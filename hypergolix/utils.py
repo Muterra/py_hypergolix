@@ -28,13 +28,13 @@ hypergolix: A python Golix client.
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
-
 '''
 
-# Add in core module
-from .core import *
-from .utils import NakError
+# Control * imports.
+__all__ = [
+    'NakError'
+]
 
-# # Submodules
-from . import persisters
-from . import utils
+
+class NakError(RuntimeError):
+    pass
