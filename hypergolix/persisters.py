@@ -282,6 +282,14 @@ class MemoryPersister(_PersisterBase):
                 'ERR#3: Attempt to upload a binding for which a debinding '
                 'already exists. Remove the debinding first.'
             )
+        # All checks done, now we're clear to add.
+        
+        # Update the state of local bindings
+        if gobs.target in self._bindings:
+            if gobs.guid not in self._bindings[gobs.target]:
+                self._bindings[gobs.target].append(gobs.guid)
+        else:
+            self._bindings[gobs.target] = [gobs.guid]
             
         # Note that publishing the object to store is handled upstream.
             
@@ -418,6 +426,12 @@ class MemoryPersister(_PersisterBase):
     def _gc_orphan_bindings(self):
         ''' Removes any orphaned (target does not exist) dynamic or 
         static bindings.
+        '''
+        pass
+        
+    def _gc_check(self, guid):
+        ''' Checks for, and if needed, performs, garbage collection. 
+        Only checks the passed guid.
         '''
         pass
             

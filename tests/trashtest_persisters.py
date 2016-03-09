@@ -39,6 +39,7 @@ import warnings
 
 # These are normal imports
 from hypergolix.persisters import MemoryPersister
+from hypergolix import NakError
 
 # These are abnormal imports
 from golix import Guid
@@ -62,11 +63,76 @@ class TrashTest(unittest.TestCase):
         self.reader2 = self.agent2.second_party
         
     def test_trash(self):
+        # ---------------------------------------
+        # Create and publish identity containers
         midc1 = self.reader1.packed
         midc2 = self.reader2.packed
         
         self.server1.publish(midc1)
         self.server1.publish(midc2)
+        # Don't publish the third, we want to test refusal
+        
+        # ---------------------------------------
+        # Prerequisites for testing -- should move to setUp?
+        # Make some objects for a known ID
+        pt1 = b'[[ Hello, world? ]]'
+        pt2 = b'[[ Hiyaback! ]]'
+        secret1_1 = self.agent1.new_secret()
+        cont1_1 = self.agent1.make_container(
+            secret = secret1_1,
+            plaintext = pt1
+        )
+        secret1_2 = self.agent1.new_secret()
+        cont1_2 = self.agent1.make_container(
+            secret = secret1_2,
+            plaintext = pt2
+        )
+        
+        # Make some objects for an unknown ID
+        secret3_1 = self.agent3.new_secret()
+        cont3_1 = self.agent3.make_container(
+            secret = secret3_1,
+            plaintext = pt1
+        )
+        secret3_2 = self.agent3.new_secret()
+        cont3_2 = self.agent3.make_container(
+            secret = secret3_2,
+            plaintext = pt2
+        )
+        
+        # Make some bindings for the known ID
+        bind1_1 = self.agent1.make_bind_static(
+            target = cont1_1.guid
+        )
+        bind1_2 = self.agent1.make_bind_static(
+            target = cont1_2.guid
+        )
+        
+        # Make some bindings for the unknown ID
+        bind3_1 = self.agent3.make_bind_static(
+            target = cont3_1.guid
+        )
+        bind3_2 = self.agent3.make_bind_static(
+            target = cont3_2.guid
+        )
+        
+        # ---------------------------------------
+        # Publish bindings and then containers
+        self.server1.publish(bind1_1.packed)
+        self.server1.publish(bind1_2.packed)
+        with self.assertRaises(NakError, msg='Server allowed unknown binder.'):
+            self.server1.publish(bind3_1.packed)
+            self.server1.publish(bind3_2.packed)
+            
+        self.server1.publish(cont1_1.packed)
+        self.server1.publish(cont1_2.packed)
+        with self.assertRaises(NakError, msg='Server allowed unknown author.'):
+            self.server1.publish(cont3_1.packed)
+            self.server1.publish(cont3_2.packed)
+        
+        
+        # --------------------------------------------------------------------
+        # Comment this out if no interactivity desired
             
         # Start an interactive IPython interpreter with local namespace, but
         # suppress all IPython-related warnings.
