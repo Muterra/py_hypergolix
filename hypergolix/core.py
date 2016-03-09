@@ -47,7 +47,6 @@ DO PERSISTENCE PROVIDERS FIRST.
 # package through __init__.py
 __all__ = [
     'Agent', 
-    'NakError'
 ]
 
 # Global dependencies
@@ -70,10 +69,8 @@ from Crypto.Protocol.KDF import scrypt
 # from .utils import SecurityError
 # from .utils import Secret
 
-# # Inter-package dependencies that are only used locally
-# from .cipher import FirstParty1 as FirstParty
-# from .cipher import SecondParty1 as SecondParty
-# from .cipher import ThirdParty1 as ThirdParty
+# Inter-package dependencies that are only used locally
+from .utils import NakError
 
         
 # ###############################################
@@ -83,7 +80,7 @@ from Crypto.Protocol.KDF import scrypt
 
 class Agent():
     def __init__(self, _golix_provider=None):
-        if _golix_provider=None:
+        if _golix_provider == None:
             self._golix_provider = FirstParty()
         else:
             self._golix_provider = _golix_provider
