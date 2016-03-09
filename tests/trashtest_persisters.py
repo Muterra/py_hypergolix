@@ -33,8 +33,9 @@ hypergolix: A python Golix client.
 
 '''
 
-import sys
-import collections
+import IPython
+import unittest
+import warnings
 
 # These are normal imports
 from hypergolix.persisters import MemoryPersister
@@ -49,23 +50,29 @@ from golix import FirstParty
 # Testing
 # ###############################################
     
-def run():
-    server1 = MemoryPersister()
+class TrashTest(unittest.TestCase):
+    def setUp(self):
+        self.server1 = MemoryPersister()
     
-    agent1 = FirstParty()
-    agent2 = FirstParty()
+        self.agent1 = FirstParty()
+        self.agent2 = FirstParty()
+        self.agent3 = FirstParty()
     
-    reader1 = agent1.second_party
-    reader2 = agent2.second_party
-    
-    midc1 = reader1.packed
-    midc2 = reader2.packed
-    
-    server1.publish(midc1)
-    server1.publish(midc2)
+        self.reader1 = self.agent1.second_party
+        self.reader2 = self.agent2.second_party
         
-    import IPython
-    IPython.embed()
-                
-if __name__ == '__main__':
-    run()
+    def test_trash(self):
+        midc1 = self.reader1.packed
+        midc2 = self.reader2.packed
+        
+        self.server1.publish(midc1)
+        self.server1.publish(midc2)
+            
+        # Start an interactive IPython interpreter with local namespace, but
+        # suppress all IPython-related warnings.
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            IPython.embed()
+
+if __name__ == "__main__":
+    unittest.main()
