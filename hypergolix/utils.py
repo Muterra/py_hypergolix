@@ -32,9 +32,20 @@ hypergolix: A python Golix client.
 
 # Control * imports.
 __all__ = [
-    'NakError'
+    'NakError',
+    'PersistenceWarning'
 ]
 
 
 class NakError(RuntimeError):
+    ''' Raised for most failed operations.
+    '''
+    pass
+    
+    
+class PersistenceWarning(RuntimeWarning):
+    ''' Raised when a debinding did not result in the removal of its
+    target -- for example, if another binding remains on the target
+    object.
+    '''
     pass
