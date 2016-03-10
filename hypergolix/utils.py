@@ -30,6 +30,8 @@ hypergolix: A python Golix client.
 ------------------------------------------------------
 '''
 
+import collections
+
 # Control * imports.
 __all__ = [
     'NakError',
@@ -49,3 +51,44 @@ class PersistenceWarning(RuntimeWarning):
     object.
     '''
     pass
+    
+
+class _DeepDeleteChainMap(collections.ChainMap):
+    ''' Chainmap variant to allow deletion of inner scopes. Used in 
+    MemoryPersister.
+    '''
+    def __delitem__(self, key):
+        for mapping in self.maps:
+            if key in mapping:
+                del mapping[key]
+                return
+        raise KeyError(key)
+    
+
+class _WeldedSetChainMap(collections.ChainMap):
+    ''' Chainmap variant to combine mappings constructed exclusively of
+    {
+        key: set()
+    }
+    pairs. Used in MemoryPersister.
+    '''
+    def __getitem__(self, key):
+        found = False
+        result = set()
+        for mapping in self.maps:
+            if key in mapping:
+                result.update(mapping[key])
+                found = True
+        if not found:
+            raise KeyError(key)
+        return result
+    
+    def __delitem__(self, key):
+        found = False
+        for mapping in self.maps:
+            if key in mapping:
+                del mapping[key]
+                found = True
+        if not found:
+            raise KeyError(key)
+    

@@ -40,6 +40,7 @@ import warnings
 # These are normal imports
 from hypergolix.persisters import MemoryPersister
 from hypergolix import NakError
+from hypergolix import PersistenceWarning
 
 # These are abnormal imports
 from golix import Guid
@@ -74,7 +75,7 @@ class TrashTest(unittest.TestCase):
         
         # ---------------------------------------
         # Prerequisites for testing -- should move to setUp?
-        # Make some objects for a known ID
+        # Make some objects for known IDs
         pt1 = b'[[ Hello, world? ]]'
         pt2 = b'[[ Hiyaback! ]]'
         secret1_1 = self.agent1.new_secret()
@@ -85,6 +86,17 @@ class TrashTest(unittest.TestCase):
         secret1_2 = self.agent1.new_secret()
         cont1_2 = self.agent1.make_container(
             secret = secret1_2,
+            plaintext = pt2
+        )
+        
+        secret2_1 = self.agent2.new_secret()
+        cont2_1 = self.agent2.make_container(
+            secret = secret2_1,
+            plaintext = pt1
+        )
+        secret2_2 = self.agent2.new_secret()
+        cont2_2 = self.agent2.make_container(
+            secret = secret2_2,
             plaintext = pt2
         )
         
@@ -100,12 +112,19 @@ class TrashTest(unittest.TestCase):
             plaintext = pt2
         )
         
-        # Make some bindings for the known ID
+        # Make some bindings for known IDs
         bind1_1 = self.agent1.make_bind_static(
             target = cont1_1.guid
         )
         bind1_2 = self.agent1.make_bind_static(
             target = cont1_2.guid
+        )
+        
+        bind2_1 = self.agent2.make_bind_static(
+            target = cont2_1.guid
+        )
+        bind2_2 = self.agent2.make_bind_static(
+            target = cont2_2.guid
         )
         
         # Make some bindings for the unknown ID
@@ -116,20 +135,40 @@ class TrashTest(unittest.TestCase):
             target = cont3_2.guid
         )
         
+        # Make some debindings 
+        debind2_1 = self.agent2.make_debind(
+            target = bind2_1.guid
+        )
+        debind2_2 = self.agent2.make_debind(
+            target = bind2_2.guid
+        )
+        
         # ---------------------------------------
         # Publish bindings and then containers
         self.server1.publish(bind1_1.packed)
         self.server1.publish(bind1_2.packed)
+        self.server1.publish(bind2_1.packed)
+        self.server1.publish(bind2_2.packed)
         with self.assertRaises(NakError, msg='Server allowed unknown binder.'):
             self.server1.publish(bind3_1.packed)
             self.server1.publish(bind3_2.packed)
             
         self.server1.publish(cont1_1.packed)
         self.server1.publish(cont1_2.packed)
+        self.server1.publish(cont2_1.packed)
+        self.server1.publish(cont2_2.packed)
         with self.assertRaises(NakError, msg='Server allowed unknown author.'):
             self.server1.publish(cont3_1.packed)
             self.server1.publish(cont3_2.packed)
         
+        # ---------------------------------------
+        # Publish debindings for the second identity
+        
+        self.server1.publish(debind2_1.packed)
+        self.server1.publish(debind2_2.packed)
+        with self.assertRaises(NakError, msg='Server allowed binding replay.'):
+            self.server1.publish(bind2_1.packed)
+            self.server1.publish(bind2_2.packed)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
