@@ -143,6 +143,22 @@ class TrashTest(unittest.TestCase):
             target = bind2_2.guid
         )
         
+        # And make some author-inconsistent debindings
+        debind2_1_bad = self.agent1.make_debind(
+            target = bind2_1.guid
+        )
+        debind2_2_bad = self.agent1.make_debind(
+            target = bind2_2.guid
+        )
+        
+        # And then make some debindings for the debindings
+        dedebind2_1 = self.agent2.make_debind(
+            target = debind2_1.guid
+        )
+        dedebind2_2 = self.agent2.make_debind(
+            target = debind2_2.guid
+        )
+        
         # ---------------------------------------
         # Publish bindings and then containers
         self.server1.publish(bind1_1.packed)
@@ -162,13 +178,43 @@ class TrashTest(unittest.TestCase):
             self.server1.publish(cont3_2.packed)
         
         # ---------------------------------------
-        # Publish debindings for the second identity
+        # Publish impersonation debindings for the second identity
+        with self.assertRaises(NakError, msg='Server allowed wrong author debind.'):
+            self.server1.publish(debind2_1_bad.packed)
+            self.server1.publish(debind2_2_bad.packed)
         
+        # ---------------------------------------
+        # Publish debindings for the second identity
         self.server1.publish(debind2_1.packed)
         self.server1.publish(debind2_2.packed)
         with self.assertRaises(NakError, msg='Server allowed binding replay.'):
             self.server1.publish(bind2_1.packed)
             self.server1.publish(bind2_2.packed)
+            
+        self.assertIn(debind2_1.guid, self.server1._store)
+        self.assertNotIn(bind2_1.guid, self.server1._store)
+        self.assertNotIn(cont2_1.guid, self.server1._store)
+        
+        # ---------------------------------------
+        # Publish debindings for those debindings and then rebind them
+        self.server1.publish(dedebind2_1.packed)
+        self.server1.publish(dedebind2_2.packed)
+        with self.assertRaises(NakError, msg='Server allowed debinding replay.'):
+            self.server1.publish(debind2_1.packed)
+            self.server1.publish(debind2_2.packed)
+            
+        self.assertIn(dedebind2_1.guid, self.server1._store)
+        self.assertNotIn(debind2_1.guid, self.server1._store)
+        self.assertNotIn(bind2_1.guid, self.server1._store)
+        self.assertNotIn(cont2_1.guid, self.server1._store)
+        
+        self.server1.publish(bind2_1.packed)
+        self.server1.publish(bind2_2.packed)
+        self.server1.publish(cont2_1.packed)
+        self.server1.publish(cont2_2.packed)
+        
+        self.assertIn(bind2_1.guid, self.server1._store)
+        self.assertIn(cont2_1.guid, self.server1._store)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired

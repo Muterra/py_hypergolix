@@ -52,6 +52,47 @@ class PersistenceWarning(RuntimeWarning):
     '''
     pass
     
+    
+class _WeldedSet:
+    __slots__ = ['_setviews']
+    
+    def __init__(self, *sets):
+        # Some rudimentary type checking / forcing
+        self._setviews = tuple(sets)
+    
+    def __contains__(self, item):
+        for view in self._setviews:
+            if item in view:
+                return True
+        return False
+        
+    def __len__(self):
+        # This may not be efficient for large sets.
+        union = set()
+        union.update(*self._setviews)
+        return len(union)
+        
+    def remove(self, elem):
+        found = False
+        for view in self._setviews:
+            if elem in view:
+                view.remove(elem)
+                found = True
+        if not found:
+            raise KeyError(elem)
+            
+    def add_set_views(self, *sets):
+        self._setviews += tuple(sets)
+            
+    def __repr__(self):
+        c = type(self).__name__
+        return (
+            c + 
+            '(' + 
+                repr(self._setviews) + 
+            ')'
+        )
+        
 
 class _DeepDeleteChainMap(collections.ChainMap):
     ''' Chainmap variant to allow deletion of inner scopes. Used in 
@@ -65,7 +106,7 @@ class _DeepDeleteChainMap(collections.ChainMap):
         raise KeyError(key)
     
 
-class _WeldedSetChainMap(collections.ChainMap):
+class _WeldedSetDeepChainMap(collections.ChainMap):
     ''' Chainmap variant to combine mappings constructed exclusively of
     {
         key: set()
@@ -74,10 +115,10 @@ class _WeldedSetChainMap(collections.ChainMap):
     '''
     def __getitem__(self, key):
         found = False
-        result = set()
+        result = _WeldedSet()
         for mapping in self.maps:
             if key in mapping:
-                result.update(mapping[key])
+                result.add_set_views(mapping[key])
                 found = True
         if not found:
             raise KeyError(key)
@@ -92,3 +133,12 @@ class _WeldedSetChainMap(collections.ChainMap):
         if not found:
             raise KeyError(key)
     
+    def remove_empty(self, key):
+        found = False
+        for mapping in self.maps:
+            if key in mapping:
+                found = True
+                if len(mapping[key]) == 0:
+                    del mapping[key]
+        if not found:
+            raise KeyError(key)

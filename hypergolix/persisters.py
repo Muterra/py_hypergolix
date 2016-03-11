@@ -48,6 +48,7 @@ __all__ = [
 # Global dependencies
 import abc
 import collections
+import warnings
 
 from golix import ThirdParty
 from golix import SecondParty
@@ -67,7 +68,7 @@ from golix._getlow import GARQ
 from .utils import NakError
 from .utils import PersistenceWarning
 from .utils import _DeepDeleteChainMap
-from .utils import _WeldedSetChainMap
+from .utils import _WeldedSetDeepChainMap
 
 
 class _PersisterBase(metaclass=abc.ABCMeta):
@@ -183,25 +184,39 @@ class MemoryPersister(_PersisterBase):
         )
         # All objects. {<Guid>: <packed object>}
         self._store = {}
-        # Forward lookup for containers, simple set of guids.
-        self._containers = set()
+        
         # Forward lookup for static bindings, 
         # {
         #   <binding Guid>: (<binder Guid>, <bound Guid>)
         # }
         self._targets_static = {}
+        
         # Forward lookup for dynamic bindings, 
         # {
         #   <dynamic guid>: (<binder guid>, (<history>))
         # }
         self._targets_dynamic = {}
+        
         # Forward lookup for debindings, 
         # {
         #   <debinding Guid>: (<debinder Guid>, <debound Guid>)
         # }
         self._targets_debind = {}
+        
         # Forward lookup for asymmetric requests
-        self._requests = set()
+        # {
+        #   <garq Guid>: (<recipient Guid>,)
+        # }
+        self._targets_request = {}
+        
+        # Forward lookup for everything. Note that a guid can only be one 
+        # thing, so a chainmap is appropriate.
+        self._targets = _DeepDeleteChainMap(
+            self._targets_static,
+            self._targets_dynamic,
+            self._targets_debind,
+            self._targets_request
+        )
         
         # Reverse lookup for bindings, {<bound Guid>: {<bound by Guid>}}
         self._bindings_static = {}
@@ -210,13 +225,21 @@ class MemoryPersister(_PersisterBase):
         # Reverse lookup for implicit bindings {<bound Guid>: {<bound Guid>}}
         self._bindings_implicit = {}
         # Reverse lookup for any valid bindings
-        self._bindings = _WeldedSetChainMap(
+        self._bindings = _WeldedSetDeepChainMap(
             self._bindings_static,
             self._bindings_dynamic,
             self._bindings_implicit
         )
-        # Reverse lookup for debindings, {<debound Guid>: <debound by Guid>}
+        # Reverse lookup for debindings, {<debound Guid>: {<debound by Guid>}}
         self._debindings = {}
+        # Reverse lookup for everything, same format as other bindings
+        self._reverse_references = _WeldedSetDeepChainMap(
+            self._bindings_static,
+            self._bindings_dynamic,
+            self._bindings_implicit,
+            self._debindings
+        )
+        
         
     def publish(self, packed):
         ''' Submits a packed object to the persister.
@@ -297,8 +320,6 @@ class MemoryPersister(_PersisterBase):
                 'garbage collected.'
             )
             
-        self._containers.add(geoc.guid)
-            
         # Note that publishing the object to store is handled upstream.
             
     def _dispatch_gobs(self, gobs):
@@ -321,17 +342,16 @@ class MemoryPersister(_PersisterBase):
         # All checks done, now we're clear to add.
         
         # Update the state of local bindings
+        # Assuming this is an atomic change, we'll always need to do
+        # both of these, or neither.
         if gobs.target in self._bindings_static:
-            # One is a set and the other would be overwritten, so it doesn't
-            # much matter if we already have these.
-            # Assuming this is an atomic change, we'll always need to do
-            # both of these, or neither.
             self._bindings_static[gobs.target].add(gobs.guid)
-            self._targets_static[gobs.guid] = gobs.binder, gobs.target
         else:
-            # Same note re: atomic changes
             self._bindings_static[gobs.target] = { gobs.guid }
-            self._targets_static[gobs.guid] = gobs.binder, gobs.target
+        # These must, by definition, be identical for any repeated guid, so 
+        # it doesn't much matter if we already have them.
+        self._targets_static[gobs.guid] = gobs.binder, gobs.target
+        self._bindings_implicit[gobs.guid] = { gobs.guid }
             
         # Note that publishing the object to store is handled upstream.
             
@@ -377,15 +397,15 @@ class MemoryPersister(_PersisterBase):
             
         # Handle based on target
         if gdxx.target in self._targets_static:
-            self._debind_static(gdxx)
+            self._debind_simple(gdxx)
             
         elif gdxx.target in self._targets_dynamic:
             pass
             
         elif gdxx.target in self._targets_debind:
-            pass
+            self._debind_simple(gdxx)
             
-        elif gdxx.target in self._requests:
+        elif gdxx.target in self._targets_request:
             pass
             
         else:
@@ -396,44 +416,33 @@ class MemoryPersister(_PersisterBase):
             
         # Debindings can only target one thing, so it doesn't much matter if it
         # already exists (we've already checked for replays)
-        self._debindings[gdxx.target] = gdxx.guid
+        self._debindings[gdxx.target] = { gdxx.guid }
         self._targets_debind[gdxx.guid] = gdxx.debinder, gdxx.target
+        self._bindings_implicit[gdxx.guid] = { gdxx.guid }
             
         # Note that publishing the object to store is handled upstream.
         
-    def _debind_static(self, gdxx):
+    def _debind_simple(self, gdxx):
         ''' Performs all checks, etc, necessary to release a static 
-        binding.
+        binding or debinding.
         '''
-        # Check that the debinder is the same as the binder
-        if gdxx.debinder != self._targets_static[gdxx.target][0]:
+        # Check debinder is consistent with other (de)bindings in the chain
+        if gdxx.debinder != self._targets[gdxx.target][0]:
             raise NakError(
                 'ERR#5: Debinding author is inconsistent with the resource '
                 'being debound.'
             )
+            
+        # In all cases, we're now proceeding with the debinding. Remove any 
+        # implicit bindings for the target. Will be needed for dynamics.
+        if gdxx.target in self._bindings_implicit:
+            # Remove, don't delete, so that GC finds and performs.
+            # May want to refactor GC logic so that you don't have to do this.
+            self._bindings_implicit[gdxx.target].remove(gdxx.target)
         
-        # We need this before continuing
-        binding_target = self._targets_static[gdxx.target][1]
-        # We have a consistent author, now remove the original binding.
-        # Debindings ALWAYS win, if they've gotten this far.
-        self._bindings_static[binding_target].remove(gdxx.target)
-        del self._targets_static[gdxx.target]
-        del self._store[gdxx.target]
-        
-        # Garbage collect the binding's target.
-        # These are the only two allowable targets for a dynamic binding.
-        if binding_target in self._targets_dynamic or \
-            binding_target in self._containers:
-                self._gc_check(binding_target)
-                
-        # If it wasn't found, we still appear to have a valid debinding, so 
-        # remove the binding anyways, but warn about unexpected behavior
-        else:
-            raise RuntimeWarning(
-                'Successfully removed static binding, but its target was '
-                'unknown, or of incorrect type (only GEOC static guids and '
-                'GOBD dynamic guids are valid as static binding targets).'
-            )
+        # Check for (and possibly perform) garbage collect on the target.
+        # Cannot blindly call _gc_execute because of dynamic bindings.
+        self._gc_check(gdxx.target)
             
     def _debind_garq(self, gdxx):
         ''' Performs all checks, etc, necessary to release a GARQ.
@@ -557,12 +566,45 @@ class MemoryPersister(_PersisterBase):
         ''' Checks for, and if needed, performs, garbage collection. 
         Only checks the passed guid.
         '''
-        if len(self._bindings[guid]) == 0:
-            del self._bindings[guid]
-            del self._store[guid]
+        if guid in self._bindings:
+            if len(self._bindings[guid]) == 0:
+                self._gc_execute(guid)
+            else:
+                warnings.warn(
+                    message = str(guid) + ' has outstanding bindings.',
+                    category = PersistenceWarning
+                )
         else:
-            raise PersistenceWarning(str(guid) + ' has outstanding bindings.')
+            print('guid not in bindings')
+                
+    def _gc_execute(self, guid):
+        ''' Performs garbage collection on guid.
+        '''
+        # This means it's a binding or debinding
+        if guid in self._targets:
+            target = self._targets[guid][1]
+            # Clean up the forward lookup
+            del self._targets[guid]
+            # Clean up the reverse lookup
+            reverse_refs = self._reverse_references[target]
+            reverse_refs.remove(guid)
             
+            # # The target of a (de)binding could be another (de)binding
+            # if target in self._bindings_implicit:
+            #     # Remove, don't delete, so that GC finds and performs.
+            #     # May want to refactor GC logic so that you don't have to do this.
+            #     self._bindings_implicit[target].remove(target)
             
+            # Perform a recursive garbage collection check on the target
+            self._gc_check(target)
+            # Remove any empty sets from the chained mappings
+            # self._reverse_references.remove_empty(target)
+            
+        # Force a cleanup of any reverse references (should all be empty sets)
+        del self._reverse_references[guid]
+        # And finally, clean up the store.
+        del self._store[guid]
+        
+
 class DiskPersister(_PersisterBase):
     pass
