@@ -99,11 +99,13 @@ class _DeepDeleteChainMap(collections.ChainMap):
     MemoryPersister.
     '''
     def __delitem__(self, key):
+        found = False
         for mapping in self.maps:
             if key in mapping:
+                found = True
                 del mapping[key]
-                return
-        raise KeyError(key)
+        if not found:
+            raise KeyError(key)
     
 
 class _WeldedSetDeepChainMap(collections.ChainMap):

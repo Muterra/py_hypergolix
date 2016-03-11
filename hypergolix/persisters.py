@@ -377,6 +377,8 @@ class MemoryPersister(_PersisterBase):
                 'already exists. Remove the debinding first.'
             )
             
+        self._bindings_implicit[gobd.guid] = { gobd.guid }
+            
         # Note that publishing the object to store is handled upstream.
             
     def _dispatch_gdxx(self, gdxx):
@@ -395,37 +397,12 @@ class MemoryPersister(_PersisterBase):
                 'already exists. Remove the debinding first.'
             )
             
-        # Handle based on target
-        if gdxx.target in self._targets_static:
-            self._debind_simple(gdxx)
-            
-        elif gdxx.target in self._targets_dynamic:
-            pass
-            
-        elif gdxx.target in self._targets_debind:
-            self._debind_simple(gdxx)
-            
-        elif gdxx.target in self._targets_request:
-            pass
-            
-        else:
+        if gdxx.target not in self._targets:
             raise NakError(
                 'ERR#4: Invalid target for debinding. Debindings must target '
                 'static/dynamic bindings, debindings, or asymmetric requests.'
             )
             
-        # Debindings can only target one thing, so it doesn't much matter if it
-        # already exists (we've already checked for replays)
-        self._debindings[gdxx.target] = { gdxx.guid }
-        self._targets_debind[gdxx.guid] = gdxx.debinder, gdxx.target
-        self._bindings_implicit[gdxx.guid] = { gdxx.guid }
-            
-        # Note that publishing the object to store is handled upstream.
-        
-    def _debind_simple(self, gdxx):
-        ''' Performs all checks, etc, necessary to release a static 
-        binding or debinding.
-        '''
         # Check debinder is consistent with other (de)bindings in the chain
         if gdxx.debinder != self._targets[gdxx.target][0]:
             raise NakError(
@@ -433,16 +410,19 @@ class MemoryPersister(_PersisterBase):
                 'being debound.'
             )
             
-        # In all cases, we're now proceeding with the debinding. Remove any 
-        # implicit bindings for the target. Will be needed for dynamics.
-        if gdxx.target in self._bindings_implicit:
-            # Remove, don't delete, so that GC finds and performs.
-            # May want to refactor GC logic so that you don't have to do this.
-            self._bindings_implicit[gdxx.target].remove(gdxx.target)
+        # Debindings can only target one thing, so it doesn't much matter if it
+        # already exists (we've already checked for replays)
+        self._debindings[gdxx.target] = { gdxx.guid }
+        self._targets_debind[gdxx.guid] = gdxx.debinder, gdxx.target
+        self._bindings_implicit[gdxx.guid] = { gdxx.guid }
         
         # Check for (and possibly perform) garbage collect on the target.
         # Cannot blindly call _gc_execute because of dynamic bindings.
+        # Note that, to correctly handle implicit bindings, this MUST come
+        # after adding the current debinding to the internal store.
         self._gc_check(gdxx.target)
+            
+        # Note that publishing the object to store is handled upstream.
             
     def _debind_garq(self, gdxx):
         ''' Performs all checks, etc, necessary to release a GARQ.
@@ -566,16 +546,31 @@ class MemoryPersister(_PersisterBase):
         ''' Checks for, and if needed, performs, garbage collection. 
         Only checks the passed guid.
         '''
+        # First make sure it's actually in the store.
+        if guid not in self._store:
+            return
+            
+        # It exists? Preprocess GC check.
+        # Case 1: guid is an identity (GIDC). Basically never delete those.
+        if guid in self._id_bases:
+            return
+            
+        # Case 2: guid has an implicit binding. GOBS, GOBD, GDXX, GARQ.
+        # Check it for an explicit debinding; remove if appropriate.
+        if guid in self._bindings_implicit and guid in self._debindings:
+            del self._bindings_implicit[guid]
+        
+        # Case 3: guid has explicit binding (GEOC). No preprocess necessary.
+        
+        # Now check for bindings. If still bound, something else is blocking.
         if guid in self._bindings:
-            if len(self._bindings[guid]) == 0:
-                self._gc_execute(guid)
-            else:
-                warnings.warn(
-                    message = str(guid) + ' has outstanding bindings.',
-                    category = PersistenceWarning
-                )
+            warnings.warn(
+                message = str(guid) + ' has outstanding bindings.',
+                category = PersistenceWarning
+            )
+        # The resource is unbound. Perform GC.
         else:
-            print('guid not in bindings')
+            self._gc_execute(guid)
                 
     def _gc_execute(self, guid):
         ''' Performs garbage collection on guid.
@@ -585,23 +580,21 @@ class MemoryPersister(_PersisterBase):
             target = self._targets[guid][1]
             # Clean up the forward lookup
             del self._targets[guid]
-            # Clean up the reverse lookup
-            reverse_refs = self._reverse_references[target]
-            reverse_refs.remove(guid)
-            
-            # # The target of a (de)binding could be another (de)binding
-            # if target in self._bindings_implicit:
-            #     # Remove, don't delete, so that GC finds and performs.
-            #     # May want to refactor GC logic so that you don't have to do this.
-            #     self._bindings_implicit[target].remove(target)
+            # Clean up the reverse lookup, then remove any empty sets
+            self._reverse_references[target].remove(guid)
+            self._reverse_references.remove_empty(target)
             
             # Perform a recursive garbage collection check on the target
             self._gc_check(target)
-            # Remove any empty sets from the chained mappings
-            # self._reverse_references.remove_empty(target)
             
-        # Force a cleanup of any reverse references (should all be empty sets)
-        del self._reverse_references[guid]
+        # Warn of state problems if still in bindings.
+        if guid in self._bindings:
+            warnings.warn(
+                message = str(guid) + ' has conflicted state. It was removed '
+                        'through forced garbage collection, but it still has '
+                        'outstanding bindings.'
+            )
+            
         # And finally, clean up the store.
         del self._store[guid]
         

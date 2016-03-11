@@ -203,6 +203,11 @@ class TrashTest(unittest.TestCase):
             self.server1.publish(debind2_1.packed)
             self.server1.publish(debind2_2.packed)
             
+        self.assertNotIn(debind2_1.guid, self.server1._targets_debind)
+        self.assertNotIn(debind2_2.guid, self.server1._targets_debind)
+        self.assertNotIn(bind2_1.guid, self.server1._debindings)
+        self.assertNotIn(bind2_2.guid, self.server1._debindings)
+            
         self.assertIn(dedebind2_1.guid, self.server1._store)
         self.assertNotIn(debind2_1.guid, self.server1._store)
         self.assertNotIn(bind2_1.guid, self.server1._store)
