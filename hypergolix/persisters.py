@@ -622,24 +622,21 @@ class MemoryPersister(_PersisterBase):
         ''' Checks for, and if needed, performs, garbage collection. 
         Only checks the passed guid.
         '''
-        # First make sure it's actually in the store.
+        # If guid has an implicit binding (GOBS, GOBD, GDXX, GARQ), then check 
+        # it for an explicit debinding and remove if appropriate.
+        if guid in self._bindings_implicit and guid in self._debindings:
+            del self._bindings_implicit[guid]
+         
+        # Case 1: not even in the store. Gitouttahere.
         if guid not in self._store:
             return
             
-        # It exists? Preprocess GC check.
-        # Case 1: guid is an identity (GIDC). Basically never delete those.
-        if guid in self._id_bases:
+        # Case 2: guid is an identity (GIDC). Basically never delete those.
+        elif guid in self._id_bases:
             return
-            
-        # Case 2: guid has an implicit binding. GOBS, GOBD, GDXX, GARQ.
-        # Check it for an explicit debinding; remove if appropriate.
-        if guid in self._bindings_implicit and guid in self._debindings:
-            del self._bindings_implicit[guid]
         
-        # Case 3: guid has explicit binding (GEOC). No preprocess necessary.
-        
-        # Now check for bindings. If still bound, something else is blocking.
-        if guid in self._bindings:
+        # Case 3: Still bound; something else is blocking. Warn.
+        elif guid in self._bindings:
             warnings.warn(
                 message = str(guid) + ' has outstanding bindings.',
                 category = PersistenceWarning
@@ -652,20 +649,17 @@ class MemoryPersister(_PersisterBase):
         ''' Performs garbage collection on guid.
         '''
         # This means it's a binding or debinding
-        if guid in self._targets:
-            target = self._targets[guid][1]
+        if guid in self._forward_references:
+            if guid in self._targets:
+                # Clean up the reverse lookup, then remove any empty sets
+                target = self._targets[guid][1]
+                self._reverse_references[target].remove(guid)
+                self._reverse_references.remove_empty(target)
+                # Perform a recursive garbage collection check on the target
+                self._gc_check(target)
+                
             # Clean up the forward lookup
-            del self._targets[guid]
-            # Clean up the reverse lookup, then remove any empty sets
-            self._reverse_references[target].remove(guid)
-            self._reverse_references.remove_empty(target)
-            
-            # Perform a recursive garbage collection check on the target
-            self._gc_check(target)
-            
-        # And add a wee bit of special processing for requests.
-        elif guid in self._requests:
-            del self._requests[guid]
+            del self._forward_references[guid]
             
         # Clean up any subscriptions.
         if guid in self._subscriptions:
