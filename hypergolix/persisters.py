@@ -467,9 +467,11 @@ class MemoryPersister(_PersisterBase):
                 'being debound.'
             )
             
-        # Update any subscribers that a GDXX has been issued
-        if gdxx.target in self._subscriptions:
-            self._subscriptions[gdxx.target](gdxx.guid)
+        # Update any subscribers (if they exist) that a GDXX has been issued
+        self._check_for_subs(
+            subscription_guid = gdxx.target,
+            notification_guid = gdxx.guid
+        )
             
         # Debindings can only target one thing, so it doesn't much matter if it
         # already exists (we've already checked for replays)
@@ -519,11 +521,19 @@ class MemoryPersister(_PersisterBase):
         # It doesn't matter if we already have it, it must be the same.
         self._store[garq.guid] = garq.packed
         
-        # Call the subscribers after adding, in case the request it.
+        # Call the subscribers after adding, in case they request it.
         # Also in case they error out.
-        if garq.guid in self._subscriptions:
-            for callback in self._subscriptions[garq.guid]:
-                callback(garq.guid)
+        self._check_for_subs(
+            subscription_guid = garq.recipient,
+            notification_guid = garq.guid
+        )
+                
+    def _check_for_subs(self, subscription_guid, notification_guid):
+        ''' Check for subscriptions, and update them if any exist.
+        '''
+        if subscription_guid in self._subscriptions:
+            for callback in self._subscriptions[subscription_guid]:
+                callback(notification_guid)
         
     def ping(self):
         ''' Queries the persistence provider for availability.
