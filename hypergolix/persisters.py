@@ -475,6 +475,9 @@ class MemoryPersister(_PersisterBase):
         self._targets_debind[gdxx.guid] = gdxx.debinder, gdxx.target
         self._bindings_implicit[gdxx.guid] = { gdxx.guid }
         
+        # Targets will always have an implicit binding. Remove it.
+        del self._bindings_implicit[gdxx.target]
+        
         # Check for (and possibly perform) garbage collect on the target.
         # Cannot blindly call _gc_execute because of dynamic bindings.
         # Note that, to correctly handle implicit bindings, this MUST come
@@ -622,11 +625,6 @@ class MemoryPersister(_PersisterBase):
         ''' Checks for, and if needed, performs, garbage collection. 
         Only checks the passed guid.
         '''
-        # If guid has an implicit binding (GOBS, GOBD, GDXX, GARQ), then check 
-        # it for an explicit debinding and remove if appropriate.
-        if guid in self._bindings_implicit and guid in self._debindings:
-            del self._bindings_implicit[guid]
-         
         # Case 1: not even in the store. Gitouttahere.
         if guid not in self._store:
             return
