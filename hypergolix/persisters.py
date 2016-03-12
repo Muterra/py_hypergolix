@@ -250,7 +250,6 @@ class MemoryPersister(_PersisterBase):
         # Lookup for subscriptions, {<subscribed Guid>: [callbacks]}
         self._subscriptions = {}
         
-        
     def publish(self, packed):
         ''' Submits a packed object to the persister.
         
@@ -357,13 +356,15 @@ class MemoryPersister(_PersisterBase):
             )
             
         # Check for any KNOWN illegal targets, and fail loudly if so
-        if gobs.target in self._targets_static or \
-            gobs.target in self._targets_debind or \
-            gobs.target in self._requests or \
-            gobs.target in self._id_bases:
-                raise NakError(
-                    'ERR#4: Attempt to bind to an invalid target.'
-                )
+        if (
+            gobs.target in self._targets_static or
+            gobs.target in self._targets_debind or
+            gobs.target in self._requests or
+            gobs.target in self._id_bases
+        ):
+            raise NakError(
+                'ERR#4: Attempt to bind to an invalid target.'
+            )
         
         # Check to see if someone has already uploaded an illegal binding for 
         # this static binding (due to the race condition in target inspection).
