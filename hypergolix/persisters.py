@@ -356,23 +356,18 @@ class MemoryPersister(_PersisterBase):
             )
             
         # Check for any KNOWN illegal targets, and fail loudly if so
-        if (
-            gobs.target in self._targets_static or
+        if (gobs.target in self._targets_static or
             gobs.target in self._targets_debind or
             gobs.target in self._requests or
-            gobs.target in self._id_bases
-        ):
-            raise NakError(
-                'ERR#4: Attempt to bind to an invalid target.'
-            )
+            gobs.target in self._id_bases):
+                raise NakError(
+                    'ERR#4: Attempt to bind to an invalid target.'
+                )
         
         # Check to see if someone has already uploaded an illegal binding for 
         # this static binding (due to the race condition in target inspection).
         # If so, force garbage collection.
-        if gobs.guid in self._bindings:
-            illegal_binding = self._bindings[gobs.guid]
-            del self._bindings[illegal_binding]
-            self._gc_execute(illegal_binding)
+        self._check_illegal_binding(gobs.guid)
         
         # Update the state of local bindings
         # Assuming this is an atomic change, we'll always need to do
@@ -510,10 +505,7 @@ class MemoryPersister(_PersisterBase):
         # Check to see if someone has already uploaded an illegal binding for 
         # this request (due to the race condition in target inspection).
         # If so, force garbage collection.
-        if garq.guid in self._bindings:
-            illegal_binding = self._bindings[garq.guid]
-            del self._bindings[illegal_binding]
-            self._gc_execute(illegal_binding)
+        self._check_illegal_binding(garq.guid)
             
         # Update persister state information
         self._requests[garq.guid] = (garq.recipient,)
@@ -535,6 +527,18 @@ class MemoryPersister(_PersisterBase):
         if subscription_guid in self._subscriptions:
             for callback in self._subscriptions[subscription_guid]:
                 callback(notification_guid)
+                
+    def _check_illegal_binding(self, guid):
+        ''' Checks for an existing binding for guid. If it exists,
+        removes the binding, and forces its garbage collection. Used to
+        overcome race condition inherent to binding.
+        
+        Should this warn?
+        '''
+        if guid in self._bindings:
+            illegal_binding = self._bindings[guid]
+            del self._bindings[illegal_binding]
+            self._gc_execute(illegal_binding)
         
     def ping(self):
         ''' Queries the persistence provider for availability.
