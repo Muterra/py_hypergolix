@@ -159,6 +159,14 @@ class TrashTest(unittest.TestCase):
             target = debind2_2.guid
         )
         
+        # And then make some debindings for the debindings for the...
+        dededebind2_1 = self.agent2.make_debind(
+            target = dedebind2_1.guid
+        )
+        dededebind2_2 = self.agent2.make_debind(
+            target = dedebind2_2.guid
+        )
+        
         # ---------------------------------------
         # Publish bindings and then containers
         self.server1.publish(bind1_1.packed)
@@ -220,6 +228,26 @@ class TrashTest(unittest.TestCase):
         
         self.assertIn(bind2_1.guid, self.server1._store)
         self.assertIn(cont2_1.guid, self.server1._store)
+        
+        # ---------------------------------------
+        # Publish debindings for those debindings' debindings (... fer srlsy?) 
+        # and then redebind them
+        self.server1.publish(dededebind2_1.packed)
+        self.server1.publish(dededebind2_2.packed)
+        with self.assertRaises(NakError, msg='Server allowed dedebinding replay.'):
+            self.server1.publish(dedebind2_1.packed)
+            self.server1.publish(dedebind2_2.packed)
+            
+        self.assertNotIn(dedebind2_1.guid, self.server1._targets_debind)
+        self.assertNotIn(dedebind2_2.guid, self.server1._targets_debind)
+        self.assertNotIn(debind2_1.guid, self.server1._debindings)
+        self.assertNotIn(debind2_2.guid, self.server1._debindings)
+        
+        self.server1.publish(debind2_1.packed)
+        self.server1.publish(debind2_2.packed)
+        
+        self.assertIn(debind2_1.guid, self.server1._store)
+        self.assertIn(debind2_2.guid, self.server1._store)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired

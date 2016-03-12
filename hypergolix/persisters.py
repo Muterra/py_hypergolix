@@ -34,7 +34,7 @@ ERR#0: Failed to verify.
 ERR#1: Unknown author or recipient.
 ERR#2: Unbound GEOC; immediately garbage collected
 ERR#3: Existing debinding for address; (de)binding rejected.
-ERR#4: Invalid target.
+ERR#4: Invalid or unknown target.
 ERR#5: Inconsistent author.
 
 '''
@@ -240,6 +240,9 @@ class MemoryPersister(_PersisterBase):
             self._debindings
         )
         
+        # Lookup for subscriptions, {<subscribed Guid>: [callbacks]}
+        self._subscribers = {}
+        
         
     def publish(self, packed):
         ''' Submits a packed object to the persister.
@@ -400,7 +403,8 @@ class MemoryPersister(_PersisterBase):
         if gdxx.target not in self._targets:
             raise NakError(
                 'ERR#4: Invalid target for debinding. Debindings must target '
-                'static/dynamic bindings, debindings, or asymmetric requests.'
+                'static/dynamic bindings, debindings, or asymmetric requests. '
+                'This may indicate the target does not exist in local storage.'
             )
             
         # Check debinder is consistent with other (de)bindings in the chain
