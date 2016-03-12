@@ -207,16 +207,23 @@ class MemoryPersister(_PersisterBase):
         # {
         #   <garq Guid>: (<recipient Guid>,)
         # }
-        self._targets_request = {}
+        self._requests = {}
         
-        # Forward lookup for everything. Note that a guid can only be one 
+        # Forward lookup for targeted objects. Note that a guid can only be one 
         # thing, so a chainmap is appropriate.
         self._targets = _DeepDeleteChainMap(
             self._targets_static,
             self._targets_dynamic,
-            self._targets_debind,
-            self._targets_request
+            self._targets_debind
         )
+        
+        # Forward lookup for everything.
+        self._forward_references = _DeepDeleteChainMap(
+            self._targets_static,
+            self._targets_dynamic,
+            self._targets_debind,
+            self._requests
+        ) 
         
         # Reverse lookup for bindings, {<bound Guid>: {<bound by Guid>}}
         self._bindings_static = {}
@@ -241,7 +248,7 @@ class MemoryPersister(_PersisterBase):
         )
         
         # Lookup for subscriptions, {<subscribed Guid>: [callbacks]}
-        self._subscribers = {}
+        self._subscriptions = {}
         
         
     def publish(self, packed):
@@ -259,21 +266,29 @@ class MemoryPersister(_PersisterBase):
         except ParseError as e:
             raise TypeError('Packed must be a packed golix object.') from e
         # We are now guaranteed a Golix object.
-            
-        if isinstance(obj, GIDC):
-            self._dispatch_gidc(obj)
-        elif isinstance(obj, GEOC):
-            self._dispatch_geoc(obj)
-        elif isinstance(obj, GOBS):
-            self._dispatch_gobs(obj)
-        elif isinstance(obj, GOBD):
-            self._dispatch_gobd(obj)
-        elif isinstance(obj, GDXX):
-            self._dispatch_gdxx(obj)
+        
+        return self.publish_unsafe(obj)
+        
+    def publish_unsafe(self, unpacked):
+        ''' Handles publishing for an unpacked object. DOES NOT perform
+        guid verification. ONLY USE THIS IF YOU CREATED THE UNPACKED 
+        OBJECT YOURSELF, or have already performed your own unpacking 
+        step. However, will still perform signature verification.
+        '''
+        if isinstance(unpacked, GIDC):
+            self._dispatch_gidc(unpacked)
+        elif isinstance(unpacked, GEOC):
+            self._dispatch_geoc(unpacked)
+        elif isinstance(unpacked, GOBS):
+            self._dispatch_gobs(unpacked)
+        elif isinstance(unpacked, GOBD):
+            self._dispatch_gobd(unpacked)
+        elif isinstance(unpacked, GDXX):
+            self._dispatch_gdxx(unpacked)
+        elif isinstance(unpacked, GARQ):
+            self._dispatch_garq(unpacked)
         else:
-            self._dispatch_garq(obj)
-            
-        self._publish_unsafe(obj)
+            raise TypeError('Unpacked must be an unpacked Golix object.')
         
         return True
         
@@ -307,7 +322,8 @@ class MemoryPersister(_PersisterBase):
             secondparty = SecondParty.from_identity(gidc)
             self._id_bases[author] = secondparty
             
-        # Note that publishing the object to store is handled upstream.
+        # It doesn't matter if we already have it, it must be the same.
+        self._store[gidc.guid] = gidc.packed
             
     def _dispatch_geoc(self, geoc):
         ''' Does whatever is needed to preprocess a GEOC.
@@ -323,14 +339,11 @@ class MemoryPersister(_PersisterBase):
                 'garbage collected.'
             )
             
-        # Note that publishing the object to store is handled upstream.
+        # It doesn't matter if we already have it, it must be the same.
+        self._store[geoc.guid] = geoc.packed
             
     def _dispatch_gobs(self, gobs):
         ''' Does whatever is needed to preprocess a GOBS.
-        
-        May want to add some target checking to this at some point, 
-        though it's impossible to catch everything (race condition) and
-        not required by spec
         '''
         self._verify_obj(
             assignee = gobs.binder,
@@ -342,7 +355,23 @@ class MemoryPersister(_PersisterBase):
                 'ERR#3: Attempt to upload a binding for which a debinding '
                 'already exists. Remove the debinding first.'
             )
-        # All checks done, now we're clear to add.
+            
+        # Check for any KNOWN illegal targets, and fail loudly if so
+        if gobs.target in self._targets_static or \
+            gobs.target in self._targets_debind or \
+            gobs.target in self._requests or \
+            gobs.target in self._id_bases:
+                raise NakError(
+                    'ERR#4: Attempt to bind to an invalid target.'
+                )
+        
+        # Check to see if someone has already uploaded an illegal binding for 
+        # this static binding (due to the race condition in target inspection).
+        # If so, force garbage collection.
+        if gobs.guid in self._bindings:
+            illegal_binding = self._bindings[gobs.guid]
+            del self._bindings[illegal_binding]
+            self._gc_execute(illegal_binding)
         
         # Update the state of local bindings
         # Assuming this is an atomic change, we'll always need to do
@@ -356,7 +385,8 @@ class MemoryPersister(_PersisterBase):
         self._targets_static[gobs.guid] = gobs.binder, gobs.target
         self._bindings_implicit[gobs.guid] = { gobs.guid }
             
-        # Note that publishing the object to store is handled upstream.
+        # It doesn't matter if we already have it, it must be the same.
+        self._store[gobs.guid] = gobs.packed
             
     def _dispatch_gobd(self, gobd):
         ''' Does whatever is needed to preprocess a GOBD.
@@ -366,23 +396,46 @@ class MemoryPersister(_PersisterBase):
             obj = gobd
         )
         
-        # NOTE: add own guid to self._bindings_implicit as preventing own GC.
-        # When _debind_dynamic is called, remove that. That way, _gc_check
-        # should always work as desired.
-        
-        # NOTE: this needs to call _gc_check on any updated frames. Should it 
-        # also suppress any PersistenceWarnings? Impossible to know if it was
-        # intentionally persistent or not.
-        
         if gobd.guid in self._debindings:
             raise NakError(
                 'ERR#3: Attempt to upload a binding for which a debinding '
                 'already exists. Remove the debinding first.'
             )
             
+        # Check for any KNOWN illegal targets, and fail loudly if so
+        if gobd.target in self._targets_static or \
+            gobd.target in self._requests or \
+            gobd.target in self._id_bases:
+                raise NakError(
+                    'ERR#4: Attempt to bind to an invalid target.'
+                )
+        
+        # Update the state of local bindings
+        # Assuming this is an atomic change, we'll always need to do
+        # both of these, or neither.
+        if gobd.target in self._bindings_dynamic:
+            self._bindings_dynamic[gobd.target].add(gobd.guid)
+        else:
+            self._bindings_dynamic[gobd.target] = { gobd.guid }
+        # These must, by definition, be identical for any repeated guid, so 
+        # it doesn't much matter if we already have them.
+        
+        # NOTE: This needs to be fixed to incorporate history. Or does it?
+        self._targets_dynamic[gobd.guid] = gobd.binder, gobd.target
         self._bindings_implicit[gobd.guid] = { gobd.guid }
             
-        # Note that publishing the object to store is handled upstream.
+        # It doesn't matter if we already have it, it must be the same.
+        self._store[gobd.guid] = gobd.packed
+        
+    def _dispatch_new_dynamic(self, gobd):
+        pass
+        
+    def _dispatch_updated_dynamic(self, gobd):
+        pass
+        
+        # NOTE: this needs to call _gc_check on any updated frames. Should it 
+        # also suppress any PersistenceWarnings? Impossible to know if it was
+        # intentionally persistent or not.
             
     def _dispatch_gdxx(self, gdxx):
         ''' Does whatever is needed to preprocess a GDXX.
@@ -400,7 +453,7 @@ class MemoryPersister(_PersisterBase):
                 'already exists. Remove the debinding first.'
             )
             
-        if gdxx.target not in self._targets:
+        if gdxx.target not in self._forward_references:
             raise NakError(
                 'ERR#4: Invalid target for debinding. Debindings must target '
                 'static/dynamic bindings, debindings, or asymmetric requests. '
@@ -408,11 +461,15 @@ class MemoryPersister(_PersisterBase):
             )
             
         # Check debinder is consistent with other (de)bindings in the chain
-        if gdxx.debinder != self._targets[gdxx.target][0]:
+        if gdxx.debinder != self._forward_references[gdxx.target][0]:
             raise NakError(
                 'ERR#5: Debinding author is inconsistent with the resource '
                 'being debound.'
             )
+            
+        # Update any subscribers that a GDXX has been issued
+        if gdxx.target in self._subscriptions:
+            self._subscriptions[gdxx.target](gdxx.guid)
             
         # Debindings can only target one thing, so it doesn't much matter if it
         # already exists (we've already checked for replays)
@@ -426,23 +483,8 @@ class MemoryPersister(_PersisterBase):
         # after adding the current debinding to the internal store.
         self._gc_check(gdxx.target)
             
-        # Note that publishing the object to store is handled upstream.
-            
-    def _debind_garq(self, gdxx):
-        ''' Performs all checks, etc, necessary to release a GARQ.
-        
-        NOTE that currently, if you blindly add to _bindings_implicit, 
-        and just remove that and then call GC, there will be problems if
-        someone successfully binds to the garq independently, due to the
-        inherent race condition if the binding is uploaded before the 
-        garq.
-        
-        THOUGH, we could also add checks for existing bindings into all
-        the dispatch functions that don't allow it. That would silently
-        remove them, which is probably a better solution than allowing
-        them to mess up normal debinding processes.
-        '''
-        pass
+        # It doesn't matter if we already have it, it must be the same.
+        self._store[gdxx.guid] = gdxx.packed
             
     def _dispatch_garq(self, garq):
         ''' Does whatever is needed to preprocess a GARQ.
@@ -456,17 +498,32 @@ class MemoryPersister(_PersisterBase):
                 'ERR#1: Unknown author / recipient.'
             )
             
-        # Note that publishing the object to store is handled upstream.
+        if garq.guid in self._debindings:
+            raise NakError(
+                'ERR#3: Attempt to upload a request for which a debinding '
+                'already exists. Remove the debinding first.'
+            )
         
-    def _publish_unsafe(self, obj):
-        ''' Adds the object to the internal object store used by the 
-        persistence provider. obj should be ex. GEOC, not bytes. 
-        Performs NO verification or type checking.
-        '''
-        if obj.guid not in self._store:
-            self._store[obj.guid] = obj.packed
+        # Check to see if someone has already uploaded an illegal binding for 
+        # this request (due to the race condition in target inspection).
+        # If so, force garbage collection.
+        if garq.guid in self._bindings:
+            illegal_binding = self._bindings[garq.guid]
+            del self._bindings[illegal_binding]
+            self._gc_execute(illegal_binding)
             
-        return True
+        # Update persister state information
+        self._requests[garq.guid] = (garq.recipient,)
+        self._bindings_implicit[garq.guid] = { garq.guid }
+            
+        # It doesn't matter if we already have it, it must be the same.
+        self._store[garq.guid] = garq.packed
+        
+        # Call the subscribers after adding, in case the request it.
+        # Also in case they error out.
+        if garq.guid in self._subscriptions:
+            for callback in self._subscriptions[garq.guid]:
+                callback(garq.guid)
         
     def ping(self):
         ''' Queries the persistence provider for availability.
@@ -590,6 +647,14 @@ class MemoryPersister(_PersisterBase):
             
             # Perform a recursive garbage collection check on the target
             self._gc_check(target)
+            
+        # And add a wee bit of special processing for requests.
+        elif guid in self._requests:
+            del self._requests[guid]
+            
+        # Clean up any subscriptions.
+        if guid in self._subscriptions:
+            del self._subscriptions[guid]
             
         # Warn of state problems if still in bindings.
         if guid in self._bindings:

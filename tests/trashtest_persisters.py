@@ -62,6 +62,7 @@ class TrashTest(unittest.TestCase):
     
         self.reader1 = self.agent1.second_party
         self.reader2 = self.agent2.second_party
+        self.reader3 = self.agent3.second_party
         
     def test_trash(self):
         # ---------------------------------------
@@ -167,6 +168,40 @@ class TrashTest(unittest.TestCase):
             target = dedebind2_2.guid
         )
         
+        # Make requests between known IDs
+        handshake1_1 = self.agent1.make_request(
+            recipient = self.reader2,
+            request = self.agent1.make_handshake(
+                                                target = cont1_1.guid,
+                                                secret = secret1_1
+                                                )
+        )
+        
+        handshake2_1 = self.agent2.make_request(
+            recipient = self.reader1,
+            request = self.agent2.make_handshake(
+                                                target = cont2_1.guid,
+                                                secret = secret2_1
+                                                )
+        )
+        
+        # Make a request to an unknown ID
+        handshake3_1 = self.agent1.make_request(
+            recipient = self.reader3,
+            request = self.agent1.make_handshake(
+                                                target = cont1_1.guid,
+                                                secret = secret1_1
+                                                )
+        )
+        
+        # Make some debindings for those requests
+        degloveshake1_1 = self.agent2.make_debind(
+            target = handshake1_1.guid
+        )
+        degloveshake2_1 = self.agent1.make_debind(
+            target = handshake2_1.guid
+        )
+        
         # ---------------------------------------
         # Publish bindings and then containers
         self.server1.publish(bind1_1.packed)
@@ -175,6 +210,7 @@ class TrashTest(unittest.TestCase):
         self.server1.publish(bind2_2.packed)
         with self.assertRaises(NakError, msg='Server allowed unknown binder.'):
             self.server1.publish(bind3_1.packed)
+        with self.assertRaises(NakError, msg='Server allowed unknown binder.'):
             self.server1.publish(bind3_2.packed)
             
         self.server1.publish(cont1_1.packed)
@@ -183,12 +219,14 @@ class TrashTest(unittest.TestCase):
         self.server1.publish(cont2_2.packed)
         with self.assertRaises(NakError, msg='Server allowed unknown author.'):
             self.server1.publish(cont3_1.packed)
+        with self.assertRaises(NakError, msg='Server allowed unknown author.'):
             self.server1.publish(cont3_2.packed)
         
         # ---------------------------------------
         # Publish impersonation debindings for the second identity
         with self.assertRaises(NakError, msg='Server allowed wrong author debind.'):
             self.server1.publish(debind2_1_bad.packed)
+        with self.assertRaises(NakError, msg='Server allowed wrong author debind.'):
             self.server1.publish(debind2_2_bad.packed)
         
         # ---------------------------------------
@@ -197,6 +235,7 @@ class TrashTest(unittest.TestCase):
         self.server1.publish(debind2_2.packed)
         with self.assertRaises(NakError, msg='Server allowed binding replay.'):
             self.server1.publish(bind2_1.packed)
+        with self.assertRaises(NakError, msg='Server allowed binding replay.'):
             self.server1.publish(bind2_2.packed)
             
         self.assertIn(debind2_1.guid, self.server1._store)
@@ -209,6 +248,7 @@ class TrashTest(unittest.TestCase):
         self.server1.publish(dedebind2_2.packed)
         with self.assertRaises(NakError, msg='Server allowed debinding replay.'):
             self.server1.publish(debind2_1.packed)
+        with self.assertRaises(NakError, msg='Server allowed debinding replay.'):
             self.server1.publish(debind2_2.packed)
             
         self.assertNotIn(debind2_1.guid, self.server1._targets_debind)
@@ -236,6 +276,7 @@ class TrashTest(unittest.TestCase):
         self.server1.publish(dededebind2_2.packed)
         with self.assertRaises(NakError, msg='Server allowed dedebinding replay.'):
             self.server1.publish(dedebind2_1.packed)
+        with self.assertRaises(NakError, msg='Server allowed dedebinding replay.'):
             self.server1.publish(dedebind2_2.packed)
             
         self.assertNotIn(dedebind2_1.guid, self.server1._targets_debind)
@@ -248,6 +289,32 @@ class TrashTest(unittest.TestCase):
         
         self.assertIn(debind2_1.guid, self.server1._store)
         self.assertIn(debind2_2.guid, self.server1._store)
+        
+        # ---------------------------------------
+        # Publish requests.
+        self.server1.publish(handshake1_1.packed)
+        self.server1.publish(handshake2_1.packed)
+        with self.assertRaises(NakError, msg='Server allowed unknown recipient.'):
+            self.server1.publish(handshake3_1.packed)
+            
+        self.assertIn(handshake1_1.guid, self.server1._store)
+        self.assertIn(handshake2_1.guid, self.server1._store)
+        
+        # ---------------------------------------
+        # Debind those requests.
+        self.server1.publish(degloveshake1_1.packed)
+        self.server1.publish(degloveshake2_1.packed)
+            
+        self.assertNotIn(handshake1_1.guid, self.server1._store)
+        self.assertNotIn(handshake2_1.guid, self.server1._store)
+        
+        with self.assertRaises(NakError, msg='Server allowed request replay.'):
+            self.server1.publish(handshake1_1.packed)
+        with self.assertRaises(NakError, msg='Server allowed request replay.'):
+            self.server1.publish(handshake2_1.packed)
+            
+        self.assertNotIn(handshake1_1.guid, self.server1._store)
+        self.assertNotIn(handshake2_1.guid, self.server1._store)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
