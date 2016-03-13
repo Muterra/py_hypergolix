@@ -274,18 +274,14 @@ class MemoryPersister(_PersisterBase):
         OBJECT YOURSELF, or have already performed your own unpacking 
         step. However, will still perform signature verification.
         '''
-        if isinstance(unpacked, GIDC):
-            self._dispatch_gidc(unpacked)
-        elif isinstance(unpacked, GEOC):
-            self._dispatch_geoc(unpacked)
-        elif isinstance(unpacked, GOBS):
-            self._dispatch_gobs(unpacked)
-        elif isinstance(unpacked, GOBD):
-            self._dispatch_gobd(unpacked)
-        elif isinstance(unpacked, GDXX):
-            self._dispatch_gdxx(unpacked)
-        elif isinstance(unpacked, GARQ):
-            self._dispatch_garq(unpacked)
+        # Somewhat awkward case select mechanism.
+        for case, dispatch in zip(
+            (GIDC, GEOC, GOBS, GOBD, GDXX, GARQ), 
+            (self._dispatch_gidc, self._dispatch_geoc, self._dispatch_gobs, 
+            self._dispatch_gobd, self._dispatch_gdxx, self._dispatch_garq)):
+                if isinstance(unpacked, case):
+                    dispatch(unpacked)
+                    break
         else:
             raise TypeError('Unpacked must be an unpacked Golix object.')
         
