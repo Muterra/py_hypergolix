@@ -36,7 +36,7 @@ ERR#2: Unbound GEOC; immediately garbage collected
 ERR#3: Existing debinding for address; (de)binding rejected.
 ERR#4: Invalid or unknown target.
 ERR#5: Inconsistent author.
-
+ERR#6: Object does not exist at persistence provider.
 '''
 
 # Control * imports.
@@ -323,7 +323,7 @@ class MemoryPersister(_PersisterBase):
             self._id_bases[author] = secondparty
             
         # It doesn't matter if we already have it, it must be the same.
-        self._store[gidc.guid] = gidc.packed
+        self._store[gidc.guid] = gidc
             
     def _dispatch_geoc(self, geoc):
         ''' Does whatever is needed to preprocess a GEOC.
@@ -340,7 +340,7 @@ class MemoryPersister(_PersisterBase):
             )
             
         # It doesn't matter if we already have it, it must be the same.
-        self._store[geoc.guid] = geoc.packed
+        self._store[geoc.guid] = geoc
             
     def _dispatch_gobs(self, gobs):
         ''' Does whatever is needed to preprocess a GOBS.
@@ -377,7 +377,7 @@ class MemoryPersister(_PersisterBase):
         self._bindings_implicit[gobs.guid] = { gobs.guid }
             
         # It doesn't matter if we already have it, it must be the same.
-        self._store[gobs.guid] = gobs.packed
+        self._store[gobs.guid] = gobs
             
     def _dispatch_gobd(self, gobd):
         ''' Does whatever is needed to preprocess a GOBD.
@@ -411,7 +411,7 @@ class MemoryPersister(_PersisterBase):
         self._bindings_implicit[gobd.guid] = { gobd.guid }
             
         # It doesn't matter if we already have it, it must be the same.
-        self._store[gobd.guid] = gobd.packed
+        self._store[gobd.guid] = gobd
         
     def _dispatch_new_dynamic(self, gobd):
         pass
@@ -475,7 +475,7 @@ class MemoryPersister(_PersisterBase):
         self._gc_check(gdxx.target)
             
         # It doesn't matter if we already have it, it must be the same.
-        self._store[gdxx.guid] = gdxx.packed
+        self._store[gdxx.guid] = gdxx
             
     def _dispatch_garq(self, garq):
         ''' Does whatever is needed to preprocess a GARQ.
@@ -505,7 +505,7 @@ class MemoryPersister(_PersisterBase):
         self._bindings_implicit[garq.guid] = { garq.guid }
             
         # It doesn't matter if we already have it, it must be the same.
-        self._store[garq.guid] = garq.packed
+        self._store[garq.guid] = garq
         
         # Call the subscribers after adding, in case they request it.
         # Also in case they error out.
@@ -568,7 +568,7 @@ class MemoryPersister(_PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        pass
+        return True
         
     def get(self, guid):
         ''' Requests an object from the persistence provider, identified
@@ -577,7 +577,20 @@ class MemoryPersister(_PersisterBase):
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
         '''
-        pass
+        return self.get_unsafe(guid).packed
+        
+    def get_unsafe(self, guid):
+        ''' Returns an unpacked Golix object. Only use this if you 100%
+        trust the PersistenceProvider to perform all public verification
+        of objects.
+        
+        ACK/success is represented by returning the object
+        NAK/failure is represented by raise NakError
+        '''
+        try:
+            return self._store[guid]
+        except KeyError as e:
+            raise NakError('ERR#6: Guid not found in store.') from e
         
     def subscribe(self, guid, callback):
         ''' Request that the persistence provider update the client on
