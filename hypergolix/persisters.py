@@ -357,13 +357,7 @@ class MemoryPersister(_PersisterBase):
             )
             
         # Check for any KNOWN illegal targets, and fail loudly if so
-        if (gobs.target in self._targets_static or
-            gobs.target in self._targets_debind or
-            gobs.target in self._requests or
-            gobs.target in self._id_bases):
-                raise NakError(
-                    'ERR#4: Attempt to bind to an invalid target.'
-                )
+        self._check_illegal_gobs_target(gobs)
         
         # Check to see if someone has already uploaded an illegal binding for 
         # this static binding (due to the race condition in target inspection).
@@ -400,12 +394,7 @@ class MemoryPersister(_PersisterBase):
             )
             
         # Check for any KNOWN illegal targets, and fail loudly if so
-        if gobd.target in self._targets_static or \
-            gobd.target in self._requests or \
-            gobd.target in self._id_bases:
-                raise NakError(
-                    'ERR#4: Attempt to bind to an invalid target.'
-                )
+        self._check_illegal_gobd_target(gobd)
         
         # Update the state of local bindings
         # Assuming this is an atomic change, we'll always need to do
@@ -543,6 +532,35 @@ class MemoryPersister(_PersisterBase):
             illegal_binding = self._bindings[guid]
             del self._bindings[illegal_binding]
             self._gc_execute(illegal_binding)
+
+    def _check_illegal_gobs_target(self, gobs):
+        ''' Checks for illegal targets for GOBS objects. Only guarantees
+        a valid target if the target is already known.
+        '''
+        # Check for any KNOWN illegal targets, and fail loudly if so
+        if (gobs.target in self._targets_static or
+            gobs.target in self._targets_debind or
+            gobs.target in self._requests or
+            gobs.target in self._id_bases):
+                raise NakError(
+                    'ERR#4: Attempt to bind to an invalid target.'
+                )
+                
+        return True
+
+    def _check_illegal_gobd_target(self, gobs):
+        ''' Checks for illegal targets for GOBS objects. Only guarantees
+        a valid target if the target is already known.
+        '''
+        # Check for any KNOWN illegal targets, and fail loudly if so
+        if (gobd.target in self._targets_static or
+            gobd.target in self._requests or
+            gobd.target in self._id_bases):
+                raise NakError(
+                    'ERR#4: Attempt to bind to an invalid target.'
+                )
+                
+        return True
         
     def ping(self):
         ''' Queries the persistence provider for availability.
