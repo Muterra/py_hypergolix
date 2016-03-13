@@ -274,11 +274,16 @@ class MemoryPersister(_PersisterBase):
         OBJECT YOURSELF, or have already performed your own unpacking 
         step. However, will still perform signature verification.
         '''
-        # Somewhat awkward case select mechanism.
-        for case, dispatch in zip(
-            (GIDC, GEOC, GOBS, GOBD, GDXX, GARQ), 
-            (self._dispatch_gidc, self._dispatch_geoc, self._dispatch_gobs, 
-            self._dispatch_gobd, self._dispatch_gdxx, self._dispatch_garq)):
+        # Select a dispatch function by its type, and raise TypeError if no
+        # valid type found.
+        for case, dispatch in (
+            (GIDC, self._dispatch_gidc),
+            (GEOC, self._dispatch_geoc),
+            (GOBS, self._dispatch_gobs),
+            (GOBD, self._dispatch_gobd),
+            (GDXX, self._dispatch_gdxx),
+            (GARQ, self._dispatch_garq)
+        ):
                 if isinstance(unpacked, case):
                     dispatch(unpacked)
                     break
