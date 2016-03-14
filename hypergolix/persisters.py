@@ -665,12 +665,18 @@ class MemoryPersister(_PersisterBase):
         elif guid in self._id_bases:
             return
         
-        # Case 3: Still bound; something else is blocking. Warn.
+        # Case 3: Still bound?
         elif guid in self._bindings:
-            warnings.warn(
-                message = str(guid) + ' has outstanding bindings.',
-                category = PersistenceWarning
-            )
+            # Case 3a: still bound; something else is blocking. Warn.
+            if len(self._bindings[guid]) > 0:
+                warnings.warn(
+                    message = str(guid) + ' has outstanding bindings.',
+                    category = PersistenceWarning
+                )
+            # Case 3b: the binding length is zero; unbound; also remove.
+            else:
+                del self._bindings[guid]
+                self._gc_execute(guid)
         # The resource is unbound. Perform GC.
         else:
             self._gc_execute(guid)
