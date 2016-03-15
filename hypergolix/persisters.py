@@ -775,8 +775,8 @@ class MemoryPersister(_PersisterBase):
             
             # Clean up the forward lookup
             del self._targets[guid]
-                
-        if guid in self._requests:
+        # It cannot be both a _target and a _request
+        elif guid in self._requests:
             del self._requests[guid]
             
         # Clean up any subscriptions.
