@@ -765,17 +765,19 @@ class MemoryPersister(_PersisterBase):
         ''' Performs garbage collection on guid.
         '''
         # This means it's a binding or debinding
-        if guid in self._forward_references:
-            if guid in self._targets:
-                # Clean up the reverse lookup, then remove any empty sets
-                for target in self._targets[guid][1]:
-                    self._reverse_references[target].remove(guid)
-                    self._reverse_references.remove_empty(target)
-                    # Perform recursive garbage collection check on the target
-                    self._gc_check(target)
-                
+        if guid in self._targets:
+            # Clean up the reverse lookup, then remove any empty sets
+            for target in self._targets[guid][1]:
+                self._reverse_references[target].remove(guid)
+                self._reverse_references.remove_empty(target)
+                # Perform recursive garbage collection check on the target
+                self._gc_check(target)
+            
             # Clean up the forward lookup
-            del self._forward_references[guid]
+            del self._targets[guid]
+                
+        if guid in self._requests:
+            del self._requests[guid]
             
         # Clean up any subscriptions.
         if guid in self._subscriptions:
