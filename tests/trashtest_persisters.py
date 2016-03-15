@@ -241,6 +241,14 @@ class TrashTest(unittest.TestCase):
             history = [dyn1_1a.guid]
         )
         
+        # Make some debindings 
+        dyndebind1_1 = self.agent1.make_debind(
+            target = dyn1_1b.guid_dynamic
+        )
+        dyndebind2_1 = self.agent2.make_debind(
+            target = dyn2_1b.guid_dynamic
+        )
+        
         # ---------------------------------------
         # Publish bindings and then containers
         self.server1.publish(bind1_1.packed)
@@ -371,6 +379,7 @@ class TrashTest(unittest.TestCase):
         self.server1.publish(debind1_1.packed)
         self.assertNotIn(bind1_1.guid, self.server1._store)
         self.assertIn(cont1_1.guid, self.server1._store)
+        self.assertIn(cont2_1.guid, self.server1._store)
         # Now let's try some fraudulent updates
         with self.assertRaises(NakError, msg='Server allowed fraudulent dynamic.'):
             self.server1.publish(dynF_1b.packed)
@@ -379,10 +388,40 @@ class TrashTest(unittest.TestCase):
         # Now the real updates.
         self.server1.publish(dyn1_1b.packed)
         self.server1.publish(dyn2_1b.packed)
-        # And now test that cont1 was actually GC'd
+        self.server1.publish(cont2_2.packed)
+        # And now test that containers were actually GC'd
         self.assertNotIn(cont1_1.guid, self.server1._store)
+        self.assertNotIn(cont2_1.guid, self.server1._store)
         # And that the previous frame (but not its references) were as well
         self.assertIn(dyn1_1b.guid, self.server1._store)
+        self.assertIn(dyn2_1b.guid, self.server1._store)
+        self.assertIn(cont2_2.guid, self.server1._store)
+        
+        # Make sure we cannot replay old frames.
+        with self.assertRaises(NakError, msg='Server allowed dyn frame replay.'):
+            self.server1.publish(dyn1_1a.packed)
+        with self.assertRaises(NakError, msg='Server allowed dyn frame replay.'):
+            self.server1.publish(dyn2_1a.packed)
+        
+        # Now let's try debinding the dynamics.
+        self.server1.publish(dyndebind1_1.packed)
+        self.server1.publish(dyndebind2_1.packed)
+        with self.assertRaises(NakError, msg='Server allowed debound dyn replay.'):
+            self.server1.publish(dyn1_1a.packed)
+        with self.assertRaises(NakError, msg='Server allowed debound dyn replay.'):
+            self.server1.publish(dyn2_1a.packed)
+        # And check their state.
+        self.assertIn(dyndebind1_1.guid, self.server1._store)
+        self.assertIn(dyndebind2_1.guid, self.server1._store)
+        
+        self.assertNotIn(dyn1_1a.guid_dynamic, self.server1._store)
+        self.assertNotIn(dyn2_1a.guid_dynamic, self.server1._store)
+        self.assertNotIn(dyn1_1a.guid, self.server1._store)
+        self.assertNotIn(dyn1_1b.guid, self.server1._store)
+        self.assertNotIn(dyn2_1a.guid, self.server1._store)
+        self.assertNotIn(dyn2_1b.guid, self.server1._store)
+        self.assertIn(cont1_2.guid, self.server1._store)
+        self.assertNotIn(cont2_2.guid, self.server1._store)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired

@@ -187,25 +187,26 @@ class MemoryPersister(_PersisterBase):
             self._id_proxies
         )
         # All objects. {<Guid>: <packed object>}
+        # Includes proxy reference from dynamic guids.
         self._store = {}
-        # Dynamic states. {<Dynamic Guid>: deque([<current history>])}
-        self._dynamic_states = {}
+        # Dynamic states. {<Dynamic Guid>: tuple(<current history>)}
+        # self._dynamic_states = {}
         
         # Forward lookup for static bindings, 
         # {
-        #   <binding Guid>: (<binder Guid>, <bound Guid>)
+        #   <binding Guid>: (<binder Guid>, tuple(<bound Guid>))
         # }
         self._targets_static = {}
         
         # Forward lookup for dynamic bindings, 
         # {
-        #   <dynamic guid>: (<binder guid>, <current target>)
+        #   <dynamic guid>: (<binder guid>, tuple(<current history>))
         # }
         self._targets_dynamic = {}
         
         # Forward lookup for debindings, 
         # {
-        #   <debinding Guid>: (<debinder Guid>, <debound Guid>)
+        #   <debinding Guid>: (<debinder Guid>, tuple(<debound Guid>))
         # }
         self._targets_debind = {}
         
@@ -379,7 +380,7 @@ class MemoryPersister(_PersisterBase):
             self._bindings_static[gobs.target] = { gobs.guid }
         # These must, by definition, be identical for any repeated guid, so 
         # it doesn't much matter if we already have them.
-        self._targets_static[gobs.guid] = gobs.binder, gobs.target
+        self._targets_static[gobs.guid] = gobs.binder, (gobs.target,)
         self._bindings_implicit[gobs.guid] = { gobs.guid }
             
         # It doesn't matter if we already have it, it must be the same.
@@ -393,7 +394,7 @@ class MemoryPersister(_PersisterBase):
             obj = gobd
         )
         
-        if gobd.guid in self._debindings:
+        if gobd.guid_dynamic in self._debindings:
             raise NakError(
                 'ERR#3: Attempt to upload a binding for which a debinding '
                 'already exists. Remove the debinding first.'
@@ -410,38 +411,37 @@ class MemoryPersister(_PersisterBase):
             self._dispatch_new_dynamic(gobd)
             
         # Status check: we now know we have a legal binding, and that
-        # self._dynamic_states[guid_dynamic] exists, and that any existing
+        # self._targets_dynamic[guid_dynamic] exists, and that any existing
         # **targets** have been removed and GC'd.
         
-        old_history = set(self._dynamic_states[gobd.guid_dynamic])
+        old_history = set(self._targets_dynamic[gobd.guid_dynamic][1])
         new_history = set(gobd.history)
         
         # Remove implicit bindings for any expired frames and call GC_check on
         # them.
         # Might want to make this suppress persistence warnings.
         for expired in old_history - new_history:
-            del self._bindings_implicit[expired]
+            # Remove any explicit bindings from the dynamic guid to the frames
+            self._bindings_dynamic[expired].remove(gobd.guid_dynamic)
             self._gc_check(expired)
             
-        # Create a new state.
-        self._dynamic_states[gobd.guid_dynamic] = (gobd.guid,) + tuple(gobd.history)
-        
-        # Update the state of local bindings
-        # Assuming this is an atomic change, we'll always need to do
-        # both of these, or neither.
+        # Update the state of target bindings
         if gobd.target in self._bindings_dynamic:
             self._bindings_dynamic[gobd.target].add(gobd.guid_dynamic)
         else:
             self._bindings_dynamic[gobd.target] = { gobd.guid_dynamic }
-        # These must, by definition, be identical for any repeated guid, so 
-        # it doesn't much matter if we already have them.
         
-        # NOTE: This needs to be fixed to incorporate history. Or does it?
-        self._targets_dynamic[gobd.guid_dynamic] = gobd.binder, gobd.target
-        self._bindings_implicit[gobd.guid] = { gobd.guid_dynamic }
+        # Create a new state.
+        self._targets_dynamic[gobd.guid_dynamic] = (
+            gobd.binder,
+            (gobd.guid,) + tuple(gobd.history) + (gobd.target,)
+        )
+        self._bindings_dynamic[gobd.guid] = { gobd.guid_dynamic }
             
         # It doesn't matter if we already have it, it must be the same.
         self._store[gobd.guid] = gobd
+        # Overwrite any existing value, or create a new one.
+        self._store[gobd.guid_dynamic] = gobd
         
     def _dispatch_new_dynamic(self, gobd):
         ''' Performs validation for a dynamic binding that the persister
@@ -464,7 +464,7 @@ class MemoryPersister(_PersisterBase):
             )
             
         # self._dynamic_states[gobd.guid_dynamic] = collections.deque()
-        self._dynamic_states[gobd.guid_dynamic] = tuple()
+        self._targets_dynamic[gobd.guid_dynamic] = (None, tuple())
         self._bindings_implicit[gobd.guid_dynamic] = { gobd.guid_dynamic }
         
     def _dispatch_updated_dynamic(self, gobd):
@@ -482,20 +482,23 @@ class MemoryPersister(_PersisterBase):
             
         
         # Verify history contains existing most recent frame
-        if self._dynamic_states[gobd.guid_dynamic][0] not in gobd.history:
+        if self._targets_dynamic[gobd.guid_dynamic][1][0] not in gobd.history:
             raise NakError(
                 'ERR#7: Illegal dynamic frame. Attempted to upload a new '
                 'dynamic frame, but its history did not contain the most '
                 'recent frame.'
             )
             
-        # Release hold on previous target. WARNING: currently this means that
-        # updating dynamic bindings is a non-atomic change.
-        old_target = self._targets_dynamic[gobd.guid_dynamic][1]
-        # This should always be true, unless something was forcibly GC'd
-        if old_target in self._bindings_dynamic:
-            self._bindings_dynamic[old_target].remove(gobd.guid_dynamic)
-            self._gc_check(old_target)
+        # This is unnecessary -- it's all handled through self._targets_dynamic
+        # in the dispatch_gobd method.
+        # # Release hold on previous target. WARNING: currently this means that
+        # # updating dynamic bindings is a non-atomic change.
+        # old_frame = self._targets_dynamic[gobd.guid_dynamic][1][0]
+        # old_target = self._store[old_frame].target
+        # # This should always be true, unless something was forcibly GC'd
+        # if old_target in self._bindings_dynamic:
+        #     self._bindings_dynamic[old_target].remove(gobd.guid_dynamic)
+        #     self._gc_check(old_target)
             
     def _dispatch_gdxx(self, gdxx):
         ''' Does whatever is needed to preprocess a GDXX.
@@ -536,7 +539,7 @@ class MemoryPersister(_PersisterBase):
         # Debindings can only target one thing, so it doesn't much matter if it
         # already exists (we've already checked for replays)
         self._debindings[gdxx.target] = { gdxx.guid }
-        self._targets_debind[gdxx.guid] = gdxx.debinder, gdxx.target
+        self._targets_debind[gdxx.guid] = gdxx.debinder, (gdxx.target,)
         self._bindings_implicit[gdxx.guid] = { gdxx.guid }
         
         # Targets will always have an implicit binding. Remove it.
@@ -765,11 +768,11 @@ class MemoryPersister(_PersisterBase):
         if guid in self._forward_references:
             if guid in self._targets:
                 # Clean up the reverse lookup, then remove any empty sets
-                target = self._targets[guid][1]
-                self._reverse_references[target].remove(guid)
-                self._reverse_references.remove_empty(target)
-                # Perform a recursive garbage collection check on the target
-                self._gc_check(target)
+                for target in self._targets[guid][1]:
+                    self._reverse_references[target].remove(guid)
+                    self._reverse_references.remove_empty(target)
+                    # Perform recursive garbage collection check on the target
+                    self._gc_check(target)
                 
             # Clean up the forward lookup
             del self._forward_references[guid]
