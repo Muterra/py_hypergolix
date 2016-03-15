@@ -137,6 +137,14 @@ class TrashTest(unittest.TestCase):
         )
         
         # Make some debindings 
+        debind1_1 = self.agent1.make_debind(
+            target = bind1_1.guid
+        )
+        debind1_2 = self.agent1.make_debind(
+            target = bind1_2.guid
+        )
+        
+        # Make some debindings 
         debind2_1 = self.agent2.make_debind(
             target = bind2_1.guid
         )
@@ -200,6 +208,37 @@ class TrashTest(unittest.TestCase):
         )
         degloveshake2_1 = self.agent1.make_debind(
             target = handshake2_1.guid
+        )
+        
+        # Make some dynamic bindings!
+        dyn1_1a = self.agent1.make_bind_dynamic(
+            target = cont1_1.guid
+        )
+        dyn1_1b = self.agent1.make_bind_dynamic(
+            target = cont1_2.guid,
+            guid_dynamic = dyn1_1a.guid_dynamic,
+            history = [dyn1_1a.guid]
+        )
+        
+        dyn2_1a = self.agent2.make_bind_dynamic(
+            target = cont2_1.guid
+        )
+        dyn2_1b = self.agent2.make_bind_dynamic(
+            target = cont2_2.guid,
+            guid_dynamic = dyn2_1a.guid_dynamic,
+            history = [dyn2_1a.guid]
+        )
+        
+        # And make some fraudulent ones
+        dynF_1b = self.agent1.make_bind_dynamic(
+            target = cont1_2.guid,
+            guid_dynamic = dyn2_1a.guid_dynamic,
+            history = [dyn2_1a.guid]
+        )
+        dynF_2b = self.agent2.make_bind_dynamic(
+            target = cont2_2.guid,
+            guid_dynamic = dyn1_1a.guid_dynamic,
+            history = [dyn1_1a.guid]
         )
         
         # ---------------------------------------
@@ -315,6 +354,35 @@ class TrashTest(unittest.TestCase):
             
         self.assertNotIn(handshake1_1.guid, self.server1._store)
         self.assertNotIn(handshake2_1.guid, self.server1._store)
+        
+        # ---------------------------------------
+        # Test some dynamic bindings.
+        # First make sure the container is actually not there.
+        self.assertNotIn(cont2_1.guid, self.server1._store)
+        self.assertNotIn(cont2_2.guid, self.server1._store)
+        # Now let's see what happens if we upload stuff
+        self.server1.publish(dyn1_1a.packed)
+        self.server1.publish(dyn2_1a.packed)
+        self.server1.publish(cont2_1.packed)
+        self.assertIn(dyn1_1a.guid, self.server1._store)
+        self.assertIn(dyn2_1a.guid, self.server1._store)
+        self.assertIn(cont2_1.guid, self.server1._store)
+        # And make sure that the container is retained if we remove the static
+        self.server1.publish(debind1_1.packed)
+        self.assertNotIn(bind1_1.guid, self.server1._store)
+        self.assertIn(cont1_1.guid, self.server1._store)
+        # Now let's try some fraudulent updates
+        with self.assertRaises(NakError, msg='Server allowed fraudulent dynamic.'):
+            self.server1.publish(dynF_1b.packed)
+        with self.assertRaises(NakError, msg='Server allowed fraudulent dynamic.'):
+            self.server1.publish(dynF_2b.packed)
+        # Now the real updates.
+        self.server1.publish(dyn1_1b.packed)
+        self.server1.publish(dyn2_1b.packed)
+        # And now test that cont1 was actually GC'd
+        self.assertNotIn(cont1_1.guid, self.server1._store)
+        # And that the previous frame (but not its references) were as well
+        self.assertIn(dyn1_1b.guid, self.server1._store)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired

@@ -37,6 +37,10 @@ ERR#3: Existing debinding for address; (de)binding rejected.
 ERR#4: Invalid or unknown target.
 ERR#5: Inconsistent author.
 ERR#6: Object does not exist at persistence provider.
+ERR#7: Attempt to upload illegal frame for dynamic binding. Indicates 
+       uploading a new dynamic binding without the root binding, or that
+       the uploaded frame does not contain any existing frames in its 
+       history.
 '''
 
 # Control * imports.
@@ -184,6 +188,8 @@ class MemoryPersister(_PersisterBase):
         )
         # All objects. {<Guid>: <packed object>}
         self._store = {}
+        # Dynamic states. {<Dynamic Guid>: deque([<current history>])}
+        self._dynamic_states = {}
         
         # Forward lookup for static bindings, 
         # {
@@ -193,7 +199,7 @@ class MemoryPersister(_PersisterBase):
         
         # Forward lookup for dynamic bindings, 
         # {
-        #   <dynamic guid>: (<binder guid>, (<history>))
+        #   <dynamic guid>: (<binder guid>, <current target>)
         # }
         self._targets_dynamic = {}
         
@@ -396,32 +402,100 @@ class MemoryPersister(_PersisterBase):
         # Check for any KNOWN illegal targets, and fail loudly if so
         self._check_illegal_gobd_target(gobd)
         
+        # This needs to be done before updating local bindings, since it does
+        # some verification.
+        if gobd.guid_dynamic in self._targets_dynamic:
+            self._dispatch_updated_dynamic(gobd)
+        else:
+            self._dispatch_new_dynamic(gobd)
+            
+        # Status check: we now know we have a legal binding, and that
+        # self._dynamic_states[guid_dynamic] exists, and that any existing
+        # **targets** have been removed and GC'd.
+        
+        old_history = set(self._dynamic_states[gobd.guid_dynamic])
+        new_history = set(gobd.history)
+        
+        # Remove implicit bindings for any expired frames and call GC_check on
+        # them.
+        # Might want to make this suppress persistence warnings.
+        for expired in old_history - new_history:
+            del self._bindings_implicit[expired]
+            self._gc_check(expired)
+            
+        # Create a new state.
+        self._dynamic_states[gobd.guid_dynamic] = (gobd.guid,) + tuple(gobd.history)
+        
         # Update the state of local bindings
         # Assuming this is an atomic change, we'll always need to do
         # both of these, or neither.
         if gobd.target in self._bindings_dynamic:
-            self._bindings_dynamic[gobd.target].add(gobd.guid)
+            self._bindings_dynamic[gobd.target].add(gobd.guid_dynamic)
         else:
-            self._bindings_dynamic[gobd.target] = { gobd.guid }
+            self._bindings_dynamic[gobd.target] = { gobd.guid_dynamic }
         # These must, by definition, be identical for any repeated guid, so 
         # it doesn't much matter if we already have them.
         
         # NOTE: This needs to be fixed to incorporate history. Or does it?
-        self._targets_dynamic[gobd.guid] = gobd.binder, gobd.target
-        self._bindings_implicit[gobd.guid] = { gobd.guid }
+        self._targets_dynamic[gobd.guid_dynamic] = gobd.binder, gobd.target
+        self._bindings_implicit[gobd.guid] = { gobd.guid_dynamic }
             
         # It doesn't matter if we already have it, it must be the same.
         self._store[gobd.guid] = gobd
         
     def _dispatch_new_dynamic(self, gobd):
-        pass
+        ''' Performs validation for a dynamic binding that the persister
+        is encountering for the first time. Mostly ensures that the
+        first frame seen by the persistence provider is, in fact, the
+        root frame for the binding, in order to validate the dynamic 
+        address.
+        
+        Also preps the history declaration so that subsequent operations
+        in _dispatch_gobd can be identical between new and updated 
+        bindings.
+        '''
+        # Note: golix._getlow.GOBD will perform verification of correct dynamic
+        # hash address when unpacking new bindings, so we only need to make
+        # sure that it has no history.
+        if gobd.history:
+            raise NakError(
+                'ERR#7: Illegal dynamic frame. Cannot upload a frame with '
+                'history as the first frame in a persistence provider.'
+            )
+            
+        # self._dynamic_states[gobd.guid_dynamic] = collections.deque()
+        self._dynamic_states[gobd.guid_dynamic] = tuple()
+        self._bindings_implicit[gobd.guid_dynamic] = { gobd.guid_dynamic }
         
     def _dispatch_updated_dynamic(self, gobd):
-        pass
+        ''' Performs validation for a dynamic binding from which the 
+        persister has an existing frame. Checks author consistency, 
+        historical progression, and calls garbage collection on any 
+        expired frames.
+        '''
+        # Verify consistency of binding author
+        if gobd.binder != self._targets_dynamic[gobd.guid_dynamic][0]:
+            raise NakError(
+                'ERR#5: Dynamic binding author is inconsistent with an '
+                'existing dynamic binding at the same address.'
+            )
+            
         
-        # NOTE: this needs to call _gc_check on any updated frames. Should it 
-        # also suppress any PersistenceWarnings? Impossible to know if it was
-        # intentionally persistent or not.
+        # Verify history contains existing most recent frame
+        if self._dynamic_states[gobd.guid_dynamic][0] not in gobd.history:
+            raise NakError(
+                'ERR#7: Illegal dynamic frame. Attempted to upload a new '
+                'dynamic frame, but its history did not contain the most '
+                'recent frame.'
+            )
+            
+        # Release hold on previous target. WARNING: currently this means that
+        # updating dynamic bindings is a non-atomic change.
+        old_target = self._targets_dynamic[gobd.guid_dynamic][1]
+        # This should always be true, unless something was forcibly GC'd
+        if old_target in self._bindings_dynamic:
+            self._bindings_dynamic[old_target].remove(gobd.guid_dynamic)
+            self._gc_check(old_target)
             
     def _dispatch_gdxx(self, gdxx):
         ''' Does whatever is needed to preprocess a GDXX.
@@ -548,7 +622,7 @@ class MemoryPersister(_PersisterBase):
                 
         return True
 
-    def _check_illegal_gobd_target(self, gobs):
+    def _check_illegal_gobd_target(self, gobd):
         ''' Checks for illegal targets for GOBS objects. Only guarantees
         a valid target if the target is already known.
         '''
@@ -577,6 +651,7 @@ class MemoryPersister(_PersisterBase):
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
         '''
+        # NEED TO UPDATE THIS to successfully deal with dynamic bindings.
         return self.get_unsafe(guid).packed
         
     def get_unsafe(self, guid):
@@ -587,6 +662,7 @@ class MemoryPersister(_PersisterBase):
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
         '''
+        # NEED TO UPDATE THIS to successfully deal with dynamic bindings.
         try:
             return self._store[guid]
         except KeyError as e:
@@ -674,6 +750,7 @@ class MemoryPersister(_PersisterBase):
                     category = PersistenceWarning
                 )
             # Case 3b: the binding length is zero; unbound; also remove.
+            # This currently only happens when updating dynamic bindings.
             else:
                 del self._bindings[guid]
                 self._gc_execute(guid)
