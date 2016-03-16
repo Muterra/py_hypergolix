@@ -51,8 +51,16 @@ from golix import FirstParty
 # ###############################################
 # Testing
 # ###############################################
+
     
 class TrashTest(unittest.TestCase):
+    def dummy_callback(self, guid):
+        print('--------------------------------')
+        print('Subscription update received.')
+        print(str(bytes(guid)))
+        print('Referenced resource:')
+        print(self.server1._store[guid])
+    
     def setUp(self):
         self.server1 = MemoryPersister()
     
@@ -338,6 +346,12 @@ class TrashTest(unittest.TestCase):
         self.assertIn(debind2_2.guid, self.server1._store)
         
         # ---------------------------------------
+        # Subscribe to requests.
+        
+        self.server1.subscribe(self.agent1.guid, self.dummy_callback)
+        self.server1.subscribe(self.agent2.guid, self.dummy_callback)
+        
+        # ---------------------------------------
         # Publish requests.
         self.server1.publish(handshake1_1.packed)
         self.server1.publish(handshake2_1.packed)
@@ -385,6 +399,11 @@ class TrashTest(unittest.TestCase):
             self.server1.publish(dynF_1b.packed)
         with self.assertRaises(NakError, msg='Server allowed fraudulent dynamic.'):
             self.server1.publish(dynF_2b.packed)
+            
+        # Subscribe to updates before actually sending the real ones.
+        self.server1.subscribe(dyn1_1a.guid_dynamic, self.dummy_callback)
+        self.server1.subscribe(dyn2_1a.guid_dynamic, self.dummy_callback)
+            
         # Now the real updates.
         self.server1.publish(dyn1_1b.packed)
         self.server1.publish(dyn2_1b.packed)
@@ -422,6 +441,11 @@ class TrashTest(unittest.TestCase):
         self.assertNotIn(dyn2_1b.guid, self.server1._store)
         self.assertIn(cont1_2.guid, self.server1._store)
         self.assertNotIn(cont2_2.guid, self.server1._store)
+        
+        # Test remaining subscription methods
+        self.server1.list_subs()
+        self.server1.unsubscribe(self.agent1.guid)
+        self.server1.unsubscribe(self.agent2.guid)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired

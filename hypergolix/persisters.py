@@ -144,7 +144,8 @@ class _PersisterBase(metaclass=abc.ABCMeta):
     
     @abc.abstractmethod
     def list_subs(self):
-        ''' List all currently subscribed guids.
+        ''' List all currently subscribed guids for the connected 
+        client.
         
         ACK/success is represented by returning a list of guids.
         NAK/failure is represented by raise NakError
@@ -152,11 +153,23 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         pass
     
     @abc.abstractmethod
-    def list_binders(self, guid):
+    def list_bindings(self, guid):
         ''' Request a list of identities currently binding to the passed
         guid.
         
         ACK/success is represented by returning a list of guids.
+        NAK/failure is represented by raise NakError
+        '''
+        pass
+    
+    @abc.abstractmethod
+    def query_debinding(self, guid):
+        ''' Request a the address of any debindings of guid, if they
+        exist.
+        
+        ACK/success is represented by returning:
+            1. The debinding GUID if it exists
+            2. None if it does not exist
         NAK/failure is represented by raise NakError
         '''
         pass
@@ -443,6 +456,13 @@ class MemoryPersister(_PersisterBase):
         # Overwrite any existing value, or create a new one.
         self._store[gobd.guid_dynamic] = gobd
         
+        # Update any subscribers (if they exist) that an updated frame has 
+        # been issued
+        self._check_for_subs(
+            subscription_guid = gobd.guid_dynamic,
+            notification_guid = gobd.guid
+        )
+        
     def _dispatch_new_dynamic(self, gobd):
         ''' Performs validation for a dynamic binding that the persister
         is encountering for the first time. Mostly ensures that the
@@ -530,7 +550,15 @@ class MemoryPersister(_PersisterBase):
                 'being debound.'
             )
             
-        # Update any subscribers (if they exist) that a GDXX has been issued
+        # Note: if the entire rest of this is not performed atomically, errors
+        # will result.
+            
+        # Must be added to the store before updating subscribers.
+        self._store[gdxx.guid] = gdxx
+            
+        # Update any subscribers (if they exist) that a GDXX has been issued.
+        # Must be called before removing bindings, or the subscription record
+        # will be removed.
         self._check_for_subs(
             subscription_guid = gdxx.target,
             notification_guid = gdxx.guid
@@ -550,9 +578,6 @@ class MemoryPersister(_PersisterBase):
         # Note that, to correctly handle implicit bindings, this MUST come
         # after adding the current debinding to the internal store.
         self._gc_check(gdxx.target)
-            
-        # It doesn't matter if we already have it, it must be the same.
-        self._store[gdxx.guid] = gdxx
             
     def _dispatch_garq(self, garq):
         ''' Does whatever is needed to preprocess a GARQ.
@@ -654,7 +679,6 @@ class MemoryPersister(_PersisterBase):
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
         '''
-        # NEED TO UPDATE THIS to successfully deal with dynamic bindings.
         return self.get_unsafe(guid).packed
         
     def get_unsafe(self, guid):
@@ -665,7 +689,6 @@ class MemoryPersister(_PersisterBase):
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
         '''
-        # NEED TO UPDATE THIS to successfully deal with dynamic bindings.
         try:
             return self._store[guid]
         except KeyError as e:
@@ -686,8 +709,20 @@ class MemoryPersister(_PersisterBase):
         
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
-        '''
-        pass
+        '''    
+        if not callable(callback):
+            raise TypeError('callback must be callable.')
+            
+        if (guid not in self._targets_dynamic and 
+            guid not in self._secondparties):
+                raise NakError(
+                    'ERR#4: Invalid or unknown target for subscription.'
+                )
+                
+        if guid in self._subscriptions:
+            self._subscriptions[guid].append(callback)
+        else:
+            self._subscriptions[guid] = [callback]
         
     def unsubscribe(self, guid):
         ''' Unsubscribe. Client must have an existing subscription to 
@@ -696,21 +731,38 @@ class MemoryPersister(_PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        pass
+        if guid in self._subscriptions:
+            del self._subscriptions[guid]
+        else:
+            raise NakError(
+                'ERR#4: Invalid or unknown target for unsubscription.'
+            )
         
     def list_subs(self):
-        ''' List all currently subscribed guids.
+        ''' List all currently subscribed guids for the connected 
+        client.
+        
+        ACK/success is represented by returning a list of guids.
+        NAK/failure is represented by raise NakError
+        '''
+        return tuple(self._subscriptions)
+    
+    def list_bindings(self, guid):
+        ''' Request a list of identities currently binding to the passed
+        guid.
         
         ACK/success is represented by returning a list of guids.
         NAK/failure is represented by raise NakError
         '''
         pass
-    
-    def list_binders(self, guid):
-        ''' Request a list of identities currently binding to the passed
-        guid.
         
-        ACK/success is represented by returning a list of guids.
+    def query_debinding(self, guid):
+        ''' Request a the address of any debindings of guid, if they
+        exist.
+        
+        ACK/success is represented by returning:
+            1. The debinding GUID if it exists
+            2. None if it does not exist
         NAK/failure is represented by raise NakError
         '''
         pass
