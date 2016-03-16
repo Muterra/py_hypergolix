@@ -47,9 +47,13 @@ DO PERSISTENCE PROVIDERS FIRST.
 # package through __init__.py
 __all__ = [
     'Agent', 
+    'StaticObject',
+    'DynamicObject'
 ]
 
 # Global dependencies
+import collections
+
 from golix import FirstParty
 from golix import SecondParty
 from golix import Guid
@@ -138,23 +142,39 @@ class Agent():
         ''' Closes the stream.
         '''
         pass
-    
         
-class Stream():
-    ''' Streams cannot update themselves. Only Agents can modify them.
-    If you subclass, you should be careful to avoid putting any refs to
-    Agents within Streams, because you'll be increasing the attack (and 
-    even just exposure) surface of your private key data.
+
+class _ObjectBase:
+    ''' Hypergolix objects cannot be directly updated. They must be 
+    passed to Agents for modification (if applicable). They do not (and, 
+    if you subclass, for security reasons they should not) reference a
+    parent Agent.
     
-    This is a local plaintext object. Persistence providers will never
-    have anything to do with it.
+    Objects provide a simple interface to the arbitrary binary data 
+    contained within Golix containers. They track both the plaintext, 
+    and the associated GUID. They do NOT expose the secret key material
+    of the container.
+    
+    From the perspective of an external method, *all* Objects should be 
+    treated as read-only. They should only ever be modified by Agents.
     '''
-    def __init__(self, address, state):
-        ''' Creates a new stream. Address is the dynamic guid. State is
+    __slots__ = [
+        '_author',
+        '_state',
+        '_address'
+    ]
+    
+    def __init__(self, author, address, state):
+        ''' Creates a new object. Address is the dynamic guid. State is
         the initial state.
         '''
+        self._author = author
         self._state = state
         self._address = address
+        
+    @property
+    def author(self):
+        return self._author
         
     @property
     def address(self):
@@ -163,3 +183,102 @@ class Stream():
     @property
     def state(self):
         return self._state
+
+        
+class StaticObject(_ObjectBase):
+    ''' An immutable object. Can be produced directly, or by freezing a
+    dynamic object.
+    '''
+    # This might be a little excessive, but I guess it's nice to have a
+    # little extra protection against updates?
+    def __setattr__(self, name, value):
+        ''' Prevent rewriting declared attributes.
+        '''
+        try:
+            __ = getattr(self, name)
+        except AttributeError:
+            super().__setattr__(name, value)
+        else:
+            raise AttributeError(
+                'StaticObjects do not support mutation of attributes once '
+                'they have been declared.'
+            )
+            
+    def __delattr__(self, name):
+        ''' Prevent deleting declared attributes.
+        '''
+        try:
+            __ = getattr(self, name)
+        except AttributeError:
+            # Note that this will also raise an AttributeError!
+            super().__delattr__(name, value)
+        else:
+            raise AttributeError(
+                'StaticObjects do not support deletion of attributes once '
+                'they have been declared.'
+            )
+            
+    def __repr__(self):
+        c = type(self).__name__
+        s = ('('
+                'author=' + repr(self.author) + ', '
+                'address=' + repr(self.address) + ', '
+                'state=' + repr(self.state) +
+            ')'
+        )
+        return c + s
+    
+    
+class DynamicObject(_ObjectBase):
+    ''' A mutable object. Updatable by Agents.
+    Interestingly, this could also do the whole __setattr__/__delattr__
+    thing from above, since we're overriding state, and buffer updating
+    is handled by the internal deque.
+    '''
+    __slots__ = [
+        '_author',
+        '_state',
+        '_address',
+        '_buffer'
+    ]
+    
+    def __init__(self, author, address, buffer=None, state=None):
+        # Catch declaring both -- super's _state is unused here.
+        if buffer is not None and state is not None:
+            raise ValueError(
+                'Declare either buffer or state, but not both.'
+            )
+            
+        elif state is not None:
+            self._buffer = collections.deque((state,))
+        
+        elif buffer is not None:
+            self._buffer = collections.deque(buffer)
+            
+        else:
+            self._buffer = collections.deque()
+            
+        # super's _state is unused due to state@property override.
+        super().__init__(author=author, address=address, state=None)
+        
+    @property
+    def state(self):
+        return self._buffer[0]
+        
+    @property
+    def buffer(self):
+        ''' Returns a tuple of the current buffer.
+        '''
+        # Note that this has the added benefit of preventing assignment
+        # to the internal buffer!
+        return tuple(self._buffer)
+            
+    def __repr__(self):
+        c = type(self).__name__
+        s = ('('
+                'author=' + repr(self.author) + ', '
+                'address=' + repr(self.address) + ', '
+                'buffer=' + repr(self.buffer) +
+            ')'
+        )
+        return c + s
