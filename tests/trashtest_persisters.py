@@ -53,7 +53,7 @@ from golix import FirstParty
 # ###############################################
 
     
-class TrashTest(unittest.TestCase):
+class MemoryPersisterTrashtest(unittest.TestCase):
     def dummy_callback(self, guid):
         print('--------------------------------')
         print('Subscription update received.')
@@ -442,10 +442,21 @@ class TrashTest(unittest.TestCase):
         self.assertIn(cont1_2.guid, self.server1._store)
         self.assertNotIn(cont2_2.guid, self.server1._store)
         
+        # ----------------------------------------
         # Test remaining subscription methods
         self.server1.list_subs()
         self.server1.unsubscribe(self.agent1.guid)
-        self.server1.unsubscribe(self.agent2.guid)
+        self.server1.disconnect()
+        
+        # Test listing bindings
+        holdings_cont1_2 = self.server1.list_bindings(cont1_2.guid)
+        self.assertEqual(holdings_cont1_2, {bind1_2.guid})
+        
+        # Test querying debindings
+        debindings_cont1_1 = self.server1.query_debinding(bind1_1.guid)
+        self.assertEqual(debindings_cont1_1, debind1_1.guid)
+        debindings_cont1_2 = self.server1.query_debinding(bind1_2.guid)
+        self.assertIsNone(debindings_cont1_2)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired

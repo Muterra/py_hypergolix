@@ -754,7 +754,12 @@ class MemoryPersister(_PersisterBase):
         ACK/success is represented by returning a list of guids.
         NAK/failure is represented by raise NakError
         '''
-        pass
+        result = set()
+        if guid in self._bindings_static:
+            result.update(self._bindings_static[guid])
+        if guid in self._bindings_dynamic:
+            result.update(self._bindings_dynamic[guid])
+        return result
         
     def query_debinding(self, guid):
         ''' Request a the address of any debindings of guid, if they
@@ -765,18 +770,22 @@ class MemoryPersister(_PersisterBase):
             2. None if it does not exist
         NAK/failure is represented by raise NakError
         '''
-        pass
+        if guid in self._debindings:
+            return tuple(self._debindings[guid])[0]
+        else:
+            return None
         
     def disconnect(self):
-        ''' Terminates all subscriptions and requests. Not required for
-        a disconnect, but highly recommended, and prevents an window of
-        attack for address spoofers. Note that such an attack would only
-        leak metadata.
+        ''' Terminates all subscriptions. Not required for a disconnect, 
+        but highly recommended, and prevents an window of attack for 
+        address spoofers. Note that such an attack would only leak 
+        metadata.
         
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        pass
+        self._subscriptions = {}
+        return True
     
     def _gc_orphan_bindings(self):
         ''' Removes any orphaned (target does not exist) dynamic or 
