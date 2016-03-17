@@ -172,21 +172,16 @@ class DynamicObject(_ObjectBase):
         '_buffer'
     ]
     
-    def __init__(self, author, address, buffer=None, state=None):
-        # Catch declaring both -- super's _state is unused here.
-        if buffer is not None and state is not None:
+    def __init__(self, author, address, buffer):
+        if not isinstance(buffer, collections.deque):
+            raise TypeError('Buffer must be collections.deque or similar.')
+        if not buffer.maxlen:
             raise ValueError(
-                'Declare either buffer or state, but not both.'
+                'Buffers without a max length will grow to infinity. Please '
+                'declare a max length.'
             )
             
-        elif state is not None:
-            self._buffer = collections.deque((state,))
-        
-        elif buffer is not None:
-            self._buffer = collections.deque(buffer)
-            
-        else:
-            self._buffer = collections.deque()
+        self._buffer = buffer
             
         # super's _state is unused due to state@property override.
         super().__init__(author=author, address=address, state=None)
@@ -333,11 +328,15 @@ class Agent():
         self._check_dynamic_args(data, link)
             
         if data is not None:
-            container = self._make_geoc(data)
-            link = container.guid
+            container = self._prep_geoc(data)
+            target = container.guid
+            state = data
+        else:
+            target = link.address
+            state = link
             
         dynamic = self._identity.make_bind_dynamic(
-            target = link
+            target = target
         )
         
         self.persister.publish(dynamic.packed)    
@@ -353,12 +352,24 @@ class Agent():
         # Add a note to _bindings that "I am my own keeper"
         self._bindings[dynamic.guid_dynamic] = dynamic.guid_dynamic
         
+        return DynamicObject(
+            author = self._identity.guid,
+            address = dynamic.guid_dynamic,
+            buffer = collections.deque(
+                iterable = (state,),
+                maxlen = _legroom
+            )
+        )
+        
     def update_dynamic(self, obj, data=None, link=None):
         ''' Updates a dynamic object. May link to a static (or dynamic) 
         object's address. Must pass either data or link, but not both.
         
+        Modifies the dynamic object in place.
+        
         Could add a way to update the legroom parameter while we're at
-        it.
+        it. That would need to update the maxlen of both the obj._buffer
+        and the self._historian.
         '''
         if not isinstance(obj, DynamicObject):
             raise TypeError(
@@ -373,10 +384,14 @@ class Agent():
             
         if data is not None:
             container = self._make_geoc(data)
-            link = container.guid
+            target = container.guid
+            state = data
+        else:
+            target = link.address
+            state = link
             
         dynamic = self._identity.make_bind_dynamic(
-            target = link,
+            target = target,
             guid_dynamic = obj.address,
             history = self._historian[obj.address]
         )
@@ -386,6 +401,7 @@ class Agent():
             self.persister.publish(container.packed)
             
         self._historian[obj.address].appendleft(dynamic.guid)
+        obj._buffer.appendleft(state)
             
     @staticmethod
     def _check_dynamic_args(data, link):
@@ -395,9 +411,21 @@ class Agent():
         if (data is None and link is None) or \
         (data is not None and link is not None):
             raise TypeError('Must pass either data XOR link to make_dynamic.')
+            
+        if link and not isinstance(link, _ObjectBase):
+            raise TypeError(
+                'Link must be a StaticObject, DynamicObject, or similar.'
+            )
         
     def freeze_dynamic(self, obj):
+        ''' Creates a frozen StaticObject from the most current state of
+        a DynamicObject.
         '''
+        pass
+        
+    def hold_object(self, obj):
+        ''' Prevents the deletion of a StaticObject or DynamicObject by
+        binding to it.
         '''
         pass
         

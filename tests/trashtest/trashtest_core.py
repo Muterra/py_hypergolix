@@ -36,6 +36,7 @@ hypergolix: A python Golix client.
 import IPython
 import unittest
 import warnings
+import collections
 
 # These are normal imports
 from hypergolix.persisters import MemoryPersister
@@ -74,22 +75,8 @@ class ObjectTrashtest(unittest.TestCase):
         dyn1 = DynamicObject(
             address = _dummy_guid,
             author = _dummy_guid,
-            state = dummy_state,
+            buffer = collections.deque([dummy_state], maxlen=7),
         )
-        dyn2 = DynamicObject(
-            address = _dummy_guid,
-            author = _dummy_guid,
-            buffer = [dummy_state],
-        )
-        
-        with self.assertRaises(ValueError, 
-            msg='Failed to catch setting both buffer, state in dynamic obj'):
-                dyn3 = DynamicObject(
-                    address = _dummy_guid,
-                    author = _dummy_guid,
-                    buffer = [dummy_state],
-                    state = dummy_state
-                )
         
         with self.assertRaises(AttributeError, 
             msg='Failed to prevent private attr assignment in static obj.'):
@@ -138,6 +125,7 @@ class AgentTrashTest(unittest.TestCase):
     def test_trash(self):
         obj1 = self.agent.make_static(b'Hello, world?')
         self.agent.delete_object(obj1)
+        obj2 = self.agent.make_dynamic(b'Hello, world?')
         
 
 if __name__ == "__main__":
