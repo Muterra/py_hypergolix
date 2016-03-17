@@ -4,10 +4,13 @@ Hypergolix is a "full client" for the Golix protocol. That doesn't mean anything
 
 It does not require application-level cryptographic code, and is available via IPC on the local machine (specifically through pipes, and potentially through localhost in the future).
 
-# Todo
+# Todo (no particular order)
 
-+ Write enough code to have a reason to have a todo list
++ Implement a key ratchet for dynamic objects instead of requiring new keyshares for each frame
+    + Use the _legroom parameter as a hint for when to issue a new key
+    + Everything else is done through a ratchet
++ Create a format for using dynamic objects to perform keyshares
 
 ## Done
 
-+ Start to get a feel for things
++ Write enough code to have a reason to have a todo list

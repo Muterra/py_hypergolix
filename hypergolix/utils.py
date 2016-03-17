@@ -35,8 +35,15 @@ import collections
 # Control * imports.
 __all__ = [
     'NakError',
+    'InaccessibleError',
     'PersistenceWarning'
 ]
+
+
+class InaccessibleError(RuntimeError):
+    ''' Raised when an Agent does not have access to an object.
+    '''
+    pass
 
 
 class NakError(RuntimeError):

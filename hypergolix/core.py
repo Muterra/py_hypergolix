@@ -75,6 +75,7 @@ from Crypto.Protocol.KDF import scrypt
 
 # Inter-package dependencies that are only used locally
 from .utils import NakError
+from .utils import InaccessibleError
 from .persisters import _PersisterBase
         
 # ###############################################
