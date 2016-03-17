@@ -43,6 +43,7 @@ from hypergolix import DynamicObject
 from hypergolix import StaticObject
 from hypergolix import NakError
 from hypergolix import PersistenceWarning
+from hypergolix import Agent
 
 # This is a semi-normal import
 from golix.utils import _dummy_guid
@@ -58,7 +59,7 @@ from golix import FirstParty
 # ###############################################
 
     
-class CoreTrashtest(unittest.TestCase):
+class ObjectTrashtest(unittest.TestCase):
     def setUp(self):
         pass
         
@@ -127,6 +128,16 @@ class CoreTrashtest(unittest.TestCase):
         # with warnings.catch_warnings():
         #     warnings.simplefilter('ignore')
         #     IPython.embed()
+        
+        
+class AgentTrashTest(unittest.TestCase):
+    def setUp(self):
+        self.persister = MemoryPersister()
+        self.agent = Agent(persister=self.persister)
+        
+    def test_trash(self):
+        obj1 = self.agent.make_static(b'Hello, world?')
+        
 
 if __name__ == "__main__":
     unittest.main()

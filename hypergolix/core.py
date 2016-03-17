@@ -75,73 +75,11 @@ from Crypto.Protocol.KDF import scrypt
 
 # Inter-package dependencies that are only used locally
 from .utils import NakError
-
+from .persisters import _PersisterBase
         
 # ###############################################
 # Utilities, etc
 # ###############################################
-
-
-class Agent():
-    def __init__(self, _golix_provider=None):
-        if _golix_provider == None:
-            self._golix_provider = FirstParty()
-        else:
-            self._golix_provider = _golix_provider
-            
-        # This needs to be a MUID for a dynamic binding
-        self._bootstrap_binding = None
-        
-    def save(self, password):
-        # Condense everything we need to rebuild self._golix_provider
-        keys = self._golix_provider._serialize()
-        # Store the muid for the dynamic bootstrap object
-        bootstrap = self._bootstrap_binding
-        # Create some random-length, random padding to make it harder to
-        # guess that our end-product GEOC is a saved Agent
-        padding = None
-        # Put it all into a GEOC.
-        # Scrypt the password. Salt against the author GUID, which we know
-        # (when reloading) from the author of the file!
-        # Use 2**14 for t<=100ms, 2**20 for t<=5s
-        combined = scrypt(
-            password = password, 
-            salt = bytes(self._golix_provider.guid),
-            key_len = 48,
-            N = 2**15,
-            r = 8,
-            p = 1
-        )
-        secret = Secret(
-            cipher = 1,
-            key = combined[:32],
-            seed = combined[32:48]
-        )
-        
-    @classmethod
-    def load(cls, password, data):
-        pass
-        
-    def new_stream(self):
-        ''' Create a new dynamic binding.
-        '''
-        pass
-        
-    def update_stream(self, stream, data):
-        ''' Updates the stream.
-        '''
-        pass
-        
-    def refresh_stream(self, stream, persister):
-        ''' The callback registered to the persistence provider to 
-        create the plaintext object from an updated binding.
-        '''
-        pass
-        
-    def close_stream(self, stream):
-        ''' Closes the stream.
-        '''
-        pass
         
 
 class _ObjectBase:
@@ -282,3 +220,119 @@ class DynamicObject(_ObjectBase):
             ')'
         )
         return c + s
+        
+        
+class _DynamicHistorian:
+    ''' Helper class to track the historical state of a dynamic binding.
+    '''
+    pass
+
+
+class Agent():
+    def __init__(self, persister, _golix_firstparty=None):
+        ''' Create a new agent. Persister should subclass _PersisterBase
+        (eventually this requirement may be changed).
+        '''
+        if not isinstance(persister, _PersisterBase):
+            raise TypeError('Persister must subclass _PersisterBase.')
+        self._persister = persister
+        
+        if _golix_firstparty is None:
+            self._identity = FirstParty()
+            self._persister.publish(self._identity.second_party.packed)
+        else:
+            # Could do type checking here but currently no big deal?
+            # This would also be a good spot to make sure our identity already
+            # exists at the persister.
+            self._identity = _golix_firstparty
+        
+        self._secrets = {}
+        self._contacts = {}
+        # Bindings lookup: {<target guid>: <binding guid>}
+        self._bindings = {}
+        
+    @property
+    def persister(self):
+        return self._persister
+        
+    def save(self, password):
+        ''' Save the agent's identity to a GEOC object.
+        '''
+        # Condense everything we need to rebuild self._golix_provider
+        keys = self._golix_provider._serialize()
+        # Store the guid for the dynamic bootstrap object
+        bootstrap = self._bootstrap_binding
+        # Create some random-length, random padding to make it harder to
+        # guess that our end-product GEOC is a saved Agent
+        padding = None
+        # Put it all into a GEOC.
+        # Scrypt the password. Salt against the author GUID, which we know
+        # (when reloading) from the author of the file!
+        # Use 2**14 for t<=100ms, 2**20 for t<=5s
+        combined = scrypt(
+            password = password, 
+            salt = bytes(self._golix_provider.guid),
+            key_len = 48,
+            N = 2**15,
+            r = 8,
+            p = 1
+        )
+        secret = Secret(
+            cipher = 1,
+            key = combined[:32],
+            seed = combined[32:48]
+        )
+        
+    @classmethod
+    def load(cls, password, data):
+        ''' Load an Agent from an identity contained within a GEOC.
+        '''
+        pass
+        
+    def make_static(self, data):
+        ''' Makes a new static object, handling binding, persistence, 
+        and so on. Returns a StaticObject.
+        '''
+        secret = self._identity.new_secret()
+        container = self._identity.make_container(
+            secret = secret,
+            plaintext = data
+        )
+        binding = self._identity.make_bind_static(
+            target = container.guid
+        )
+        # This would be a good spot to figure out a way to make use of
+        # publish_unsafe.
+        self.persister.publish(binding.packed)
+        self.persister.publish(container.packed)
+        self._bindings[container.guid] = binding.guid
+        return StaticObject(
+            author = self._identity.guid,
+            address = container.guid,
+            state = data
+        )
+        
+    def make_dynamic(self, data):
+        '''
+        '''
+        pass
+        
+    def update_dynamic(self, obj, data):
+        ''' 
+        '''
+        pass
+        
+    def freeze_dynamic(self, obj):
+        '''
+        '''
+        pass
+        
+    def delete_object(self, obj):
+        ''' 
+        '''
+        pass
+        
+    def share_object(self, obj, recipient):
+        '''
+        '''
+        pass
