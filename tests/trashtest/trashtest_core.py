@@ -75,7 +75,7 @@ class ObjectTrashtest(unittest.TestCase):
         dyn1 = DynamicObject(
             address = _dummy_guid,
             author = _dummy_guid,
-            buffer = collections.deque([dummy_state], maxlen=7),
+            _buffer = collections.deque([dummy_state], maxlen=7),
         )
         
         with self.assertRaises(AttributeError, 
@@ -103,8 +103,8 @@ class ObjectTrashtest(unittest.TestCase):
         self.assertEqual(dyn1.state, dummy_state)
         self.assertEqual(dyn1.buffer, (dummy_state,))
                 
-        repr(stat1)
-        repr(dyn1)
+        print(repr(stat1))
+        print(repr(dyn1))
             
         
         # --------------------------------------------------------------------
@@ -123,9 +123,9 @@ class AgentTrashTest(unittest.TestCase):
         self.agent = Agent(persister=self.persister)
         
     def test_trash(self):
-        obj1 = self.agent.make_static(b'Hello, world?')
+        obj1 = self.agent.new_static(b'Hello, world?')
         self.agent.delete_object(obj1)
-        obj2 = self.agent.make_dynamic(b'Hello, world?')
+        obj2 = self.agent.new_dynamic(b'Hello, world?')
         
 
 if __name__ == "__main__":

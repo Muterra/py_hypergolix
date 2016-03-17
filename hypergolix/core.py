@@ -98,16 +98,16 @@ class _ObjectBase:
     '''
     __slots__ = [
         '_author',
-        '_state',
         '_address'
     ]
     
-    def __init__(self, author, address, state):
+    _REPROS = ['author', 'address']
+    
+    def __init__(self, author, address):
         ''' Creates a new object. Address is the dynamic guid. State is
         the initial state.
         '''
         self._author = author
-        self._state = state
         self._address = address
         
     @property
@@ -117,46 +117,62 @@ class _ObjectBase:
     @property
     def address(self):
         return self._address
-        
-    @property
-    def state(self):
-        return self._state
-
-        
-class StaticObject(_ObjectBase):
-    ''' An immutable object. Can be produced directly, or by freezing a
-    dynamic object.
-    '''
+    
     # This might be a little excessive, but I guess it's nice to have a
     # little extra protection against updates?
     def __setattr__(self, name, value):
         ''' Prevent rewriting declared attributes.
         '''
         try:
-            # Check if the attribute exists. If we can get it, it exists.
             __ = getattr(self, name)
         except AttributeError:
             super().__setattr__(name, value)
         else:
             raise AttributeError(
-                'StaticObjects do not support mutation of attributes once '
-                'they have been declared.'
+                'StaticObjects and DynamicObjects do not support mutation of '
+                'attributes once they have been declared.'
             )
             
     def __delattr__(self, name):
         ''' Prevent deleting declared attributes.
         '''
         raise AttributeError(
-            'StaticObjects do not support deletion of attributes.'
+            'StaticObjects and DynamicObjects do not support deletion of '
+            'attributes.'
         )
             
     def __repr__(self):
-        return type(self).__name__ + ('('
-                'author=' + repr(self.author) + ', '
-                'address=' + repr(self.address) + ', '
-                'state=' + repr(self.state) +
-            ')'
-        )
+        ''' Automated repr generation based upon class._REPROS.
+        '''
+        c = type(self).__name__ 
+        
+        s = '('
+        for attr in self._REPROS:
+            s += attr + '=' + repr(getattr(self, attr)) + ', '
+        s = s[:len(s) - 2]
+        s += ')'
+        return c + s
+
+        
+class StaticObject(_ObjectBase):
+    ''' An immutable object. Can be produced directly, or by freezing a
+    dynamic object.
+    '''
+    __slots__ = [
+        '_author',
+        '_address',
+        '_state'
+    ]
+    
+    _REPROS = ['author', 'address', 'state']
+    
+    def __init__(self, author, address, state):
+        super().__init__(author, address)
+        self._state = state
+        
+    @property
+    def state(self):
+        return self._state
     
     
 class DynamicObject(_ObjectBase):
@@ -167,24 +183,24 @@ class DynamicObject(_ObjectBase):
     '''
     __slots__ = [
         '_author',
-        '_state',
         '_address',
         '_buffer'
     ]
     
-    def __init__(self, author, address, buffer):
-        if not isinstance(buffer, collections.deque):
+    _REPROS = ['author', 'address', '_buffer']
+    
+    def __init__(self, author, address, _buffer):
+        super().__init__(author, address)
+        
+        if not isinstance(_buffer, collections.deque):
             raise TypeError('Buffer must be collections.deque or similar.')
-        if not buffer.maxlen:
+        if not _buffer.maxlen:
             raise ValueError(
                 'Buffers without a max length will grow to infinity. Please '
                 'declare a max length.'
             )
             
-        self._buffer = buffer
-            
-        # super's _state is unused due to state@property override.
-        super().__init__(author=author, address=address, state=None)
+        self._buffer = _buffer
         
     @property
     def state(self):
@@ -197,14 +213,6 @@ class DynamicObject(_ObjectBase):
         # Note that this has the added benefit of preventing assignment
         # to the internal buffer!
         return tuple(self._buffer)
-            
-    def __repr__(self):
-        return type(self).__name__ + ('('
-                'author=' + repr(self.author) + ', '
-                'address=' + repr(self.address) + ', '
-                'buffer=' + repr(self.buffer) +
-            ')'
-        )
         
         
 class _DynamicHistorian:
@@ -284,7 +292,7 @@ class Agent():
         '''
         pass
         
-    def _prep_geoc(self, data):
+    def _make_static(self, data):
         secret = self._identity.new_secret()
         container = self._identity.make_container(
             secret = secret,
@@ -293,19 +301,19 @@ class Agent():
         self._secrets[container.guid] = secret
         return container
         
-    def _prep_bind(self, container):
+    def _make_bind(self, container):
         binding = self._identity.make_bind_static(
             target = container.guid
         )
         self._bindings[container.guid] = binding.guid
         return binding
         
-    def make_static(self, data):
+    def new_static(self, data):
         ''' Makes a new static object, handling binding, persistence, 
         and so on. Returns a StaticObject.
         '''
-        container = self._prep_geoc(data)
-        binding = self._prep_bind(container)
+        container = self._make_static(data)
+        binding = self._make_bind(container)
         # This would be a good spot to figure out a way to make use of
         # publish_unsafe.
         # Note that if these raise exceptions and we catch them, we'll
@@ -318,44 +326,54 @@ class Agent():
             state = data
         )
         
-    def make_dynamic(self, data=None, link=None, _legroom=3):
+    def _do_dynamic(self, data, link, guid_dynamic=None, history=None):
+        self._check_dynamic_args(data, link)
+            
+        if data is not None:
+            container = self._make_static(data)
+            target = container.guid
+        else:
+            # Type check the link.
+            if not isinstance(link, _ObjectBase):
+                raise TypeError(
+                    'Link must be a StaticObject, DynamicObject, or similar.'
+                )
+            target = link.address
+            
+        dynamic = self._identity.make_bind_dynamic(
+            target = target,
+            guid_dynamic = guid_dynamic,
+            history = history
+        )
+            
+        self.persister.publish(dynamic.packed)
+        if data is not None:
+            self.persister.publish(container.packed)
+            
+        return dynamic
+        
+    def new_dynamic(self, data=None, link=None, _legroom=3):
         ''' Makes a dynamic object. May link to a static (or dynamic) 
         object's address. Must pass either data or link, but not both.
         
         The _legroom argument determines how many frames should be used 
         as history in the dynamic binding.
         '''
-        self._check_dynamic_args(data, link)
-            
-        if data is not None:
-            container = self._prep_geoc(data)
-            target = container.guid
-            state = data
-        else:
-            target = link.address
-            state = link
-            
-        dynamic = self._identity.make_bind_dynamic(
-            target = target
-        )
-        
-        self.persister.publish(dynamic.packed)    
-        if data is not None:
-            self.persister.publish(container.packed)
+        dynamic = self._do_dynamic(data, link)
+        state = data or link
             
         # Historian manages the history definition for the object.
         self._historian[dynamic.guid_dynamic] = collections.deque(
             iterable = (dynamic.guid,),
             maxlen = _legroom
         )
-            
         # Add a note to _bindings that "I am my own keeper"
         self._bindings[dynamic.guid_dynamic] = dynamic.guid_dynamic
         
         return DynamicObject(
             author = self._identity.guid,
             address = dynamic.guid_dynamic,
-            buffer = collections.deque(
+            _buffer = collections.deque(
                 iterable = (state,),
                 maxlen = _legroom
             )
@@ -380,25 +398,14 @@ class Agent():
                 'The Agent could not find a record of the object\'s history. '
                 'Agents cannot update objects they did not create.'
             )
-        self._check_dynamic_args(data, link)
             
-        if data is not None:
-            container = self._make_geoc(data)
-            target = container.guid
-            state = data
-        else:
-            target = link.address
-            state = link
-            
-        dynamic = self._identity.make_bind_dynamic(
-            target = target,
+        dynamic = self._do_dynamic(
+            data = data, 
+            link = link, 
             guid_dynamic = obj.address,
             history = self._historian[obj.address]
         )
-            
-        self.persister.publish(dynamic.packed)
-        if data is not None:
-            self.persister.publish(container.packed)
+        state = data or link
             
         self._historian[obj.address].appendleft(dynamic.guid)
         obj._buffer.appendleft(state)
@@ -411,11 +418,6 @@ class Agent():
         if (data is None and link is None) or \
         (data is not None and link is not None):
             raise TypeError('Must pass either data XOR link to make_dynamic.')
-            
-        if link and not isinstance(link, _ObjectBase):
-            raise TypeError(
-                'Link must be a StaticObject, DynamicObject, or similar.'
-            )
         
     def freeze_dynamic(self, obj):
         ''' Creates a frozen StaticObject from the most current state of
