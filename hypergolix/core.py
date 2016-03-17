@@ -133,6 +133,7 @@ class StaticObject(_ObjectBase):
         ''' Prevent rewriting declared attributes.
         '''
         try:
+            # Check if the attribute exists. If we can get it, it exists.
             __ = getattr(self, name)
         except AttributeError:
             super().__setattr__(name, value)
@@ -145,26 +146,17 @@ class StaticObject(_ObjectBase):
     def __delattr__(self, name):
         ''' Prevent deleting declared attributes.
         '''
-        try:
-            __ = getattr(self, name)
-        except AttributeError:
-            # Note that this will also raise an AttributeError!
-            super().__delattr__(name, value)
-        else:
-            raise AttributeError(
-                'StaticObjects do not support deletion of attributes once '
-                'they have been declared.'
-            )
+        raise AttributeError(
+            'StaticObjects do not support deletion of attributes.'
+        )
             
     def __repr__(self):
-        c = type(self).__name__
-        s = ('('
+        return type(self).__name__ + ('('
                 'author=' + repr(self.author) + ', '
                 'address=' + repr(self.address) + ', '
                 'state=' + repr(self.state) +
             ')'
         )
-        return c + s
     
     
 class DynamicObject(_ObjectBase):
@@ -212,20 +204,25 @@ class DynamicObject(_ObjectBase):
         return tuple(self._buffer)
             
     def __repr__(self):
-        c = type(self).__name__
-        s = ('('
+        return type(self).__name__ + ('('
                 'author=' + repr(self.author) + ', '
                 'address=' + repr(self.address) + ', '
                 'buffer=' + repr(self.buffer) +
             ')'
         )
-        return c + s
         
         
 class _DynamicHistorian:
     ''' Helper class to track the historical state of a dynamic binding.
     '''
     pass
+    
+    
+def _check_if_obj(obj):
+    if not isinstance(obj, _ObjectBase):
+        raise TypeError(
+            'Obj must be StaticObject, DynamicObject, or similar.'
+        )
 
 
 class Agent():
@@ -250,6 +247,9 @@ class Agent():
         self._contacts = {}
         # Bindings lookup: {<target guid>: <binding guid>}
         self._bindings = {}
+        # History lookup for dynamic bindings. {<dynamic guid>: <frame deque>}
+        # Note that the deque must use a maxlen or it will grow indefinitely.
+        self._historian = {}
         
     @property
     def persister(self):
@@ -289,23 +289,34 @@ class Agent():
         '''
         pass
         
-    def make_static(self, data):
-        ''' Makes a new static object, handling binding, persistence, 
-        and so on. Returns a StaticObject.
-        '''
+    def _prep_geoc(self, data):
         secret = self._identity.new_secret()
         container = self._identity.make_container(
             secret = secret,
             plaintext = data
         )
+        self._secrets[container.guid] = secret
+        return container
+        
+    def _prep_bind(self, container):
         binding = self._identity.make_bind_static(
             target = container.guid
         )
+        self._bindings[container.guid] = binding.guid
+        return binding
+        
+    def make_static(self, data):
+        ''' Makes a new static object, handling binding, persistence, 
+        and so on. Returns a StaticObject.
+        '''
+        container = self._prep_geoc(data)
+        binding = self._prep_bind(container)
         # This would be a good spot to figure out a way to make use of
         # publish_unsafe.
+        # Note that if these raise exceptions and we catch them, we'll
+        # have an incorrect state in self._bindings
         self.persister.publish(binding.packed)
         self.persister.publish(container.packed)
-        self._bindings[container.guid] = binding.guid
         return StaticObject(
             author = self._identity.guid,
             address = container.guid,
@@ -319,13 +330,25 @@ class Agent():
         The _legroom argument determines how many frames should be used 
         as history in the dynamic binding.
         '''
-        if (data is None and link is None) or \
-        (data is not None and link is not None):
-            raise TypeError('Must pass either data XOR link to make_dynamic.')
-        elif data is not None:
-            pass
-        elif link is not None:
-            pass
+        self._check_dynamic_args(data, link)
+            
+        if data is not None:
+            container = self._make_geoc(data)
+            link = container.guid
+            
+        dynamic = self._identity.make_bind_dynamic(
+            target = link
+        )
+        
+        self.persister.publish(dynamic.packed)    
+        if data is not None:
+            self.persister.publish(container.packed)
+            
+        # Historian manages the history definition for the object.
+        self._historian[dynamic.guid_dynamic] = collections.deque(
+            iterable = (dynamic.guid,),
+            maxlen = _legroom
+        )
             
         # Add a note to _bindings that "I am my own keeper"
         self._bindings[dynamic.guid_dynamic] = dynamic.guid_dynamic
@@ -333,19 +356,45 @@ class Agent():
     def update_dynamic(self, obj, data=None, link=None):
         ''' Updates a dynamic object. May link to a static (or dynamic) 
         object's address. Must pass either data or link, but not both.
-        '''
-        if not isinstance(obj, _ObjectBase):
-            raise TypeError(
-                'Obj must be StaticObject, DynamicObject, or similar.'
-            )
         
+        Could add a way to update the legroom parameter while we're at
+        it.
+        '''
+        if not isinstance(obj, DynamicObject):
+            raise TypeError(
+                'Obj must be a DynamicObject or similar.'
+            )
+        if obj.address not in self._historian:
+            raise ValueError(
+                'The Agent could not find a record of the object\'s history. '
+                'Agents cannot update objects they did not create.'
+            )
+        self._check_dynamic_args(data, link)
+            
+        if data is not None:
+            container = self._make_geoc(data)
+            link = container.guid
+            
+        dynamic = self._identity.make_bind_dynamic(
+            target = link,
+            guid_dynamic = obj.address,
+            history = self._historian[obj.address]
+        )
+            
+        self.persister.publish(dynamic.packed)
+        if data is not None:
+            self.persister.publish(container.packed)
+            
+        self._historian[obj.address].appendleft(dynamic.guid)
+            
+    @staticmethod
+    def _check_dynamic_args(data, link):
+        ''' Validate data, link arguments passed to make_ and 
+        update_dynamic methods.
+        '''
         if (data is None and link is None) or \
         (data is not None and link is not None):
             raise TypeError('Must pass either data XOR link to make_dynamic.')
-        elif data is not None:
-            pass
-        elif link is not None:
-            pass
         
     def freeze_dynamic(self, obj):
         '''
@@ -357,10 +406,7 @@ class Agent():
         the persistence provider cannot remove the object due to another 
         conflicting binding.
         '''
-        if not isinstance(obj, _ObjectBase):
-            raise TypeError(
-                'Obj must be StaticObject, DynamicObject, or similar.'
-            )
+        _check_if_obj(obj)
             
         if obj.address not in self._bindings:
             raise ValueError(
@@ -380,3 +426,23 @@ class Agent():
         '''
         '''
         pass
+        
+
+class _ClientBase:
+    pass
+    
+    
+class EmbeddedClient:
+    pass
+    
+    
+class LocalhostClient:
+    pass
+    
+    
+class PipeClient:
+    pass
+    
+    
+class FileClient:
+    pass
