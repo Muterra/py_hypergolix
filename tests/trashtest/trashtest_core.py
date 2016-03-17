@@ -103,8 +103,8 @@ class ObjectTrashtest(unittest.TestCase):
         self.assertEqual(dyn1.state, dummy_state)
         self.assertEqual(dyn1.buffer, (dummy_state,))
                 
-        print(repr(stat1))
-        print(repr(dyn1))
+        repr(stat1)
+        repr(dyn1)
             
         
         # --------------------------------------------------------------------
@@ -126,6 +126,7 @@ class AgentTrashTest(unittest.TestCase):
         obj1 = self.agent.new_static(b'Hello, world?')
         self.agent.delete_object(obj1)
         obj2 = self.agent.new_dynamic(b'Hello, world?')
+        self.agent.update_dynamic(obj2, data=b'Hiyaback!')
         
 
 if __name__ == "__main__":

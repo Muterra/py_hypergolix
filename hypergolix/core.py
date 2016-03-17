@@ -213,19 +213,6 @@ class DynamicObject(_ObjectBase):
         # Note that this has the added benefit of preventing assignment
         # to the internal buffer!
         return tuple(self._buffer)
-        
-        
-class _DynamicHistorian:
-    ''' Helper class to track the historical state of a dynamic binding.
-    '''
-    pass
-    
-    
-def _check_if_obj(obj):
-    if not isinstance(obj, _ObjectBase):
-        raise TypeError(
-            'Obj must be StaticObject, DynamicObject, or similar.'
-        )
 
 
 class Agent():
@@ -327,11 +314,14 @@ class Agent():
         )
         
     def _do_dynamic(self, data, link, guid_dynamic=None, history=None):
-        self._check_dynamic_args(data, link)
-            
-        if data is not None:
+        if (data is None and link is None) or \
+        (data is not None and link is not None):
+            raise TypeError('Must pass either data XOR link to make_dynamic.')
+        
+        elif data is not None:
             container = self._make_static(data)
             target = container.guid
+            
         else:
             # Type check the link.
             if not isinstance(link, _ObjectBase):
@@ -393,6 +383,7 @@ class Agent():
             raise TypeError(
                 'Obj must be a DynamicObject or similar.'
             )
+            
         if obj.address not in self._historian:
             raise ValueError(
                 'The Agent could not find a record of the object\'s history. '
@@ -409,15 +400,6 @@ class Agent():
             
         self._historian[obj.address].appendleft(dynamic.guid)
         obj._buffer.appendleft(state)
-            
-    @staticmethod
-    def _check_dynamic_args(data, link):
-        ''' Validate data, link arguments passed to make_ and 
-        update_dynamic methods.
-        '''
-        if (data is None and link is None) or \
-        (data is not None and link is not None):
-            raise TypeError('Must pass either data XOR link to make_dynamic.')
         
     def freeze_dynamic(self, obj):
         ''' Creates a frozen StaticObject from the most current state of
@@ -436,7 +418,10 @@ class Agent():
         the persistence provider cannot remove the object due to another 
         conflicting binding.
         '''
-        _check_if_obj(obj)
+        if not isinstance(obj, _ObjectBase):
+            raise TypeError(
+                'Obj must be StaticObject, DynamicObject, or similar.'
+            )
             
         if obj.address not in self._bindings:
             raise ValueError(
