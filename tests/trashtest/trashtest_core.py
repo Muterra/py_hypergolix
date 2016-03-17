@@ -137,6 +137,7 @@ class AgentTrashTest(unittest.TestCase):
         
     def test_trash(self):
         obj1 = self.agent.make_static(b'Hello, world?')
+        self.agent.delete_object(obj1)
         
 
 if __name__ == "__main__":

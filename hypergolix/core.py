@@ -312,15 +312,40 @@ class Agent():
             state = data
         )
         
-    def make_dynamic(self, data):
-        '''
-        '''
-        pass
+    def make_dynamic(self, data=None, link=None, _legroom=3):
+        ''' Makes a dynamic object. May link to a static (or dynamic) 
+        object's address. Must pass either data or link, but not both.
         
-    def update_dynamic(self, obj, data):
-        ''' 
+        The _legroom argument determines how many frames should be used 
+        as history in the dynamic binding.
         '''
-        pass
+        if (data is None and link is None) or \
+        (data is not None and link is not None):
+            raise TypeError('Must pass either data XOR link to make_dynamic.')
+        elif data is not None:
+            pass
+        elif link is not None:
+            pass
+            
+        # Add a note to _bindings that "I am my own keeper"
+        self._bindings[dynamic.guid_dynamic] = dynamic.guid_dynamic
+        
+    def update_dynamic(self, obj, data=None, link=None):
+        ''' Updates a dynamic object. May link to a static (or dynamic) 
+        object's address. Must pass either data or link, but not both.
+        '''
+        if not isinstance(obj, _ObjectBase):
+            raise TypeError(
+                'Obj must be StaticObject, DynamicObject, or similar.'
+            )
+        
+        if (data is None and link is None) or \
+        (data is not None and link is not None):
+            raise TypeError('Must pass either data XOR link to make_dynamic.')
+        elif data is not None:
+            pass
+        elif link is not None:
+            pass
         
     def freeze_dynamic(self, obj):
         '''
@@ -328,9 +353,28 @@ class Agent():
         pass
         
     def delete_object(self, obj):
-        ''' 
+        ''' Removes an object (if possible). May produce a warning if
+        the persistence provider cannot remove the object due to another 
+        conflicting binding.
         '''
-        pass
+        if not isinstance(obj, _ObjectBase):
+            raise TypeError(
+                'Obj must be StaticObject, DynamicObject, or similar.'
+            )
+            
+        if obj.address not in self._bindings:
+            raise ValueError(
+                'Agents cannot attempt to delete objects they did not create. '
+                'This may also indicate that the object has already been '
+                'deleted.'
+            )
+            
+        binding_guid = self._bindings[obj.address]
+        debind = self._identity.make_debind(
+            target = binding_guid
+        )
+        self.persister.publish(debind.packed)
+        del self._bindings[obj.address]
         
     def share_object(self, obj, recipient):
         '''
