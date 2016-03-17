@@ -123,10 +123,45 @@ class AgentTrashTest(unittest.TestCase):
         self.agent = Agent(persister=self.persister)
         
     def test_trash(self):
-        obj1 = self.agent.new_static(b'Hello, world?')
+        pt1 = b'Hello, world?'
+        pt2 = b'Hiyaback!'
+        pt3 = b'Listening...'
+        pt4 = b'All ears!'
+        
+        # Create, test, and delete a static object
+        obj1 = self.agent.new_static(pt1)
+        self.assertEqual(obj1.state, pt1)
+        
         self.agent.delete_object(obj1)
-        obj2 = self.agent.new_dynamic(b'Hello, world?')
-        self.agent.update_dynamic(obj2, data=b'Hiyaback!')
+        with self.assertRaises(NakError, msg='Agent failed to delete.'):
+            self.persister.get(obj1.address)
+        
+        # Create, test, update, test, and delete a dynamic object
+        obj2 = self.agent.new_dynamic(pt1)
+        self.assertEqual(obj2.state, pt1)
+        
+        self.agent.update_dynamic(obj2, data=pt2)
+        self.assertEqual(obj2.state, pt2)
+        
+        self.agent.delete_object(obj2)
+        with self.assertRaises(NakError, msg='Agent failed to delete.'):
+            self.persister.get(obj2.address)
+        
+        # Test dynamic linking
+        obj3 = self.agent.new_static(pt3)
+        obj4 = self.agent.new_dynamic(link=obj3)
+        obj5 = self.agent.new_dynamic(link=obj4)
+        
+        self.assertEqual(obj3.state, pt3)
+        self.assertEqual(obj4.state, pt3)
+        self.assertEqual(obj5.state, pt3)
+        
+        obj6 = self.agent.freeze_dynamic(obj4)
+        self.agent.update_dynamic(obj4, pt4)
+        
+        self.assertEqual(obj6.state, pt3)
+        self.assertEqual(obj4.state, pt4)
+        self.assertEqual(obj5.state, pt4)
         
 
 if __name__ == "__main__":

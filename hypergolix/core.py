@@ -205,7 +205,16 @@ class DynamicObject(_ObjectBase):
         
     @property
     def state(self):
-        return self._buffer[0]
+        ''' Return the current value of the object. Will always return
+        a value, even for a linked object.
+        '''
+        frame = self._buffer[0]
+        
+        # Resolve into the actual value if necessary
+        if isinstance(frame, _ObjectBase):
+            frame = frame.state
+            
+        return frame
         
     @property
     def buffer(self):
@@ -280,20 +289,34 @@ class Agent():
         '''
         pass
         
+    def _get_secret(self, guid):
+        ''' Return the secret for the passed guid, if one is available.
+        If unknown, raise InaccessibleError.
+        '''
+        try:
+            return self._secrets[guid]
+        except KeyError as e:
+            raise InaccessibleError('Agent has no access to object.') from e
+            
+    def _set_secret(self, guid, secret):
+        ''' Stores the secret for the passed guid.
+        '''
+        self._secrets[guid] = secret
+        
     def _make_static(self, data):
         secret = self._identity.new_secret()
         container = self._identity.make_container(
             secret = secret,
             plaintext = data
         )
-        self._secrets[container.guid] = secret
+        self._set_secret(container.guid, secret)
         return container
         
-    def _make_bind(self, container):
+    def _make_bind(self, guid):
         binding = self._identity.make_bind_static(
-            target = container.guid
+            target = guid
         )
-        self._bindings[container.guid] = binding.guid
+        self._bindings[guid] = binding.guid
         return binding
         
     def new_static(self, data):
@@ -301,7 +324,7 @@ class Agent():
         and so on. Returns a StaticObject.
         '''
         container = self._make_static(data)
-        binding = self._make_bind(container)
+        binding = self._make_bind(container.guid)
         # This would be a good spot to figure out a way to make use of
         # publish_unsafe.
         # Note that if these raise exceptions and we catch them, we'll
@@ -404,15 +427,37 @@ class Agent():
         
     def freeze_dynamic(self, obj):
         ''' Creates a frozen StaticObject from the most current state of
-        a DynamicObject.
+        a DynamicObject. Returns the StaticObject.
         '''
-        pass
+        if not isinstance(obj, DynamicObject):
+            raise TypeError(
+                'Only DynamicObjects may be frozen.'
+            )
+            
+        guid = self._historian[obj.address][0]
+        static = StaticObject(
+            author = self._identity.guid,
+            address = guid,
+            state = obj.state
+        )
+        self.hold_object(static)
+        return static
         
     def hold_object(self, obj):
         ''' Prevents the deletion of a StaticObject or DynamicObject by
         binding to it.
         '''
-        pass
+        if not isinstance(obj, _ObjectBase):
+            raise TypeError(
+                'Only dynamic objects and static objects may be held to '
+                'prevent their deletion.'
+            )
+        # There's not really a reason to create a binding for something you
+        # already created, whether static or dynamic, but there's also not
+        # really a reason to check if that's the case.
+        binding = self._make_bind(obj.address)
+        self.persister.publish(binding.packed)
+        self._bindings[obj.address] = binding.guid
         
     def delete_object(self, obj):
         ''' Removes an object (if possible). May produce a warning if
