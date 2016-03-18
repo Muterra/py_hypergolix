@@ -120,49 +120,66 @@ class ObjectTrashtest(unittest.TestCase):
 class AgentTrashTest(unittest.TestCase):
     def setUp(self):
         self.persister = MemoryPersister()
-        self.agent = Agent(persister=self.persister)
+        self.agent1 = Agent(persister=self.persister)
+        self.agent2 = Agent(persister=self.persister)
         
-    def test_trash(self):
+    def test_alone(self):
         pt1 = b'Hello, world?'
         pt2 = b'Hiyaback!'
         pt3 = b'Listening...'
         pt4 = b'All ears!'
         
         # Create, test, and delete a static object
-        obj1 = self.agent.new_static(pt1)
+        obj1 = self.agent1.new_static(pt1)
         self.assertEqual(obj1.state, pt1)
         
-        self.agent.delete_object(obj1)
+        self.agent1.delete_object(obj1)
         with self.assertRaises(NakError, msg='Agent failed to delete.'):
             self.persister.get(obj1.address)
         
         # Create, test, update, test, and delete a dynamic object
-        obj2 = self.agent.new_dynamic(pt1)
+        obj2 = self.agent1.new_dynamic(pt1)
         self.assertEqual(obj2.state, pt1)
         
-        self.agent.update_dynamic(obj2, data=pt2)
+        self.agent1.update_dynamic(obj2, data=pt2)
         self.assertEqual(obj2.state, pt2)
         
-        self.agent.delete_object(obj2)
+        self.agent1.delete_object(obj2)
         with self.assertRaises(NakError, msg='Agent failed to delete.'):
             self.persister.get(obj2.address)
         
         # Test dynamic linking
-        obj3 = self.agent.new_static(pt3)
-        obj4 = self.agent.new_dynamic(link=obj3)
-        obj5 = self.agent.new_dynamic(link=obj4)
+        obj3 = self.agent1.new_static(pt3)
+        obj4 = self.agent1.new_dynamic(link=obj3)
+        obj5 = self.agent1.new_dynamic(link=obj4)
         
         self.assertEqual(obj3.state, pt3)
         self.assertEqual(obj4.state, pt3)
         self.assertEqual(obj5.state, pt3)
         
-        obj6 = self.agent.freeze_dynamic(obj4)
-        self.agent.update_dynamic(obj4, pt4)
+        obj6 = self.agent1.freeze_dynamic(obj4)
+        # Note: at some point that was producing incorrect bindings and didn't
+        # error out at the persister. Is that still a problem, or has it been 
+        # resolved?
+        self.agent1.update_dynamic(obj4, pt4)
         
         self.assertEqual(obj6.state, pt3)
         self.assertEqual(obj4.state, pt4)
         self.assertEqual(obj5.state, pt4)
         
+    def test_together(self):
+        contact1 = self.agent1.address
+        contact2 = self.agent2.address
+        
+        pt1 = b'Hello, world?'
+        pt2 = b'Hiyaback!'
+        
+        obj1 = self.agent1.new_dynamic(pt1)
+        obj1s = self.agent1.freeze_dynamic(obj1)
+        
+        self.agent1.share_object(obj1s, contact2)
+        self.assertIn(obj1s.address, self.agent2._secrets)
+        self.assertEqual(self.agent1._secrets[obj1s.address], self.agent2._secrets[obj1s.address])
 
 if __name__ == "__main__":
     unittest.main()

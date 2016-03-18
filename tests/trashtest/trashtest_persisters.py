@@ -81,6 +81,9 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         
         self.server1.publish(midc1)
         self.server1.publish(midc2)
+        
+        self.assertIn(self.reader1.guid, self.server1._store)
+        self.assertIn(self.reader2.guid, self.server1._store)
         # Don't publish the third, we want to test refusal
         
         # ---------------------------------------

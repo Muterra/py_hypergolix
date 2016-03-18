@@ -59,12 +59,9 @@ from golix import SecondParty
 from golix import Guid
 from golix import Secret
 
-from golix._getlow import GIDC
-from golix._getlow import GEOC
-from golix._getlow import GOBS
-from golix._getlow import GOBD
-from golix._getlow import GDXX
-from golix._getlow import GARQ
+from golix.utils import AsymHandshake
+from golix.utils import AsymAck
+from golix.utils import AsymNak
 
 from Crypto.Protocol.KDF import scrypt
 
@@ -76,6 +73,7 @@ from Crypto.Protocol.KDF import scrypt
 # Inter-package dependencies that are only used locally
 from .utils import NakError
 from .utils import InaccessibleError
+from .utils import UnknownPartyError
 from .persisters import _PersisterBase
         
 # ###############################################
@@ -242,14 +240,103 @@ class Agent():
             # This would also be a good spot to make sure our identity already
             # exists at the persister.
             self._identity = _golix_firstparty
+            
+        # Now subscribe to my identity at the persister.
+        self._persister.subscribe(
+            guid = self._identity.guid, 
+            callback = self._request_listener
+        )
         
         self._secrets = {}
         self._contacts = {}
         # Bindings lookup: {<target guid>: <binding guid>}
         self._bindings = {}
-        # History lookup for dynamic bindings. {<dynamic guid>: <frame deque>}
+        # History lookup for dynamic bindings' frame guids. 
+        # {<dynamic guid>: <frame deque>}
         # Note that the deque must use a maxlen or it will grow indefinitely.
         self._historian = {}
+        # Target lookup for most recent frame in dynamic bindings.
+        # {<dynamic guid>: <most recent target>}
+        self._dynamic_targets = {}
+        # Lookup for pending requests. {<request address>: <target address>}
+        self._pending_requests = {}
+        # Lookup for shared objects. {<obj address>: {<recipients>}}
+        self._shared_objects = {}
+        
+    @property
+    def address(self):
+        ''' Return the Agent's Guid.
+        '''
+        return self._identity.guid
+        
+    def _retrieve_contact(self, guid):
+        ''' Attempt to retrieve a contact, first from self, then from 
+        persister. Raise UnknownPartyError if failure. Return the 
+        contact.
+        '''
+        if guid in self._contacts:
+            contact = self._contacts[guid]
+        else:
+            try:
+                contact_packed = self.persister.get(guid)
+                contact = SecondParty.from_packed(contact_packed)
+                self._contacts[guid] = contact
+            except NakError as e:
+                raise UnknownPartyError(
+                    'Could not find identity in known contacts or at the '
+                    'Agent\'s persistence provider.'
+                ) from e
+        return contact
+        
+    def _request_listener(self, request_guid):
+        ''' Callback to handle any requests.
+        '''
+        request_packed = self.persister.get(request_guid)
+        request_unpacked = self._identity.unpack_request(request_packed)
+        requestor_guid = request_unpacked.author
+        
+        try:
+            requestor = self._retrieve_contact(requestor_guid)
+        finally:
+            self._do_debind(request_unpacked.guid)
+            
+        request = self._identity.receive_request(
+            requestor = requestor,
+            request = request_unpacked
+        )
+            
+        self._request_handler(request, request_unpacked.guid)
+            
+    def _request_handler(self, request, source_guid):
+        ''' Handles a request after reception.
+        '''
+        if isinstance(request, AsymHandshake):
+            # First add the secret to our store
+            if request.target not in self._secrets:
+                self._secrets[request.target] = request.secret
+            
+            # Now send an ack to whomever sent the handshake
+            ack = self._identity.make_ack(
+                target = source_guid
+            )
+            response = self._identity.make_request(
+                recipient = self._retrieve_contact(request.author),
+                request = ack
+            )
+            self.persister.publish(response.packed)
+            
+        elif isinstance(request, AsymAck):
+            target = self._pending_requests[request.target]
+            del self._pending_requests[request.target]
+            
+            if target in self._shared_objects:
+                self._shared_objects.add(request.author)
+            else:
+                self._shared_objects[request.author] = {request.target}
+                
+        elif isinstance(request, AsynNak):
+            del self._pending_requests[request.target]
+            raise NakError('Recipient refused request.')
         
     @property
     def persister(self):
@@ -319,6 +406,14 @@ class Agent():
         self._bindings[guid] = binding.guid
         return binding
         
+    def _do_debind(self, guid):
+        ''' Creates a debinding and removes the object from persister.
+        '''
+        debind = self._identity.make_debind(
+            target = guid
+        )
+        self.persister.publish(debind.packed)
+        
     def new_static(self, data):
         ''' Makes a new static object, handling binding, persistence, 
         and so on. Returns a StaticObject.
@@ -364,6 +459,8 @@ class Agent():
         if data is not None:
             self.persister.publish(container.packed)
             
+        self._dynamic_targets[dynamic.guid_dynamic] = target
+        
         return dynamic
         
     def new_dynamic(self, data=None, link=None, _legroom=3):
@@ -434,10 +531,12 @@ class Agent():
                 'Only DynamicObjects may be frozen.'
             )
             
-        guid = self._historian[obj.address][0]
+        # frame_guid = self._historian[obj.address][0]
+        target = self._dynamic_targets[obj.address]
+        
         static = StaticObject(
             author = self._identity.guid,
-            address = guid,
+            address = target,
             state = obj.state
         )
         self.hold_object(static)
@@ -477,17 +576,42 @@ class Agent():
             )
             
         binding_guid = self._bindings[obj.address]
-        debind = self._identity.make_debind(
-            target = binding_guid
-        )
-        self.persister.publish(debind.packed)
+        self._do_debind(binding_guid)
         del self._bindings[obj.address]
         
-    def share_object(self, obj, recipient):
+    def share_object(self, obj, recipient_guid):
+        ''' Initiates a request with the recipient to share the object.
         '''
-        '''
-        pass
+        contact = self._retrieve_contact(recipient_guid)
         
+        if isinstance(obj, DynamicObject):
+            # This is, shall we say, suboptimal.
+            target = self._historian[obj.address][0]
+            
+        elif isinstance(obj, StaticObject):
+            target = obj.address
+            
+        else:
+            raise TypeError(
+                'Obj must be a StaticObject, DynamicObject, or similar.'
+            )
+        
+        handshake = self._identity.make_handshake(
+            target = target,
+            secret = self._secrets[obj.address]
+        )
+        
+        request = self._identity.make_request(
+            recipient = contact,
+            request = handshake
+        )
+        
+        # Note the potential race condition here. Should catch errors with the
+        # persister in case we need to resolve pending requests that didn't
+        # successfully post.
+        self._pending_requests[request.guid] = obj.address
+        self.persister.publish(request.packed)
+
 
 class _ClientBase:
     pass

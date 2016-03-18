@@ -6,9 +6,10 @@ It does not require application-level cryptographic code, and is available via I
 
 # Todo (no particular order)
 
-+ Implement a key ratchet for dynamic objects instead of requiring new keyshares for each frame
++ Implement an axolotl-like key ratchet for dynamic objects instead of requiring new keyshares for each frame
     + Use the _legroom parameter as a hint for when to issue a new key
     + Everything else is done through a ratchet
+    + Note that not only is this self-synchronizing, but it also allows dynamic objects that have been shared with multiple parties to remove access to future frames.
 + Create a format for using dynamic objects to perform keyshares
 
 ## Done

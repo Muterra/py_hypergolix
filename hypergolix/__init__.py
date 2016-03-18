@@ -34,8 +34,9 @@ hypergolix: A python Golix client.
 # Add in core module
 from .core import *
 from .utils import NakError
-from .utils import InaccessibleError
 from .utils import PersistenceWarning
+from .utils import InaccessibleError
+from .utils import UnknownPartyError
 
 # Submodules
 from . import persisters

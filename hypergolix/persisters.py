@@ -630,9 +630,11 @@ class MemoryPersister(_PersisterBase):
         
         Should this warn?
         '''
-        if guid in self._bindings:
+        # Make sure not to check implicit bindings, or dynamic bindings will
+        # show up as illegal if/when we statically bind them
+        if guid in self._bindings_static or guid in self._bindings_dynamic:
             illegal_binding = self._bindings[guid]
-            del self._bindings[illegal_binding]
+            del self._bindings[guid]
             self._gc_execute(illegal_binding)
 
     def _check_illegal_gobs_target(self, gobs):
