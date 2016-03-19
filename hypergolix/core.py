@@ -305,38 +305,51 @@ class Agent():
             request = request_unpacked
         )
             
-        self._request_handler(request, request_unpacked.guid)
-            
-    def _request_handler(self, request, source_guid):
-        ''' Handles a request after reception.
-        '''
         if isinstance(request, AsymHandshake):
-            # First add the secret to our store
-            if request.target not in self._secrets:
-                self._secrets[request.target] = request.secret
-            
-            # Now send an ack to whomever sent the handshake
-            ack = self._identity.make_ack(
-                target = source_guid
-            )
-            response = self._identity.make_request(
-                recipient = self._retrieve_contact(request.author),
-                request = ack
-            )
-            self.persister.publish(response.packed)
+            self._handle_req_handshake(request, request_unpacked.guid)
             
         elif isinstance(request, AsymAck):
-            target = self._pending_requests[request.target]
-            del self._pending_requests[request.target]
+            self._handle_req_ack(request, request_unpacked.guid)
             
-            if target in self._shared_objects:
-                self._shared_objects.add(request.author)
-            else:
-                self._shared_objects[request.author] = {request.target}
-                
-        elif isinstance(request, AsynNak):
-            del self._pending_requests[request.target]
-            raise NakError('Recipient refused request.')
+        elif isinstance(request, AsymNak):
+            self._handle_req_nak(request, request_unpacked.guid)
+            
+        else:
+            raise RuntimeError('Encountered and unknown request type.')
+            
+    def _handle_req_handshake(self, request, source_guid):
+        ''' Handles a handshake request after reception.
+        '''
+        # First add the secret to our store
+        if request.target not in self._secrets:
+            self._secrets[request.target] = request.secret
+        
+        # Now send an ack to whomever sent the handshake
+        ack = self._identity.make_ack(
+            target = source_guid
+        )
+        response = self._identity.make_request(
+            recipient = self._retrieve_contact(request.author),
+            request = ack
+        )
+        self.persister.publish(response.packed)
+            
+    def _handle_req_ack(self, request, source_guid):
+        ''' Handles a handshake ack after reception.
+        '''
+        target = self._pending_requests[request.target]
+        del self._pending_requests[request.target]
+        
+        if target in self._shared_objects:
+            self._shared_objects[target].add(request.author)
+        else:
+            self._shared_objects[target] = { request.author }
+            
+    def _handle_req_nak(self, request, source_guid):
+        ''' Handles a handshake nak after reception.
+        '''
+        del self._pending_requests[request.target]
+        raise NakError('Recipient refused request.')
         
     @property
     def persister(self):
@@ -433,21 +446,22 @@ class Agent():
         )
         
     def _do_dynamic(self, data, link, guid_dynamic=None, history=None):
-        if (data is None and link is None) or \
-        (data is not None and link is not None):
-            raise TypeError('Must pass either data XOR link to make_dynamic.')
-        
-        elif data is not None:
+        ''' Actually generate a dynamic binding.
+        '''
+        if data is not None and link is None:
             container = self._make_static(data)
             target = container.guid
             
-        else:
+        elif link is not None and data is None:
             # Type check the link.
             if not isinstance(link, _ObjectBase):
                 raise TypeError(
                     'Link must be a StaticObject, DynamicObject, or similar.'
                 )
             target = link.address
+            
+        else:
+            raise TypeError('Must pass either data XOR link to make_dynamic.')
             
         dynamic = self._identity.make_bind_dynamic(
             target = target,
@@ -522,6 +536,11 @@ class Agent():
         self._historian[obj.address].appendleft(dynamic.guid)
         obj._buffer.appendleft(state)
         
+        # Since we're not doing a ratchet right now, just do this every time.
+        if obj.address in self._shared_objects:
+            for recipient in self._shared_objects[obj.address]:
+                self.share_object(obj, recipient)
+        
     def freeze_dynamic(self, obj):
         ''' Creates a frozen StaticObject from the most current state of
         a DynamicObject. Returns the StaticObject.
@@ -586,7 +605,8 @@ class Agent():
         
         if isinstance(obj, DynamicObject):
             # This is, shall we say, suboptimal.
-            target = self._historian[obj.address][0]
+            # frame_guid = self._historian[obj.address][0]
+            target = self._dynamic_targets[obj.address]
             
         elif isinstance(obj, StaticObject):
             target = obj.address
@@ -598,7 +618,7 @@ class Agent():
         
         handshake = self._identity.make_handshake(
             target = target,
-            secret = self._secrets[obj.address]
+            secret = self._secrets[target]
         )
         
         request = self._identity.make_request(

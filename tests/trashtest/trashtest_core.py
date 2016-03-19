@@ -175,11 +175,27 @@ class AgentTrashTest(unittest.TestCase):
         pt2 = b'Hiyaback!'
         
         obj1 = self.agent1.new_dynamic(pt1)
-        obj1s = self.agent1.freeze_dynamic(obj1)
+        obj1s1 = self.agent1.freeze_dynamic(obj1)
         
-        self.agent1.share_object(obj1s, contact2)
-        self.assertIn(obj1s.address, self.agent2._secrets)
-        self.assertEqual(self.agent1._secrets[obj1s.address], self.agent2._secrets[obj1s.address])
+        self.agent1.share_object(obj1s1, contact2)
+        self.assertIn(obj1s1.address, self.agent2._secrets)
+        self.assertEqual(
+            self.agent1._secrets[obj1s1.address], 
+            self.agent2._secrets[obj1s1.address]
+        )
+        # Soon, we're going to want this to do a retrieve object using agent2
+        
+        # This makes sure we're propertly propagating secrets when we update
+        # dynamic bindings
+        self.agent1.share_object(obj1, contact2)
+        self.agent1.update_dynamic(obj1, pt2)
+        obj1s2 = self.agent1.freeze_dynamic(obj1)
+        self.assertIn(obj1s2.address, self.agent2._secrets)
+        self.assertEqual(
+            self.agent1._secrets[obj1s2.address],
+            self.agent2._secrets[obj1s2.address]
+        )
+        
 
 if __name__ == "__main__":
     unittest.main()
