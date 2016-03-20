@@ -323,8 +323,9 @@ class Agent():
         ''' Handles a handshake request after reception.
         '''
         # First add the secret to our store
+        # This will break if we change behavior of self._secrets.
         if request.target not in self._secrets:
-            self._secrets[request.target] = request.secret
+            self._set_secret(request.target, request.secret)
         
         # Now send an ack to whomever sent the handshake
         ack = self._identity.make_ack(
@@ -395,6 +396,10 @@ class Agent():
         ''' Return the secret for the passed guid, if one is available.
         If unknown, raise InaccessibleError.
         '''
+        # If guid is a dynamic binding, resolve it into the most recent frame,
+        # which is how we're storing secrets in self._secrets.
+        if guid in self._historian:
+            guid = self._historian[guid][0]
         try:
             return self._secrets[guid]
         except KeyError as e:
@@ -403,6 +408,7 @@ class Agent():
     def _set_secret(self, guid, secret):
         ''' Stores the secret for the passed guid.
         '''
+        # Should this add parallel behavior for handling dynamic guids?
         self._secrets[guid] = secret
         
     def _make_static(self, data, secret=None):
@@ -412,8 +418,7 @@ class Agent():
             secret = secret,
             plaintext = data
         )
-        self._set_secret(container.guid, secret)
-        return container
+        return container, secret
         
     def _make_bind(self, guid):
         binding = self._identity.make_bind_static(
@@ -434,7 +439,8 @@ class Agent():
         ''' Makes a new static object, handling binding, persistence, 
         and so on. Returns a StaticObject.
         '''
-        container = self._make_static(data)
+        container, secret = self._make_static(data)
+        self._set_secret(container.guid, secret)
         binding = self._make_bind(container.guid)
         # This would be a good spot to figure out a way to make use of
         # publish_unsafe.
@@ -448,12 +454,13 @@ class Agent():
             state = data
         )
         
-    def _do_dynamic(self, data, link, guid_dynamic=None, history=None):
+    def _do_dynamic(self, data, link, guid_dynamic=None, history=None, secret=None):
         ''' Actually generate a dynamic binding.
         '''
         if data is not None and link is None:
-            container = self._make_static(data)
+            container, secret = self._make_static(data, secret)
             target = container.guid
+            state = data
             
         elif link is not None and data is None:
             # Type check the link.
@@ -462,6 +469,8 @@ class Agent():
                     'Link must be a StaticObject, DynamicObject, or similar.'
                 )
             target = link.address
+            state = link
+            secret = self._get_secret(link.address)
             
         else:
             raise TypeError('Must pass either data XOR link to make_dynamic.')
@@ -472,13 +481,18 @@ class Agent():
             history = history
         )
             
+        # Add the secret to the chamber. HOWEVER, associate it with the frame
+        # guid, so that (if we've held it as a static object) it won't be 
+        # garbage collected when we advance past legroom.
+        self._set_secret(dynamic.guid, secret)
+            
         self.persister.publish(dynamic.packed)
         if data is not None:
             self.persister.publish(container.packed)
             
         self._dynamic_targets[dynamic.guid_dynamic] = target
         
-        return dynamic
+        return dynamic, state
         
     def new_dynamic(self, data=None, link=None, _legroom=3):
         ''' Makes a dynamic object. May link to a static (or dynamic) 
@@ -487,8 +501,7 @@ class Agent():
         The _legroom argument determines how many frames should be used 
         as history in the dynamic binding.
         '''
-        dynamic = self._do_dynamic(data, link)
-        state = data or link
+        dynamic, state = self._do_dynamic(data, link)
             
         # Historian manages the history definition for the object.
         self._historian[dynamic.guid_dynamic] = collections.deque(
@@ -528,21 +541,33 @@ class Agent():
                 'Agents cannot update objects they did not create.'
             )
             
-        dynamic = self._do_dynamic(
+        frame_history = self._historian[obj.address]
+        
+        old_tail = frame_history[len(frame_history) - 1]
+        old_frame = frame_history[0]
+        dynamic, state = self._do_dynamic(
             data = data, 
             link = link, 
             guid_dynamic = obj.address,
-            history = self._historian[obj.address]
+            history = frame_history,
+            secret = self._ratchet_secret(
+                secret = self._get_secret(old_frame),
+                guid = old_frame
+            )
         )
-        state = data or link
             
-        self._historian[obj.address].appendleft(dynamic.guid)
+        frame_history.appendleft(dynamic.guid)
         obj._buffer.appendleft(state)
         
-        # Since we're not doing a ratchet right now, just do this every time.
-        if obj.address in self._shared_objects:
-            for recipient in self._shared_objects[obj.address]:
-                self.share_object(obj, recipient)
+        # This will break if we ever change the behavior of self._secrets
+        # Clear out old key material
+        if old_tail not in frame_history:
+            del self._secrets[old_tail]
+        
+        # # Since we're not doing a ratchet right now, just do this every time.
+        # if obj.address in self._shared_objects:
+        #     for recipient in self._shared_objects[obj.address]:
+        #         self.share_object(obj, recipient)
         
     def freeze_dynamic(self, obj):
         ''' Creates a frozen StaticObject from the most current state of
@@ -562,6 +587,10 @@ class Agent():
             state = obj.state
         )
         self.hold_object(static)
+        
+        # Don't forget to add the actual static resource to _secrets
+        self._set_secret(target, self._get_secret(obj.address))
+        
         return static
         
     def hold_object(self, obj):
@@ -621,7 +650,7 @@ class Agent():
         
         handshake = self._identity.make_handshake(
             target = target,
-            secret = self._secrets[target]
+            secret = self._get_secret(target)
         )
         
         request = self._identity.make_request(

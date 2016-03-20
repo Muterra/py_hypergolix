@@ -189,12 +189,12 @@ class AgentTrashTest(unittest.TestCase):
         # dynamic bindings
         self.agent1.share_object(obj1, contact2)
         self.agent1.update_dynamic(obj1, pt2)
-        obj1s2 = self.agent1.freeze_dynamic(obj1)
-        self.assertIn(obj1s2.address, self.agent2._secrets)
-        self.assertEqual(
-            self.agent1._secrets[obj1s2.address],
-            self.agent2._secrets[obj1s2.address]
-        )
+        # obj1s2 = self.agent1.freeze_dynamic(obj1)
+        # self.assertIn(obj1s2.address, self.agent2._secrets)
+        # self.assertEqual(
+        #     self.agent1._secrets[obj1s2.address],
+        #     self.agent2._secrets[obj1s2.address]
+        # )
             
         
         # --------------------------------------------------------------------
