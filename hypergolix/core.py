@@ -64,6 +64,8 @@ from golix.utils import AsymAck
 from golix.utils import AsymNak
 
 from Crypto.Protocol.KDF import scrypt
+from Crypto.Hash import SHA512
+from Crypto.Protocol.KDF import HKDF
 
 # # Inter-package dependencies that pass straight through to __all__
 # from .utils import Guid
@@ -403,8 +405,9 @@ class Agent():
         '''
         self._secrets[guid] = secret
         
-    def _make_static(self, data):
-        secret = self._identity.new_secret()
+    def _make_static(self, data, secret=None):
+        if secret is None:
+            secret = self._identity.new_secret()
         container = self._identity.make_container(
             secret = secret,
             plaintext = data
@@ -631,6 +634,32 @@ class Agent():
         # successfully post.
         self._pending_requests[request.guid] = obj.address
         self.persister.publish(request.packed)
+        
+    @staticmethod
+    def _ratchet_secret(secret, guid):
+        ''' Ratchets a key using HKDF-SHA512, using the associated 
+        address as salt. For dynamic files, this should be the previous
+        frame guid (not the dynamic guid).
+        '''
+        cls = type(secret)
+        cipher = secret.cipher
+        version = secret.version
+        len_seed = len(secret.seed)
+        len_key = len(secret.key)
+        source = bytes(secret.seed + secret.key)
+        ratcheted = HKDF(
+            master = source,
+            salt = bytes(guid),
+            key_len = len_seed + len_key,
+            hashmod = SHA512,
+            num_keys = 1
+        )
+        return cls(
+            cipher = cipher,
+            version = version,
+            key = ratcheted[:len_key],
+            seed = ratcheted[len_key:]
+        )
 
 
 class _ClientBase:

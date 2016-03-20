@@ -6,12 +6,15 @@ It does not require application-level cryptographic code, and is available via I
 
 # Todo (no particular order)
 
-+ Implement an axolotl-like key ratchet for dynamic objects instead of requiring new keyshares for each frame
-    + Use the _legroom parameter as a hint for when to issue a new key
-    + Everything else is done through a ratchet
-    + Note that not only is this self-synchronizing, but it also allows dynamic objects that have been shared with multiple parties to remove access to future frames.
 + Create a format for using dynamic objects to perform keyshares
++ Document key ratcheting mechanism
++ Improve / create key ratchet healing
++ Document that (currently, until protocol change) using a link as a dynamic frame breaks the ratchet and is, generally speaking, a very dangerous decision.
 
 ## Done
 
 + Write enough code to have a reason to have a todo list
++ Implement an axolotl-like key ratchet for dynamic objects instead of requiring new keyshares for each frame
+    + Use the _legroom parameter as a hint for when to issue a new key
+    + Everything else is done through a ratchet
+    + Note that not only is this self-synchronizing, but it also allows dynamic objects that have been shared with multiple parties to remove access to future frames.
