@@ -183,7 +183,10 @@ class AgentTrashTest(unittest.TestCase):
             self.agent1._secrets[obj1s1.address], 
             self.agent2._secrets[obj1s1.address]
         )
-        # Soon, we're going to want this to do a retrieve object using agent2
+        obj1s1_shared = self.agent2.get_object(obj1s1.address)
+        self.assertEqual(
+            obj1s1_shared, obj1s1
+        )
         
         # This makes sure we're propertly propagating secrets when we update
         # dynamic bindings

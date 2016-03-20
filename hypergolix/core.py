@@ -59,6 +59,9 @@ from golix import SecondParty
 from golix import Guid
 from golix import Secret
 
+from golix._getlow import GEOC
+from golix._getlow import GOBD
+
 from golix.utils import AsymHandshake
 from golix.utils import AsymAck
 from golix.utils import AsymNak
@@ -174,6 +177,19 @@ class StaticObject(_ObjectBase):
     @property
     def state(self):
         return self._state
+        
+    def __eq__(self, other):
+        if not isinstance(other, StaticObject):
+            raise TypeError(
+                'Cannot compare StaticObjects to non-StaticObject-like Python '
+                'objects.'
+            )
+            
+        return (
+            self.author == other.author and
+            self.address == other.address and
+            self.state == other.state
+        )
     
     
 class DynamicObject(_ObjectBase):
@@ -223,6 +239,19 @@ class DynamicObject(_ObjectBase):
         # Note that this has the added benefit of preventing assignment
         # to the internal buffer!
         return tuple(self._buffer)
+        
+    def __eq__(self, other):
+        if not isinstance(other, DynamicObject):
+            raise TypeError(
+                'Cannot compare DynamicObjects to non-DynamicObject-like '
+                'Python objects.'
+            )
+            
+        return (
+            self.author == other.author and
+            self.address == other.address and
+            self.buffer == other.buffer
+        )
 
 
 class Agent():
@@ -357,40 +386,6 @@ class Agent():
     @property
     def persister(self):
         return self._persister
-        
-    def save(self, password):
-        ''' Save the agent's identity to a GEOC object.
-        '''
-        # Condense everything we need to rebuild self._golix_provider
-        keys = self._golix_provider._serialize()
-        # Store the guid for the dynamic bootstrap object
-        bootstrap = self._bootstrap_binding
-        # Create some random-length, random padding to make it harder to
-        # guess that our end-product GEOC is a saved Agent
-        padding = None
-        # Put it all into a GEOC.
-        # Scrypt the password. Salt against the author GUID, which we know
-        # (when reloading) from the author of the file!
-        # Use 2**14 for t<=100ms, 2**20 for t<=5s
-        combined = scrypt(
-            password = password, 
-            salt = bytes(self._golix_provider.guid),
-            key_len = 48,
-            N = 2**15,
-            r = 8,
-            p = 1
-        )
-        secret = Secret(
-            cipher = 1,
-            key = combined[:32],
-            seed = combined[32:48]
-        )
-        
-    @classmethod
-    def load(cls, password, data):
-        ''' Load an Agent from an identity contained within a GEOC.
-        '''
-        pass
         
     def _get_secret(self, guid):
         ''' Return the secret for the passed guid, if one is available.
@@ -569,6 +564,13 @@ class Agent():
         #     for recipient in self._shared_objects[obj.address]:
         #         self.share_object(obj, recipient)
         
+    def refresh_dynamic(self, obj, guid):
+        ''' Retrieves the guid from the storage provider, evaluates if 
+        it is a new dynamic frame for obj, and if so, updates obj 
+        accordingly.
+        '''
+        pass
+        
     def freeze_dynamic(self, obj):
         ''' Creates a frozen StaticObject from the most current state of
         a DynamicObject. Returns the StaticObject.
@@ -664,6 +666,45 @@ class Agent():
         self._pending_requests[request.guid] = obj.address
         self.persister.publish(request.packed)
         
+    def get_object(self, guid):
+        ''' Gets an object, assuming the Agent has access to it, as 
+        identified by guid.
+        '''
+        if not isinstance(guid, Guid):
+            raise TypeError('Passed guid must be a Guid or similar.')
+            
+        secret = self._get_secret(guid)
+        packed = self.persister.get(guid)
+        unpacked = self._identity.unpack_container(packed=packed)
+        
+        if isinstance(unpacked, GEOC):
+            author = self._retrieve_contact(unpacked.author)
+            plaintext = self._identity.receive_container(
+                author = author,
+                secret = secret,
+                container = unpacked
+            )
+            obj = StaticObject(
+                author = unpacked.author,
+                address = guid,
+                state = plaintext
+            )
+            
+        elif isinstance(unpacked, GOBD):
+            author = self._retrieve_contact(unpacked.binder)
+            target = self._identity.receive_bind_dynamic(
+                binder = author,
+                binding = unpacked
+            )
+            
+        else:
+            raise ValueError(
+                'Guid resolves to an invalid Golix object. get_object must '
+                'target either a container (GEOC) or a dynamic binding (GOBD).'
+            )
+            
+        return obj
+        
     @staticmethod
     def _ratchet_secret(secret, guid):
         ''' Ratchets a key using HKDF-SHA512, using the associated 
@@ -692,7 +733,39 @@ class Agent():
 
 
 class _ClientBase:
-    pass
+    def register(self, password):
+        ''' Save the agent's identity to a GEOC object.
+        '''
+        # Condense everything we need to rebuild self._golix_provider
+        keys = self._golix_provider._serialize()
+        # Store the guid for the dynamic bootstrap object
+        bootstrap = self._bootstrap_binding
+        # Create some random-length, random padding to make it harder to
+        # guess that our end-product GEOC is a saved Agent
+        padding = None
+        # Put it all into a GEOC.
+        # Scrypt the password. Salt against the author GUID, which we know
+        # (when reloading) from the author of the file!
+        # Use 2**14 for t<=100ms, 2**20 for t<=5s
+        combined = scrypt(
+            password = password, 
+            salt = bytes(self._golix_provider.guid),
+            key_len = 48,
+            N = 2**15,
+            r = 8,
+            p = 1
+        )
+        secret = Secret(
+            cipher = 1,
+            key = combined[:32],
+            seed = combined[32:48]
+        )
+        
+    @classmethod
+    def login(cls, password, data):
+        ''' Load an Agent from an identity contained within a GEOC.
+        '''
+        pass
     
     
 class EmbeddedClient:
