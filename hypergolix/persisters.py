@@ -187,7 +187,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         pass
         
 
-class MemoryPersister(_PersisterBase):
+class UnsafeMemoryPersister(_PersisterBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Lookup for GIDC authors, {<Guid>: <secondparty>}
@@ -270,25 +270,7 @@ class MemoryPersister(_PersisterBase):
         # Lookup for subscriptions, {<subscribed Guid>: [callbacks]}
         self._subscriptions = {}
         
-    def publish(self, packed):
-        ''' Submits a packed object to the persister.
-        
-        Should MemoryPersister have a publish_unsafe that does not 
-        verify the object?
-        
-        ACK is represented by a return True
-        NAK is represented by raise NakError
-        '''
-        # This will raise if improperly formatted.
-        try:
-            obj = self._golix_provider.unpack_object(packed)
-        except ParseError as e:
-            raise TypeError('Packed must be a packed golix object.') from e
-        # We are now guaranteed a Golix object.
-        
-        return self.publish_unsafe(obj)
-        
-    def publish_unsafe(self, unpacked):
+    def publish(self, unpacked):
         ''' Handles publishing for an unpacked object. DOES NOT perform
         guid verification. ONLY USE THIS IF YOU CREATED THE UNPACKED 
         OBJECT YOURSELF, or have already performed your own unpacking 
@@ -675,15 +657,6 @@ class MemoryPersister(_PersisterBase):
         return True
         
     def get(self, guid):
-        ''' Requests an object from the persistence provider, identified
-        by its guid.
-        
-        ACK/success is represented by returning the object
-        NAK/failure is represented by raise NakError
-        '''
-        return self.get_unsafe(guid).packed
-        
-    def get_unsafe(self, guid):
         ''' Returns an unpacked Golix object. Only use this if you 100%
         trust the PersistenceProvider to perform all public verification
         of objects.
@@ -858,5 +831,42 @@ class MemoryPersister(_PersisterBase):
         del self._store[guid]
         
 
+class MemoryPersister(UnsafeMemoryPersister):
+    ''' A safe memory persister. Fully verifies everything in both 
+    directions.
+    '''
+        
+    def publish(self, packed):
+        ''' Submits a packed object to the persister.
+        
+        ACK is represented by a return True
+        NAK is represented by raise NakError
+        '''
+        # This will raise if improperly formatted.
+        try:
+            obj = self._golix_provider.unpack_object(packed)
+        except ParseError as e:
+            raise TypeError('Packed must be a packed golix object.') from e
+        # We are now guaranteed a Golix object.
+        
+        return super().publish(obj)
+        
+    def get(self, guid):
+        ''' Requests an object from the persistence provider, identified
+        by its guid.
+        
+        ACK/success is represented by returning the object
+        NAK/failure is represented by raise NakError
+        '''
+        return super().get(guid).packed
+        
+
 class DiskPersister(_PersisterBase):
+    pass
+    
+    
+class ProxyPersister(_PersisterBase):
+    ''' Allows for customized persister implementation using an IPC 
+    proxy.
+    '''
     pass
