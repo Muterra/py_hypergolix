@@ -187,6 +187,13 @@ class StaticObject(_ObjectBase):
             self.address == other.address and
             self.state == other.state
         )
+        
+    def __hash__(self):
+        return (
+            hash(self.author) ^ 
+            hash(self.address) ^ 
+            hash(self.state)
+        )
     
     
 class DynamicObject(_ObjectBase):

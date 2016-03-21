@@ -120,15 +120,16 @@ class ObjectTrashtest(unittest.TestCase):
         
 class AgentTrashTest(unittest.TestCase):
     def setUp(self):
-        self.client = EmbeddedClient()
+        self.client1 = EmbeddedClient()
+        self.client2 = EmbeddedClient()
         self.persister = MemoryPersister()
         self.agent1 = Agent(
             persister = self.persister,
-            client = self.client
+            client = self.client1
         )
         self.agent2 = Agent(
             persister = self.persister,
-            client = self.client
+            client = self.client2
         )
         
     def test_alone(self):
@@ -195,6 +196,7 @@ class AgentTrashTest(unittest.TestCase):
         self.assertEqual(
             obj1s1_shared, obj1s1
         )
+        self.assertEqual(obj1s1, self.client2._store[obj1s1.address])
         
         # This makes sure we're propertly propagating secrets when we update
         # dynamic bindings
