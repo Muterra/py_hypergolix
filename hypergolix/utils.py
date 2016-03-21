@@ -35,9 +35,10 @@ import collections
 # Control * imports.
 __all__ = [
     'NakError',
-    'PersistenceWarning',
+    'HandshakeError',
     'InaccessibleError',
-    'UnknownPartyError'
+    'UnknownPartyError',
+    'PersistenceWarning'
 ]
 
 
@@ -45,12 +46,10 @@ class NakError(RuntimeError):
     ''' Raised for most failed operations.
     '''
     pass
-    
-    
-class PersistenceWarning(RuntimeWarning):
-    ''' Raised when a debinding did not result in the removal of its
-    target -- for example, if another binding remains on the target
-    object.
+
+
+class HandshakeError(RuntimeError):
+    ''' Raised when handshakes fail.
     '''
     pass
 
@@ -64,6 +63,14 @@ class InaccessibleError(RuntimeError):
 class UnknownPartyError(RuntimeError):
     ''' Raised when an Agent cannot find an identity definition for an
     author and therefore cannot verify anything.
+    '''
+    pass
+    
+    
+class PersistenceWarning(RuntimeWarning):
+    ''' Raised when a debinding did not result in the removal of its
+    target -- for example, if another binding remains on the target
+    object.
     '''
     pass
     

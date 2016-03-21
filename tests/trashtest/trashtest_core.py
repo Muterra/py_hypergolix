@@ -40,6 +40,7 @@ import collections
 
 # These are normal imports
 from hypergolix.persisters import MemoryPersister
+from hypergolix.clients import EmbeddedClient
 from hypergolix import DynamicObject
 from hypergolix import StaticObject
 from hypergolix import NakError
@@ -119,9 +120,16 @@ class ObjectTrashtest(unittest.TestCase):
         
 class AgentTrashTest(unittest.TestCase):
     def setUp(self):
+        self.client = EmbeddedClient()
         self.persister = MemoryPersister()
-        self.agent1 = Agent(persister=self.persister)
-        self.agent2 = Agent(persister=self.persister)
+        self.agent1 = Agent(
+            persister = self.persister,
+            client = self.client
+        )
+        self.agent2 = Agent(
+            persister = self.persister,
+            client = self.client
+        )
         
     def test_alone(self):
         pt1 = b'Hello, world?'

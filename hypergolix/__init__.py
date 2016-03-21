@@ -40,4 +40,5 @@ from .utils import UnknownPartyError
 
 # Submodules
 from . import persisters
+from . import clients
 from . import utils

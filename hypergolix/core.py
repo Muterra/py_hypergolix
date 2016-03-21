@@ -70,16 +70,13 @@ from Crypto.Protocol.KDF import scrypt
 from Crypto.Hash import SHA512
 from Crypto.Protocol.KDF import HKDF
 
-# # Inter-package dependencies that pass straight through to __all__
-# from .utils import Guid
-# from .utils import SecurityError
-# from .utils import Secret
-
-# Inter-package dependencies that are only used locally
+# Intra-package dependencies
 from .utils import NakError
+from .utils import HandshakeError
 from .utils import InaccessibleError
 from .utils import UnknownPartyError
 from .persisters import _PersisterBase
+from .clients import _ClientBase
         
 # ###############################################
 # Utilities, etc
@@ -255,13 +252,17 @@ class DynamicObject(_ObjectBase):
 
 
 class Agent():
-    def __init__(self, persister, _golix_firstparty=None):
+    def __init__(self, persister, client, _golix_firstparty=None):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         '''
         if not isinstance(persister, _PersisterBase):
             raise TypeError('Persister must subclass _PersisterBase.')
         self._persister = persister
+        
+        if not isinstance(client, _ClientBase):
+            raise TypeError('Client must subclass _ClientBase.')
+        self._client = client
         
         if _golix_firstparty is None:
             self._identity = FirstParty()
@@ -355,14 +356,27 @@ class Agent():
         # This will break if we change behavior of self._secrets.
         if request.target not in self._secrets:
             self._set_secret(request.target, request.secret)
+        obj = self.get_object(request.target)
         
-        # Now send an ack to whomever sent the handshake
-        ack = self._identity.make_ack(
-            target = source_guid
-        )
+        try:
+            self._client.dispatch_handshake(obj)
+            
+        except HandshakeError as e:
+            # Erfolglos. Send a nak to whomever sent the handshake
+            response_obj = self._identity.make_nak(
+                target = source_guid
+            )
+            self.cleanup_object(obj)
+            
+        else:
+            # Success. Send an ack to whomever sent the handshake
+            response_obj = self._identity.make_ack(
+                target = source_guid
+            )
+            
         response = self._identity.make_request(
             recipient = self._retrieve_contact(request.author),
-            request = ack
+            request = response_obj
         )
         self.persister.publish(response.packed)
             
@@ -372,16 +386,19 @@ class Agent():
         target = self._pending_requests[request.target]
         del self._pending_requests[request.target]
         
-        if target in self._shared_objects:
-            self._shared_objects[target].add(request.author)
-        else:
-            self._shared_objects[target] = { request.author }
+        # # Since we're now using ratchets, this is no longer used.
+        # if target in self._shared_objects:
+        #     self._shared_objects[target].add(request.author)
+        # else:
+        #     self._shared_objects[target] = { request.author }
+            
+        self._client.dispatch_handshake_ack(request)
             
     def _handle_req_nak(self, request, source_guid):
         ''' Handles a handshake nak after reception.
         '''
         del self._pending_requests[request.target]
-        raise NakError('Recipient refused request.')
+        self._client.dispatch_handshake_nak(request)
         
     @property
     def persister(self):
@@ -705,6 +722,12 @@ class Agent():
             
         return obj
         
+    def cleanup_object(self, obj):
+        ''' Does anything needed to clean up the object -- removing 
+        secrets, unsubscribing from dynamic updates, etc.
+        '''
+        pass
+        
     @staticmethod
     def _ratchet_secret(secret, guid):
         ''' Ratchets a key using HKDF-SHA512, using the associated 
@@ -730,9 +753,7 @@ class Agent():
             key = ratcheted[:len_key],
             seed = ratcheted[len_key:]
         )
-
-
-class _ClientBase:
+        
     def register(self, password):
         ''' Save the agent's identity to a GEOC object.
         '''
@@ -766,19 +787,3 @@ class _ClientBase:
         ''' Load an Agent from an identity contained within a GEOC.
         '''
         pass
-    
-    
-class EmbeddedClient:
-    pass
-    
-    
-class LocalhostClient:
-    pass
-    
-    
-class PipeClient:
-    pass
-    
-    
-class FileClient:
-    pass
