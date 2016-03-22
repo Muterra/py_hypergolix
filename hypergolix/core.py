@@ -733,7 +733,8 @@ class Agent():
         if isinstance(obj, DynamicObject):
             # This is, shall we say, suboptimal.
             # frame_guid = self._historian[obj.address][0]
-            target = self._dynamic_targets[obj.address]
+            # target = self._dynamic_targets[obj.address]
+            target = obj.address
             
         elif isinstance(obj, StaticObject):
             target = obj.address
