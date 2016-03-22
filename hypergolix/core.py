@@ -208,7 +208,7 @@ class Agent():
         )
         
         try:
-            self._client.dispatch_handshake(obj)
+            self.client.dispatch_handshake(obj)
             
         except HandshakeError as e:
             # Erfolglos. Send a nak to whomever sent the handshake
@@ -241,17 +241,21 @@ class Agent():
         # else:
         #     self._shared_objects[target] = { request.author }
             
-        self._client.dispatch_handshake_ack(request)
+        self.client.dispatch_handshake_ack(request)
             
     def _handle_req_nak(self, request, source_guid):
         ''' Handles a handshake nak after reception.
         '''
         del self._pending_requests[request.target]
-        self._client.dispatch_handshake_nak(request)
+        self.client.dispatch_handshake_nak(request)
         
     @property
     def persister(self):
         return self._persister
+        
+    @property
+    def client(self):
+        return self._client
         
     def _get_secret(self, guid):
         ''' Return the secret for the passed guid, if one is available.
