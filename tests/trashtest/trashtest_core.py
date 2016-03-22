@@ -209,8 +209,12 @@ class AgentTrashTest(unittest.TestCase):
         )
         
         # Awesome, now let's check updating them -- including subscriptions, 
-        # and that the recipient correctly ratchets the key.
-        # self.agent1.update_dynamic(obj1, pt2)
+        # and that the recipient correctly ratchets the key and updates state.
+        self.agent1.update_dynamic(obj1, pt2)
+        self.assertEqual(
+            obj1,
+            self.client2._store[obj1.address]
+        )
         
         # obj1s2 = self.agent1.freeze_dynamic(obj1)
         # self.assertIn(obj1s2.address, self.agent2._secrets)

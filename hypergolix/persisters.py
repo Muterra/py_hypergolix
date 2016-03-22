@@ -269,6 +269,9 @@ class UnsafeMemoryPersister(_PersisterBase):
         
         # Lookup for subscriptions, {<subscribed Guid>: [callbacks]}
         self._subscriptions = {}
+        # Parallel lookup for any subscription notifications that are blocking
+        # on an updated target. {<pending target>: <sub guid, notify guid>}
+        self._pending_notifications = {}
         
     def publish(self, unpacked):
         ''' Handles publishing for an unpacked object. DOES NOT perform
@@ -343,6 +346,14 @@ class UnsafeMemoryPersister(_PersisterBase):
             
         # It doesn't matter if we already have it, it must be the same.
         self._store[geoc.guid] = geoc
+        
+        # Update any pending notifications and then clean up.
+        if geoc.guid in self._pending_notifications:
+            self._check_for_subs(
+                subscription_guid = self._pending_notifications[geoc.guid][0],
+                notification_guid = self._pending_notifications[geoc.guid][1]
+            )
+            del self._pending_notifications[geoc.guid]
             
     def _dispatch_gobs(self, gobs):
         ''' Does whatever is needed to preprocess a GOBS.
@@ -439,10 +450,11 @@ class UnsafeMemoryPersister(_PersisterBase):
         self._store[gobd.guid_dynamic] = gobd
         
         # Update any subscribers (if they exist) that an updated frame has 
-        # been issued
+        # been issued. May need to delay until target is uploaded (race cond)
         self._check_for_subs(
             subscription_guid = gobd.guid_dynamic,
-            notification_guid = gobd.guid
+            notification_guid = gobd.guid,
+            target_guid = gobd.target
         )
         
     def _dispatch_new_dynamic(self, gobd):
@@ -598,12 +610,16 @@ class UnsafeMemoryPersister(_PersisterBase):
             notification_guid = garq.guid
         )
                 
-    def _check_for_subs(self, subscription_guid, notification_guid):
+    def _check_for_subs(self, subscription_guid, notification_guid, target_guid=None):
         ''' Check for subscriptions, and update them if any exist.
         '''
         if subscription_guid in self._subscriptions:
-            for callback in self._subscriptions[subscription_guid]:
-                callback(notification_guid)
+            if not target_guid or target_guid in self._store:
+                for callback in self._subscriptions[subscription_guid]:
+                    callback(notification_guid)
+            else:
+                self._pending_notifications[target_guid] = \
+                    subscription_guid, notification_guid
                 
     def _check_illegal_binding(self, guid):
         ''' Checks for an existing binding for guid. If it exists,

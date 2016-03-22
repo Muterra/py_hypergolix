@@ -411,11 +411,15 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         self.server1.subscribe(dyn2_1a.guid_dynamic, self.dummy_callback)
             
         # Now the real updates.
+        # Since we already have an object for this binding, it should immediately
+        # notify.
         with self.assertWarns(SubscriptionNotifier, msg="Dynamic subscription failure."):
             self.server1.publish(dyn1_1b.packed)
+        # Since we need to upload the object for this binding, it should not notify
+        # until we've uploaded the container itself.
         with self.assertWarns(SubscriptionNotifier, msg="Dynamic subscription failure."):
             self.server1.publish(dyn2_1b.packed)
-        self.server1.publish(cont2_2.packed)
+            self.server1.publish(cont2_2.packed)
         # And now test that containers were actually GC'd
         self.assertNotIn(cont1_1.guid, self.server1._store)
         self.assertNotIn(cont2_1.guid, self.server1._store)

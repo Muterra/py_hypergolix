@@ -631,6 +631,8 @@ class Agent():
     def refresh_dynamic(self, obj):
         ''' Checks self.persister for a new dynamic frame for obj, and 
         if one exists, updates obj accordingly.
+        
+        Returns the object back (not a copy).
         '''
         if not isinstance(obj, DynamicObject):
             raise TypeError(
@@ -656,6 +658,24 @@ class Agent():
         # We're only going to update with the most recent state, and not 
         # regress up the history chain. However, we should try to heal any
         # repairable ratchet.
+        # print('----------------------------------------------')
+        # print('Local dynamic address')
+        # print(bytes(obj.address))
+        # print('With local history')
+        # for ent in self._historian[obj.address]:
+        #     print(bytes(ent))
+        # print('Looking for frame')
+        # print(bytes(last_known_frame))
+        # print('Remote dynamic address')
+        # print(bytes(unpacked_binding.guid_dynamic))
+        # print('Remote frame address')
+        # print(bytes(unpacked_binding.guid))
+        # print('remote history')
+        # for ent in unpacked_binding.history:
+        #     print(bytes(ent))
+        # print('new target')
+        # print(bytes(target))
+        # print('----------------------------------------------')
         secret = self._get_secret(obj.address)
         offset = unpacked_binding.history.index(last_known_frame)
         # Count backwards in index (and therefore forward in time) from the 
@@ -699,19 +719,22 @@ class Agent():
         for expired_frame in expired:
             self._del_secret(expired_frame)
         
-        # Preallocate a state. Ignore their history, and preserve our own,
-        # since we may have different ideas about how much legroom we need
-        state = collections.deque(maxlen=self._legroom)
+        # Get our most recent plaintext value
+        plaintext = self._resolve_dynamic_plaintext(target)
         
-        # This will automatically collate everything using the shorter of
-        # the two, between self._legroom and len(all_known_targets)
-        for __, guid_cont in zip(range(self._legroom), all_known_targets):
-            # This could probably stand to see some optimization
-            packed_container = self.persister.get(guid_cont)
-            unpacked_container = self._identity.unpack_container(
-                packed_target_hist
-            )
-            secret = self._get_secret(guid_hist)
+        # # This will automatically collate everything using the shorter of
+        # # the two, between self._legroom and len(all_known_targets)
+        # for __, guid_cont in zip(range(self._legroom), all_known_targets):
+        #     # This could probably stand to see some optimization
+        #     packed_container = self.persister.get(guid_cont)
+        #     unpacked_container = self._identity.unpack_container(
+        #         packed_target_hist
+        #     )
+        #     secret = self._get_secret(guid_hist)
+        
+        # Update the object and return
+        obj._buffer.appendleft(plaintext)
+        return obj
         
     def freeze_dynamic(self, obj):
         ''' Creates a frozen StaticObject from the most current state of
@@ -832,11 +855,11 @@ class Agent():
             
         elif isinstance(unpacked, GOBD):
             # Call recursively.
-            target = self._identity.receive_bind_dynamic(
+            nested_target = self._identity.receive_bind_dynamic(
                 binder = self._retrieve_contact(unpacked.author),
                 binding = unpacked
             )
-            plaintext = self._resolve_dynamic_plaintext(target)
+            plaintext = self._resolve_dynamic_plaintext(nested_target)
             
         else:
             raise RuntimeError(
@@ -898,7 +921,7 @@ class Agent():
             
             # Add the dynamic guid to historian using our own _legroom param.
             self._historian[guid] = collections.deque(
-                iterable = (target,),
+                iterable = (unpacked.guid,),
                 maxlen = self._legroom
             )
             
@@ -914,7 +937,7 @@ class Agent():
             )
             
             # Create an auto-update method for obj.
-            updater = lambda obj=obj, *__, **___: self.refresh_dynamic(obj)
+            updater = lambda __, obj=obj: self.refresh_dynamic(obj)
             self.persister.subscribe(guid, updater)
             
         else:
