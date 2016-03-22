@@ -37,6 +37,8 @@ from .utils import NakError
 from .utils import PersistenceWarning
 from .utils import InaccessibleError
 from .utils import UnknownPartyError
+from .utils import StaticObject
+from .utils import DynamicObject
 
 # Submodules
 from . import persisters
