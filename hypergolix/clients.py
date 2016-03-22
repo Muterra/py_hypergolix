@@ -74,7 +74,7 @@ class _ClientBase(metaclass=abc.ABCMeta):
     
 class EmbeddedClient(_ClientBase):
     def __init__(self):
-        self._store = {}
+        self._handshakes = {}
         
     def dispatch_handshake(self, handshake):
         ''' Receives the target for a handshake (NOT the handshake
@@ -83,7 +83,7 @@ class EmbeddedClient(_ClientBase):
         handshake is a StaticObject or DynamicObject.
         Raises HandshakeError if unsuccessful.
         '''
-        self._store[handshake.address] = handshake
+        self._handshakes[handshake.address] = handshake
         
     def dispatch_handshake_ack(self, ack):
         ''' Receives a handshake acknowledgement and dispatches it to

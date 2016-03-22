@@ -192,11 +192,11 @@ class AgentTrashTest(unittest.TestCase):
             self.agent1._secrets[obj1s1.address], 
             self.agent2._secrets[obj1s1.address]
         )
-        obj1s1_shared = self.client2._store[obj1s1.address]
+        obj1s1_shared = self.client2._handshakes[obj1s1.address]
         self.assertEqual(
             obj1s1_shared, obj1s1
         )
-        self.assertEqual(obj1s1, self.client2._store[obj1s1.address])
+        self.assertEqual(obj1s1, self.client2._handshakes[obj1s1.address])
         
         # Test handshakes using dynamic objects
         self.agent1.hand_object(obj1, contact2)
@@ -205,7 +205,7 @@ class AgentTrashTest(unittest.TestCase):
         self.agent2._get_secret(obj1.address)
         self.assertEqual(
             obj1,
-            self.client2._store[obj1.address]
+            self.client2._handshakes[obj1.address]
         )
         
         # Awesome, now let's check updating them -- including subscriptions, 
@@ -213,15 +213,8 @@ class AgentTrashTest(unittest.TestCase):
         self.agent1.update_dynamic(obj1, pt2)
         self.assertEqual(
             obj1,
-            self.client2._store[obj1.address]
+            self.client2._handshakes[obj1.address]
         )
-        
-        # obj1s2 = self.agent1.freeze_dynamic(obj1)
-        # self.assertIn(obj1s2.address, self.agent2._secrets)
-        # self.assertEqual(
-        #     self.agent1._secrets[obj1s2.address],
-        #     self.agent2._secrets[obj1s2.address]
-        # )
             
         
         # --------------------------------------------------------------------

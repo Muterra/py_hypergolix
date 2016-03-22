@@ -308,7 +308,7 @@ class Agent():
         
         self._contacts = {}
         # Bindings lookup: {<target guid>: <binding guid>}
-        self._bindings = {}
+        self._holdings = {}
         # History lookup for dynamic bindings' frame guids. 
         # {<dynamic guid>: <frame deque>}
         # Note that the deque must use a maxlen or it will grow indefinitely.
@@ -477,7 +477,7 @@ class Agent():
         binding = self._identity.make_bind_static(
             target = guid
         )
-        self._bindings[guid] = binding.guid
+        self._holdings[guid] = binding.guid
         return binding
         
     def _do_debind(self, guid):
@@ -498,7 +498,7 @@ class Agent():
         # This would be a good spot to figure out a way to make use of
         # publish_unsafe.
         # Note that if these raise exceptions and we catch them, we'll
-        # have an incorrect state in self._bindings
+        # have an incorrect state in self._holdings
         self.persister.publish(binding.packed)
         self.persister.publish(container.packed)
         return StaticObject(
@@ -568,8 +568,8 @@ class Agent():
             iterable = (dynamic.guid,),
             maxlen = _legroom
         )
-        # Add a note to _bindings that "I am my own keeper"
-        self._bindings[dynamic.guid_dynamic] = dynamic.guid_dynamic
+        # Add a note to _holdings that "I am my own keeper"
+        self._holdings[dynamic.guid_dynamic] = dynamic.guid_dynamic
         
         return DynamicObject(
             author = self._identity.guid,
@@ -774,28 +774,38 @@ class Agent():
         # really a reason to check if that's the case.
         binding = self._make_bind(obj.address)
         self.persister.publish(binding.packed)
-        self._bindings[obj.address] = binding.guid
+        self._holdings[obj.address] = binding.guid
         
     def delete_object(self, obj):
         ''' Removes an object (if possible). May produce a warning if
         the persistence provider cannot remove the object due to another 
         conflicting binding.
         '''
+        # if isinstance(obj, StaticObject):
+            
+        # elif isinstance(obj, DynamicObject):
+        #     if obj.author 
+            
+        # else:
+        #     raise TypeError(
+        #         'Obj must be StaticObject, DynamicObject, or similar.'
+        #     )
+            
         if not isinstance(obj, _ObjectBase):
             raise TypeError(
                 'Obj must be StaticObject, DynamicObject, or similar.'
             )
             
-        if obj.address not in self._bindings:
+        if obj.address not in self._holdings:
             raise ValueError(
                 'Agents cannot attempt to delete objects they did not create. '
                 'This may also indicate that the object has already been '
                 'deleted.'
             )
             
-        binding_guid = self._bindings[obj.address]
+        binding_guid = self._holdings[obj.address]
         self._do_debind(binding_guid)
-        del self._bindings[obj.address]
+        del self._holdings[obj.address]
         
     def hand_object(self, obj, recipient_guid):
         ''' Initiates a handshake request with the recipient to share 
