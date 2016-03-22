@@ -252,11 +252,16 @@ class DynamicObject(_ObjectBase):
                 'Python objects.'
             )
             
-        return (
+        # This will only compare as far as we both have history.
+        comp = zip(self.buffer, other.buffer)
+        result = (
             self.author == other.author and
-            self.address == other.address and
-            self.buffer == other.buffer
+            self.address == other.address
         )
+        for a, b in comp:
+            result &= (a == b)
+            
+        return result
 
 
 class Agent():
