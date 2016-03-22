@@ -53,6 +53,7 @@ __all__ = [
 
 # Global dependencies
 import collections
+import weakref
 
 from golix import FirstParty
 from golix import SecondParty
@@ -259,7 +260,7 @@ class DynamicObject(_ObjectBase):
 
 
 class Agent():
-    def __init__(self, persister, client, _golix_firstparty=None):
+    def __init__(self, persister, client, _golix_firstparty=None, _legroom=3):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         '''
@@ -286,7 +287,20 @@ class Agent():
             callback = self._request_listener
         )
         
-        self._secrets = {}
+        # Automatic type checking using max. Can't have smaller than 1.
+        self._legroom = max(1, _legroom)
+        
+        # This bit is clever. We want to allow for garbage collection of 
+        # secrets as soon as they're no longer needed, but we also need a way
+        # to get secrets for the targets of dynamic binding frames. So, let's
+        # combine a chainmap and a weakvaluedictionary.
+        self._secrets_persistent = {}
+        self._secrets_proxy = weakref.WeakValueDictionary()
+        self._secrets = collections.ChainMap(
+            self._secrets_persistent, 
+            self._secrets_proxy
+        )
+        
         self._contacts = {}
         # Bindings lookup: {<target guid>: <binding guid>}
         self._bindings = {}
@@ -359,11 +373,11 @@ class Agent():
     def _handle_req_handshake(self, request, source_guid):
         ''' Handles a handshake request after reception.
         '''
-        # First add the secret to our store
-        # This will break if we change behavior of self._secrets.
-        if request.target not in self._secrets:
-            self._set_secret(request.target, request.secret)
-        obj = self.get_object(request.target)
+        # Note that get_obj handles adding the secret to the store.
+        obj = self.get_object(
+            secret = request.secret, 
+            guid = request.target
+        )
         
         try:
             self._client.dispatch_handshake(obj)
@@ -419,16 +433,31 @@ class Agent():
         # which is how we're storing secrets in self._secrets.
         if guid in self._historian:
             guid = self._historian[guid][0]
+            
         try:
             return self._secrets[guid]
         except KeyError as e:
             raise InaccessibleError('Agent has no access to object.') from e
             
     def _set_secret(self, guid, secret):
-        ''' Stores the secret for the passed guid.
+        ''' Stores the secret for the passed guid persistently.
         '''
         # Should this add parallel behavior for handling dynamic guids?
-        self._secrets[guid] = secret
+        if guid not in self._secrets_persistent:
+            self._secrets[guid] = secret
+            
+    def _set_secret_temporary(self, guid, secret):
+        ''' Stores the secret for the passed guid only as long as it is
+        used by other objects.
+        '''
+        if guid not in self._secrets_proxy:
+            self._secrets_proxy[guid] = secret
+        
+    def _del_secret(self, guid):
+        ''' Removes the secret for the passed guid, if it exists. If 
+        unknown, raises KeyError.
+        '''
+        del self._secrets[guid]
         
     def _make_static(self, data, secret=None):
         if secret is None:
@@ -502,8 +531,11 @@ class Agent():
             
         # Add the secret to the chamber. HOWEVER, associate it with the frame
         # guid, so that (if we've held it as a static object) it won't be 
-        # garbage collected when we advance past legroom.
+        # garbage collected when we advance past legroom. Simultaneously add
+        # a temporary proxy to it so that it's accessible from the actual 
+        # container's guid.
         self._set_secret(dynamic.guid, secret)
+        self._set_secret_temporary(target, secret)
             
         self.persister.publish(dynamic.packed)
         if data is not None:
@@ -513,13 +545,17 @@ class Agent():
         
         return dynamic, state
         
-    def new_dynamic(self, data=None, link=None, _legroom=3):
+    def new_dynamic(self, data=None, link=None, _legroom=None):
         ''' Makes a dynamic object. May link to a static (or dynamic) 
         object's address. Must pass either data or link, but not both.
         
         The _legroom argument determines how many frames should be used 
-        as history in the dynamic binding.
+        as history in the dynamic binding. If unused, sources from 
+        self._legroom.
         '''
+        if _legroom is None:
+            _legroom = self._legroom
+        
         dynamic, state = self._do_dynamic(data, link)
             
         # Historian manages the history definition for the object.
@@ -578,22 +614,49 @@ class Agent():
         frame_history.appendleft(dynamic.guid)
         obj._buffer.appendleft(state)
         
-        # This will break if we ever change the behavior of self._secrets
         # Clear out old key material
         if old_tail not in frame_history:
-            del self._secrets[old_tail]
+            self._del_secret(old_tail)
         
         # # Since we're not doing a ratchet right now, just do this every time.
         # if obj.address in self._shared_objects:
         #     for recipient in self._shared_objects[obj.address]:
-        #         self.share_object(obj, recipient)
+        #         self.hand_object(obj, recipient)
         
-    def refresh_dynamic(self, obj, guid):
-        ''' Retrieves the guid from the storage provider, evaluates if 
-        it is a new dynamic frame for obj, and if so, updates obj 
-        accordingly.
+    def refresh_dynamic(self, obj):
+        ''' Checks self.persister for a new dynamic frame for obj, and 
+        if one exists, updates obj accordingly.
         '''
-        pass
+            
+        # Combine target and history into a single iterable
+        all_known_targets = [target]
+        for tgt in unpacked.history:
+            # Find the frame's historical content
+            # This could probably stand to see some optimization
+            
+            # First get the frame record
+            packed_hist = self.persister.get(guid_hist)
+            unpacked_hist = self._identity.unpack_bind_dynamic(packed_hist)
+            all_know_targets.append(
+                self.receive_bind_dynamic(
+                    binder = author, 
+                    binding = unpacked_hist
+                )
+            )
+        
+        # Preallocate a state. Ignore their history, and preserve our own,
+        # since we may have different ideas about how much legroom we need
+        state = collections.deque(maxlen=self._legroom)
+        
+        # This will automatically collate everything using the shorter of
+        # the two, between self._legroom and len(all_known_targets)
+        for __, guid_cont in zip(range(self._legroom), all_known_targets):
+            # This could probably stand to see some optimization
+            packed_container = self.persister.get(guid_cont)
+            unpacked_container = self._identity.unpack_container(
+                packed_target_hist
+            )
+            secret = self._get_secret(guid_hist)
         
     def freeze_dynamic(self, obj):
         ''' Creates a frozen StaticObject from the most current state of
@@ -656,8 +719,9 @@ class Agent():
         self._do_debind(binding_guid)
         del self._bindings[obj.address]
         
-    def share_object(self, obj, recipient_guid):
-        ''' Initiates a request with the recipient to share the object.
+    def hand_object(self, obj, recipient_guid):
+        ''' Initiates a handshake request with the recipient to share 
+        the object.
         '''
         contact = self._retrieve_contact(recipient_guid)
         
@@ -690,16 +754,19 @@ class Agent():
         self._pending_requests[request.guid] = obj.address
         self.persister.publish(request.packed)
         
-    def get_object(self, guid):
-        ''' Gets an object, assuming the Agent has access to it, as 
-        identified by guid.
+    def get_object(self, secret, guid):
+        ''' Gets a new local copy of the object, assuming the Agent has 
+        access to it, as identified by guid. Dynamic objects will 
+        automatically update themselves.
+        
+        Note that for dynamic objects, initial retrieval DOES NOT parse
+        any history. It begins with the target and goes from there.
         '''
         if not isinstance(guid, Guid):
             raise TypeError('Passed guid must be a Guid or similar.')
             
-        secret = self._get_secret(guid)
         packed = self.persister.get(guid)
-        unpacked = self._identity.unpack_container(packed=packed)
+        unpacked = self._identity.unpack_any(packed=packed)
         
         if isinstance(unpacked, GEOC):
             author = self._retrieve_contact(unpacked.author)
@@ -708,6 +775,12 @@ class Agent():
                 secret = secret,
                 container = unpacked
             )
+            
+            # Looks legit; add the secret to our store persistently. Note that 
+            # _set_secret handles the case of existing secrets, so we should be 
+            # immune to malicious attempts to override existing secrets.
+            self._set_secret(guid, secret)
+            
             obj = StaticObject(
                 author = unpacked.author,
                 address = guid,
@@ -720,6 +793,50 @@ class Agent():
                 binder = author,
                 binding = unpacked
             )
+            
+            # Unpack the target container and extract the plaintext.
+            # NOTE THAT THIS IS GOING TO CAUSE PROBLEMS if it's a nested 
+            # dynamic binding. Will probably need to make this recursive at 
+            # some point in the future.
+            target_unpacked = self._identity.unpack_container(
+                self.persister.get(target)
+            )
+            target_author = self._retrieve_contact(target_unpacked.author)
+            plaintext = self._identity.receive_container(
+                author = target_author,
+                secret = secret,
+                container = target_unpacked
+            )
+            
+            # Looks legit; add the secret to our store persistently under the
+            # frame guid, and as a proxy for the container guid. Note that 
+            # _set_secret handles the case of existing secrets, so we should be 
+            # immune to malicious attempts to override existing secrets.
+            self._set_secret(unpacked.guid, secret)
+            self._set_secret_temporary(target, secret)
+            
+            # Add the dynamic guid to historian using our own _legroom param.
+            self._historian[guid] = collections.deque(
+                iterable = (target,),
+                maxlen = self._legroom
+            )
+            
+            # Create local state. Ignore their history, and preserve our own,
+            # since we may have different ideas about how much legroom we need
+            state = collections.deque(
+                iterable = (plaintext,),
+                maxlen = self._legroom
+            )
+            
+            obj = DynamicObject(
+                author = unpacked.binder,
+                address = guid,
+                _buffer = state
+            )
+            
+            # Create an auto-update method for obj.
+            updater = lambda obj=obj, *__, **___: self.refresh_dynamic(obj)
+            self.persister.subscribe(guid, updater)
             
         else:
             raise ValueError(

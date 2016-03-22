@@ -186,13 +186,13 @@ class AgentTrashTest(unittest.TestCase):
         obj1 = self.agent1.new_dynamic(pt1)
         obj1s1 = self.agent1.freeze_dynamic(obj1)
         
-        self.agent1.share_object(obj1s1, contact2)
+        self.agent1.hand_object(obj1s1, contact2)
         self.assertIn(obj1s1.address, self.agent2._secrets)
         self.assertEqual(
             self.agent1._secrets[obj1s1.address], 
             self.agent2._secrets[obj1s1.address]
         )
-        obj1s1_shared = self.agent2.get_object(obj1s1.address)
+        obj1s1_shared = self.client2._store[obj1s1.address]
         self.assertEqual(
             obj1s1_shared, obj1s1
         )
@@ -200,7 +200,7 @@ class AgentTrashTest(unittest.TestCase):
         
         # This makes sure we're propertly propagating secrets when we update
         # dynamic bindings
-        self.agent1.share_object(obj1, contact2)
+        self.agent1.hand_object(obj1, contact2)
         self.agent1.update_dynamic(obj1, pt2)
         # obj1s2 = self.agent1.freeze_dynamic(obj1)
         # self.assertIn(obj1s2.address, self.agent2._secrets)

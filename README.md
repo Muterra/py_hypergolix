@@ -6,6 +6,7 @@ It does not require application-level cryptographic code, and is available via I
 
 # Todo (no particular order)
 
++ Add a frame guid history to DynamicObject
 + Create a format for using dynamic objects to perform keyshares
 + Document key ratcheting mechanism
     + Side note: using the previous frame guid as a salt effectively creates a key expiration mechanism -- if you magically find / break the original exchange, you probably still cannot reconstruct the history chain required to ratchet the whole thing.
