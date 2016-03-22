@@ -632,22 +632,72 @@ class Agent():
         ''' Checks self.persister for a new dynamic frame for obj, and 
         if one exists, updates obj accordingly.
         '''
-            
-        # Combine target and history into a single iterable
-        all_known_targets = [target]
-        for tgt in unpacked.history:
-            # Find the frame's historical content
-            # This could probably stand to see some optimization
-            
-            # First get the frame record
-            packed_hist = self.persister.get(guid_hist)
-            unpacked_hist = self._identity.unpack_bind_dynamic(packed_hist)
-            all_know_targets.append(
-                self.receive_bind_dynamic(
-                    binder = author, 
-                    binding = unpacked_hist
-                )
+        if not isinstance(obj, DynamicObject):
+            raise TypeError(
+                'refresh_dynamic can only refresh dynamic objects!'
             )
+        binder = self._retrieve_contact(obj.author)
+        
+        unpacked_binding = self._identity.unpack_bind_dynamic(
+            self.persister.get(obj.address)
+        )
+        # This bit trusts that the persistence provider is enforcing proper
+        # monotonic state progression for dynamic bindings.
+        last_known_frame = self._historian[obj.address][0]
+        if unpacked_binding.guid == last_known_frame:
+            return
+        
+        # Figure out the new target
+        target = self._identity.receive_bind_dynamic(
+            binder = binder,
+            binding = unpacked_binding
+        )
+        
+        # We're only going to update with the most recent state, and not 
+        # regress up the history chain. However, we should try to heal any
+        # repairable ratchet.
+        secret = self._get_secret(obj.address)
+        offset = unpacked_binding.history.index(last_known_frame)
+        # Count backwards in index (and therefore forward in time) from the 
+        # first new frame to zero (and therefore the current frame).
+        # Note that we're using the previous frame's guid as salt.
+        for ii in range(offset, -1, -1):
+            secret = self._ratchet_secret(
+                secret = secret,
+                guid = unpacked_binding.history[ii]
+            )
+            
+        # Now assign the secret, persistently to the frame guid and temporarily
+        # to the container guid
+        self._set_secret(unpacked_binding.guid, secret)
+        self._set_secret_temporary(target, secret)
+        
+        # # Combine target and history into a single iterable
+        # all_known_targets = [target]
+        # for frame_guid in unpacked_binding.history:
+        #     # Find the frame's historical content
+        #     # This could probably stand to see some optimization
+            
+        #     # First get the frame record. We're assuming the persistence
+        #     # provider has checked for consistent author.
+        #     unpacked_frame = self._identity.unpack_bind_dynamic(
+        #         self.persister.get(frame_guid)
+        #     )
+        #     all_know_targets.append(
+        #         self.receive_bind_dynamic(
+        #             binder = author, 
+        #             binding = unpacked_frame
+        #         )
+        #     )
+        
+        # Check to see if we're losing anything from historian while we update
+        # it. Remove those secrets.
+        old_history = set(self._historian[obj.address])
+        self._historian[obj.address].appendleft(unpacked_binding.guid)
+        new_history = set(self._historian[obj.address])
+        expired = old_history - new_history
+        for expired_frame in expired:
+            self._del_secret(expired_frame)
         
         # Preallocate a state. Ignore their history, and preserve our own,
         # since we may have different ideas about how much legroom we need
@@ -760,6 +810,42 @@ class Agent():
         self._pending_requests[request.guid] = obj.address
         self.persister.publish(request.packed)
         
+    def _resolve_dynamic_plaintext(self, target):
+        ''' Recursively find the plaintext state of the dynamic target. 
+        Correctly handles (?) nested dynamic bindings.
+        
+        However, can't currently handle using a GIDC as a target.
+        '''
+        # Unpack the target container and extract the plaintext.
+        # NOTE THAT THIS IS GOING TO CAUSE PROBLEMS if it's a nested 
+        # dynamic binding. Will probably need to make this recursive at 
+        # some point in the future.
+        unpacked = self._identity.unpack_any(
+            self.persister.get(target)
+        )
+        if isinstance(unpacked, GEOC):
+            plaintext = self._identity.receive_container(
+                author = self._retrieve_contact(unpacked.author),
+                secret = self._get_secret(target),
+                container = unpacked
+            )
+            
+        elif isinstance(unpacked, GOBD):
+            # Call recursively.
+            target = self._identity.receive_bind_dynamic(
+                binder = self._retrieve_contact(unpacked.author),
+                binding = unpacked
+            )
+            plaintext = self._resolve_dynamic_plaintext(target)
+            
+        else:
+            raise RuntimeError(
+                'The dynamic binding has an illegal target and is therefore '
+                'invalid.'
+            )
+            
+        return plaintext
+        
     def get_object(self, secret, guid):
         ''' Gets a new local copy of the object, assuming the Agent has 
         access to it, as identified by guid. Dynamic objects will 
@@ -800,19 +886,8 @@ class Agent():
                 binding = unpacked
             )
             
-            # Unpack the target container and extract the plaintext.
-            # NOTE THAT THIS IS GOING TO CAUSE PROBLEMS if it's a nested 
-            # dynamic binding. Will probably need to make this recursive at 
-            # some point in the future.
-            target_unpacked = self._identity.unpack_container(
-                self.persister.get(target)
-            )
-            target_author = self._retrieve_contact(target_unpacked.author)
-            plaintext = self._identity.receive_container(
-                author = target_author,
-                secret = secret,
-                container = target_unpacked
-            )
+            # Recursively grab the plaintext
+            plaintext = self._resolve_dynamic_plaintext(target)
             
             # Looks legit; add the secret to our store persistently under the
             # frame guid, and as a proxy for the container guid. Note that 
@@ -829,15 +904,13 @@ class Agent():
             
             # Create local state. Ignore their history, and preserve our own,
             # since we may have different ideas about how much legroom we need
-            state = collections.deque(
-                iterable = (plaintext,),
-                maxlen = self._legroom
-            )
-            
             obj = DynamicObject(
                 author = unpacked.binder,
                 address = guid,
-                _buffer = state
+                _buffer = collections.deque(
+                    iterable = (plaintext,),
+                    maxlen = self._legroom
+                )
             )
             
             # Create an auto-update method for obj.

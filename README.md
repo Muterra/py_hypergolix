@@ -10,7 +10,6 @@ It does not require application-level cryptographic code, and is available via I
 + Create a format for using dynamic objects to perform keyshares
 + Document key ratcheting mechanism
     + Side note: using the previous frame guid as a salt effectively creates a key expiration mechanism -- if you magically find / break the original exchange, you probably still cannot reconstruct the history chain required to ratchet the whole thing.
-+ Improve / create key ratchet healing
 + Document that (currently, until protocol change) using a link as a dynamic frame breaks the ratchet and is, generally speaking, a very dangerous decision.
 
 ## Done
@@ -20,3 +19,4 @@ It does not require application-level cryptographic code, and is available via I
     + Use the _legroom parameter as a hint for when to issue a new key
     + Everything else is done through a ratchet
     + Note that not only is this self-synchronizing, but it also allows dynamic objects that have been shared with multiple parties to remove access to future frames.
++ Improve / create key ratchet healing
