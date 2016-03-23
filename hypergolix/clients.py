@@ -73,7 +73,8 @@ class _ClientBase(metaclass=abc.ABCMeta):
     
     
 class EmbeddedClient(_ClientBase):
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self._handshakes = {}
         
     def dispatch_handshake(self, handshake):

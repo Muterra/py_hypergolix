@@ -45,7 +45,8 @@ from hypergolix import DynamicObject
 from hypergolix import StaticObject
 from hypergolix import NakError
 from hypergolix import PersistenceWarning
-from hypergolix import Agent
+from hypergolix import AgentBase
+from hypergolix import EmbeddedMemoryAgent
 
 # This is a semi-normal import
 from golix.utils import _dummy_guid
@@ -123,11 +124,11 @@ class AgentTrashTest(unittest.TestCase):
         self.client1 = EmbeddedClient()
         self.client2 = EmbeddedClient()
         self.persister = MemoryPersister()
-        self.agent1 = Agent(
+        self.agent1 = AgentBase(
             persister = self.persister,
             client = self.client1
         )
-        self.agent2 = Agent(
+        self.agent2 = AgentBase(
             persister = self.persister,
             client = self.client2
         )
@@ -215,6 +216,41 @@ class AgentTrashTest(unittest.TestCase):
             obj1,
             self.client2._handshakes[obj1.address]
         )
+            
+        
+        # --------------------------------------------------------------------
+        # Comment this out if no interactivity desired
+            
+        # # Start an interactive IPython interpreter with local namespace, but
+        # # suppress all IPython-related warnings.
+        # with warnings.catch_warnings():
+        #     warnings.simplefilter('ignore')
+        #     IPython.embed()
+        
+        
+class EmbeddedMemoryAgentTrashTest(unittest.TestCase):
+    def setUp(self):
+        self.agent1 = EmbeddedMemoryAgent()
+        self.agent2 = EmbeddedMemoryAgent()
+        
+    def test_alone(self):
+        pt1 = b'Hello, world?'
+        pt2 = b'Hiyaback!'
+        pt3 = b'Listening...'
+        pt4 = b'All ears!'
+        
+        # Create, test, and delete a static object
+        obj1 = self.agent1.new_static(pt1)
+        self.agent1.delete_object(obj1)
+        obj2 = self.agent1.new_dynamic(pt1)
+        self.agent1.update_dynamic(obj2, data=pt2)
+        self.agent1.delete_object(obj2)
+        # Test dynamic linking
+        obj3 = self.agent1.new_static(pt3)
+        obj4 = self.agent1.new_dynamic(link=obj3)
+        obj5 = self.agent1.new_dynamic(link=obj4)
+        obj6 = self.agent1.freeze_dynamic(obj4)
+        self.agent1.update_dynamic(obj4, pt4)
             
         
         # --------------------------------------------------------------------

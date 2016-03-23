@@ -46,9 +46,10 @@ DO PERSISTENCE PROVIDERS FIRST.
 # Control * imports. Therefore controls what is available to toplevel
 # package through __init__.py
 __all__ = [
-    'Agent', 
+    'AgentBase', 
     'StaticObject',
-    'DynamicObject'
+    'DynamicObject',
+    'EmbeddedMemoryAgent'
 ]
 
 # Global dependencies
@@ -79,19 +80,24 @@ from .utils import UnknownPartyError
 from .utils import _ObjectBase
 from .utils import StaticObject
 from .utils import DynamicObject
+
 from .persisters import _PersisterBase
+from .persisters import MemoryPersister
 from .clients import _ClientBase
+from .clients import EmbeddedClient
         
 # ###############################################
 # Utilities, etc
 # ###############################################
 
 
-class Agent():
-    def __init__(self, persister, client, _golix_firstparty=None, _legroom=3):
+class AgentBase:
+    def __init__(self, persister, client, _golix_firstparty=None, _legroom=3, *args, **kwargs):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         '''
+        super().__init__(*args, **kwargs)
+        
         if not isinstance(persister, _PersisterBase):
             raise TypeError('Persister must subclass _PersisterBase.')
         self._persister = persister
@@ -846,7 +852,12 @@ class Agent():
         )
         
     @classmethod
-    def login(cls, password, data):
+    def login(cls, password, data, persister, client):
         ''' Load an Agent from an identity contained within a GEOC.
         '''
         pass
+        
+        
+class EmbeddedMemoryAgent(AgentBase, MemoryPersister, EmbeddedClient):
+    def __init__(self):
+        super().__init__(persister=self, client=self)
