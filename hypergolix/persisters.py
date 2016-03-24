@@ -921,42 +921,89 @@ class LocalhostServer():
 import time
 import random
 import string
+import threading
 
 class LocalhostClient():
     ''' Creates connections over localhost using websockets.
+    
+    Notes:
+    + The only thing I have to listen for is subscription updates.
+    + Convert _ws_handler into _subs_listener
+    + Everything else can use run_coroutine_threadsafe to add to the pile
+    
     '''
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._ws_loc = 'ws://localhost:8765/'
         
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(self._ws_loop())
+        self._loop = asyncio.new_event_loop()
+        # Call soon only works for functions
+        # self._ws_future = self._loop.call_soon_threadsafe(self._ws_loop())
+        self._ws_thread = threading.Thread(target=self._loop.run_forever)
+        # self._ws_future = asyncio.run_coroutine_threadsafe(self._ws_loop(), self._loop)
+        # self._loop.run_until_complete(self._ws_loop())
+        self._ws_thread.start()
+        __ = asyncio.run_coroutine_threadsafe(self._ws_init(), self._loop)
+        time.sleep(.1)
+        self._ws_listener_future = asyncio.run_coroutine_threadsafe(self._ws_listener(), self._loop)
+        time.sleep(2)
+        self._future2 = asyncio.run_coroutine_threadsafe(self._pusher(b'Hello guvna!'), self._loop)
+        
+    def _halt(self):
+        asyncio.run_coroutine_threadsafe(self._ws_close(), self._loop)
+        time.sleep(.1)
+        # self._ws_future.cancel()
+        self._ws_listener_future.cancel()
+        self._loop.stop()
+        time.sleep(.5)
+        self._loop.close()
+        self._ws_thread.join()
+        
+    @asyncio.coroutine
+    def _ws_init(self):
+        asyncio.set_event_loop(self._loop)
+        self._websocket = yield from websockets.connect(self._ws_loc)
+        
+    @asyncio.coroutine
+    def _ws_listener(self):
+        while True:
+            yield from self._ws_handler()
+        
+    @asyncio.coroutine
+    def _ws_close(self):
+        yield from self._websocket.close()
         
     @asyncio.coroutine
     def _ws_loop(self):
+        asyncio.set_event_loop(self._loop)
+        
         try:
-            websocket = yield from websockets.connect(self._ws_loc)
+            self._websocket = yield from websockets.connect(self._ws_loc)
             
             while True:
-                yield from self._ws_handler(websocket)
+                yield from self._ws_handler()
                 
         finally:
-            yield from websocket.close()
+            yield from self._websocket.close()
+            self._loop.stop()
             
     @asyncio.coroutine
-    def _ws_handler(self, websocket):
+    def _ws_handler(self):
         ''' This handles a single websocket REQUEST, not an entire 
         connection.
         '''
-        listener_task = asyncio.ensure_future(websocket.recv())
-        producer_task = asyncio.ensure_future(self.producer())
+        listener_task = asyncio.ensure_future(self._websocket.recv())
+        # producer_task = asyncio.ensure_future(self.producer())
         done, pending = yield from asyncio.wait(
-            [listener_task, producer_task],
+            [
+                listener_task, 
+                # producer_task
+            ],
             return_when=asyncio.FIRST_COMPLETED)
 
         if producer_task in done:
             message = producer_task.result()
-            yield from websocket.send(message)
+            yield from self._websocket.send(message)
         else:
             producer_task.cancel()
 
@@ -970,8 +1017,12 @@ class LocalhostClient():
         #     task.cancel()
         
     @asyncio.coroutine
+    def _pusher(self, data):
+        yield from self._websocket.send(data)
+        
+    @asyncio.coroutine
     def consumer(self, message):
-        print("> {}".format(message))
+        # print("> {}".format(message))
         return True
             
     @asyncio.coroutine
@@ -979,3 +1030,108 @@ class LocalhostClient():
         time.sleep(.1)
         name = ''.join(random.choice(string.ascii_uppercase + string.digits) for __ in range(5))
         return name
+    
+    def publish(self, packed):
+        ''' Submits a packed object to the persister.
+        
+        Note that this is going to (unfortunately) result in packing + 
+        unpacking the object twice for ex. a MemoryPersister. At some 
+        point, that should be fixed -- maybe through ex. publish_unsafe?
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        future = asyncio.run_coroutine_threadsafe(self._pusher(b'Publish!'), self._loop)
+        pass
+    
+    def ping(self):
+        ''' Queries the persistence provider for availability.
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        future = asyncio.run_coroutine_threadsafe(self._pusher(b'Ping!'), self._loop)
+        pass
+    
+    def get(self, guid):
+        ''' Requests an object from the persistence provider, identified
+        by its guid.
+        
+        ACK/success is represented by returning the object
+        NAK/failure is represented by raise NakError
+        '''
+        future = asyncio.run_coroutine_threadsafe(self._pusher(b'Get!'), self._loop)
+        pass
+    
+    def subscribe(self, guid, callback):
+        ''' Request that the persistence provider update the client on
+        any changes to the object addressed by guid. Must target either:
+        
+        1. Dynamic guid
+        2. Author identity guid
+        
+        Upon successful subscription, the persistence provider will 
+        publish to client either of the above:
+        
+        1. New frames to a dynamic binding
+        2. Asymmetric requests with the indicated GUID as a recipient
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        future = asyncio.run_coroutine_threadsafe(self._pusher(b'Subscribe!'), self._loop)
+        pass
+    
+    def unsubscribe(self, guid):
+        ''' Unsubscribe. Client must have an existing subscription to 
+        the passed guid at the persistence provider.
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        future = asyncio.run_coroutine_threadsafe(self._pusher(b'Unsub!'), self._loop)
+        pass
+    
+    def list_subs(self):
+        ''' List all currently subscribed guids for the connected 
+        client.
+        
+        ACK/success is represented by returning a list of guids.
+        NAK/failure is represented by raise NakError
+        '''
+        future = asyncio.run_coroutine_threadsafe(self._pusher(b'List subs!'), self._loop)
+        pass
+    
+    def list_bindings(self, guid):
+        ''' Request a list of identities currently binding to the passed
+        guid.
+        
+        ACK/success is represented by returning a list of guids.
+        NAK/failure is represented by raise NakError
+        '''
+        future = asyncio.run_coroutine_threadsafe(self._pusher(b'List binds!'), self._loop)
+        pass
+    
+    def query_debinding(self, guid):
+        ''' Request a the address of any debindings of guid, if they
+        exist.
+        
+        ACK/success is represented by returning:
+            1. The debinding GUID if it exists
+            2. None if it does not exist
+        NAK/failure is represented by raise NakError
+        '''
+        future = asyncio.run_coroutine_threadsafe(self._pusher(b'List debinds!'), self._loop)
+        pass
+    
+    def disconnect(self):
+        ''' Terminates all subscriptions and requests. Not required for
+        a disconnect, but highly recommended, and prevents an window of
+        attack for address spoofers. Note that such an attack would only
+        leak metadata.
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        future = asyncio.run_coroutine_threadsafe(self._pusher(b'Disconnect!'), self._loop)
+        pass
