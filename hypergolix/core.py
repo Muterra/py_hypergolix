@@ -861,3 +861,7 @@ class AgentBase:
 class EmbeddedMemoryAgent(AgentBase, MemoryPersister, EmbeddedClient):
     def __init__(self):
         super().__init__(persister=self, client=self)
+        
+        
+# Note: need either localhost persister, or localhost client. Client would
+# be easier and make more sense.

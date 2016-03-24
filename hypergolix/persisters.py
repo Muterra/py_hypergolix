@@ -54,6 +54,9 @@ import abc
 import collections
 import warnings
 
+import asyncio
+import websockets
+
 from golix import ThirdParty
 from golix import SecondParty
 from golix import Guid
@@ -886,3 +889,93 @@ class ProxyPersister(_PersisterBase):
     proxy.
     '''
     pass
+    
+    
+# class LocalhostPersister(MemoryPersister):
+class LocalhostServer():
+    ''' Accepts connections over localhost using websockets.
+    '''
+    @asyncio.coroutine
+    def _ws_handler(self, websocket, path):
+        ''' Handles a single websocket CONNECTION. Does NOT handle a 
+        single websocket exchange.
+        '''
+        while True:
+            name = yield from websocket.recv()
+            print("< {}".format(name))
+
+            greeting = "Hello {}!".format(name)
+            yield from websocket.send(greeting)
+            print("> {}".format(greeting))
+            
+    
+    def run(self):
+        ''' Starts a LocalhostPersister server. Runs until the heat 
+        death of the universe (or an interrupt is generated somehow).
+        '''
+        start_server = websockets.serve(self._ws_handler, 'localhost', 8765)
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(start_server)
+        loop.run_forever()
+        
+import time
+import random
+import string
+
+class LocalhostClient():
+    ''' Creates connections over localhost using websockets.
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._ws_loc = 'ws://localhost:8765/'
+        
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(self._ws_loop())
+        
+    @asyncio.coroutine
+    def _ws_loop(self):
+        try:
+            websocket = yield from websockets.connect(self._ws_loc)
+            
+            while True:
+                yield from self._ws_handler(websocket)
+                
+        finally:
+            yield from websocket.close()
+            
+    @asyncio.coroutine
+    def _ws_handler(self, websocket):
+        ''' This handles a single websocket REQUEST, not an entire 
+        connection.
+        '''
+        listener_task = asyncio.ensure_future(websocket.recv())
+        producer_task = asyncio.ensure_future(self.producer())
+        done, pending = yield from asyncio.wait(
+            [listener_task, producer_task],
+            return_when=asyncio.FIRST_COMPLETED)
+
+        if producer_task in done:
+            message = producer_task.result()
+            yield from websocket.send(message)
+        else:
+            producer_task.cancel()
+
+        if listener_task in done:
+            message = listener_task.result()
+            yield from self.consumer(message)
+        else:
+            listener_task.cancel()
+            
+        # for task in pending:
+        #     task.cancel()
+        
+    @asyncio.coroutine
+    def consumer(self, message):
+        print("> {}".format(message))
+        return True
+            
+    @asyncio.coroutine
+    def producer(self):
+        time.sleep(.1)
+        name = ''.join(random.choice(string.ascii_uppercase + string.digits) for __ in range(5))
+        return name
