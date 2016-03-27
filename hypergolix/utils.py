@@ -31,6 +31,7 @@ hypergolix: A python Golix client.
 '''
 
 import collections
+import threading
 
 # Control * imports.
 __all__ = [
@@ -348,3 +349,20 @@ class _WeldedSetDeepChainMap(collections.ChainMap):
                     del mapping[key]
         if not found:
             raise KeyError(key)
+            
+
+def _block_on_result(future):
+    ''' Wait for the result of an asyncio future from synchronous code.
+    Returns it as soon as available.
+    '''
+    lock = threading.Lock()
+    def callback(fut, lock=lock):
+        lock.release()
+    future.add_done_callback(callback)
+    # This will not block
+    lock.acquire()
+    # This will block until the callback releases the lock
+    lock.acquire()
+    # Just for good measure
+    lock.release()
+    return future.exception() or future.result()

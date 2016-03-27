@@ -30,6 +30,7 @@ hypergolix: A python Golix client.
 ------------------------------------------------------
 
 NakError status code conventions:
+ERR#X: Internal error.
 ERR#0: Failed to verify.
 ERR#1: Unknown author or recipient.
 ERR#2: Unbound GEOC; immediately garbage collected
@@ -76,6 +77,7 @@ from .utils import NakError
 from .utils import PersistenceWarning
 from .utils import _DeepDeleteChainMap
 from .utils import _WeldedSetDeepChainMap
+from .utils import _block_on_result
 
 
 class _PersisterBase(metaclass=abc.ABCMeta):
@@ -1130,64 +1132,76 @@ class LocalhostClient(_PersisterBase):
         self._ws_loc = 'ws://localhost:8766/'
         
         # Set up an event loop and some admin objects
-        self._local_loop = asyncio.get_event_loop()
         self._ws_loop = asyncio.new_event_loop()
+        # self._ws_loop.set_debug(True)
         self._exchange_lock = asyncio.Lock(loop=self._ws_loop)
         self._admin_lock = threading.Lock()
+        # This isn't threadsafe, so maybe it should switch to threading.Event?
         self._init_shutdown = asyncio.Event(loop=self._ws_loop)
         
         # Set up a thread for the websockets client
         self._ws_thread = threading.Thread(
-            target=self._ws_loop.run_forever, 
-            daemon=True
+            target = self._ws_robot,
+            daemon = True
         )
+        self._admin_lock.acquire()
         self._ws_thread.start()
-        asyncio.run_coroutine_threadsafe(self._ws_init(), self._ws_loop)
+        # asyncio.run_coroutine_threadsafe(self._ws_init(), self._ws_loop)
         
         # Start listening for subscription responses as soon as possible.
         # This also means that the persister is ready for external requests.
         with self._admin_lock:
-            asyncio.run_coroutine_threadsafe(self._ws_listener(), self._ws_loop)
+            # asyncio.run_coroutine_threadsafe(self._ws_listener(), self._ws_loop)
+            pass
         
         # Might want to send an initial ping here
         # time.sleep(2)
         # self._future2 = asyncio.run_coroutine_threadsafe(self._pusher(b'Hello guvna!'), self._ws_loop)
         
     def _halt(self):
-        # Set the shutdown flag and close down the websocket (must be done with
-        # a coroutine, and therefore elsewhere)
-        self._init_shutdown.set()
-        
         # Manually set the admin lock, to make sure we don't have a race 
         # condition with the event loop scheduler.
         self._admin_lock.acquire()
-        # Schedule the websocket closure, and then schedule the loop to stop.
+        print('Acquired lock.')
+        # Schedule the websocket closure.
+        # This will manually release the admin lock when finished. Note: must 
+        # be done with a coroutine, and therefore elsewhere
         asyncio.run_coroutine_threadsafe(self._ws_close(), self._ws_loop)
-        self._ws_loop.stop()
+        print('Sent to _ws_close')
         
         # Wait for the admin lock to release in _ws_close
         with self._admin_lock:
+            # Stop the loop and set the shutdown flag 
+            self._init_shutdown.set()
+            print('Set shutdown flag.')
+            _block_on_result(self._ws_future)
             self._ws_loop.close()
+            print('Closed loop.')
             
-        # # Shut down the local loop as well
-        # self._local_loop.stop()
-        # self._local_loop.close()
-        
-    @asyncio.coroutine
-    def _ws_init(self):
-        ''' Initialize the websockets thread's event loop, and the 
-        connection itself.
+    def _ws_robot(self):
+        ''' Sets the local event loop and then starts running the 
+        listener.
         '''
         asyncio.set_event_loop(self._ws_loop)
-        
-        # with self._admin_lock:
-        self._websocket = yield from websockets.connect(self._ws_loc)
-        print('Socket connected.')
+        # _ws_future is useful for blocking during halt.
+        self._ws_future = asyncio.ensure_future(
+            self._ws_listener(), 
+            loop = self._ws_loop
+        )
+        self._ws_loop.run_until_complete(self._ws_future)
         
     @asyncio.coroutine
     def _ws_listener(self):
+        self._websocket = yield from websockets.connect(self._ws_loc)
+        print('Socket connected.')
+        
+        # Manually release the lock so that __init__ can proceed.
+        self._admin_lock.release()
+        
         while not self._init_shutdown.is_set():
             yield from self._ws_handler()
+            
+        print('Listener successfully shut down.')
         
     @asyncio.coroutine
     def _ws_close(self):
@@ -1205,28 +1219,35 @@ class LocalhostClient(_PersisterBase):
         connection.
         '''
         listener_task = asyncio.ensure_future(self._websocket.recv())
-        # producer_task = asyncio.ensure_future(self.producer())
+        interrupt_task = asyncio.ensure_future(self._init_shutdown.wait())
         done, pending = yield from asyncio.wait(
             [
-                listener_task, 
-                # producer_task
+                interrupt_task,
+                listener_task
             ],
             return_when=asyncio.FIRST_COMPLETED)
 
-        if producer_task in done:
-            message = producer_task.result()
-            yield from self._websocket.send(message)
-        else:
-            producer_task.cancel()
-
-        if listener_task in done:
-            message = listener_task.result()
-            yield from self.consumer(message)
-        else:
+        if interrupt_task in done:
+            print('Got shutdown signal.')
             listener_task.cancel()
+            self._ws_loop.stop()
+            print('Stopped loop.')
+            return
             
-        # for task in pending:
-        #     task.cancel()
+        # yield from self._websocket.send(message)
+    
+        if listener_task in done:
+            interrupt_task.cancel()
+            
+            exc = listener_task.exception()
+            if exc:
+                self._handle_listener_failure(exc)
+            else:
+                message = listener_task.result()
+                yield from self.consumer(message)
+            
+    def _handle_listener_failure(self, exc):
+        print(exc)
         
     @asyncio.coroutine
     def _pusher(self, data):
@@ -1243,41 +1264,22 @@ class LocalhostClient(_PersisterBase):
         name = ''.join(random.choice(string.ascii_uppercase + string.digits) for __ in range(5))
         return name
         
-    @asyncio.coroutine
     def _requestor(self, req_type, req_body):
-    # async def _requestor(self, req_type, req_body):
-        ''' Calls across the thread boundary to make a request, and then
-        waits for it to be complete.
+        ''' Synchronously calls across the thread boundary to make an
+        asynchronous request, and then cleverly awaits its completion.
         '''
+        # This prevents us from accidentally blocking ourselves later on
+        if not self._ws_loop.is_running():
+            raise NakError('ERR#X: Internal error.')
+        
         framed = self.REQUEST_CODES[req_type] + req_body
         
         future = asyncio.run_coroutine_threadsafe(
             coro = self._pusher(data=framed), 
             loop = self._ws_loop
         )
-        result = yield from asyncio.wait_for(future, timeout=None)
-        # result = await asyncio.wait_for(future, timeout=None)
-        return result
         
-    def _wrap_requestor(self, req_type, req_body):
-        ''' Wraps requestor for calling from synchronous code.
-        '''
-        future = asyncio.ensure_future(
-            self._requestor(
-                req_type = req_type,
-                req_body = req_body
-            ),
-            loop = self._local_loop
-        )
-        
-        try:
-            return self._local_loop.run_until_complete(future)
-            
-        except:
-            print(future)
-            print(req_type)
-            print(req_body)
-        
+        return _block_on_result(future)
     
     def publish(self, packed):
         ''' Submits a packed object to the persister.
@@ -1289,7 +1291,7 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        return self._wrap_requestor(
+        return self._requestor(
             req_type = 'publish',
             req_body = packed
         )
@@ -1300,7 +1302,7 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        return self._wrap_requestor(
+        return self._requestor(
             req_type = 'ping',
             req_body = b''
         )
@@ -1312,7 +1314,7 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
         '''
-        return self._wrap_requestor(
+        return self._requestor(
             req_type = 'get',
             req_body = bytes(guid)
         )
@@ -1333,7 +1335,7 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        result = self._wrap_requestor(
+        result = self._requestor(
             req_type = 'subscribe',
             req_body = bytes(guid)
         )
@@ -1347,7 +1349,7 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        result =  self._wrap_requestor(
+        result =  self._requestor(
             req_type = 'unsubscribe',
             req_body = bytes(guid)
         )
@@ -1361,7 +1363,7 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by returning a list of guids.
         NAK/failure is represented by raise NakError
         '''
-        return self._wrap_requestor(
+        return self._requestor(
             req_type = 'list_subs',
             req_body = b''
         )
@@ -1373,7 +1375,7 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by returning a list of guids.
         NAK/failure is represented by raise NakError
         '''
-        return self._wrap_requestor(
+        return self._requestor(
             req_type = 'list_bindings',
             req_body = bytes(guid)
         )
@@ -1387,7 +1389,7 @@ class LocalhostClient(_PersisterBase):
             2. None if it does not exist
         NAK/failure is represented by raise NakError
         '''
-        return self._wrap_requestor(
+        return self._requestor(
             req_type = 'query_debindings',
             req_body = bytes(guid)
         )
@@ -1401,7 +1403,7 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        return self._wrap_requestor(
+        return self._requestor(
             req_type = 'disconnect',
             req_body = b''
         )
