@@ -717,6 +717,8 @@ class UnsafeMemoryPersister(_PersisterBase):
             self._subscriptions[guid].append(callback)
         else:
             self._subscriptions[guid] = [callback]
+            
+        return True
         
     def unsubscribe(self, guid):
         ''' Unsubscribe. Client must have an existing subscription to 
@@ -731,6 +733,8 @@ class UnsafeMemoryPersister(_PersisterBase):
             raise NakError(
                 'ERR#4: Invalid or unknown target for unsubscription.'
             )
+            
+        return True
         
     def list_subs(self):
         ''' List all currently subscribed guids for the connected 
@@ -865,6 +869,7 @@ class MemoryPersister(UnsafeMemoryPersister):
         try:
             obj = self._golix_provider.unpack_object(packed)
         except ParseError as e:
+            print(repr(e))
             raise TypeError('Packed must be a packed golix object.') from e
         # We are now guaranteed a Golix object.
         
@@ -890,40 +895,213 @@ class ProxyPersister(_PersisterBase):
     '''
     pass
     
-    
-# class LocalhostPersister(MemoryPersister):
-class LocalhostServer():
-    ''' Accepts connections over localhost using websockets.
-    '''
-    @asyncio.coroutine
-    def _ws_handler(self, websocket, path):
-        ''' Handles a single websocket CONNECTION. Does NOT handle a 
-        single websocket exchange.
-        '''
-        while True:
-            name = yield from websocket.recv()
-            print("< {}".format(name))
-
-            greeting = "Hello {}!".format(name)
-            yield from websocket.send(greeting)
-            print("> {}".format(greeting))
-            
-    
-    def run(self):
-        ''' Starts a LocalhostPersister server. Runs until the heat 
-        death of the universe (or an interrupt is generated somehow).
-        '''
-        start_server = websockets.serve(self._ws_handler, 'localhost', 8765)
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(start_server)
-        loop.run_forever()
         
 import time
 import random
 import string
 import threading
+import traceback
+    
+class LocalhostServer(MemoryPersister):
+    ''' Accepts connections over localhost using websockets.
+    
+    b'AK'       Ack
+    b'NK'       Nak
+    b'RF'       Response follows
+    
+    b'??'       ping
+    b'PB'       publish
+    b'GT'       get 
+    b'+S'       subscribe
+    b'xS'       unsubscribe
+    b'LS'       list subs
+    b'LB'       list binds
+    b'QD'       query debind
+    b'XX'       disconnect
+    
+    Note that subscriptions are connection-specific. If a connection 
+    dies, so do its subscriptions.
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._exchange_lock = asyncio.Lock()
+        self._admin_lock = asyncio.Lock()
+    
+    @asyncio.coroutine
+    def _ws_handler(self, websocket, path):
+        ''' Handles a single websocket CONNECTION. Does NOT handle a 
+        single websocket exchange.
+        '''
+        # Note that this overhead happens only once per connection.
+        # It's also the easiest way to dispatch connection-specific methods,
+        # like list_subs and disconnect.
+        
+        conn_list_subs = lambda packed: [None]
+        conn_disconnect = lambda packed: None
+        
+        dispatch_lookup = {
+            b'??': self.ping,
+            b'PB': self.publish,
+            b'GT': self.get,
+            b'+S': self.subscribe,
+            b'xS': self.unsubscribe,
+            b'LS': conn_list_subs,
+            b'LB': self.list_bindings,
+            b'QD': self.query_debinding,
+            b'XX': conn_disconnect
+        }
+        
+        while True:
+            rcv = yield from websocket.recv()
+                
+            # Acquire the exchange lock so we can guarantee an orderly response
+            yield from self._exchange_lock
+            
+            try:
+                framed = memoryview(rcv)
+                header = bytes(framed[0:2])
+                body = framed[2:]
+                
+                # This will automatically dispatch the request based on the
+                # two-byte header
+                result = dispatch_lookup[header](body)
+                print('-----------------------------------------------')
+                print('Successful ', header)
+                print(bytes(body))
+                    
+            except Exception as e:
+                # We should log the exception, but exceptions here should never
+                # be allowed to take down a server.
+                result = False
+                print('Failed to dispatch.')
+                print(rcv)
+                print(repr(e))
+                traceback.print_tb(e.__traceback__)
+                
+            finally:
+                yield from websocket.send(
+                    self._frame_response(result)
+                )
+                self._exchange_lock.release()
+                
+    def _frame_response(self, obj):
+        ''' Take a result from the _ws_handler and formulate a response.
+        '''
+        if obj is True:
+            response = b'AK'
+            
+        elif obj is False:
+            response = b'NK'
+            
+        else:
+            response = b'RF' + bytes(obj)
+            
+        return response
+    
+    def run(self):
+        ''' Starts a LocalhostPersister server. Runs until the heat 
+        death of the universe (or an interrupt is generated somehow).
+        '''
+        start_server = websockets.serve(self._ws_handler, 'localhost', 8766)
+        self._loop = asyncio.get_event_loop()
+        self._loop.run_until_complete(start_server)
+        self._loop.run_forever()
+    
+    def ping(self, packed):
+        ''' Queries the persistence provider for availability.
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        return super().ping()
+    
+    def get(self, packed):
+        ''' Requests an object from the persistence provider, identified
+        by its guid.
+        
+        ACK/success is represented by returning the object
+        NAK/failure is represented by raise NakError
+        '''
+        guid = Guid.from_bytes(packed)
+        return super().get(guid)
+    
+    def subscribe(self, packed):
+        ''' Request that the persistence provider update the client on
+        any changes to the object addressed by guid. Must target either:
+        
+        1. Dynamic guid
+        2. Author identity guid
+        
+        Upon successful subscription, the persistence provider will 
+        publish to client either of the above:
+        
+        1. New frames to a dynamic binding
+        2. Asymmetric requests with the indicated GUID as a recipient
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        # Temporary dummy callback
+        callback = lambda *args, **kwargs: None
+        
+        guid = Guid.from_bytes(packed)
+        return super().subscribe(guid, callback)
+    
+    def unsubscribe(self, packed):
+        ''' Unsubscribe. Client must have an existing subscription to 
+        the passed guid at the persistence provider.
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        guid = Guid.from_bytes(packed)
+        return super().unsubscribe(guid)
+    
+    def list_subs(self, packed):
+        ''' List all currently subscribed guids for the connected 
+        client.
+        
+        ACK/success is represented by returning a list of guids.
+        NAK/failure is represented by raise NakError
+        '''
+        # super().list_subs()
+        raise NotImplementedError
+    
+    def list_bindings(self, packed):
+        ''' Request a list of identities currently binding to the passed
+        guid.
+        
+        ACK/success is represented by returning a list of guids.
+        NAK/failure is represented by raise NakError
+        '''
+        guid = Guid.from_bytes(packed)
+        return super().list_bindings(guid)
+    
+    def query_debinding(self, packed):
+        ''' Request a the address of any debindings of guid, if they
+        exist.
+        
+        ACK/success is represented by returning:
+            1. The debinding GUID if it exists
+            2. None if it does not exist
+        NAK/failure is represented by raise NakError
+        '''
+        guid = Guid.from_bytes(packed)
+        return super().query_debinding(guid)
+    
+    def disconnect(self, packed):
+        ''' Terminates all subscriptions and requests. Not required for
+        a disconnect, but highly recommended, and prevents an window of
+        attack for address spoofers. Note that such an attack would only
+        leak metadata.
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        # super().disconnect()
+        raise NotImplementedError
 
-class LocalhostClient():
+class LocalhostClient(_PersisterBase):
     ''' Creates connections over localhost using websockets.
     
     Notes:
@@ -932,60 +1110,94 @@ class LocalhostClient():
     + Everything else can use run_coroutine_threadsafe to add to the pile
     
     '''
+    REQUEST_CODES = {
+        'ack':              b'AK',
+        'nak':              b'NK',
+        'response':         b'RF',
+        'ping':             b'??',
+        'publish':          b'PB',
+        'get':              b'GT',
+        'subscribe':        b'+S',
+        'unsubscribe':      b'xS',
+        'list_subs':        b'LS',
+        'list_bindings':    b'LB',
+        'query_debindings': b'QD',
+        'disconnect':       b'XX',
+    }
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._ws_loc = 'ws://localhost:8765/'
+        self._ws_loc = 'ws://localhost:8766/'
         
-        self._loop = asyncio.new_event_loop()
-        # Call soon only works for functions
-        # self._ws_future = self._loop.call_soon_threadsafe(self._ws_loop())
-        self._ws_thread = threading.Thread(target=self._loop.run_forever)
-        # self._ws_future = asyncio.run_coroutine_threadsafe(self._ws_loop(), self._loop)
-        # self._loop.run_until_complete(self._ws_loop())
+        # Set up an event loop and some admin objects
+        self._local_loop = asyncio.get_event_loop()
+        self._ws_loop = asyncio.new_event_loop()
+        self._exchange_lock = asyncio.Lock(loop=self._ws_loop)
+        self._admin_lock = threading.Lock()
+        self._init_shutdown = asyncio.Event(loop=self._ws_loop)
+        
+        # Set up a thread for the websockets client
+        self._ws_thread = threading.Thread(
+            target=self._ws_loop.run_forever, 
+            daemon=True
+        )
         self._ws_thread.start()
-        __ = asyncio.run_coroutine_threadsafe(self._ws_init(), self._loop)
-        time.sleep(.1)
-        self._ws_listener_future = asyncio.run_coroutine_threadsafe(self._ws_listener(), self._loop)
-        time.sleep(2)
-        self._future2 = asyncio.run_coroutine_threadsafe(self._pusher(b'Hello guvna!'), self._loop)
+        asyncio.run_coroutine_threadsafe(self._ws_init(), self._ws_loop)
+        
+        # Start listening for subscription responses as soon as possible.
+        # This also means that the persister is ready for external requests.
+        with self._admin_lock:
+            asyncio.run_coroutine_threadsafe(self._ws_listener(), self._ws_loop)
+        
+        # Might want to send an initial ping here
+        # time.sleep(2)
+        # self._future2 = asyncio.run_coroutine_threadsafe(self._pusher(b'Hello guvna!'), self._ws_loop)
         
     def _halt(self):
-        asyncio.run_coroutine_threadsafe(self._ws_close(), self._loop)
-        time.sleep(.1)
-        # self._ws_future.cancel()
-        self._ws_listener_future.cancel()
-        self._loop.stop()
-        time.sleep(.5)
-        self._loop.close()
-        self._ws_thread.join()
+        # Set the shutdown flag and close down the websocket (must be done with
+        # a coroutine, and therefore elsewhere)
+        self._init_shutdown.set()
+        
+        # Manually set the admin lock, to make sure we don't have a race 
+        # condition with the event loop scheduler.
+        self._admin_lock.acquire()
+        # Schedule the websocket closure, and then schedule the loop to stop.
+        asyncio.run_coroutine_threadsafe(self._ws_close(), self._ws_loop)
+        self._ws_loop.stop()
+        
+        # Wait for the admin lock to release in _ws_close
+        with self._admin_lock:
+            self._ws_loop.close()
+            
+        # # Shut down the local loop as well
+        # self._local_loop.stop()
+        # self._local_loop.close()
         
     @asyncio.coroutine
     def _ws_init(self):
-        asyncio.set_event_loop(self._loop)
+        ''' Initialize the websockets thread's event loop, and the 
+        connection itself.
+        '''
+        asyncio.set_event_loop(self._ws_loop)
+        
+        # with self._admin_lock:
         self._websocket = yield from websockets.connect(self._ws_loc)
+        print('Socket connected.')
         
     @asyncio.coroutine
     def _ws_listener(self):
-        while True:
+        while not self._init_shutdown.is_set():
             yield from self._ws_handler()
         
     @asyncio.coroutine
     def _ws_close(self):
         yield from self._websocket.close()
-        
-    @asyncio.coroutine
-    def _ws_loop(self):
-        asyncio.set_event_loop(self._loop)
-        
+        # We SHOULD have already set the admin lock, but catch the runtimeerror
+        # just in case
         try:
-            self._websocket = yield from websockets.connect(self._ws_loc)
-            
-            while True:
-                yield from self._ws_handler()
-                
-        finally:
-            yield from self._websocket.close()
-            self._loop.stop()
+            self._admin_lock.release()
+        except RuntimeError:
+            pass
             
     @asyncio.coroutine
     def _ws_handler(self):
@@ -1030,6 +1242,42 @@ class LocalhostClient():
         time.sleep(.1)
         name = ''.join(random.choice(string.ascii_uppercase + string.digits) for __ in range(5))
         return name
+        
+    @asyncio.coroutine
+    def _requestor(self, req_type, req_body):
+    # async def _requestor(self, req_type, req_body):
+        ''' Calls across the thread boundary to make a request, and then
+        waits for it to be complete.
+        '''
+        framed = self.REQUEST_CODES[req_type] + req_body
+        
+        future = asyncio.run_coroutine_threadsafe(
+            coro = self._pusher(data=framed), 
+            loop = self._ws_loop
+        )
+        result = yield from asyncio.wait_for(future, timeout=None)
+        # result = await asyncio.wait_for(future, timeout=None)
+        return result
+        
+    def _wrap_requestor(self, req_type, req_body):
+        ''' Wraps requestor for calling from synchronous code.
+        '''
+        future = asyncio.ensure_future(
+            self._requestor(
+                req_type = req_type,
+                req_body = req_body
+            ),
+            loop = self._local_loop
+        )
+        
+        try:
+            return self._local_loop.run_until_complete(future)
+            
+        except:
+            print(future)
+            print(req_type)
+            print(req_body)
+        
     
     def publish(self, packed):
         ''' Submits a packed object to the persister.
@@ -1041,8 +1289,10 @@ class LocalhostClient():
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        future = asyncio.run_coroutine_threadsafe(self._pusher(b'Publish!'), self._loop)
-        pass
+        return self._wrap_requestor(
+            req_type = 'publish',
+            req_body = packed
+        )
     
     def ping(self):
         ''' Queries the persistence provider for availability.
@@ -1050,8 +1300,10 @@ class LocalhostClient():
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        future = asyncio.run_coroutine_threadsafe(self._pusher(b'Ping!'), self._loop)
-        pass
+        return self._wrap_requestor(
+            req_type = 'ping',
+            req_body = b''
+        )
     
     def get(self, guid):
         ''' Requests an object from the persistence provider, identified
@@ -1060,8 +1312,10 @@ class LocalhostClient():
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
         '''
-        future = asyncio.run_coroutine_threadsafe(self._pusher(b'Get!'), self._loop)
-        pass
+        return self._wrap_requestor(
+            req_type = 'get',
+            req_body = bytes(guid)
+        )
     
     def subscribe(self, guid, callback):
         ''' Request that the persistence provider update the client on
@@ -1079,9 +1333,13 @@ class LocalhostClient():
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        future = asyncio.run_coroutine_threadsafe(self._pusher(b'Subscribe!'), self._loop)
-        pass
-    
+        result = self._wrap_requestor(
+            req_type = 'subscribe',
+            req_body = bytes(guid)
+        )
+        
+        # Insert local subscription callback stuff here
+        
     def unsubscribe(self, guid):
         ''' Unsubscribe. Client must have an existing subscription to 
         the passed guid at the persistence provider.
@@ -1089,8 +1347,12 @@ class LocalhostClient():
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        future = asyncio.run_coroutine_threadsafe(self._pusher(b'Unsub!'), self._loop)
-        pass
+        result =  self._wrap_requestor(
+            req_type = 'unsubscribe',
+            req_body = bytes(guid)
+        )
+        
+        # Insert local unsubscription callback stuff here
     
     def list_subs(self):
         ''' List all currently subscribed guids for the connected 
@@ -1099,8 +1361,10 @@ class LocalhostClient():
         ACK/success is represented by returning a list of guids.
         NAK/failure is represented by raise NakError
         '''
-        future = asyncio.run_coroutine_threadsafe(self._pusher(b'List subs!'), self._loop)
-        pass
+        return self._wrap_requestor(
+            req_type = 'list_subs',
+            req_body = b''
+        )
     
     def list_bindings(self, guid):
         ''' Request a list of identities currently binding to the passed
@@ -1109,8 +1373,10 @@ class LocalhostClient():
         ACK/success is represented by returning a list of guids.
         NAK/failure is represented by raise NakError
         '''
-        future = asyncio.run_coroutine_threadsafe(self._pusher(b'List binds!'), self._loop)
-        pass
+        return self._wrap_requestor(
+            req_type = 'list_bindings',
+            req_body = bytes(guid)
+        )
     
     def query_debinding(self, guid):
         ''' Request a the address of any debindings of guid, if they
@@ -1121,8 +1387,10 @@ class LocalhostClient():
             2. None if it does not exist
         NAK/failure is represented by raise NakError
         '''
-        future = asyncio.run_coroutine_threadsafe(self._pusher(b'List debinds!'), self._loop)
-        pass
+        return self._wrap_requestor(
+            req_type = 'query_debindings',
+            req_body = bytes(guid)
+        )
     
     def disconnect(self):
         ''' Terminates all subscriptions and requests. Not required for
@@ -1133,5 +1401,7 @@ class LocalhostClient():
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        future = asyncio.run_coroutine_threadsafe(self._pusher(b'Disconnect!'), self._loop)
-        pass
+        return self._wrap_requestor(
+            req_type = 'disconnect',
+            req_body = b''
+        )
