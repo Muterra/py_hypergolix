@@ -355,14 +355,13 @@ def _block_on_result(future):
     ''' Wait for the result of an asyncio future from synchronous code.
     Returns it as soon as available.
     '''
-    lock = threading.Lock()
-    def callback(fut, lock=lock):
-        lock.release()
+    event = threading.Event()
+    
+    # Create a callback to set the event and then set it for the future.
+    def callback(fut, event=event):
+        event.set()
     future.add_done_callback(callback)
-    # This will not block
-    lock.acquire()
-    # This will block until the callback releases the lock
-    lock.acquire()
-    # Just for good measure
-    lock.release()
+    
+    # Now wait for completion and return the exception or result.
+    event.wait()
     return future.exception() or future.result()
