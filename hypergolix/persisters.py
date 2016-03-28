@@ -930,6 +930,7 @@ class LocalhostServer(MemoryPersister):
         super().__init__(*args, **kwargs)
         self._exchange_lock = asyncio.Lock()
         self._admin_lock = asyncio.Lock()
+        self._shutdown = False
     
     @asyncio.coroutine
     def _ws_handler(self, websocket, path):
@@ -1012,15 +1013,42 @@ class LocalhostServer(MemoryPersister):
             response = b'RF' + bytes(preheader) + body
             
         return response
+        
+    @asyncio.coroutine
+    def catch_interrupt(self):
+        ''' Workaround for Windows not passing signals well for doing
+        interrupts.
+        '''
+        while not self._shutdown:
+            yield from asyncio.sleep(5)
     
     def run(self):
         ''' Starts a LocalhostPersister server. Runs until the heat 
         death of the universe (or an interrupt is generated somehow).
         '''
-        start_server = websockets.serve(self._ws_handler, 'localhost', 8766)
         self._loop = asyncio.get_event_loop()
-        self._loop.run_until_complete(start_server)
-        self._loop.run_forever()
+        server_task = websockets.serve(self._ws_handler, 'localhost', 8766)
+        intrrptng_cow = asyncio.ensure_future(
+            self.catch_interrupt(), 
+            loop=self._loop
+        )
+        try:
+            self._server_future = self._loop.run_until_complete(server_task)
+            _intrrpt_future = self._loop.run_until_complete(intrrptng_cow)
+            # I don't think this is actually getting called, but the above is 
+            # evidently still fixing the windows scheduler bug thig... Odd
+            _block_on_result(intrrpt_future)
+            
+        # Catch and handle a keyboard interrupt
+        except KeyboardInterrupt as e:
+            self._shutdown = True
+            intrrptng_cow.cancel()
+            # Restart the loop to close down the loop
+            self._loop.stop()
+            self._loop.run_forever()
+            
+        finally:
+            self._loop.close()
     
     def ping(self, packed):
         ''' Queries the persistence provider for availability.
