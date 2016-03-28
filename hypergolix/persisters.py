@@ -1113,7 +1113,11 @@ class LocalhostClient(_PersisterBase):
     + Everything else can use run_coroutine_threadsafe to add to the pile
     
     '''
-    RESPONSE_CODES = {b'AK', b'NK', b'RF'}
+    RESPONSE_CODES = {
+        b'AK': lambda __: True, 
+        b'NK': lambda message: NakError(message),
+        b'RF': lambda message: message
+    }
     
     NOTIFIER_CODE = b'!!'
     
@@ -1217,18 +1221,11 @@ class LocalhostClient(_PersisterBase):
             pass
             
     @asyncio.coroutine
-    def _ws_receiver(self):
-        ''' Wraps the websocket receive with access locks.
-        '''
-        message = yield from self._websocket.recv()
-        return message
-            
-    @asyncio.coroutine
     def _ws_handler(self):
         ''' This handles a single websocket REQUEST, not an entire 
         connection.
         '''
-        listener_task = asyncio.ensure_future(self._ws_receiver())
+        listener_task = asyncio.ensure_future(self._websocket.recv())
         interrupt_task = asyncio.ensure_future(self._init_shutdown.wait())
         done, pending = yield from asyncio.wait(
             [
@@ -1263,8 +1260,14 @@ class LocalhostClient(_PersisterBase):
     def _pusher(self, data):
         with self._exchange_lock:
             yield from self._websocket.send(data)
-            result = yield from self._response_box.get()
-            return result
+            header, body = yield from self._response_box.get()
+            
+            response = self.RESPONSE_CODES[header](body)
+            
+            if isinstance(response, Exception):
+                raise response
+            else:
+                return response
         
     @asyncio.coroutine
     def consumer(self, message):
@@ -1273,7 +1276,7 @@ class LocalhostClient(_PersisterBase):
         body = framed[2:]
         
         if header in self.RESPONSE_CODES:
-            yield from self._response_box.put(message)
+            yield from self._response_box.put((header, body))
             
         elif header == self.NOTIFIER_CODE:
             print('Subscription update.')
@@ -1301,6 +1304,7 @@ class LocalhostClient(_PersisterBase):
         
         response = _block_on_result(future)
         print(response)
+        return response
     
     def publish(self, packed):
         ''' Submits a packed object to the persister.

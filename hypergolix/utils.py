@@ -364,4 +364,9 @@ def _block_on_result(future):
     
     # Now wait for completion and return the exception or result.
     event.wait()
-    return future.exception() or future.result()
+    
+    exc = future.exception()
+    if exc:
+        raise exc
+        
+    return future.result()
