@@ -31,6 +31,7 @@ hypergolix: A python Golix client.
 
 NakError status code conventions:
 ERR#X: Internal error.
+ERR#N: Does not appear to be a Golix object.
 ERR#0: Failed to verify.
 ERR#1: Unknown author or recipient.
 ERR#2: Unbound GEOC; immediately garbage collected
@@ -298,7 +299,7 @@ class UnsafeMemoryPersister(_PersisterBase):
                     dispatch(unpacked)
                     break
         else:
-            raise TypeError('Unpacked must be an unpacked Golix object.')
+            raise NakError('ERR#N: Does not appear to be a Golix object.')
         
         return True
         
@@ -872,7 +873,7 @@ class MemoryPersister(UnsafeMemoryPersister):
             obj = self._golix_provider.unpack_object(packed)
         except ParseError as e:
             print(repr(e))
-            raise TypeError('Packed must be a packed golix object.') from e
+            raise NakError('ERR#N: Does not appear to be a Golix object.') from e
         # We are now guaranteed a Golix object.
         
         return super().publish(obj)
@@ -1275,8 +1276,11 @@ class LocalhostClient(_PersisterBase):
             
             response = self.RESPONSE_CODES[header](body)
             
-            if isinstance(response, Exception):
+            if isinstance(response, NakError):
                 raise response
+            elif isinstance(response, Exception):
+                # Note: This would be a good place to log the internal error.
+                raise NakError('ERR#X: Internal error.')
             else:
                 return response
         
