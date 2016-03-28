@@ -967,37 +967,48 @@ class LocalhostServer(MemoryPersister):
                 
                 # This will automatically dispatch the request based on the
                 # two-byte header
-                result = dispatch_lookup[header](body)
-                print('-----------------------------------------------')
-                print('Successful ', header)
-                print(bytes(body))
+                response_preheader = dispatch_lookup[header](body)
+                # print('-----------------------------------------------')
+                print('Successful ', header, ' ', bytes(body[:4]))
+                response = self._frame_response(response_preheader)
+                # print(bytes(body))
                     
             except Exception as e:
                 # We should log the exception, but exceptions here should never
                 # be allowed to take down a server.
-                result = False
-                print('Failed to dispatch.')
-                print(rcv)
-                print(repr(e))
-                traceback.print_tb(e.__traceback__)
+                response_preheader = False
+                response_body = (str(e)).encode('utf8')
+                response = self._frame_response(
+                    preheader = response_preheader, 
+                    body = response_body
+                )
+                print('Failed to dispatch ', header, ' ', bytes(body[:4]))
+                # print(rcv)
+                # print(repr(e))
+                # traceback.print_tb(e.__traceback__)
                 
             finally:
-                yield from websocket.send(
-                    self._frame_response(result)
-                )
+                yield from websocket.send(response)
                 self._exchange_lock.release()
                 
-    def _frame_response(self, obj):
+    def _frame_response(self, preheader, body=None):
         ''' Take a result from the _ws_handler and formulate a response.
         '''
-        if obj is True:
-            response = b'AK'
+        if body is None:
+            body = b''
+        
+        if preheader is True:
+            # This should never have a body.
+            response = b'AK' + body
             
-        elif obj is False:
-            response = b'NK'
+        elif preheader is False:
+            # This will likely have a body.
+            response = b'NK' + body
             
         else:
-            response = b'RF' + bytes(obj)
+            # This is strange behavior, but emerges from the awkwardly not 
+            # identical responses of self.publish vs self.list_bindings etc
+            response = b'RF' + bytes(preheader) + body
             
         return response
     
@@ -1115,7 +1126,7 @@ class LocalhostClient(_PersisterBase):
     '''
     RESPONSE_CODES = {
         b'AK': lambda __: True, 
-        b'NK': lambda message: NakError(message),
+        b'NK': lambda message: NakError(str(message, encoding='utf8')),
         b'RF': lambda message: message
     }
     
