@@ -910,6 +910,7 @@ class LocalhostServer(MemoryPersister):
     b'AK'       Ack
     b'NK'       Nak
     b'RF'       Response follows
+    b'!!'       Subscription notification
     
     b'??'       ping
     b'PB'       publish
@@ -1112,10 +1113,11 @@ class LocalhostClient(_PersisterBase):
     + Everything else can use run_coroutine_threadsafe to add to the pile
     
     '''
+    RESPONSE_CODES = {b'AK', b'NK', b'RF'}
+    
+    NOTIFIER_CODE = b'!!'
+    
     REQUEST_CODES = {
-        'ack':              b'AK',
-        'nak':              b'NK',
-        'response':         b'RF',
         'ping':             b'??',
         'publish':          b'PB',
         'get':              b'GT',
@@ -1134,7 +1136,8 @@ class LocalhostClient(_PersisterBase):
         # Set up an event loop and some admin objects
         self._ws_loop = asyncio.new_event_loop()
         # self._ws_loop.set_debug(True)
-        self._exchange_lock = asyncio.Lock(loop=self._ws_loop)
+        self._exchange_lock = threading.Lock()
+        self._response_box = asyncio.Queue(maxsize=1, loop=self._ws_loop)
         self._admin_lock = threading.Lock()
         # This isn't threadsafe, so maybe it should switch to threading.Event?
         self._init_shutdown = asyncio.Event(loop=self._ws_loop)
@@ -1214,11 +1217,18 @@ class LocalhostClient(_PersisterBase):
             pass
             
     @asyncio.coroutine
+    def _ws_receiver(self):
+        ''' Wraps the websocket receive with access locks.
+        '''
+        message = yield from self._websocket.recv()
+        return message
+            
+    @asyncio.coroutine
     def _ws_handler(self):
         ''' This handles a single websocket REQUEST, not an entire 
         connection.
         '''
-        listener_task = asyncio.ensure_future(self._websocket.recv())
+        listener_task = asyncio.ensure_future(self._ws_receiver())
         interrupt_task = asyncio.ensure_future(self._init_shutdown.wait())
         done, pending = yield from asyncio.wait(
             [
@@ -1251,18 +1261,28 @@ class LocalhostClient(_PersisterBase):
         
     @asyncio.coroutine
     def _pusher(self, data):
-        yield from self._websocket.send(data)
+        with self._exchange_lock:
+            yield from self._websocket.send(data)
+            result = yield from self._response_box.get()
+            return result
         
     @asyncio.coroutine
     def consumer(self, message):
-        # print("> {}".format(message))
-        return True
+        framed = memoryview(message)
+        header = bytes(framed[0:2])
+        body = framed[2:]
+        
+        if header in self.RESPONSE_CODES:
+            yield from self._response_box.put(message)
             
-    @asyncio.coroutine
-    def producer(self):
-        time.sleep(.1)
-        name = ''.join(random.choice(string.ascii_uppercase + string.digits) for __ in range(5))
-        return name
+        elif header == self.NOTIFIER_CODE:
+            print('Subscription update.')
+            
+        else:
+            # Invalid code!
+            raise RuntimeError('Invalid response code from server.')
+            
+        return True
         
     def _requestor(self, req_type, req_body):
         ''' Synchronously calls across the thread boundary to make an
@@ -1279,7 +1299,8 @@ class LocalhostClient(_PersisterBase):
             loop = self._ws_loop
         )
         
-        return _block_on_result(future)
+        response = _block_on_result(future)
+        print(response)
     
     def publish(self, packed):
         ''' Submits a packed object to the persister.
