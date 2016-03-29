@@ -58,6 +58,7 @@ import warnings
 
 import asyncio
 import websockets
+from websockets.exceptions import ConnectionClosed
 
 from golix import ThirdParty
 from golix import SecondParty
@@ -85,6 +86,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
     ''' Base class for persistence providers.
     '''
     def __init__(self):
+        super().__init__()
         self._golix_provider = ThirdParty()
     
     @abc.abstractmethod
@@ -928,9 +930,69 @@ class LocalhostServer(MemoryPersister):
     '''
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._exchange_lock = asyncio.Lock()
         self._admin_lock = asyncio.Lock()
         self._shutdown = False
+        self._loop = asyncio.get_event_loop()
+        
+    @asyncio.coroutine
+    def _request_handler(self, websocket, exchange_lock, dispatch_lookup):
+        ''' Handles incoming requests from the websocket in parallel 
+        with outgoing subscription updates.
+        '''
+        rcv = yield from websocket.recv()
+            
+        # Acquire the exchange lock so we can guarantee an orderly response
+        yield from exchange_lock
+        try:
+            framed = memoryview(rcv)
+            header = bytes(framed[0:2])
+            body = framed[2:]
+            
+            # This will automatically dispatch the request based on the
+            # two-byte header
+            response_preheader = dispatch_lookup[header](body)
+            # print('-----------------------------------------------')
+            print('Successful ', header, ' ', bytes(body[:4]))
+            response = self._frame_response(response_preheader)
+            # print(bytes(body))
+                
+        except Exception as e:
+            # We should log the exception, but exceptions here should never
+            # be allowed to take down a server.
+            response_preheader = False
+            response_body = (str(e)).encode('utf8')
+            response = self._frame_response(
+                preheader = response_preheader, 
+                body = response_body
+            )
+            print('Failed to dispatch ', header, ' ', bytes(body[:4]))
+            # print(rcv)
+            # print(repr(e))
+            # traceback.print_tb(e.__traceback__)
+            
+        finally:
+            yield from websocket.send(response)
+            exchange_lock.release()
+            
+    @asyncio.coroutine
+    def _update_handler(self, websocket, exchange_lock, sub_queue):
+        ''' Handles updates through a queue into sending out.
+        '''
+        # This will grab the notification guid from the queue.
+        update = yield from sub_queue.get()
+        
+        # Immediately acquire the exchange lock when update yields.
+        yield from exchange_lock
+        try:
+            print('Preparing to send sub update.')
+            msg_preheader = b'!!'
+            msg_body = bytes(update)
+            msg = msg_preheader + msg_body
+            yield from websocket.send(msg)
+            # Note: should this expect a response?
+            
+        finally:
+            exchange_lock.release()
     
     @asyncio.coroutine
     def _ws_handler(self, websocket, path):
@@ -941,6 +1003,27 @@ class LocalhostServer(MemoryPersister):
         # It's also the easiest way to dispatch connection-specific methods,
         # like list_subs and disconnect.
         
+        sub_queue = asyncio.Queue()
+        exchange_lock = asyncio.Lock()
+        
+        def sub_handler(packed):
+            ''' Handles subscriptions for this connection.
+            '''
+            guid = Guid.from_bytes(packed)
+            
+            def callback(notification_guid, sub_queue=sub_queue):
+                self._loop.create_task(sub_queue.put(notification_guid))
+                print('Task added to queue. ', sub_queue.qsize(), ' items.')
+                
+            self.subscribe(guid, callback)
+            return True
+        
+        def unsub_handler(packed):
+            ''' Handles subscriptions for this connection.
+            '''
+            guid = Guid.from_bytes(packed)
+            return True
+        
         conn_list_subs = lambda packed: [None]
         conn_disconnect = lambda packed: None
         
@@ -948,50 +1031,59 @@ class LocalhostServer(MemoryPersister):
             b'??': self.ping,
             b'PB': self.publish,
             b'GT': self.get,
-            b'+S': self.subscribe,
-            b'xS': self.unsubscribe,
+            b'+S': sub_handler,
+            b'xS': unsub_handler,
             b'LS': conn_list_subs,
             b'LB': self.list_bindings,
             b'QD': self.query_debinding,
             b'XX': conn_disconnect
         }
         
+        # return super().subscribe(guid, callback)
+        # return super().unsubscribe(guid)
+        # return super().list_subs()
+        # return super().disconnect()
+        
         while True:
-            rcv = yield from websocket.recv()
-                
-            # Acquire the exchange lock so we can guarantee an orderly response
-            yield from self._exchange_lock
-            
-            try:
-                framed = memoryview(rcv)
-                header = bytes(framed[0:2])
-                body = framed[2:]
-                
-                # This will automatically dispatch the request based on the
-                # two-byte header
-                response_preheader = dispatch_lookup[header](body)
-                # print('-----------------------------------------------')
-                print('Successful ', header, ' ', bytes(body[:4]))
-                response = self._frame_response(response_preheader)
-                # print(bytes(body))
-                    
-            except Exception as e:
-                # We should log the exception, but exceptions here should never
-                # be allowed to take down a server.
-                response_preheader = False
-                response_body = (str(e)).encode('utf8')
-                response = self._frame_response(
-                    preheader = response_preheader, 
-                    body = response_body
+            listener_task = asyncio.ensure_future(
+                self._request_handler(
+                    websocket, 
+                    exchange_lock, 
+                    dispatch_lookup
                 )
-                print('Failed to dispatch ', header, ' ', bytes(body[:4]))
-                # print(rcv)
-                # print(repr(e))
-                # traceback.print_tb(e.__traceback__)
-                
-            finally:
-                yield from websocket.send(response)
-                self._exchange_lock.release()
+            )
+            producer_task = asyncio.ensure_future(
+                self._update_handler(
+                    websocket, 
+                    exchange_lock, 
+                    sub_queue
+                )
+            )
+            
+            done, pending = yield from asyncio.wait(
+                [
+                    producer_task,
+                    listener_task
+                ],
+                return_when=asyncio.FIRST_COMPLETED)
+            
+            for task in done:
+                self._log_exc(task.exception())
+
+            for task in pending:
+                task.cancel()
+                    
+    def _log_exc(self, exc):
+        ''' Handles any potential internal exceptions from tasks during
+        a connection. If it's a ConnectionClosed, raise it to break the
+        parent loop.
+        '''
+        if exc is None:
+            return
+        else:
+            print(exc)
+            if isinstance(exc, ConnectionClosed):
+                raise exc
                 
     def _frame_response(self, preheader, body=None):
         ''' Take a result from the _ws_handler and formulate a response.
@@ -1026,7 +1118,6 @@ class LocalhostServer(MemoryPersister):
         ''' Starts a LocalhostPersister server. Runs until the heat 
         death of the universe (or an interrupt is generated somehow).
         '''
-        self._loop = asyncio.get_event_loop()
         server_task = websockets.serve(self._ws_handler, 'localhost', 8766)
         intrrptng_cow = asyncio.ensure_future(
             self.catch_interrupt(), 
@@ -1068,48 +1159,6 @@ class LocalhostServer(MemoryPersister):
         guid = Guid.from_bytes(packed)
         return super().get(guid)
     
-    def subscribe(self, packed):
-        ''' Request that the persistence provider update the client on
-        any changes to the object addressed by guid. Must target either:
-        
-        1. Dynamic guid
-        2. Author identity guid
-        
-        Upon successful subscription, the persistence provider will 
-        publish to client either of the above:
-        
-        1. New frames to a dynamic binding
-        2. Asymmetric requests with the indicated GUID as a recipient
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''
-        # Temporary dummy callback
-        callback = lambda *args, **kwargs: None
-        
-        guid = Guid.from_bytes(packed)
-        return super().subscribe(guid, callback)
-    
-    def unsubscribe(self, packed):
-        ''' Unsubscribe. Client must have an existing subscription to 
-        the passed guid at the persistence provider.
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''
-        guid = Guid.from_bytes(packed)
-        return super().unsubscribe(guid)
-    
-    def list_subs(self, packed):
-        ''' List all currently subscribed guids for the connected 
-        client.
-        
-        ACK/success is represented by returning a list of guids.
-        NAK/failure is represented by raise NakError
-        '''
-        # super().list_subs()
-        raise NotImplementedError
-    
     def list_bindings(self, packed):
         ''' Request a list of identities currently binding to the passed
         guid.
@@ -1131,18 +1180,6 @@ class LocalhostServer(MemoryPersister):
         '''
         guid = Guid.from_bytes(packed)
         return super().query_debinding(guid)
-    
-    def disconnect(self, packed):
-        ''' Terminates all subscriptions and requests. Not required for
-        a disconnect, but highly recommended, and prevents an window of
-        attack for address spoofers. Note that such an attack would only
-        leak metadata.
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''
-        # super().disconnect()
-        raise NotImplementedError
 
 class LocalhostClient(_PersisterBase):
     ''' Creates connections over localhost using websockets.
@@ -1294,7 +1331,11 @@ class LocalhostClient(_PersisterBase):
                 yield from self.consumer(message)
             
     def _handle_listener_failure(self, exc):
-        print(exc)
+        if isinstance(exc, ConnectionClosed):
+            print('Connection closed by server.')
+            raise exc
+        else:
+            print(exc)
         
     @asyncio.coroutine
     def _pusher(self, data):
@@ -1408,7 +1449,9 @@ class LocalhostClient(_PersisterBase):
             req_body = bytes(guid)
         )
         
-        # Insert local subscription callback stuff here
+        super().subscribe(guid, callback)
+        
+        return True
         
     def unsubscribe(self, guid):
         ''' Unsubscribe. Client must have an existing subscription to 
