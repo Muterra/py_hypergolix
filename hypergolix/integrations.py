@@ -32,8 +32,8 @@ hypergolix: A python Golix client.
 
 # Control * imports.
 __all__ = [
-    'EmbeddedClient', 
-    'LocalhostClient'
+    'EmbeddedIntegration', 
+    'LocalhostIntegration'
 ]
 
 # External dependencies
@@ -42,10 +42,10 @@ import abc
 # Intrapackage dependencies
 from .utils import HandshakeError
 
-class _ClientBase(metaclass=abc.ABCMeta):
-    ''' Base class for a client. Note that a client cannot exist without
-    also being an agent. They are separated to allow mixing-and-matching
-    client/agent/persister configurations.
+class _IntegrationBase(metaclass=abc.ABCMeta):
+    ''' Base class for a integration. Note that an integration cannot 
+    exist without also being an agent. They are separated to allow 
+    mixing-and-matching agent/persister/integration configurations.
     '''
     
     @property
@@ -139,7 +139,7 @@ class _ClientBase(metaclass=abc.ABCMeta):
         pass
     
     
-class EmbeddedClient(_ClientBase):
+class EmbeddedIntegration(_IntegrationBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._orphan_handshakes_incoming = []
@@ -172,13 +172,13 @@ class EmbeddedClient(_ClientBase):
         pass
     
     
-class LocalhostClient(_ClientBase):
+class LocalhostIntegration(_IntegrationBase):
     pass
     
     
-class PipeClient(_ClientBase):
+class PipeIntegration(_IntegrationBase):
     pass
     
     
-class FileClient(_ClientBase):
+class FileIntegration(_IntegrationBase):
     pass

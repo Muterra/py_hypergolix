@@ -470,7 +470,7 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         debindings_cont1_1 = self.server1.query_debinding(bind1_1.guid)
         self.assertEqual(debindings_cont1_1, debind1_1.guid)
         debindings_cont1_2 = self.server1.query_debinding(bind1_2.guid)
-        self.assertIsNone(debindings_cont1_2)
+        self.assertFalse(debindings_cont1_2)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired

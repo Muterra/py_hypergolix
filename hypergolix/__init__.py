@@ -42,5 +42,5 @@ from .utils import DynamicObject
 
 # Submodules
 from . import persisters
-from . import clients
+from . import integrations
 from . import utils

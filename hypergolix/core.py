@@ -83,8 +83,8 @@ from .utils import DynamicObject
 
 from .persisters import _PersisterBase
 from .persisters import MemoryPersister
-from .clients import _ClientBase
-from .clients import EmbeddedClient
+from .integrations import _IntegrationBase
+from .integrations import EmbeddedIntegration
         
 # ###############################################
 # Utilities, etc
@@ -92,7 +92,7 @@ from .clients import EmbeddedClient
 
 
 class AgentBase:
-    def __init__(self, persister, client, _golix_firstparty=None, _legroom=3, *args, **kwargs):
+    def __init__(self, persister, integration, _golix_firstparty=None, _legroom=3, *args, **kwargs):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         '''
@@ -102,9 +102,9 @@ class AgentBase:
             raise TypeError('Persister must subclass _PersisterBase.')
         self._persister = persister
         
-        if not isinstance(client, _ClientBase):
-            raise TypeError('Client must subclass _ClientBase.')
-        self._client = client
+        if not isinstance(integration, _IntegrationBase):
+            raise TypeError('Integration must subclass _IntegrationBase.')
+        self._integration = integration
         
         if _golix_firstparty is None:
             self._identity = FirstParty()
@@ -214,7 +214,7 @@ class AgentBase:
         )
         
         try:
-            self.client.dispatch_handshake(obj)
+            self.integration.dispatch_handshake(obj)
             
         except HandshakeError as e:
             # Erfolglos. Send a nak to whomever sent the handshake
@@ -247,21 +247,21 @@ class AgentBase:
         # else:
         #     self._shared_objects[target] = { request.author }
             
-        self.client.dispatch_handshake_ack(request)
+        self.integration.dispatch_handshake_ack(request)
             
     def _handle_req_nak(self, request, source_guid):
         ''' Handles a handshake nak after reception.
         '''
         del self._pending_requests[request.target]
-        self.client.dispatch_handshake_nak(request)
+        self.integration.dispatch_handshake_nak(request)
         
     @property
     def persister(self):
         return self._persister
         
     @property
-    def client(self):
-        return self._client
+    def integration(self):
+        return self._integration
         
     def _get_secret(self, guid):
         ''' Return the secret for the passed guid, if one is available.
@@ -852,16 +852,16 @@ class AgentBase:
         )
         
     @classmethod
-    def login(cls, password, data, persister, client):
+    def login(cls, password, data, persister, integration):
         ''' Load an Agent from an identity contained within a GEOC.
         '''
         pass
         
         
-class EmbeddedMemoryAgent(AgentBase, MemoryPersister, EmbeddedClient):
+class EmbeddedMemoryAgent(AgentBase, MemoryPersister, EmbeddedIntegration):
     def __init__(self):
-        super().__init__(persister=self, client=self)
+        super().__init__(persister=self, integration=self)
         
         
-# Note: need either localhost persister, or localhost client. Client would
+# Note: need either localhost persister, or localhost integration. integration would
 # be easier and make more sense.

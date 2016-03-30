@@ -40,7 +40,7 @@ import collections
 
 # These are normal imports
 from hypergolix.persisters import MemoryPersister
-from hypergolix.clients import EmbeddedClient
+from hypergolix.integrations import EmbeddedIntegration
 from hypergolix import DynamicObject
 from hypergolix import StaticObject
 from hypergolix import NakError
@@ -119,9 +119,9 @@ class ObjectTrashtest(unittest.TestCase):
         #     IPython.embed()
         
 
-class TestAgent(AgentBase, EmbeddedClient):
+class TestAgent(AgentBase, EmbeddedIntegration):
     def __init__(self, *args, **kwargs):
-        super().__init__(client=self, *args, **kwargs)
+        super().__init__(integration=self, *args, **kwargs)
         
         
 class AgentTrashTest(unittest.TestCase):
@@ -133,8 +133,8 @@ class AgentTrashTest(unittest.TestCase):
         self.agent2 = TestAgent(
             persister = self.persister
         )
-        self.client1 = self.agent1
-        self.client2 = self.agent2
+        self.integration1 = self.agent1
+        self.integration2 = self.agent2
         
     def test_alone(self):
         pt1 = b'Hello, world?'
@@ -196,7 +196,7 @@ class AgentTrashTest(unittest.TestCase):
             self.agent1._secrets[obj1s1.address], 
             self.agent2._secrets[obj1s1.address]
         )
-        obj1s1_shared = self.client2._orphan_handshakes_incoming.pop()
+        obj1s1_shared = self.integration2._orphan_handshakes_incoming.pop()
         self.assertEqual(
             obj1s1_shared, obj1s1
         )
@@ -206,7 +206,7 @@ class AgentTrashTest(unittest.TestCase):
         self.assertIn(obj1.address, self.agent2._historian)
         # Make sure this doesn't error, checking that it's in secrets
         self.agent2._get_secret(obj1.address)
-        obj1_shared = self.client2._orphan_handshakes_incoming.pop()
+        obj1_shared = self.integration2._orphan_handshakes_incoming.pop()
         self.assertEqual(
             obj1,
             obj1_shared
