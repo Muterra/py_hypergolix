@@ -752,15 +752,15 @@ class AgentBase:
                 binding = unpacked
             )
             
-            # Recursively grab the plaintext
-            plaintext = self._resolve_dynamic_plaintext(target)
-            
             # Looks legit; add the secret to our store persistently under the
             # frame guid, and as a proxy for the container guid. Note that 
             # _set_secret handles the case of existing secrets, so we should be 
             # immune to malicious attempts to override existing secrets.
             self._set_secret(unpacked.guid, secret)
             self._set_secret_temporary(target, secret)
+            
+            # Recursively grab the plaintext once we add the secret
+            plaintext = self._resolve_dynamic_plaintext(target)
             
             # Add the dynamic guid to historian using our own _legroom param.
             self._historian[guid] = collections.deque(

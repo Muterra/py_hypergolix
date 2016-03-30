@@ -55,6 +55,7 @@ __all__ = [
 import abc
 import collections
 import warnings
+import functools
 
 import asyncio
 import websockets
@@ -310,9 +311,12 @@ class UnsafeMemoryPersister(_PersisterBase):
         the storage provider and verifies obj.
         '''
         if assignee not in self._secondparties:
-            raise NakError(
-                'ERR#1: Unknown author / recipient.'
-            )
+            try:
+                self.get(assignee)
+            except NakError as e:
+                raise NakError(
+                    'ERR#1: Unknown author / recipient.'
+                ) from e
     
         try:
             # This will raise a SecurityError if verification fails.
@@ -589,9 +593,12 @@ class UnsafeMemoryPersister(_PersisterBase):
         # Don't call verify, since it would error out, as GARQ are not
         # verifiable by a third party.
         if garq.recipient not in self._secondparties:
-            raise NakError(
-                'ERR#1: Unknown author / recipient.'
-            )
+            try:
+                self.get(garq.recipient)
+            except NakError as e:
+                raise NakError(
+                    'ERR#1: Unknown author / recipient.'
+                ) from e
             
         if garq.guid in self._debindings:
             raise NakError(
@@ -942,6 +949,7 @@ class LocalhostServer(MemoryPersister):
         rcv = yield from websocket.recv()
             
         # Acquire the exchange lock so we can guarantee an orderly response
+        # print('Getting exchange lock for request.')
         yield from exchange_lock
         try:
             framed = memoryview(rcv)
@@ -973,6 +981,7 @@ class LocalhostServer(MemoryPersister):
         finally:
             yield from websocket.send(response)
             exchange_lock.release()
+        # print('Released exchange lock for request.')
             
     @asyncio.coroutine
     def _update_handler(self, websocket, exchange_lock, sub_queue):
@@ -982,17 +991,20 @@ class LocalhostServer(MemoryPersister):
         update = yield from sub_queue.get()
         
         # Immediately acquire the exchange lock when update yields.
+        # print('Getting exchange lock for update.')
         yield from exchange_lock
         try:
-            print('Preparing to send sub update.')
+            # print('Preparing to send sub update.')
             msg_preheader = b'!!'
             msg_body = bytes(update)
             msg = msg_preheader + msg_body
             yield from websocket.send(msg)
             # Note: should this expect a response?
+            # print('Sub update sent.')
             
         finally:
             exchange_lock.release()
+        # print('Released exchange lock for update.')
     
     @asyncio.coroutine
     def _ws_handler(self, websocket, path):
@@ -1013,7 +1025,6 @@ class LocalhostServer(MemoryPersister):
             
             def callback(notification_guid, sub_queue=sub_queue):
                 self._loop.create_task(sub_queue.put(notification_guid))
-                print('Task added to queue. ', sub_queue.qsize(), ' items.')
                 
             self.subscribe(guid, callback)
             return True
@@ -1181,8 +1192,10 @@ class LocalhostServer(MemoryPersister):
         guid = Guid.from_bytes(packed)
         return super().query_debinding(guid)
 
-class LocalhostClient(_PersisterBase):
+class LocalhostClient(MemoryPersister):
     ''' Creates connections over localhost using websockets.
+    
+    Caches everything locally.
     
     Notes:
     + The only thing I have to listen for is subscription updates.
@@ -1217,7 +1230,7 @@ class LocalhostClient(_PersisterBase):
         # Set up an event loop and some admin objects
         self._ws_loop = asyncio.new_event_loop()
         # self._ws_loop.set_debug(True)
-        self._exchange_lock = threading.Lock()
+        self._exchange_lock = asyncio.Lock()
         self._response_box = asyncio.Queue(maxsize=1, loop=self._ws_loop)
         self._admin_lock = threading.Lock()
         # This isn't threadsafe, so maybe it should switch to threading.Event?
@@ -1311,9 +1324,10 @@ class LocalhostClient(_PersisterBase):
             ],
             return_when=asyncio.FIRST_COMPLETED)
 
+        # These should probably be moved into the actual tasks.
+
         if interrupt_task in done:
             print('Got shutdown signal.')
-            listener_task.cancel()
             self._ws_loop.stop()
             print('Stopped loop.')
             return
@@ -1321,14 +1335,17 @@ class LocalhostClient(_PersisterBase):
         # yield from self._websocket.send(message)
     
         if listener_task in done:
-            interrupt_task.cancel()
-            
             exc = listener_task.exception()
             if exc:
                 self._handle_listener_failure(exc)
             else:
                 message = listener_task.result()
+                # print('Trying to yield to consumer.')
                 yield from self.consumer(message)
+                # print('Successfully yielded to consumer.')
+        
+        for task in pending:
+            task.cancel()
             
     def _handle_listener_failure(self, exc):
         if isinstance(exc, ConnectionClosed):
@@ -1339,19 +1356,28 @@ class LocalhostClient(_PersisterBase):
         
     @asyncio.coroutine
     def _pusher(self, data):
-        with self._exchange_lock:
+        # print('Waiting for exchange lock.')
+        yield from self._exchange_lock
+        try:
+            # print('Exchange lock acquired.')
             yield from self._websocket.send(data)
+            # print('Waiting for response.')
             header, body = yield from self._response_box.get()
             
-            response = self.RESPONSE_CODES[header](body)
+        finally:
+            # Hold the exchange lock only and exactly as long as we need it.
+            self._exchange_lock.release()
+        # print('Exchange lock released.')
             
-            if isinstance(response, NakError):
-                raise response
-            elif isinstance(response, Exception):
-                # Note: This would be a good place to log the internal error.
-                raise NakError('ERR#X: Internal error.')
-            else:
-                return response
+        response = self.RESPONSE_CODES[header](body)
+        
+        if isinstance(response, NakError):
+            raise response
+        elif isinstance(response, Exception):
+            # Note: This would be a good place to log the internal error.
+            raise NakError('ERR#X: Internal error.')
+        else:
+            return response
         
     @asyncio.coroutine
     def consumer(self, message):
@@ -1363,7 +1389,29 @@ class LocalhostClient(_PersisterBase):
             yield from self._response_box.put((header, body))
             
         elif header == self.NOTIFIER_CODE:
-            print('Subscription update.')
+            print('Subscription update: ', bytes(body))
+            # Note that in this case, body is the guid we want.
+            guid = Guid.from_bytes(body)
+            
+            # We can't do this in our thread, because calling _block_on_future
+            # in the synchronous code will block the coroutine AND the event 
+            # loop scheduler. This is a little gross, but let's spin out a new
+            # thread to handle it then.
+            t = threading.Thread(
+                target = self.get,
+                args = (guid,),
+                daemon = True
+            )
+            t.start()
+            
+            # Use put_nowait so that the scheduler doesn't immediately run
+            # callbacks on the queue, causing us to reenter the exchange lock
+            # yield from self._get_queue.put(guid)
+            # print('Exiting subscription update.')
+            # # Note that we cannot call this directly, since we'll block on the
+            # # exchange lock.
+            # call = functools.partial(self.get, guid)
+            # self._ws_loop.call_soon(call)
             
         else:
             # Invalid code!
@@ -1386,9 +1434,12 @@ class LocalhostClient(_PersisterBase):
             loop = self._ws_loop
         )
         
-        response = _block_on_result(future)
-        print(response)
-        return response
+        # print('Blocking on result of future.')
+        # response = _block_on_result(future)
+        # # print(response)
+        # return response
+        return _block_on_result(future)
+        # print('Unblocked')
     
     def publish(self, packed):
         ''' Submits a packed object to the persister.
@@ -1400,10 +1451,12 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        return self._requestor(
+        self._requestor(
             req_type = 'publish',
             req_body = packed
         )
+        super().publish(packed)
+        return True
     
     def ping(self):
         ''' Queries the persistence provider for availability.
@@ -1411,22 +1464,31 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        return self._requestor(
+        self._requestor(
             req_type = 'ping',
             req_body = b''
         )
+        super().ping()
+        return True
     
     def get(self, guid):
         ''' Requests an object from the persistence provider, identified
-        by its guid.
+        by its guid. In this case, caches all retrieved objects locally.
         
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
         '''
-        return self._requestor(
-            req_type = 'get',
-            req_body = bytes(guid)
-        )
+        try:
+            result = super().get(guid)
+        except NakError:
+            # print('Trying to get from server.')
+            result = self._requestor(
+                req_type = 'get',
+                req_body = bytes(guid)
+            )
+            # print('Re-publishing to local cache.')
+            super().publish(result)
+        return result
     
     def subscribe(self, guid, callback):
         ''' Request that the persistence provider update the client on
@@ -1465,7 +1527,9 @@ class LocalhostClient(_PersisterBase):
             req_body = bytes(guid)
         )
         
-        # Insert local unsubscription callback stuff here
+        super().unsubscribe(guid)
+        
+        return True
     
     def list_subs(self):
         ''' List all currently subscribed guids for the connected 
@@ -1474,6 +1538,7 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by returning a list of guids.
         NAK/failure is represented by raise NakError
         '''
+        # Ignore super() entirely? Currently we are.
         return self._requestor(
             req_type = 'list_subs',
             req_body = b''
@@ -1486,6 +1551,7 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by returning a list of guids.
         NAK/failure is represented by raise NakError
         '''
+        # Ignore super() entirely? Currently we are.
         return self._requestor(
             req_type = 'list_bindings',
             req_body = bytes(guid)
@@ -1500,6 +1566,7 @@ class LocalhostClient(_PersisterBase):
             2. None if it does not exist
         NAK/failure is represented by raise NakError
         '''
+        # Ignore super() entirely? Currently we are.
         return self._requestor(
             req_type = 'query_debindings',
             req_body = bytes(guid)
@@ -1514,7 +1581,9 @@ class LocalhostClient(_PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        return self._requestor(
+        self._requestor(
             req_type = 'disconnect',
             req_body = b''
         )
+        super().disconnect()
+        return True
