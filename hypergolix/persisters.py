@@ -745,9 +745,9 @@ class UnsafeMemoryPersister(_PersisterBase):
                 )
                 
         if guid in self._subscriptions:
-            self._subscriptions[guid].append(callback)
+            self._subscriptions[guid].add(callback)
         else:
-            self._subscriptions[guid] = [callback]
+            self._subscriptions[guid] = { callback }
             
         return True
         
@@ -803,13 +803,13 @@ class UnsafeMemoryPersister(_PersisterBase):
         
         ACK/success is represented by returning:
             1. The debinding GUID if it exists
-            2. None if it does not exist
+            2. False if it does not exist
         NAK/failure is represented by raise NakError
         '''
         if guid in self._debindings:
             return tuple(self._debindings[guid])[0]
         else:
-            return None
+            return False
             
     def query(self, guid):
         ''' Checks the persistence provider for the existence of the
@@ -1058,6 +1058,7 @@ class LocalhostServer(MemoryPersister):
         
         sub_queue = asyncio.Queue()
         exchange_lock = asyncio.Lock()
+        subs = {}
         
         def sub_handler(packed):
             ''' Handles subscriptions for this connection.
@@ -1068,27 +1069,53 @@ class LocalhostServer(MemoryPersister):
                 self._loop.create_task(sub_queue.put(notification_guid))
                 
             self.subscribe(guid, callback)
+            subs[guid] = callback
             return True
         
         def unsub_handler(packed):
-            ''' Handles subscriptions for this connection.
+            ''' Handles unsubscriptions for this connection. Courtesy of
+            self.unsubscribe, will NakError if not currently subscribed
+            to the passed guid.
             '''
             guid = Guid.from_bytes(packed)
-            return True
+            
+            try:
+                callback = subs[guid]
+                del subs[guid]
+            except KeyError as e:
+                raise NakError(
+                    'ERR#4: Invalid or unknown target for unsubscription.'
+                ) from e
+                
+            return struct.pack('>?', self.unsubscribe_wrapped(guid, callback))
+            
+        def conn_list_subs(packed):
+            ''' Lists all subscriptions for this connection.
+            '''
+            parser = generate_guidlist_parser()
+            return parser.pack(list(subs))
         
-        conn_list_subs = lambda packed: [None]
-        conn_disconnect = lambda packed: None
+        def conn_disconnect(packed):
+            ''' Clears all subscriptions for this connection.
+            '''
+            nonlocal subs
+            for sub, callback in subs.items():
+                self.unsubscribe_wrapped(sub, callback)
+            subs = {}
+            return struct.pack('>?', True)
         
+        # Note that publish doesn't need to be wrapped as it already handles
+        # straight bytes.
         dispatch_lookup = {
-            b'??': self.ping,
+            b'??': self.ping_wrapped,
             b'PB': self.publish,
-            b'GT': self.get,
+            b'GT': self.get_wrapped,
             b'+S': sub_handler,
             b'xS': unsub_handler,
             b'LS': conn_list_subs,
-            b'LB': self.list_bindings,
-            b'QD': self.query_debinding,
-            b'QE': self.query_proxy,
+            b'LB': self.list_bindings_wrapped,
+            b'QD': self.query_debinding_wrapped,
+            b'QE': self.query_wrapped,
             b'XX': conn_disconnect
         }
         
@@ -1125,6 +1152,13 @@ class LocalhostServer(MemoryPersister):
 
             for task in pending:
                 task.cancel()
+                
+    def unsubscribe_wrapped(self, guid, callback):
+        ''' Wraps (actually, overrides) super().unsubscribe behavior to
+        only remove the specified callback from self.
+        '''
+        self._subscriptions[guid].remove(callback)
+        return True
                     
     def _log_exc(self, exc):
         ''' Handles any potential internal exceptions from tasks during
@@ -1193,16 +1227,13 @@ class LocalhostServer(MemoryPersister):
             
         finally:
             self._loop.close()
-    
-    def ping(self, packed):
-        ''' Queries the persistence provider for availability.
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+            
+    def ping_wrapped(self, packed):
+        ''' Wraps super().ping with packing and unpacking.
         '''
-        return super().ping()
+        return struct.pack('>?', self.ping())
     
-    def get(self, packed):
+    def get_wrapped(self, packed):
         ''' Requests an object from the persistence provider, identified
         by its guid.
         
@@ -1210,9 +1241,9 @@ class LocalhostServer(MemoryPersister):
         NAK/failure is represented by raise NakError
         '''
         guid = Guid.from_bytes(packed)
-        return super().get(guid)
+        return self.get(guid)
     
-    def list_bindings(self, packed):
+    def list_bindings_wrapped(self, packed):
         ''' Request a list of identities currently binding to the passed
         guid.
         
@@ -1220,11 +1251,11 @@ class LocalhostServer(MemoryPersister):
         NAK/failure is represented by raise NakError
         '''
         guid = Guid.from_bytes(packed)
-        guidlist = super().list_bindings(guid)
+        guidlist = self.list_bindings(guid)
         parser = generate_guidlist_parser()
         return parser.pack(guidlist)
     
-    def query_debinding(self, packed):
+    def query_debinding_wrapped(self, packed):
         ''' Request a the address of any debindings of guid, if they
         exist.
         
@@ -1234,9 +1265,17 @@ class LocalhostServer(MemoryPersister):
         NAK/failure is represented by raise NakError
         '''
         guid = Guid.from_bytes(packed)
-        return super().query_debinding(guid)
         
-    def query_proxy(self, packed):
+        result = self.query_debinding(guid)
+        
+        if not result:
+            result = struct.pack('>?', False)
+        else:
+            result = bytes(result)
+        
+        return result
+        
+    def query_wrapped(self, packed):
         ''' Proxies standard query behavior so we don't get internal
         errors from overriding it.
         '''
@@ -1628,10 +1667,12 @@ class LocalhostClient(MemoryPersister):
         NAK/failure is represented by raise NakError
         '''
         # Ignore super() entirely? Currently we are.
-        return self._requestor(
+        guidlist = self._requestor(
             req_type = 'list_subs',
             req_body = b''
         )
+        parser = generate_guidlist_parser()
+        return parser.unpack(guidlist)
     
     def list_bindings(self, guid):
         ''' Request a list of identities currently binding to the passed
@@ -1659,10 +1700,15 @@ class LocalhostClient(MemoryPersister):
         NAK/failure is represented by raise NakError
         '''
         # Ignore super() entirely? Currently we are.
-        return self._requestor(
+        packed_guid = self._requestor(
             req_type = 'query_debindings',
             req_body = bytes(guid)
         )
+        if packed_guid == struct.pack('>?', False):
+            result = False
+        else:
+            result = Guid.from_bytes(packed_guid)
+        return result
         
     def query(self, guid):
         ''' Checks the persistence provider for the existence of the
@@ -1677,7 +1723,7 @@ class LocalhostClient(MemoryPersister):
             req_type = 'query',
             req_body = bytes(guid)
         )
-        remote_exists = struct.unpack('>?', packed_result)
+        remote_exists = struct.unpack('>?', packed_result)[0]
         local_exists = super().query(guid)
         return remote_exists or local_exists
     

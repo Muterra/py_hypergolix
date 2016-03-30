@@ -118,20 +118,23 @@ class ObjectTrashtest(unittest.TestCase):
         #     warnings.simplefilter('ignore')
         #     IPython.embed()
         
+
+class TestAgent(AgentBase, EmbeddedClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(client=self, *args, **kwargs)
+        
         
 class AgentTrashTest(unittest.TestCase):
     def setUp(self):
-        self.client1 = EmbeddedClient()
-        self.client2 = EmbeddedClient()
         self.persister = MemoryPersister()
-        self.agent1 = AgentBase(
-            persister = self.persister,
-            client = self.client1
+        self.agent1 = TestAgent(
+            persister = self.persister
         )
-        self.agent2 = AgentBase(
-            persister = self.persister,
-            client = self.client2
+        self.agent2 = TestAgent(
+            persister = self.persister
         )
+        self.client1 = self.agent1
+        self.client2 = self.agent2
         
     def test_alone(self):
         pt1 = b'Hello, world?'
@@ -193,28 +196,32 @@ class AgentTrashTest(unittest.TestCase):
             self.agent1._secrets[obj1s1.address], 
             self.agent2._secrets[obj1s1.address]
         )
-        obj1s1_shared = self.client2._handshakes[obj1s1.address]
+        obj1s1_shared = self.client2._orphan_handshakes_incoming.pop()
         self.assertEqual(
             obj1s1_shared, obj1s1
         )
-        self.assertEqual(obj1s1, self.client2._handshakes[obj1s1.address])
         
         # Test handshakes using dynamic objects
         self.agent1.hand_object(obj1, contact2)
         self.assertIn(obj1.address, self.agent2._historian)
         # Make sure this doesn't error, checking that it's in secrets
         self.agent2._get_secret(obj1.address)
+        obj1_shared = self.client2._orphan_handshakes_incoming.pop()
         self.assertEqual(
             obj1,
-            self.client2._handshakes[obj1.address]
+            obj1_shared
         )
         
         # Awesome, now let's check updating them -- including subscriptions, 
         # and that the recipient correctly ratchets the key and updates state.
         self.agent1.update_dynamic(obj1, pt2)
         self.assertEqual(
+            obj1.state,
+            pt2
+        )
+        self.assertEqual(
             obj1,
-            self.client2._handshakes[obj1.address]
+            obj1_shared
         )
             
         

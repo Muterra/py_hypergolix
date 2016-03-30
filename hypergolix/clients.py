@@ -43,10 +43,77 @@ import abc
 from .utils import HandshakeError
 
 class _ClientBase(metaclass=abc.ABCMeta):
+    ''' Base class for a client. Note that a client cannot exist without
+    also being an agent. They are separated to allow mixing-and-matching
+    client/agent/persister configurations.
+    '''
+    
+    @property
+    @abc.abstractmethod
+    def address(self):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def new_static(self, data=None, link=None):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def new_dynamic(self, data):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def update_dynamic(self, obj, data=None, link=None):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def refresh_dynamic(self, obj):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def freeze_dynamic(self, obj):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def hold_object(self, obj):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def delete_object(self, obj):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def hand_object(self, obj, recipient_guid):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def get_object(self, secret, guid):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
     @abc.abstractmethod
     def dispatch_handshake(self, handshake):
-        ''' Receives the target for a handshake (NOT the handshake
-        object itself) and dispatches it to the appropriate application.
+        ''' Receives the target *object* for a handshake (note: NOT the 
+        handshake itself) and dispatches it to the appropriate 
+        application.
         
         handshake is a StaticObject or DynamicObject.
         Raises HandshakeError if unsuccessful.
@@ -75,16 +142,18 @@ class _ClientBase(metaclass=abc.ABCMeta):
 class EmbeddedClient(_ClientBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._handshakes = {}
+        self._orphan_handshakes_incoming = []
+        self._orphan_handshakes_outgoing = []
         
     def dispatch_handshake(self, handshake):
-        ''' Receives the target for a handshake (NOT the handshake
-        object itself) and dispatches it to the appropriate application.
+        ''' Receives the target *object* for a handshake (note: NOT the 
+        handshake itself) and dispatches it to the appropriate 
+        application.
         
         handshake is a StaticObject or DynamicObject.
         Raises HandshakeError if unsuccessful.
         '''
-        self._handshakes[handshake.address] = handshake
+        self._orphan_handshakes_incoming.append(handshake)
         
     def dispatch_handshake_ack(self, ack):
         ''' Receives a handshake acknowledgement and dispatches it to
@@ -92,7 +161,7 @@ class EmbeddedClient(_ClientBase):
         
         ack is a golix.AsymAck object.
         '''
-        pass
+        self._orphan_handshakes_outgoing.append(ack)
     
     def dispatch_handshake_nak(self, nak):
         ''' Receives a handshake nonacknowledgement and dispatches it to
