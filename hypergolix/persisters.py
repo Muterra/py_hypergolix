@@ -56,6 +56,7 @@ import abc
 import collections
 import warnings
 import functools
+import struct
 
 import asyncio
 import websockets
@@ -183,6 +184,18 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         ACK/success is represented by returning:
             1. The debinding GUID if it exists
             2. None if it does not exist
+        NAK/failure is represented by raise NakError
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def query(self, guid):
+        ''' Checks the persistence provider for the existence of the
+        passed guid.
+        
+        ACK/success is represented by returning:
+            True if it exists
+            False otherwise
         NAK/failure is represented by raise NakError
         '''
         pass
@@ -633,9 +646,11 @@ class UnsafeMemoryPersister(_PersisterBase):
         ''' Check for subscriptions, and update them if any exist.
         '''
         if subscription_guid in self._subscriptions:
-            if not target_guid or target_guid in self._store:
+            # If the target isn't defined, or if it exists, clear to update
+            if not target_guid or self.query(target_guid):
                 for callback in self._subscriptions[subscription_guid]:
                     callback(notification_guid)
+            # Otherwise it's defined and missing; wait until we get the target.
             else:
                 self._pending_notifications[target_guid] = \
                     subscription_guid, notification_guid
@@ -795,6 +810,20 @@ class UnsafeMemoryPersister(_PersisterBase):
             return tuple(self._debindings[guid])[0]
         else:
             return None
+            
+    def query(self, guid):
+        ''' Checks the persistence provider for the existence of the
+        passed guid.
+        
+        ACK/success is represented by returning:
+            True if it exists
+            False otherwise
+        NAK/failure is represented by raise NakError
+        '''
+        if guid in self._store:
+            return True
+        else:
+            return False
         
     def disconnect(self):
         ''' Terminates all subscriptions. Not required for a disconnect, 
@@ -941,6 +970,7 @@ class LocalhostServer(MemoryPersister):
     b'LS'       list subs
     b'LB'       list binds
     b'QD'       query debind
+    b'QE'       query (existence)
     b'XX'       disconnect
     
     Note that subscriptions are connection-specific. If a connection 
@@ -1058,6 +1088,7 @@ class LocalhostServer(MemoryPersister):
             b'LS': conn_list_subs,
             b'LB': self.list_bindings,
             b'QD': self.query_debinding,
+            b'QE': self.query_proxy,
             b'XX': conn_disconnect
         }
         
@@ -1204,6 +1235,14 @@ class LocalhostServer(MemoryPersister):
         '''
         guid = Guid.from_bytes(packed)
         return super().query_debinding(guid)
+        
+    def query_proxy(self, packed):
+        ''' Proxies standard query behavior so we don't get internal
+        errors from overriding it.
+        '''
+        guid = Guid.from_bytes(packed)
+        status = self.query(guid)
+        return struct.pack('>?', status)
 
 class LocalhostClient(MemoryPersister):
     ''' Creates connections over localhost using websockets.
@@ -1233,6 +1272,7 @@ class LocalhostClient(MemoryPersister):
         'list_subs':        b'LS',
         'list_bindings':    b'LB',
         'query_debindings': b'QD',
+        'query':            b'QE',
         'disconnect':       b'XX',
     }
     
@@ -1406,12 +1446,23 @@ class LocalhostClient(MemoryPersister):
             # Note that in this case, body is the guid we want.
             guid = Guid.from_bytes(body)
             
+            # I'm not 100% sure why I haven't gotten this working, buuuut...
+            # # If it's a dynamic target, bypass the normal get method so that
+            # # we don't short-circuit on our own object. See note in self.get.
+            # if guid in self._targets_dynamic:
+            #     print('Found in dynamic.')
+            #     thread_target = self._pull_from_remote
+            # else:
+            #     thread_target = self.get
+                
+            thread_target = self._pull_from_remote
+            
             # We can't do this in our thread, because calling _block_on_future
             # in the synchronous code will block the coroutine AND the event 
             # loop scheduler. This is a little gross, but let's spin out a new
             # thread to handle it then.
             t = threading.Thread(
-                target = self.get,
+                target = thread_target,
                 args = (guid,),
                 daemon = True
             )
@@ -1493,6 +1544,9 @@ class LocalhostClient(MemoryPersister):
         '''
         # Check local cache.
         try:
+            # Note that this will cause issues if we're looking for a dynamic
+            # binding that we already have, but has been updated upstream;
+            # we'll immediately short-circuit to the cached one.
             result = super().get(guid)
             
         # We don't have it in our local cache; check the persistence server.
@@ -1609,6 +1663,23 @@ class LocalhostClient(MemoryPersister):
             req_type = 'query_debindings',
             req_body = bytes(guid)
         )
+        
+    def query(self, guid):
+        ''' Checks the persistence provider for the existence of the
+        passed guid.
+        
+        ACK/success is represented by returning:
+            True if it exists
+            False otherwise
+        NAK/failure is represented by raise NakError
+        '''
+        packed_result = self._requestor(
+            req_type = 'query',
+            req_body = bytes(guid)
+        )
+        remote_exists = struct.unpack('>?', packed_result)
+        local_exists = super().query(guid)
+        return remote_exists or local_exists
     
     def disconnect(self):
         ''' Terminates all subscriptions and requests. Not required for
