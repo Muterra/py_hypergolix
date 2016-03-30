@@ -37,6 +37,7 @@ import threading
 __all__ = [
     'NakError',
     'UnboundContainerError',
+    'DoesNotExistError',
     'HandshakeError',
     'InaccessibleError',
     'UnknownPartyError',
@@ -57,6 +58,13 @@ class UnboundContainerError(NakError):
     ''' This NakError is raised when a persistence provider has no 
     binding for the attempted container, and it was therefore passed
     immediately to garbage collection.
+    '''
+    pass
+    
+    
+class DoesNotExistError(NakError):
+    ''' This NakError is raised when a persistence provider has received
+    a request for a guid that does not exist in its object store.
     '''
     pass
 

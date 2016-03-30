@@ -80,6 +80,7 @@ from golix._getlow import GARQ
 # Local dependencies
 from .utils import NakError
 from .utils import UnboundContainerError
+from .utils import DoesNotExistError
 from .utils import PersistenceWarning
 from .utils import _DeepDeleteChainMap
 from .utils import _WeldedSetDeepChainMap
@@ -701,7 +702,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         try:
             return self._store[guid]
         except KeyError as e:
-            raise NakError('ERR#6: Guid not found in store.') from e
+            raise DoesNotExistError('ERR#6: Guid not found in store.') from e
         
     def subscribe(self, guid, callback):
         ''' Request that the persistence provider update the client on
@@ -1490,20 +1491,38 @@ class LocalhostClient(MemoryPersister):
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
         '''
+        # Check local cache.
         try:
             result = super().get(guid)
-        except NakError:
+            
+        # We don't have it in our local cache; check the persistence server.
+        except DoesNotExistError:
             # print('Trying to get from server.')
-            result = self._requestor(
-                req_type = 'get',
-                req_body = bytes(guid)
-            )
+            result = self._pull_from_remote(guid)
             
-            # If we just grabbed a static address, grabbing it will error if 
-            # we don't also grab the binding for it.
-            
+        return result
+        
+    def _pull_from_remote(self, guid):
+        ''' Handles everything needed to get a guid from the websockets
+        persistence server.
+        '''
+        result = self._requestor(
+            req_type = 'get',
+            req_body = bytes(guid)
+        )
+        
+        try:
             # print('Re-publishing to local cache.')
             super().publish(result)
+            
+        # We don't have a binding for it locally, so get the most convenient
+        # from the persistence server.
+        except UnboundContainerError:
+            binding_list = self.list_bindings(guid)
+            binding = self.get(binding_list[0])
+            super().publish(binding)
+            super().publish(result)
+            
         return result
     
     def subscribe(self, guid, callback):
