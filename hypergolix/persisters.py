@@ -68,6 +68,8 @@ from golix import Secret
 from golix import ParseError
 from golix import SecurityError
 
+from golix.utils import generate_guidlist_parser
+
 from golix._getlow import GIDC
 from golix._getlow import GEOC
 from golix._getlow import GOBS
@@ -77,6 +79,7 @@ from golix._getlow import GARQ
 
 # Local dependencies
 from .utils import NakError
+from .utils import UnboundContainerError
 from .utils import PersistenceWarning
 from .utils import _DeepDeleteChainMap
 from .utils import _WeldedSetDeepChainMap
@@ -351,7 +354,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         )
             
         if geoc.guid not in self._bindings:
-            raise NakError(
+            raise UnboundContainerError(
                 'ERR#2: Attempt to upload unbound GEOC; object immediately '
                 'garbage collected.'
             )
@@ -761,14 +764,21 @@ class UnsafeMemoryPersister(_PersisterBase):
         ''' Request a list of identities currently binding to the passed
         guid.
         
+        NOTE: does not currently satisfy condition 3 in the spec (aka,
+        it is not currently preferentially listing the author binding 
+        first).
+        
         ACK/success is represented by returning a list of guids.
         NAK/failure is represented by raise NakError
         '''
-        result = set()
+        result = []
+        # Bindings can only be static XOR dynamic, so we need not worry about
+        # set intersections. But note that the lookup dicts contain sets as 
+        # keys, so we need to extend, not append.
         if guid in self._bindings_static:
-            result.update(self._bindings_static[guid])
+            result.extend(self._bindings_static[guid])
         if guid in self._bindings_dynamic:
-            result.update(self._bindings_dynamic[guid])
+            result.extend(self._bindings_dynamic[guid])
         return result
         
     def query_debinding(self, guid):
@@ -1178,7 +1188,9 @@ class LocalhostServer(MemoryPersister):
         NAK/failure is represented by raise NakError
         '''
         guid = Guid.from_bytes(packed)
-        return super().list_bindings(guid)
+        guidlist = super().list_bindings(guid)
+        parser = generate_guidlist_parser()
+        return parser.pack(guidlist)
     
     def query_debinding(self, packed):
         ''' Request a the address of any debindings of guid, if they
@@ -1486,6 +1498,10 @@ class LocalhostClient(MemoryPersister):
                 req_type = 'get',
                 req_body = bytes(guid)
             )
+            
+            # If we just grabbed a static address, grabbing it will error if 
+            # we don't also grab the binding for it.
+            
             # print('Re-publishing to local cache.')
             super().publish(result)
         return result
@@ -1551,11 +1567,14 @@ class LocalhostClient(MemoryPersister):
         ACK/success is represented by returning a list of guids.
         NAK/failure is represented by raise NakError
         '''
-        # Ignore super() entirely? Currently we are.
-        return self._requestor(
+        # Ignore super() / local entirely? Currently we are.
+        packed_guidlist = self._requestor(
             req_type = 'list_bindings',
             req_body = bytes(guid)
         )
+        parser = generate_guidlist_parser()
+        guidlist = parser.unpack(packed_guidlist)
+        return guidlist
     
     def query_debinding(self, guid):
         ''' Request a the address of any debindings of guid, if they

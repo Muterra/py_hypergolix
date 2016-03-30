@@ -36,6 +36,7 @@ import threading
 # Control * imports.
 __all__ = [
     'NakError',
+    'UnboundContainerError',
     'HandshakeError',
     'InaccessibleError',
     'UnknownPartyError',
@@ -46,7 +47,16 @@ __all__ = [
 
 
 class NakError(RuntimeError):
-    ''' Raised for most failed operations.
+    ''' This exception (or a subclass thereof) is raised for all failed 
+    operations with persistence providers.
+    '''
+    pass
+    
+    
+class UnboundContainerError(NakError):
+    ''' This NakError is raised when a persistence provider has no 
+    binding for the attempted container, and it was therefore passed
+    immediately to garbage collection.
     '''
     pass
 
