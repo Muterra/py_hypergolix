@@ -35,65 +35,10 @@ import threading
 
 # Control * imports.
 __all__ = [
-    'NakError',
-    'UnboundContainerError',
-    'DoesNotExistError',
-    'HandshakeError',
-    'InaccessibleError',
-    'UnknownPartyError',
-    'PersistenceWarning',
     'StaticObject',
-    'DynamicObject'
+    'DynamicObject',
+    'AppDef'
 ]
-
-
-class NakError(RuntimeError):
-    ''' This exception (or a subclass thereof) is raised for all failed 
-    operations with persistence providers.
-    '''
-    pass
-    
-    
-class UnboundContainerError(NakError):
-    ''' This NakError is raised when a persistence provider has no 
-    binding for the attempted container, and it was therefore passed
-    immediately to garbage collection.
-    '''
-    pass
-    
-    
-class DoesNotExistError(NakError):
-    ''' This NakError is raised when a persistence provider has received
-    a request for a guid that does not exist in its object store.
-    '''
-    pass
-
-
-class HandshakeError(RuntimeError):
-    ''' Raised when handshakes fail.
-    '''
-    pass
-
-
-class InaccessibleError(RuntimeError):
-    ''' Raised when an Agent does not have access to an object.
-    '''
-    pass
-    
-    
-class UnknownPartyError(RuntimeError):
-    ''' Raised when an Agent cannot find an identity definition for an
-    author and therefore cannot verify anything.
-    '''
-    pass
-    
-    
-class PersistenceWarning(RuntimeWarning):
-    ''' Raised when a debinding did not result in the removal of its
-    target -- for example, if another binding remains on the target
-    object.
-    '''
-    pass
         
 
 class _ObjectBase:
@@ -388,3 +333,16 @@ def _block_on_result(future):
         raise exc
         
     return future.result()
+
+
+class AppDef:
+    ''' An application definition object.
+        
+    Note that the App IDs contained within AppDefs are specific to the 
+    agent. They will always be the same for the same agent, but they are 
+    extremely unlikely to be the same for different agents. They are 
+    generated as random 32-bit unique identifiers.
+    '''
+    def __init__(self, app_id, endpoint):
+        self.app_id = app_id
+        self.endpoint = endpoint

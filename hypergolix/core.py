@@ -73,16 +73,18 @@ from Crypto.Hash import SHA512
 from Crypto.Protocol.KDF import HKDF
 
 # Intra-package dependencies
-from .utils import NakError
-from .utils import HandshakeError
-from .utils import InaccessibleError
-from .utils import UnknownPartyError
 from .utils import _ObjectBase
 from .utils import StaticObject
 from .utils import DynamicObject
 
+from .exceptions import NakError
+from .exceptions import HandshakeError
+from .exceptions import InaccessibleError
+from .exceptions import UnknownPartyError
+
 from .persisters import _PersisterBase
 from .persisters import MemoryPersister
+
 from .integrations import _IntegrationBase
 from .integrations import EmbeddedIntegration
         

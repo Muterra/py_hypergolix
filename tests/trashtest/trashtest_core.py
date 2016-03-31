@@ -41,12 +41,14 @@ import collections
 # These are normal imports
 from hypergolix.persisters import MemoryPersister
 from hypergolix.integrations import EmbeddedIntegration
-from hypergolix import DynamicObject
-from hypergolix import StaticObject
-from hypergolix import NakError
-from hypergolix import PersistenceWarning
+
 from hypergolix import AgentBase
+from hypergolix import StaticObject
+from hypergolix import DynamicObject
 from hypergolix import EmbeddedMemoryAgent
+
+from hypergolix.exceptions import NakError
+from hypergolix.exceptions import PersistenceWarning
 
 # This is a semi-normal import
 from golix.utils import _dummy_guid

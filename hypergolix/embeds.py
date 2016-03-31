@@ -28,22 +28,34 @@ hypergolix: A python Golix client.
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
-
 '''
+# Embeds contains all of the application-side integrations. These will only
+# be used by applications written in python.
 
-# Add in core module
-from .core import *
+# Control * imports.
+__all__ = [
+    # 'EmbeddedIntegration', 
+    # 'LocalhostIntegration'
+]
 
-from .utils import StaticObject
-from .utils import DynamicObject
+# External dependencies
+import abc
+import msgpack
 
-# from .exceptions import NakError
-# from .exceptions import PersistenceWarning
-# from .exceptions import InaccessibleError
-# from .exceptions import UnknownPartyError
+# Inter-package dependencies
+from .utils import AppDef
 
-# Submodules
-from . import persisters
-from . import integrations
-from . import utils
-from . import exceptions
+
+class _EmbedBase(metaclass=abc.ABCMeta):
+    ''' Base class for an application link. Note that an integration cannot 
+    exist without also being an agent. They are separated to allow 
+    mixing-and-matching agent/persister/integration configurations.
+    '''
+    @abc.abstractmethod
+    def register_application(self, appdef):
+        ''' Registers an application with the integration. If appdef is
+        None, will create an app_id and endpoint for the app.
+        
+        Returns an AppDef object.
+        '''
+        pass

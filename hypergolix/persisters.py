@@ -79,10 +79,11 @@ from golix._getlow import GDXX
 from golix._getlow import GARQ
 
 # Local dependencies
-from .utils import NakError
-from .utils import UnboundContainerError
-from .utils import DoesNotExistError
-from .utils import PersistenceWarning
+from .exceptions import NakError
+from .exceptions import UnboundContainerError
+from .exceptions import DoesNotExistError
+from .exceptions import PersistenceWarning
+
 from .utils import _DeepDeleteChainMap
 from .utils import _WeldedSetDeepChainMap
 from .utils import _block_on_result

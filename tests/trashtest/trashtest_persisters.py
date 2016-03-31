@@ -39,8 +39,8 @@ import warnings
 
 # These are normal imports
 from hypergolix.persisters import MemoryPersister
-from hypergolix import NakError
-from hypergolix import PersistenceWarning
+from hypergolix.exceptions import NakError
+from hypergolix.exceptions import PersistenceWarning
 
 # These are abnormal imports
 from golix import Guid
