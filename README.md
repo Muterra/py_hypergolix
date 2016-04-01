@@ -12,6 +12,7 @@ It does not require application-level cryptographic code, and is available via I
     + Side note: using the previous frame guid as a salt effectively creates a key expiration mechanism -- if you magically find / break the original exchange, you probably still cannot reconstruct the history chain required to ratchet the whole thing.
 + Document that (currently, until protocol change) using a link as a dynamic frame breaks the ratchet and is, generally speaking, a very dangerous decision.
 + Document golix-over-websockets defacto protocol
++ Add callbacks for updates to ```DynamicObject``` (for application use)
 
 ## Done
 

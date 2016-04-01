@@ -338,11 +338,20 @@ def _block_on_result(future):
 class AppDef:
     ''' An application definition object.
         
-    Note that the App IDs contained within AppDefs are specific to the 
+    Note that the tokens contained within AppDefs are specific to the 
     agent. They will always be the same for the same agent, but they are 
     extremely unlikely to be the same for different agents. They are 
     generated as random 32-bit unique identifiers.
+    
+    Tokens prevent local apps from spoofing other local apps, a la many
+    phishing strategies. They are never transmitted.
+    
+    HOWEVER, app_ids are specific to an application and never change.
+    There is no inherent guarantee that a conversation parter is, in 
+    fact, using the correct application for any given app_id, except 
+    that which is verified by the app itself.
     '''
-    def __init__(self, app_id, endpoint):
+    def __init__(self, app_id, app_token, endpoint):
         self.app_id = app_id
+        self.app_token = app_token
         self.endpoint = endpoint

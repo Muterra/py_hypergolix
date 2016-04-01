@@ -44,6 +44,7 @@ import warnings
 
 # Intrapackage dependencies
 from .exceptions import HandshakeError
+from .exceptions import HandshakeWarning
 from .utils import AppDef
 
 
@@ -67,11 +68,37 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
     '''
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._app_ids = {
+        
+        # Lookup for app_tokens -> endpoints
+        self._app_tokens = {
             b'\x00\x00\x00\x00': False,
         }
+        
+        # Lookup for app_ids -> AppDef.
+        self._app_ids = {}
+        
         self._orphan_handshakes_incoming = []
         self._orphan_handshakes_outgoing = []
+        
+    def initiate_handshake(self, appdef, recipient):
+        ''' Creates a handshake for the passed appdef with recipient.
+        
+        appdef isinstance AppDef
+        recipient isinstance Guid
+        '''
+        try:
+            pass 
+        except (
+            msgpack.exceptions.BufferFull,
+            msgpack.exceptions.ExtraData,
+            msgpack.exceptions.OutOfData,
+            msgpack.exceptions.PackException,
+            msgpack.exceptions.PackValueError
+        ):
+            raise
+        
+    def app_id_lookup(self, app_id):
+        pass
         
     def dispatch_handshake(self, handshake):
         ''' Receives the target *object* for a handshake (note: NOT the 
@@ -83,9 +110,28 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         '''
         try:
             raise RuntimeError()
-        except:
-            self._orphan_handshakes_incoming.append(handshake)
             
+        except KeyError:
+            warnings.warn(HandshakeWarning(
+                'Agent lacks application to handle app id.'
+            ))
+            
+        except (
+            msgpack.exceptions.BufferFull,
+            msgpack.exceptions.ExtraData,
+            msgpack.exceptions.OutOfData,
+            msgpack.exceptions.UnpackException,
+            msgpack.exceptions.UnpackValueError
+        ) as e:
+            raise HandshakeError(
+                'Handshake does not appear to conform to the hypergolix '
+                'integration handshake procedure.'
+            ) from e
+            
+        try:
+            self._orphan_handshakes_incoming.append(handshake)
+        except:
+            raise
         
     def dispatch_handshake_ack(self, ack):
         ''' Receives a handshake acknowledgement and dispatches it to
@@ -103,26 +149,36 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         '''
         pass
     
-    def register_application(self, appdef=None):
+    def register_application(self, app_id=None, appdef=None):
         ''' Registers an application with the integration. If appdef is
-        None, will create an app_id and endpoint for the app.
+        None, will create an AppDef for the app. Must define app_id XOR
+        appdef.
         
         Returns an AppDef object.
         '''
-        if appdef is None:
-            app_id = self.new_identifier()
+        if appdef is None and app_id is not None:
+            app_token = self.new_token()
             endpoint = self.new_endpoint()
-            appdef = AppDef(app_id, endpoint)
+            appdef = AppDef(app_id, app_token, endpoint)
             
-        self._app_ids[appdef.app_id] = appdef.endpoint
+        elif appdef is not None and app_id is None:
+            pass
+            
+        else:
+            raise ValueError('Must specify appdef XOR app_id.')
+            
+        self._app_tokens[appdef.app_token] = appdef.endpoint
+        self._app_ids[appdef.app_id] = appdef
         
-    def new_identifier(self):
+        return appdef
+        
+    def new_token(self):
         # Use a dummy app_id to force the while condition to be true initially
-        app_id = b'\x00\x00\x00\x00'
+        token = b'\x00\x00\x00\x00'
         # Birthday paradox be damned; we can actually *enforce* uniqueness
-        while app_id in self._app_ids:
-            app_id = os.urandom(4)
-        return app_id
+        while token in self._app_tokens:
+            token = os.urandom(4)
+        return token
         
     @abc.abstractmethod
     def new_endpoint(self):

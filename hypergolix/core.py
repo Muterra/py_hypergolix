@@ -55,6 +55,9 @@ __all__ = [
 # Global dependencies
 import collections
 import weakref
+import threading
+import os
+import msgpack
 
 from golix import FirstParty
 from golix import SecondParty
@@ -93,10 +96,72 @@ from .integrations import EmbeddedIntegration
 # ###############################################
 
 
+class AgentBootstrap(dict):
+    ''' Threadsafe. Handles all of the stuff needed to actually build an
+    agent and keep consistent state across devices / logins.
+    '''
+    def __init__(self, agent, obj):
+        self._mutlock = threading.Lock()
+        self._agent = agent
+        self._obj = obj
+        self._def = None
+        
+    @classmethod
+    def from_existing(cls, agent, obj):
+        self = cls(agent, obj)
+        self._def = obj.state
+        super().update(msgpack.unpackb(obj.state))
+        
+    def __setitem__(self, key, value):
+        with self._mutlock:
+            super().__setitem__(key, value)
+            self._update_def()
+        
+    def __getitem__(self, key):
+        ''' For now, this is actually just unpacking self._def and 
+        returning the value for that. In the future, when we have some
+        kind of callback mechanism in dynamic objects, we'll probably
+        cache and stuff.
+        '''
+        with self._mutlock:
+            tmp = msgpack.unpackb(self._def)
+            return tmp[key]
+        
+    def __delitem__(self, key):
+        with self._mutlock:
+            super().__delitem__(key)
+            self._update_def()
+        
+    def pop(*args, **kwargs):
+        raise TypeError('AgentBootstrap does not support popping.')
+        
+    def popitem(*args, **kwargs):
+        raise TypeError('AgentBootstrap does not support popping.')
+        
+    def update(*args, **kwargs):
+        with self._mutlock:
+            super().update(*args, **kwargs)
+            self._update_def()
+        
+    def _update_def(self):
+        self._def = msgpack.packb(self)
+        self._agent.update_dynamic(self._obj, self._def)
+
+
 class AgentBase:
-    def __init__(self, persister, integration, _golix_firstparty=None, _legroom=3, *args, **kwargs):
+    ''' Base class for all Agents.
+    '''
+    
+    DEFAULT_LEGROOM = 3
+    
+    def __init__(self, persister, integration, _identity=None, _bootstrap=None, *args, **kwargs):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
+        
+        persister isinstance _PersisterBase
+        integration isinstance _IntegrationBase
+        _identity isinstance golix.FirstParty
+        _bootstrap isinstance tuple(golix.Guid, golix.Secret)
         '''
         super().__init__(*args, **kwargs)
         
@@ -107,24 +172,6 @@ class AgentBase:
         if not isinstance(integration, _IntegrationBase):
             raise TypeError('Integration must subclass _IntegrationBase.')
         self._integration = integration
-        
-        if _golix_firstparty is None:
-            self._identity = FirstParty()
-            self._persister.publish(self._identity.second_party.packed)
-        else:
-            # Could do type checking here but currently no big deal?
-            # This would also be a good spot to make sure our identity already
-            # exists at the persister.
-            self._identity = _golix_firstparty
-            
-        # Now subscribe to my identity at the persister.
-        self._persister.subscribe(
-            guid = self._identity.guid, 
-            callback = self._request_listener
-        )
-        
-        # Automatic type checking using max. Can't have smaller than 1.
-        self._legroom = max(1, _legroom)
         
         # This bit is clever. We want to allow for garbage collection of 
         # secrets as soon as they're no longer needed, but we also need a way
@@ -151,6 +198,65 @@ class AgentBase:
         self._pending_requests = {}
         # Lookup for shared objects. {<obj address>: {<recipients>}}
         self._shared_objects = {}
+        
+        # # Automatic type checking using max. Can't have smaller than 1.
+        # self._legroom = max(1, _legroom)
+        
+        # In this case, we need to create our own bootstrap.
+        if _identity is None and _bootstrap is None:
+            self._identity = FirstParty()
+            self._persister.publish(self._identity.second_party.packed)
+            self._bootstrap = AgentBootstrap(
+                agent = self,
+                obj = self._new_bootstrap_container()
+            )
+            # Default for legroom. Currently hard-coded and not overrideable.
+            self._bootstrap['legroom'] = self.DEFAULT_LEGROOM
+            
+        elif _identity is not None and _bootstrap is not None:
+            # Could do type checking here but currently no big deal?
+            # This would also be a good spot to make sure our identity already
+            # exists at the persister.
+            self._identity = _identity
+            # Get bootstrap
+            bootstrap_obj = self.get_object(
+                secret = _bootstrap[1],
+                guid = _bootstrap[0]
+            )
+            bootstrap = AgentBootstrap.from_existing(
+                obj = bootstrap_obj,
+                agent = self
+            )
+            self._bootstrap = bootstrap
+            
+        else:
+            raise ValueError(
+                'Must either declare both _golix_firstpary and _bootstrap, or '
+                'neither of them.'
+            )
+            
+        # Now subscribe to my identity at the persister.
+        self._persister.subscribe(
+            guid = self._identity.guid, 
+            callback = self._request_listener
+        )
+        
+    def _new_bootstrap_container(self):
+        ''' Creates a new container to use for the bootstrap object.
+        '''
+        padding_size = int.from_bytes(os.urandom(1), byteorder='big')
+        padding = os.urandom(padding_size)
+        return self.new_dynamic(padding)
+        
+    @property
+    def _legroom(self):
+        ''' Get the legroom from our bootstrap. If it hasn't been 
+        created yet (aka within __init__), return the class default.
+        '''
+        try:
+            return self._bootstrap['legroom']
+        except (AttributeError, KeyError):
+            return self.DEFAULT_LEGROOM
         
     @property
     def address(self):
@@ -827,6 +933,13 @@ class AgentBase:
         
     def register(self, password):
         ''' Save the agent's identity to a GEOC object.
+        
+        THIS NEEDS TO BE A DYNAMIC BINDING SO IT CAN UPDATE THE KEY TO
+        THE BOOTSTRAP OBJECT. Plus, futureproofing. But, we also cannot,
+        under any circumstances, reuse a Secret. So, instead of simply 
+        using the scrypt output directly, we should put it through a
+        secondary hkdf, using the previous frame guid as salt, to ensure
+        a new key, while maintaining updateability and accesibility.
         '''
         # Condense everything we need to rebuild self._golix_provider
         keys = self._golix_provider._serialize()

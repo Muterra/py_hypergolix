@@ -40,6 +40,7 @@ __all__ = [
     'UnboundContainerError',
     'DoesNotExistError',
     'HandshakeError',
+    'HandshakeWarning',
     'InaccessibleError',
     'UnknownPartyError',
     'PersistenceWarning',
@@ -99,5 +100,12 @@ class PersistenceWarning(HypergolixException, RuntimeWarning):
     ''' Raised when a debinding did not result in the removal of its
     target -- for example, if another binding remains on the target
     object.
+    '''
+    pass
+
+
+class HandshakeWarning(HypergolixException, RuntimeWarning):
+    ''' Raised when handshakes use an unknown app_id, but are otherwise
+    legit.
     '''
     pass
