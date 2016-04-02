@@ -977,11 +977,11 @@ class LocalhostServer(MemoryPersister):
     Note that subscriptions are connection-specific. If a connection 
     dies, so do its subscriptions.
     '''
-    def __init__(self, *args, **kwargs):
+    def __init__(self, port, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._ws_port = port
         self._admin_lock = asyncio.Lock()
         self._shutdown = False
-        self._loop = asyncio.get_event_loop()
         
     @asyncio.coroutine
     def _request_handler(self, websocket, exchange_lock, dispatch_lookup):
@@ -1206,26 +1206,42 @@ class LocalhostServer(MemoryPersister):
         ''' Starts a LocalhostPersister server. Runs until the heat 
         death of the universe (or an interrupt is generated somehow).
         '''
-        server_task = websockets.serve(self._ws_handler, 'localhost', 8766)
-        intrrptng_cow = asyncio.ensure_future(
+        try:
+            self._loop = asyncio.get_event_loop()
+        except RuntimeError:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+        
+        port = int(self._ws_port)
+        server_task = websockets.serve(self._ws_handler, 'localhost', port)
+        self._intrrptng_cow = asyncio.ensure_future(
             self.catch_interrupt(), 
             loop=self._loop
         )
+        
         try:
             self._server_future = self._loop.run_until_complete(server_task)
-            _intrrpt_future = self._loop.run_until_complete(intrrptng_cow)
+            _intrrpt_future = self._loop.run_until_complete(self._intrrptng_cow)
             # I don't think this is actually getting called, but the above is 
             # evidently still fixing the windows scheduler bug thig... Odd
             _block_on_result(intrrpt_future)
             
-        # Catch and handle a keyboard interrupt
+        # Catch and handle errors that fully propagate
         except KeyboardInterrupt as e:
+            # Note that this will still call _halt.
+            return
+            
+        # Also call halt on exit.
+        finally:
+            self._halt()
+            
+    def _halt(self):
+        try:
             self._shutdown = True
-            intrrptng_cow.cancel()
+            self._intrrptng_cow.cancel()
             # Restart the loop to close down the loop
             self._loop.stop()
             self._loop.run_forever()
-            
         finally:
             self._loop.close()
             
@@ -1316,9 +1332,9 @@ class LocalhostClient(MemoryPersister):
         'disconnect':       b'XX',
     }
     
-    def __init__(self, *args, **kwargs):
+    def __init__(self, port, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._ws_loc = 'ws://localhost:8766/'
+        self._ws_loc = 'ws://localhost:' + str(port) + '/'
         
         # Set up an event loop and some admin objects
         self._ws_loop = asyncio.new_event_loop()

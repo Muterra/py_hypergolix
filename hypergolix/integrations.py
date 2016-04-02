@@ -342,6 +342,7 @@ class TestIntegration(_IntegrationBase):
         
         self._orphan_handshakes_incoming = []
         self._orphan_handshakes_outgoing = []
+        self._orphan_handshake_failures = []
         
     def dispatch_handshake(self, handshake):
         ''' Receives the target *object* for a handshake (note: NOT the 
@@ -367,7 +368,7 @@ class TestIntegration(_IntegrationBase):
         
         ack is a golix.AsymNak object.
         '''
-        pass
+        self._orphan_handshake_failures.append(nak)
         
     def new_endpoint(self):
         ''' Creates a new endpoint for the integration. Endpoints must
@@ -377,6 +378,15 @@ class TestIntegration(_IntegrationBase):
         Returns an Endpoint object.
         '''
         return TestEndpoint()
+        
+    def retrieve_recent_handshake(self):
+        return self._orphan_handshakes_incoming.pop()
+        
+    def retrieve_recent_ack(self):
+        return self._orphan_handshakes_outgoing.pop()
+        
+    def retrieve_recent_nak(self):
+        return self._orphan_handshake_failures.pop()
     
     
 class LocalhostIntegration(_IntegrationBase):
