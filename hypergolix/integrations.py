@@ -32,7 +32,7 @@ hypergolix: A python Golix client.
 
 # Control * imports.
 __all__ = [
-    'EmbeddedIntegration', 
+    'TestIntegration', 
     'LocalhostIntegration'
 ]
 
@@ -45,14 +45,9 @@ import warnings
 # Intrapackage dependencies
 from .exceptions import HandshakeError
 from .exceptions import HandshakeWarning
+
 from .utils import AppDef
-
-
-class _EndpointBase(metaclass=abc.ABCMeta):
-    ''' Base class for an endpoint. Defines everything needed by the 
-    Integration to communicate with an individual application.
-    '''
-    pass
+from .utils import _EndpointBase
 
 
 class _IntegrationBase(metaclass=abc.ABCMeta):
@@ -74,31 +69,62 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
             b'\x00\x00\x00\x00': False,
         }
         
-        # Lookup for app_ids -> AppDef.
-        self._app_ids = {}
+        # Lookup for api_ids -> AppDef.
+        self._api_ids = {}
+        
+        # Lookup for handshake guid -> handshake object
+        self._outstanding_handshakes = {}
+        # Lookup for handshake guid -> api_id
+        self._outstanding_owners = {}
+        
+        # Lookup for guid -> object
+        self._assigned_objects = {}
+        # Lookup for guid -> api_id
+        self._assigned_owners = {}
         
         self._orphan_handshakes_incoming = []
         self._orphan_handshakes_outgoing = []
         
-    def initiate_handshake(self, appdef, recipient):
-        ''' Creates a handshake for the passed appdef with recipient.
+    def initiate_handshake(self, recipient, msg):
+        ''' Creates a handshake for the API_id with recipient.
         
-        appdef isinstance AppDef
+        msg isinstance dict(like) and must contain a valid api_id
         recipient isinstance Guid
         '''
+        # Check to make sure that we have a valid api_id in the msg
         try:
-            pass 
+            api_id = msg['api_id']
+            appdef = self._api_ids[api_id]
+            
+        except KeyError as e:
+            raise ValueError(
+                'Handshake msg must contain a valid api_id that the current '
+                'agent integration is capable of understanding.'
+            ) from e
+            
+        try:
+            packed_msg = msgpack.packb(msg)
+            
         except (
             msgpack.exceptions.BufferFull,
             msgpack.exceptions.ExtraData,
             msgpack.exceptions.OutOfData,
             msgpack.exceptions.PackException,
             msgpack.exceptions.PackValueError
-        ):
-            raise
+        ) as e:
+            raise ValueError(
+                'Couldn\'t pack handshake. Handshake msg must be dict-like.'
+            ) from e
         
-    def app_id_lookup(self, app_id):
-        pass
+        handshake = self.new_dynamic(msg)
+        self.hand_object(
+            obj = handshake, 
+            recipient_guid = recipient
+        )
+        
+        # This bit is still pretty tentative
+        self._outstanding_handshakes[handshake.address] = handshake
+        self._outstanding_owners[handshake.address] = api_id
         
     def dispatch_handshake(self, handshake):
         ''' Receives the target *object* for a handshake (note: NOT the 
@@ -108,14 +134,13 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         handshake is a StaticObject or DynamicObject.
         Raises HandshakeError if unsuccessful.
         '''
+        # First try unpacking the message.
         try:
-            raise RuntimeError()
+            unpacked_msg = msgpack.unpackb(handshake.state)
+            api_id = unpacked_msg['api_id']
+            appdef = self._api_ids[api_id]
             
-        except KeyError:
-            warnings.warn(HandshakeWarning(
-                'Agent lacks application to handle app id.'
-            ))
-            
+        # MsgPack errors mean that we don't have a properly formatted handshake
         except (
             msgpack.exceptions.BufferFull,
             msgpack.exceptions.ExtraData,
@@ -128,52 +153,88 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
                 'integration handshake procedure.'
             ) from e
             
-        try:
+        # KeyError means we don't have an app that speaks that API
+        except KeyError:
+            warnings.warn(HandshakeWarning(
+                'Agent lacks application to handle app id.'
+            ))
             self._orphan_handshakes_incoming.append(handshake)
-        except:
-            raise
+            
+        # Okay, we've successfully acquired an appdef. Pass the message along
+        # to the application.
+        else:
+            try:
+                appdef.endpoint.handle_incoming(raw_msg)
+                
+            except Exception as e:
+                raise HandshakeError(
+                    'Agent application assigned to app id was unable to '
+                    'process the handshake.'
+                )
         
-    def dispatch_handshake_ack(self, ack):
+            # Lookup for guid -> object
+            self._assigned_objects[handshake.address] = handshake
+            self._assigned_owners[handshake.address] = api_id
+        
+    def dispatch_handshake_ack(self, ack, target):
         ''' Receives a handshake acknowledgement and dispatches it to
         the appropriate application.
         
         ack is a golix.AsymAck object.
         '''
-        self._orphan_handshakes_outgoing.append(ack)
+        handshake = self._outstanding_handshakes[target]
+        owner = self._outstanding_owners[target]
+        
+        del self._outstanding_handshakes[target]
+        del self._outstanding_owners[target]
+        
+        self._assigned_objects[target] = handshake
+        self._assigned_owners[target] = owner
+        
+        endpoint = self._api_ids[owner].endpoint
+        endpoint.handle_outgoing_success(handshake)
     
-    def dispatch_handshake_nak(self, nak):
+    def dispatch_handshake_nak(self, nak, target):
         ''' Receives a handshake nonacknowledgement and dispatches it to
         the appropriate application.
         
         ack is a golix.AsymNak object.
         '''
-        pass
+        handshake = self._outstanding_handshakes[target]
+        owner = self._outstanding_owners[target]
+        
+        del self._outstanding_handshakes[target]
+        del self._outstanding_owners[target]
+        
+        endpoint = self._api_ids[owner].endpoint
+        endpoint.handle_outgoing_failure(handshake)
     
-    def register_application(self, app_id=None, appdef=None):
+    def register_application(self, api_id=None, appdef=None):
         ''' Registers an application with the integration. If appdef is
-        None, will create an AppDef for the app. Must define app_id XOR
+        None, will create an AppDef for the app. Must define api_id XOR
         appdef.
         
         Returns an AppDef object.
         '''
-        if appdef is None and app_id is not None:
+        if appdef is None and api_id is not None:
             app_token = self.new_token()
             endpoint = self.new_endpoint()
-            appdef = AppDef(app_id, app_token, endpoint)
+            appdef = AppDef(api_id, app_token, endpoint)
             
-        elif appdef is not None and app_id is None:
+        elif appdef is not None and api_id is None:
+            # Do nothing. We already have an appdef.
             pass
             
         else:
-            raise ValueError('Must specify appdef XOR app_id.')
+            raise ValueError('Must specify appdef XOR api_id.')
             
         self._app_tokens[appdef.app_token] = appdef.endpoint
-        self._app_ids[appdef.app_id] = appdef
+        self._api_ids[appdef.api_id] = appdef
         
         return appdef
         
     def new_token(self):
-        # Use a dummy app_id to force the while condition to be true initially
+        # Use a dummy api_id to force the while condition to be true initially
         token = b'\x00\x00\x00\x00'
         # Birthday paradox be damned; we can actually *enforce* uniqueness
         while token in self._app_tokens:
@@ -252,19 +313,70 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         pass
         
         
-class EmbeddedEndpoint(_EndpointBase):
+class TestEndpoint(_EndpointBase):
     ''' An embedded application endpoint.
     '''
-    pass
+    def handle_incoming(self, obj):
+        ''' Handles an object.
+        '''
+        pass
+        
+    def handle_outgoing_failure(self, obj):
+        ''' Handles an object that failed to be accepted by the intended
+        recipient.
+        '''
+        pass
+        
+    def handle_outgoing_success(self, obj):
+        ''' Handles an object that failed to be accepted by the intended
+        recipient.
+        '''
+        pass
     
     
-class EmbeddedIntegration(_IntegrationBase):
+class TestIntegration(_IntegrationBase):
+    ''' An integration that ignores all dispatching for test purposes.
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self._orphan_handshakes_incoming = []
+        self._orphan_handshakes_outgoing = []
+        
+    def dispatch_handshake(self, handshake):
+        ''' Receives the target *object* for a handshake (note: NOT the 
+        handshake itself) and dispatches it to the appropriate 
+        application.
+        
+        handshake is a StaticObject or DynamicObject.
+        Raises HandshakeError if unsuccessful.
+        '''
+        self._orphan_handshakes_incoming.append(handshake)
+        
+    def dispatch_handshake_ack(self, ack, target):
+        ''' Receives a handshake acknowledgement and dispatches it to
+        the appropriate application.
+        
+        ack is a golix.AsymAck object.
+        '''
+        self._orphan_handshakes_outgoing.append(ack)
+    
+    def dispatch_handshake_nak(self, nak, target):
+        ''' Receives a handshake nonacknowledgement and dispatches it to
+        the appropriate application.
+        
+        ack is a golix.AsymNak object.
+        '''
+        pass
+        
     def new_endpoint(self):
         ''' Creates a new endpoint for the integration. Endpoints must
         be unique. Uniqueness must be enforced by subclasses of the
         _IntegrationBase class.
+        
+        Returns an Endpoint object.
         '''
-        return EmbeddedEndpoint()
+        return TestEndpoint()
     
     
 class LocalhostIntegration(_IntegrationBase):

@@ -34,7 +34,7 @@ hypergolix: A python Golix client.
 
 # Control * imports.
 __all__ = [
-    # 'EmbeddedIntegration', 
+    # 'TestIntegration', 
     # 'LocalhostIntegration'
 ]
 
@@ -44,6 +44,13 @@ import msgpack
 
 # Inter-package dependencies
 from .utils import AppDef
+
+
+class AppObj:
+    ''' A class for objects to be used by apps. Can be updated and have
+    a state.
+    '''
+    pass
 
 
 class _EmbedBase(metaclass=abc.ABCMeta):

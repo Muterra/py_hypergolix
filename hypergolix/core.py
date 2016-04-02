@@ -89,7 +89,7 @@ from .persisters import _PersisterBase
 from .persisters import MemoryPersister
 
 from .integrations import _IntegrationBase
-from .integrations import EmbeddedIntegration
+from .integrations import TestIntegration
         
 # ###############################################
 # Utilities, etc
@@ -348,20 +348,14 @@ class AgentBase:
         '''
         target = self._pending_requests[request.target]
         del self._pending_requests[request.target]
-        
-        # # Since we're now using ratchets, this is no longer used.
-        # if target in self._shared_objects:
-        #     self._shared_objects[target].add(request.author)
-        # else:
-        #     self._shared_objects[target] = { request.author }
-            
-        self.integration.dispatch_handshake_ack(request)
+        self.integration.dispatch_handshake_ack(request, target)
             
     def _handle_req_nak(self, request, source_guid):
         ''' Handles a handshake nak after reception.
         '''
+        target = self._pending_requests[request.target]
         del self._pending_requests[request.target]
-        self.integration.dispatch_handshake_nak(request)
+        self.integration.dispatch_handshake_nak(request, target)
         
     @property
     def persister(self):
@@ -973,7 +967,7 @@ class AgentBase:
         pass
         
         
-class EmbeddedMemoryAgent(AgentBase, MemoryPersister, EmbeddedIntegration):
+class EmbeddedMemoryAgent(AgentBase, MemoryPersister, TestIntegration):
     def __init__(self):
         super().__init__(persister=self, integration=self)
         

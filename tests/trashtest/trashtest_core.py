@@ -40,7 +40,7 @@ import collections
 
 # These are normal imports
 from hypergolix.persisters import MemoryPersister
-from hypergolix.integrations import EmbeddedIntegration
+from hypergolix.integrations import TestIntegration
 
 from hypergolix import AgentBase
 from hypergolix import StaticObject
@@ -121,7 +121,7 @@ class ObjectTrashtest(unittest.TestCase):
         #     IPython.embed()
         
 
-class TestAgent(AgentBase, EmbeddedIntegration):
+class TestAgent(AgentBase, TestIntegration):
     def __init__(self, *args, **kwargs):
         super().__init__(integration=self, *args, **kwargs)
         
