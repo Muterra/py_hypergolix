@@ -49,6 +49,8 @@ from .exceptions import HandshakeWarning
 from .utils import AppDef
 from .utils import _EndpointBase
 
+from .embeds import _EmbedBase
+
 
 class _IntegrationBase(metaclass=abc.ABCMeta):
     ''' Base class for a integration. Note that an integration cannot 
@@ -309,6 +311,20 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def get_object(self, secret, guid):
         ''' Inherited from Agent.
+        '''
+        pass
+        
+        
+class _EmbeddedIntegration(_IntegrationBase, _EmbedBase):
+    ''' EmbeddedIntegration wraps _EmbedBase from embeds. It also 
+    is its own endpoint (or has its own endpoint).
+    '''
+    def new_endpoint(self):
+        ''' Creates a new endpoint for the integration. Endpoints must
+        be unique. Uniqueness must be enforced by subclasses of the
+        _IntegrationBase class.
+        
+        Returns an Endpoint object.
         '''
         pass
         
