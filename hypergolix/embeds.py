@@ -83,7 +83,7 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         pass
         
     @abc.abstractmethod
-    def load_object(self, guid):
+    def get_object(self, guid):
         ''' Loads an object into local memory from the hypergolix 
         service.
         '''

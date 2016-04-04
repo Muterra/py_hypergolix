@@ -164,12 +164,15 @@ class DynamicObject(_ObjectBase):
     __slots__ = [
         '_author',
         '_address',
-        '_buffer'
+        '_buffer',
+        '_callbacks'
     ]
     
-    _REPROS = ['author', 'address', '_buffer']
+    _REPROS = ['author', 'address', 'callbacks', '_buffer']
     
-    def __init__(self, author, address, _buffer):
+    def __init__(self, author, address, _buffer, callbacks=None):
+        ''' Callbacks isinstance iter(callbacks)
+        '''
         super().__init__(author, address)
         
         if not isinstance(_buffer, collections.deque):
@@ -180,7 +183,13 @@ class DynamicObject(_ObjectBase):
                 'declare a max length.'
             )
             
+        self._callbacks = set()
         self._buffer = _buffer
+        
+        if callbacks is None:
+            callbacks = tuple()
+        for callback in callbacks:
+            self.add_callback(callback)
         
     @property
     def state(self):
@@ -194,6 +203,23 @@ class DynamicObject(_ObjectBase):
             frame = frame.state
             
         return frame
+        
+    @property
+    def callbacks(self):
+        return self._callbacks
+        
+    def add_callback(self, callback):
+        ''' Registers a callback to be called when the object receives
+        an update.
+        
+        callback must be hashable and callable. Function definitions and
+        lambdas are natively hashable; callable classes may not be.
+        
+        On update, callbacks are passed the object.
+        '''
+        if not callable(callback):
+            raise TypeError('Callback must be callable.')
+        self._callbacks.add(callback)
         
     @property
     def buffer(self):

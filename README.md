@@ -6,6 +6,7 @@ It does not require application-level cryptographic code, and is available via I
 
 # Todo (no particular order)
 
++ Reconcile AppObj and DynamicObject/StaticObject
 + Add a frame guid history to DynamicObject
 + Create a format for using dynamic objects to perform keyshares
 + Document key ratcheting mechanism

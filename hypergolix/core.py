@@ -614,8 +614,11 @@ class AgentBase:
             )
         )
             
+        # Update the various buffers and do the object's callbacks
         frame_history.appendleft(dynamic.guid)
         obj._buffer.appendleft(state)
+        for callback in obj.callbacks:
+            callback(obj)
         
         # Clear out old key material
         if old_tail not in frame_history:
@@ -730,8 +733,10 @@ class AgentBase:
         #     )
         #     secret = self._get_secret(guid_hist)
         
-        # Update the object and return
+        # Update the object, do its callbacks, and return
         obj._buffer.appendleft(plaintext)
+        for callback in obj.callbacks:
+            callback(obj)
         return obj
         
     def freeze_dynamic(self, obj):
