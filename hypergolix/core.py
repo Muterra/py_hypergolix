@@ -63,6 +63,7 @@ from golix import FirstParty
 from golix import SecondParty
 from golix import Guid
 from golix import Secret
+from golix import SecurityError
 
 from golix._getlow import GEOC
 from golix._getlow import GOBD
@@ -178,11 +179,14 @@ class AgentBase:
         # to get secrets for the targets of dynamic binding frames. So, let's
         # combine a chainmap and a weakvaluedictionary.
         self._secrets_persistent = {}
+        self._secrets_staging = {}
         self._secrets_proxy = weakref.WeakValueDictionary()
         self._secrets = collections.ChainMap(
             self._secrets_persistent, 
+            self._secrets_staging,
             self._secrets_proxy
         )
+        self._secrets_pending = {}
         
         self._contacts = {}
         # Bindings lookup: {<target guid>: <binding guid>}
@@ -219,10 +223,11 @@ class AgentBase:
             # exists at the persister.
             self._identity = _identity
             # Get bootstrap
-            bootstrap_obj = self.get_object(
-                secret = _bootstrap[1],
-                guid = _bootstrap[0]
+            self._set_secret_pending(
+                guid = _bootstrap[0],
+                secret = _bootstrap[1]
             )
+            bootstrap_obj = self.get_object(bootstrap_guid)
             bootstrap = AgentBootstrap.from_existing(
                 obj = bootstrap_obj,
                 agent = self
@@ -315,11 +320,12 @@ class AgentBase:
     def _handle_req_handshake(self, request, source_guid):
         ''' Handles a handshake request after reception.
         '''
-        # Note that get_obj handles adding the secret to the store.
-        obj = self.get_object(
+        # Note that get_obj handles committing the secret (etc).
+        self._set_secret_pending(
             secret = request.secret, 
             guid = request.target
         )
+        obj = self.get_object(request.target)
         
         try:
             self.integration.dispatch_handshake(obj)
@@ -392,6 +398,63 @@ class AgentBase:
         '''
         if guid not in self._secrets_proxy:
             self._secrets_proxy[guid] = secret
+            
+    def _set_secret_pending(self, guid, secret):
+        ''' Sets a pending secret of unknown target type.
+        '''
+        if guid not in self._secrets_pending:
+            self._secrets_pending[guid] = secret
+            
+    def _stage_secret(self, unpacked):
+        ''' Moves a secret from _secrets_pending into its appropriate
+        location.
+        
+        NOTE: we haven't verified a dynamic binding yet, so we might 
+        accidentally store a key that doesn't verify. We should check 
+        and remove them if we're forced to clean up.
+        '''
+        guid = unpacked.guid
+        
+        # Short-circuit if we've already dispatched the secret.
+        if guid in self._secrets:
+            return
+        
+        if isinstance(unpacked, GEOC):
+            secret = self._secrets_pending.pop(guid)
+            
+        elif isinstance(unpacked, GOBD):
+            try:
+                secret = self._secrets_pending.pop(guid)
+            except KeyError:
+                secret = self._secrets_pending.pop(unpacked.guid_dynamic)
+                
+            # No need to stage this, since it isn't persistent if we don't
+            # commit. Note that _set_secret handles the case of existing 
+            # secrets, so we should be immune to malicious attempts to override 
+            # existing secrets.
+            # Temporarily point the secret at the target, in case the target
+            # is immediately GC'd on update. But, persistently stage it to the
+            # frame guid (below).
+            self._set_secret_temporary(unpacked.target, secret)
+            
+        if guid not in self._secrets_staging:
+            self._secrets_staging[guid] = secret
+            
+    def _commit_secret(self, guid):
+        ''' The secret was successfully used to load the object. Commit
+        it to persistent store.
+        '''
+        if guid in self._secrets_staging:
+            secret = self._secrets_staging.pop(guid)
+            self._set_secret(guid, secret)
+            
+    def _abandon_secret(self, guid):
+        ''' De-stage and abandon a secret, probably due to security 
+        issues. Isn't absolutely necessary, as _set_secret won't defer
+        to _secrets_staging.
+        '''
+        if guid in self._secrets_staging:
+            del self._secrets_staging[guid]
         
     def _del_secret(self, guid):
         ''' Removes the secret for the passed guid, if it exists. If 
@@ -792,11 +855,17 @@ class AgentBase:
             self.persister.get(target)
         )
         if isinstance(unpacked, GEOC):
-            plaintext = self._identity.receive_container(
-                author = self._retrieve_contact(unpacked.author),
-                secret = self._get_secret(target),
-                container = unpacked
-            )
+            try:
+                plaintext = self._identity.receive_container(
+                    author = self._retrieve_contact(unpacked.author),
+                    secret = self._get_secret(target),
+                    container = unpacked
+                )
+            except SecurityError:
+                self._abandon_secret(target)
+                raise
+            else:
+                self._commit_secret(target)
             
         elif isinstance(unpacked, GOBD):
             # Call recursively.
@@ -814,7 +883,7 @@ class AgentBase:
             
         return plaintext
         
-    def get_object(self, secret, guid):
+    def get_object(self, guid):
         ''' Gets a new local copy of the object, assuming the Agent has 
         access to it, as identified by guid. Dynamic objects will 
         automatically update themselves.
@@ -827,19 +896,21 @@ class AgentBase:
             
         packed = self.persister.get(guid)
         unpacked = self._identity.unpack_any(packed=packed)
+        self._stage_secret(unpacked)
         
         if isinstance(unpacked, GEOC):
             author = self._retrieve_contact(unpacked.author)
-            plaintext = self._identity.receive_container(
-                author = author,
-                secret = secret,
-                container = unpacked
-            )
-            
-            # Looks legit; add the secret to our store persistently. Note that 
-            # _set_secret handles the case of existing secrets, so we should be 
-            # immune to malicious attempts to override existing secrets.
-            self._set_secret(guid, secret)
+            try:
+                plaintext = self._identity.receive_container(
+                    author = author,
+                    secret = self._get_secret(guid),
+                    container = unpacked
+                )
+            except SecurityError:
+                self._abandon_secret(guid)
+                raise
+            else:
+                self._commit_secret(guid)
             
             obj = StaticObject(
                 author = unpacked.author,
@@ -853,13 +924,6 @@ class AgentBase:
                 binder = author,
                 binding = unpacked
             )
-            
-            # Looks legit; add the secret to our store persistently under the
-            # frame guid, and as a proxy for the container guid. Note that 
-            # _set_secret handles the case of existing secrets, so we should be 
-            # immune to malicious attempts to override existing secrets.
-            self._set_secret(unpacked.guid, secret)
-            self._set_secret_temporary(target, secret)
             
             # Recursively grab the plaintext once we add the secret
             plaintext = self._resolve_dynamic_plaintext(target)

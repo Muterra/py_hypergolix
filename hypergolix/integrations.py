@@ -309,7 +309,7 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         pass
         
     @abc.abstractmethod
-    def get_object(self, secret, guid):
+    def get_object(self, guid):
         ''' Inherited from Agent.
         '''
         pass
