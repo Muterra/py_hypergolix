@@ -80,10 +80,10 @@ class EmbeddedMemoryAgentTrashTest(unittest.TestCase):
         pt3 = b'Listening...'
         pt4 = b'All ears!'
 
-        obj1 = self.agent1.new_static(pt0)
-        obj2 = self.agent1.new_dynamic(pt1)
+        obj1 = self.agent1.new_object(pt0, dynamic=False)
+        obj2 = self.agent1.new_object(pt1, dynamic=True)
         
-        self.agent1.hand_object(obj1, self.agent2.address)
+        self.agent1.hand_object(obj1, self.agent2.whoami)
         # As it turns out, the length of this delay is important.
         time.sleep(1)
         obj1_shared = self.agent2.retrieve_recent_handshake()
@@ -92,7 +92,7 @@ class EmbeddedMemoryAgentTrashTest(unittest.TestCase):
             obj1
         )
         
-        self.agent1.hand_object(obj2, self.agent2.address)
+        self.agent1.hand_object(obj2, self.agent2.whoami)
         # As it turns out, the length of this delay is important.
         time.sleep(1)
         obj2_shared = self.agent2.retrieve_recent_handshake()
@@ -101,7 +101,7 @@ class EmbeddedMemoryAgentTrashTest(unittest.TestCase):
             obj2
         )
         
-        self.agent1.update_dynamic(obj2, pt2)
+        self.agent1.update_object(obj2, pt2)
         # As it turns out, the length of this delay is important.
         time.sleep(1)
         self.assertEqual(

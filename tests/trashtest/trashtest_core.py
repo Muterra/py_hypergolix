@@ -145,7 +145,7 @@ class AgentTrashTest(unittest.TestCase):
         pt4 = b'All ears!'
         
         # Create, test, and delete a static object
-        obj1 = self.agent1.new_static(pt1)
+        obj1 = self.agent1.new_object(pt1, dynamic=False)
         self.assertEqual(obj1.state, pt1)
         
         self.agent1.delete_object(obj1)
@@ -153,10 +153,10 @@ class AgentTrashTest(unittest.TestCase):
             self.persister.get(obj1.address)
         
         # Create, test, update, test, and delete a dynamic object
-        obj2 = self.agent1.new_dynamic(pt1)
+        obj2 = self.agent1.new_object(pt1, dynamic=True)
         self.assertEqual(obj2.state, pt1)
         
-        self.agent1.update_dynamic(obj2, data=pt2)
+        self.agent1.update_object(obj2, state=pt2)
         self.assertEqual(obj2.state, pt2)
         
         self.agent1.delete_object(obj2)
@@ -164,9 +164,9 @@ class AgentTrashTest(unittest.TestCase):
             self.persister.get(obj2.address)
         
         # Test dynamic linking
-        obj3 = self.agent1.new_static(pt3)
-        obj4 = self.agent1.new_dynamic(link=obj3)
-        obj5 = self.agent1.new_dynamic(link=obj4)
+        obj3 = self.agent1.new_object(pt3, dynamic=False)
+        obj4 = self.agent1.new_object(state=obj3, dynamic=True)
+        obj5 = self.agent1.new_object(state=obj4, dynamic=True)
         
         self.assertEqual(obj3.state, pt3)
         self.assertEqual(obj4.state, pt3)
@@ -176,20 +176,20 @@ class AgentTrashTest(unittest.TestCase):
         # Note: at some point that was producing incorrect bindings and didn't
         # error out at the persister. Is that still a problem, or has it been 
         # resolved?
-        self.agent1.update_dynamic(obj4, pt4)
+        self.agent1.update_object(obj4, pt4)
         
         self.assertEqual(obj6.state, pt3)
         self.assertEqual(obj4.state, pt4)
         self.assertEqual(obj5.state, pt4)
         
     def test_together(self):
-        contact1 = self.agent1.address
-        contact2 = self.agent2.address
+        contact1 = self.agent1.whoami
+        contact2 = self.agent2.whoami
         
         pt1 = b'Hello, world?'
         pt2 = b'Hiyaback!'
         
-        obj1 = self.agent1.new_dynamic(pt1)
+        obj1 = self.agent1.new_object(pt1, dynamic=True)
         obj1s1 = self.agent1.freeze_dynamic(obj1)
         
         self.agent1.hand_object(obj1s1, contact2)
@@ -216,7 +216,7 @@ class AgentTrashTest(unittest.TestCase):
         
         # Awesome, now let's check updating them -- including subscriptions, 
         # and that the recipient correctly ratchets the key and updates state.
-        self.agent1.update_dynamic(obj1, pt2)
+        self.agent1.update_object(obj1, pt2)
         self.assertEqual(
             obj1.state,
             pt2
@@ -249,17 +249,17 @@ class EmbeddedMemoryAgentTrashTest(unittest.TestCase):
         pt4 = b'All ears!'
         
         # Create, test, and delete a static object
-        obj1 = self.agent1.new_static(pt1)
+        obj1 = self.agent1.new_object(pt1, dynamic=False)
         self.agent1.delete_object(obj1)
-        obj2 = self.agent1.new_dynamic(pt1)
-        self.agent1.update_dynamic(obj2, data=pt2)
+        obj2 = self.agent1.new_object(pt1, dynamic=True)
+        self.agent1.update_object(obj2, state=pt2)
         self.agent1.delete_object(obj2)
         # Test dynamic linking
-        obj3 = self.agent1.new_static(pt3)
-        obj4 = self.agent1.new_dynamic(link=obj3)
-        obj5 = self.agent1.new_dynamic(link=obj4)
+        obj3 = self.agent1.new_object(pt3, dynamic=False)
+        obj4 = self.agent1.new_object(state=obj3, dynamic=True)
+        obj5 = self.agent1.new_object(state=obj4, dynamic=True)
         obj6 = self.agent1.freeze_dynamic(obj4)
-        self.agent1.update_dynamic(obj4, pt4)
+        self.agent1.update_object(obj4, pt4)
             
         
         # --------------------------------------------------------------------

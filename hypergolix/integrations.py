@@ -118,7 +118,7 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
                 'Couldn\'t pack handshake. Handshake msg must be dict-like.'
             ) from e
         
-        handshake = self.new_dynamic(msg)
+        handshake = self.new_object(msg, dynamic=True)
         self.hand_object(
             obj = handshake, 
             recipient_guid = recipient
@@ -255,25 +255,37 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
     
     @property
     @abc.abstractmethod
-    def address(self):
+    def whoami(self):
         ''' Inherited from Agent.
         '''
         pass
         
     @abc.abstractmethod
-    def new_static(self, data=None, link=None):
+    def new_object(self, state):
         ''' Inherited from Agent.
         '''
         pass
         
     @abc.abstractmethod
-    def new_dynamic(self, data):
+    def new_static(self, state):
         ''' Inherited from Agent.
         '''
         pass
         
     @abc.abstractmethod
-    def update_dynamic(self, obj, data=None, link=None):
+    def new_dynamic(self, state):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def update_dynamic(self, obj, state):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def update_object(self, obj, state):
         ''' Inherited from Agent.
         '''
         pass

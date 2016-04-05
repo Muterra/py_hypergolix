@@ -146,7 +146,7 @@ class AgentBootstrap(dict):
         
     def _update_def(self):
         self._def = msgpack.packb(self)
-        self._agent.update_dynamic(self._obj, self._def)
+        self._agent.update_object(self._obj, self._def)
 
 
 class AgentBase:
@@ -251,7 +251,7 @@ class AgentBase:
         '''
         padding_size = int.from_bytes(os.urandom(1), byteorder='big')
         padding = os.urandom(padding_size)
-        return self.new_dynamic(padding)
+        return self.new_object(padding, dynamic=True)
         
     @property
     def _legroom(self):
@@ -264,7 +264,7 @@ class AgentBase:
             return self.DEFAULT_LEGROOM
         
     @property
-    def address(self):
+    def whoami(self):
         ''' Return the Agent's Guid.
         '''
         return self._identity.guid
@@ -486,11 +486,25 @@ class AgentBase:
         )
         self.persister.publish(debind.packed)
         
-    def new_static(self, data):
+    def new_object(self, state, dynamic=True):
+        ''' Creates a new object.
+        
+        Returns an AppObj instance. (except not yet)
+        '''
+        # Dispatch dynamic objects and recast into AppObj
+        if dynamic:
+            obj = self.new_dynamic(state)
+        # Otherwise, proceed with static
+        else:
+            obj = self.new_static(state)
+            
+        return obj
+        
+    def new_static(self, state):
         ''' Makes a new static object, handling binding, persistence, 
         and so on. Returns a StaticObject.
         '''
-        container, secret = self._make_static(data)
+        container, secret = self._make_static(state)
         self._set_secret(container.guid, secret)
         binding = self._make_bind(container.guid)
         # This would be a good spot to figure out a way to make use of
@@ -502,29 +516,20 @@ class AgentBase:
         return StaticObject(
             author = self._identity.guid,
             address = container.guid,
-            state = data
+            state = state
         )
         
-    def _do_dynamic(self, data, link, guid_dynamic=None, history=None, secret=None):
+    def _do_dynamic(self, state, guid_dynamic=None, history=None, secret=None):
         ''' Actually generate a dynamic binding.
         '''
-        if data is not None and link is None:
-            container, secret = self._make_static(data, secret)
-            target = container.guid
-            state = data
-            
-        elif link is not None and data is None:
-            # Type check the link.
-            if not isinstance(link, _ObjectBase):
-                raise TypeError(
-                    'Link must be a StaticObject, DynamicObject, or similar.'
-                )
-            target = link.address
-            state = link
-            secret = self._get_secret(link.address)
+        if isinstance(state, _ObjectBase):
+            target = state.address
+            secret = self._get_secret(state.address)
+            container = None
             
         else:
-            raise TypeError('Must pass either data XOR link to make_dynamic.')
+            container, secret = self._make_static(state, secret)
+            target = container.guid
             
         dynamic = self._identity.make_bind_dynamic(
             target = target,
@@ -541,14 +546,14 @@ class AgentBase:
         self._set_secret_temporary(target, secret)
             
         self.persister.publish(dynamic.packed)
-        if data is not None:
+        if container is not None:
             self.persister.publish(container.packed)
             
         self._dynamic_targets[dynamic.guid_dynamic] = target
         
-        return dynamic, state
+        return dynamic
         
-    def new_dynamic(self, data=None, link=None, _legroom=None):
+    def new_dynamic(self, state, _legroom=None):
         ''' Makes a dynamic object. May link to a static (or dynamic) 
         object's address. Must pass either data or link, but not both.
         
@@ -559,7 +564,7 @@ class AgentBase:
         if _legroom is None:
             _legroom = self._legroom
         
-        dynamic, state = self._do_dynamic(data, link)
+        dynamic = self._do_dynamic(state)
             
         # Historian manages the history definition for the object.
         self._historian[dynamic.guid_dynamic] = collections.deque(
@@ -578,7 +583,7 @@ class AgentBase:
             )
         )
         
-    def update_dynamic(self, obj, data=None, link=None):
+    def update_object(self, obj, state):
         ''' Updates a dynamic object. May link to a static (or dynamic) 
         object's address. Must pass either data or link, but not both.
         
@@ -593,6 +598,13 @@ class AgentBase:
                 'Obj must be a DynamicObject or similar.'
             )
             
+        self.update_dynamic(obj, state)
+        
+    def update_dynamic(self, obj, state):
+        ''' Like update_object, but does not perform type checking, and
+        presumes a correctly formatted state. Not generally recommended
+        for outside use.
+        '''
         if obj.address not in self._historian:
             raise ValueError(
                 'The Agent could not find a record of the object\'s history. '
@@ -603,9 +615,8 @@ class AgentBase:
         
         old_tail = frame_history[len(frame_history) - 1]
         old_frame = frame_history[0]
-        dynamic, state = self._do_dynamic(
-            data = data, 
-            link = link, 
+        dynamic = self._do_dynamic(
+            state = state, 
             guid_dynamic = obj.address,
             history = frame_history,
             secret = self._ratchet_secret(

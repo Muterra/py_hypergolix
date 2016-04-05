@@ -101,7 +101,7 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         pass
         
     @abc.abstractmethod
-    def new_object(self, dynamic=True, data=None, link=None):
+    def new_object(self, state, dynamic=True):
         ''' Creates a new (static or dynamic) object.
         
         RETURNS AN AppObj INSTANCE.
@@ -109,7 +109,13 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         pass
         
     @abc.abstractmethod
-    def new_static(self, data):
+    def update_object(self, obj, state):
+        ''' Updates an existing dynamic object.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def new_static(self, state):
         ''' Creates a new static object.
         
         DOES NOT RETURN AN AppObj INSTANCE!
@@ -118,7 +124,7 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         pass
         
     @abc.abstractmethod
-    def new_dynamic(self, data=None, link=None):
+    def new_dynamic(self, state):
         ''' Creates a new dynamic object.
         
         DOES NOT RETURN AN AppObj INSTANCE!
@@ -127,7 +133,7 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         pass
         
     @abc.abstractmethod
-    def update_dynamic(self, obj, data=None, link=None):
+    def update_dynamic(self, obj, state):
         ''' Updates an existing dynamic object.
         '''
         pass
@@ -199,6 +205,8 @@ class AppObj:
         self._set_dynamic(dynamic)
         
         # _preexisting was set, so we're loading an existing object.
+        # "Trust" anything using _preexisting to have passed a correct value
+        # for state.
         if _preexisting is not None and state is None:
             state = _preexisting
             
@@ -224,15 +232,15 @@ class AppObj:
         if dynamic:
             if isinstance(state, AppObj):
                 guid = self._embed.new_dynamic(
-                    link = state
+                    state = state
                 )
             else:
                 guid = self._embed.new_dynamic(
-                    data = state
+                    state = state
                 )
         else:
             guid = self._embed.new_static(
-                data = state
+                state = state
             )
             
         return guid
