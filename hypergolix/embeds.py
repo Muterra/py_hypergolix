@@ -109,12 +109,6 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         pass
         
     @abc.abstractmethod
-    def update_object(self, obj, state):
-        ''' Updates an existing dynamic object.
-        '''
-        pass
-        
-    @abc.abstractmethod
     def new_static(self, state):
         ''' Creates a new static object.
         
@@ -133,13 +127,19 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         pass
         
     @abc.abstractmethod
-    def update_dynamic(self, obj, state):
-        ''' Updates an existing dynamic object.
+    def update_dynamic(self, guid_dynamic, state):
+        ''' Updates an existing dynamic object strictly at the embed.
         '''
         pass
         
     @abc.abstractmethod
-    def sync_dynamic(self, obj):
+    def update_object(self, obj, state):
+        ''' Wrapper for obj.update.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def sync_object(self, obj):
         ''' Checks for an update to a dynamic object, and if one is 
         available, performs an update.
         '''
@@ -163,6 +163,20 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         Agent has bound to it.
         '''
         pass
+        
+    @property
+    @abc.abstractmethod
+    def _legroom(self):
+        ''' The history length to retain.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def subscribe(self, guid, callback):
+        ''' Subscribe to updates from guid. Inherited(ish) from 
+        persister.
+        '''
+        pass
 
 
 class AppObj:
@@ -183,41 +197,46 @@ class AppObj:
         '_state'
     ]
     
-    def __init__(self, embed, state=None, dynamic=True, callbacks=None, _preexisting=None, _legroom=None, *args, **kwargs):
+    # Restore the original behavior of hash
+    __hash__ = type.__hash__
+    
+    def __init__(self, embed, state, dynamic=True, callbacks=None, _preexisting=None, _legroom=None, *args, **kwargs):
         ''' Create a new AppObj with:
         
         state isinstance bytes(like)
         dynamic isinstance bool(like) (optional)
         callbacks isinstance iterable of callables (optional)
         
-        _def isinstance dict
-        dynamic will be ignored if calling _def.
-        
-        NOTES re _def:
-        ---------
-        Must indicate ownership.
+        _preexisting isinstance tuple(like):
+            _preexisting[0] = address
+            _preexisting[1] = author
         '''
         super().__init__(*args, **kwargs)
         
         # This needs to be done first so we have access to object creation
         self._link_embed(embed)
         self._deleted = False
+        self._callbacks = set()
         self._set_dynamic(dynamic)
+        
+        # Legroom is None. Infer it from the embed.
+        if _legroom is None:
+            _legroom = self._embed._legroom
         
         # _preexisting was set, so we're loading an existing object.
         # "Trust" anything using _preexisting to have passed a correct value
-        # for state.
-        if _preexisting is not None and state is None:
-            state = _preexisting
-            
+        # for state and dynamic.
+        if _preexisting is not None:
+            self._address = _preexisting[0]
+            self._author = _preexisting[1]
+            # If we're dynamic, subscribe to any updates.
+            if self.is_dynamic:
+                self._embed.subscribe(self.address, self.sync)
         # _preexisting was not set, so we're creating a new object.
-        elif state is not None and _preexisting is None:
+        else:
             self._address = self._make_golix(state, dynamic)
             self._author = self._embed.whoami
-            
-        # Anything else is invalid
-        else:
-            raise TypeError('AppObj instances must be declared with a state.')
+            # For now, only subscribe to objects that we didn't create.
             
         # Now actually set the state.
         self._init_state(state, _legroom)
@@ -404,8 +423,8 @@ class AppObj:
         '''
         if self.is_dynamic:
             self._callbacks.clear()
-        else:
-            raise TypeError('Static objects cannot have callbacks.')
+        # It's meaningless to call this on a static object, but there's also 
+        # no need to error out
             
     def _set_dynamic(self, dynamic):
         ''' Sets whether or not we're dynamic based on dynamic.
@@ -443,8 +462,8 @@ class AppObj:
         attempts to access will raise ValueError, but does not (and 
         cannot) remove the object from memory.
         '''
+        self._embed.delete_guid(self.address)
         self.clear_callbacks()
-        self._embed.delete_object(self)
         super().__setattr__('_deleted', True)
         super().__setattr__('_is_dynamic', None)
         super().__setattr__('_author', None)
@@ -488,40 +507,79 @@ class AppObj:
     def hold(self):
         ''' Binds to the object, preventing its deletion.
         '''
-        self._embed.hold_object(
+        self._embed.hold_guid(
             obj = self
         )
         
     def freeze(self):
         ''' Creates a static snapshot of the dynamic object. Returns a 
         new static AppObj instance. Does NOT modify the existing object.
-        May only be called on dynamic objects.
+        May only be called on dynamic objects. 
+        
+        Note: should really be reimplemented as a recursive resolution
+        of the current container object, and then a hold on that plus a
+        return of a static AppObj version of that. This is pretty buggy.
+        
+        Note: does not currently traverse nested dynamic bindings, and
+        will probably error out if you attempt to freeze one.
         '''
         if self.is_dynamic:
-            self._embed.freeze_dynamic(
-                obj = self
+            guid = self._embed.freeze_dynamic(
+                guid_dynamic = self.address
             )
         else:
             raise TypeError(
                 'Static objects cannot be frozen. If attempting to save them, '
                 'call hold instead.'
             )
-            
-    def sync(self):
-        ''' Checks the current agent for an updated copy of the object.
-        '''
-        self._embed.sync_dynamic(
-            obj = self
+        
+        # If we traverse, this will need to pick the author out from the 
+        # original binding.
+        return AppObj(
+            embed = self._embed,
+            state = self.state,
+            dynamic = False,
+            _preexisting = (guid, self.author)
         )
+            
+    def sync(self, *args):
+        ''' Checks the current state matches the state at the connected
+        Agent. If this is a dynamic and an update is available, do that.
+        If it's a static and the state mismatches, raise error.
+        '''
+        if self.is_dynamic:
+            self._embed.sync_dynamic(obj=self)
+        else:
+            self._embed.sync_static(obj=self)
         return True
             
-    def update(self, state):
+    def update(self, state, _preexisting=False):
         ''' Updates a mutable object to a new state.
         
         May only be called on a dynamic object that was created by the
         attached Agent.
+        
+        If _preexisting is True, this is an update coming down from a
+        persister, and we will NOT push it upstream.
         '''
-        pass
+        if not self.is_dynamic:
+            raise TypeError('Cannot update a static AppObj.')
+            
+        # _preexisting has not been set, so this is a local request. Check if
+        # we actually can update, and then test validity by pushing an update.
+        if not _preexisting:
+            if not self.is_owned:
+                raise TypeError(
+                    'Cannot update an object that was not created by the '
+                    'attached Agent.'
+                )
+            else:
+                self._embed.update_dynamic(self.address, state)
+        
+        # Regardless, now we need to update local state.
+        self._state.appendleft(state)
+        for callback in self.callbacks:
+            callback(self)
             
     def _link_embed(self, embed):
         ''' Typechecks embed and them creates a weakref to it.
@@ -529,7 +587,11 @@ class AppObj:
         if not isinstance(embed, _EmbedBase):
             raise TypeError('embed must subclass _EmbedBase.')
         
-        self._embed = weakref.proxy(embed)
+        # Copying like this seems dangerous, but I think it should be okay.
+        if isinstance(embed, weakref.ProxyTypes):
+            self._embed = embed
+        else:
+            self._embed = weakref.proxy(embed)
         
     @classmethod
     def from_guid(cls, embed, guid):

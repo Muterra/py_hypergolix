@@ -45,10 +45,11 @@ from hypergolix.integrations import TestIntegration
 from hypergolix import AgentBase
 from hypergolix import StaticObject
 from hypergolix import DynamicObject
-from hypergolix import EmbeddedMemoryAgent
 
 from hypergolix.exceptions import NakError
 from hypergolix.exceptions import PersistenceWarning
+
+from hypergolix.embeds import _EmbedBase
 
 # This is a semi-normal import
 from golix.utils import _dummy_guid
@@ -121,9 +122,21 @@ class ObjectTrashtest(unittest.TestCase):
         #     IPython.embed()
         
 
-class TestAgent(AgentBase, TestIntegration):
+class TestClient(AgentBase, MemoryPersister, TestIntegration, _EmbedBase):
+    def __init__(self):
+        super().__init__(persister=self, integration=self)
+
+
+class TestAgent(AgentBase, TestIntegration, _EmbedBase):
     def __init__(self, *args, **kwargs):
         super().__init__(integration=self, *args, **kwargs)
+        
+    def subscribe(self, guid, callback):
+        ''' We're not testing this right now but we need to suppress 
+        warnings about it for EmbedBase. Pass everything straight to the
+        persister.
+        '''
+        self.persister.subscribe(guid, callback)
         
         
 class AgentTrashTest(unittest.TestCase):
@@ -172,7 +185,7 @@ class AgentTrashTest(unittest.TestCase):
         self.assertEqual(obj4.state, pt3)
         self.assertEqual(obj5.state, pt3)
         
-        obj6 = self.agent1.freeze_dynamic(obj4)
+        obj6 = self.agent1.freeze_object(obj4)
         # Note: at some point that was producing incorrect bindings and didn't
         # error out at the persister. Is that still a problem, or has it been 
         # resolved?
@@ -190,7 +203,7 @@ class AgentTrashTest(unittest.TestCase):
         pt2 = b'Hiyaback!'
         
         obj1 = self.agent1.new_object(pt1, dynamic=True)
-        obj1s1 = self.agent1.freeze_dynamic(obj1)
+        obj1s1 = self.agent1.freeze_object(obj1)
         
         self.agent1.hand_object(obj1s1, contact2)
         self.assertIn(obj1s1.address, self.agent2._secrets)
@@ -237,10 +250,10 @@ class AgentTrashTest(unittest.TestCase):
         #     IPython.embed()
         
         
-class EmbeddedMemoryAgentTrashTest(unittest.TestCase):
+class ClientTrashTest(unittest.TestCase):
     def setUp(self):
-        self.agent1 = EmbeddedMemoryAgent()
-        self.agent2 = EmbeddedMemoryAgent()
+        self.agent1 = TestClient()
+        self.agent2 = TestClient()
         
     def test_alone(self):
         pt1 = b'Hello, world?'
@@ -258,7 +271,7 @@ class EmbeddedMemoryAgentTrashTest(unittest.TestCase):
         obj3 = self.agent1.new_object(pt3, dynamic=False)
         obj4 = self.agent1.new_object(state=obj3, dynamic=True)
         obj5 = self.agent1.new_object(state=obj4, dynamic=True)
-        obj6 = self.agent1.freeze_dynamic(obj4)
+        obj6 = self.agent1.freeze_object(obj4)
         self.agent1.update_object(obj4, pt4)
             
         

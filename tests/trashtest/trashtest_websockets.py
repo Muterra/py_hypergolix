@@ -49,8 +49,10 @@ from hypergolix.integrations import TestIntegration
 from hypergolix.persisters import LocalhostClient
 from hypergolix.persisters import LocalhostServer
 
+from hypergolix.embeds import _EmbedBase
 
-class TestAgent(AgentBase, LocalhostClient, TestIntegration):
+
+class TestAgent(AgentBase, LocalhostClient, TestIntegration, _EmbedBase):
     def __init__(self, *args, **kwargs):
         super().__init__(persister=self, integration=self, *args, **kwargs)
 
@@ -60,7 +62,7 @@ class TestAgent(AgentBase, LocalhostClient, TestIntegration):
 # ###############################################
         
         
-class EmbeddedMemoryAgentTrashTest(unittest.TestCase):
+class WebsocketsTrashTest(unittest.TestCase):
     def setUp(self):
         self.server = LocalhostServer(port=5926)
         self.server_thread = threading.Thread(

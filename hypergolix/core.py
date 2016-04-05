@@ -91,6 +91,8 @@ from .persisters import MemoryPersister
 
 from .integrations import _IntegrationBase
 from .integrations import TestIntegration
+
+from .embeds import AppObj
         
 # ###############################################
 # Utilities, etc
@@ -486,23 +488,20 @@ class AgentBase:
         )
         self.persister.publish(debind.packed)
         
-    def new_object(self, state, dynamic=True):
-        ''' Creates a new object.
-        
-        Returns an AppObj instance. (except not yet)
+    def new_object(self, state, dynamic=True, _legroom=None):
+        ''' Creates a new object. Wrapper for AppObj.__init__.
         '''
-        # Dispatch dynamic objects and recast into AppObj
-        if dynamic:
-            obj = self.new_dynamic(state)
-        # Otherwise, proceed with static
-        else:
-            obj = self.new_static(state)
-            
-        return obj
+        return AppObj(
+            # Todo: update embed intelligently
+            embed = self,
+            state = state,
+            dynamic = dynamic,
+            _legroom = _legroom
+        )
         
     def new_static(self, state):
         ''' Makes a new static object, handling binding, persistence, 
-        and so on. Returns a StaticObject.
+        and so on. Returns container guid.
         '''
         container, secret = self._make_static(state)
         self._set_secret(container.guid, secret)
@@ -513,16 +512,12 @@ class AgentBase:
         # have an incorrect state in self._holdings
         self.persister.publish(binding.packed)
         self.persister.publish(container.packed)
-        return StaticObject(
-            author = self._identity.guid,
-            address = container.guid,
-            state = state
-        )
+        return container.guid
         
     def _do_dynamic(self, state, guid_dynamic=None, history=None, secret=None):
         ''' Actually generate a dynamic binding.
         '''
-        if isinstance(state, _ObjectBase):
+        if isinstance(state, AppObj):
             target = state.address
             secret = self._get_secret(state.address)
             container = None
@@ -555,7 +550,7 @@ class AgentBase:
         
     def new_dynamic(self, state, _legroom=None):
         ''' Makes a dynamic object. May link to a static (or dynamic) 
-        object's address. Must pass either data or link, but not both.
+        object's address. state must be either AppObj or bytes-like.
         
         The _legroom argument determines how many frames should be used 
         as history in the dynamic binding. If unused, sources from 
@@ -574,50 +569,43 @@ class AgentBase:
         # Add a note to _holdings that "I am my own keeper"
         self._holdings[dynamic.guid_dynamic] = dynamic.guid_dynamic
         
-        return DynamicObject(
-            author = self._identity.guid,
-            address = dynamic.guid_dynamic,
-            _buffer = collections.deque(
-                iterable = (state,),
-                maxlen = _legroom
-            )
-        )
+        return dynamic.guid_dynamic
         
     def update_object(self, obj, state):
         ''' Updates a dynamic object. May link to a static (or dynamic) 
         object's address. Must pass either data or link, but not both.
         
-        Modifies the dynamic object in place.
+        Wraps AppObj.update and modifies the dynamic object in place.
         
         Could add a way to update the legroom parameter while we're at
         it. That would need to update the maxlen of both the obj._buffer
         and the self._historian.
         '''
-        if not isinstance(obj, DynamicObject):
+        if not isinstance(obj, AppObj):
             raise TypeError(
-                'Obj must be a DynamicObject or similar.'
+                'Obj must be an AppObj.'
             )
             
-        self.update_dynamic(obj, state)
+        obj.update(state)
         
-    def update_dynamic(self, obj, state):
+    def update_dynamic(self, guid_dynamic, state):
         ''' Like update_object, but does not perform type checking, and
         presumes a correctly formatted state. Not generally recommended
         for outside use.
         '''
-        if obj.address not in self._historian:
+        if guid_dynamic not in self._historian:
             raise ValueError(
                 'The Agent could not find a record of the object\'s history. '
                 'Agents cannot update objects they did not create.'
             )
             
-        frame_history = self._historian[obj.address]
+        frame_history = self._historian[guid_dynamic]
         
         old_tail = frame_history[len(frame_history) - 1]
         old_frame = frame_history[0]
         dynamic = self._do_dynamic(
             state = state, 
-            guid_dynamic = obj.address,
+            guid_dynamic = guid_dynamic,
             history = frame_history,
             secret = self._ratchet_secret(
                 secret = self._get_secret(old_frame),
@@ -627,9 +615,6 @@ class AgentBase:
             
         # Update the various buffers and do the object's callbacks
         frame_history.appendleft(dynamic.guid)
-        obj._buffer.appendleft(state)
-        for callback in obj.callbacks:
-            callback(obj)
         
         # Clear out old key material
         if old_tail not in frame_history:
@@ -640,16 +625,12 @@ class AgentBase:
         #     for recipient in self._shared_objects[obj.address]:
         #         self.hand_object(obj, recipient)
         
-    def refresh_dynamic(self, obj):
+    def sync_dynamic(self, obj):
         ''' Checks self.persister for a new dynamic frame for obj, and 
-        if one exists, updates obj accordingly.
+        if one exists, gets its state and calls an update on obj.
         
-        Returns the object back (not a copy).
+        Should probably modify this to also check state vs current.
         '''
-        if not isinstance(obj, DynamicObject):
-            raise TypeError(
-                'refresh_dynamic can only refresh dynamic objects!'
-            )
         binder = self._retrieve_contact(obj.author)
         
         unpacked_binding = self._identity.unpack_bind_dynamic(
@@ -659,7 +640,7 @@ class AgentBase:
         # monotonic state progression for dynamic bindings.
         last_known_frame = self._historian[obj.address][0]
         if unpacked_binding.guid == last_known_frame:
-            return
+            return False
         
         # Figure out the new target
         target = self._identity.receive_bind_dynamic(
@@ -667,32 +648,13 @@ class AgentBase:
             binding = unpacked_binding
         )
         
-        # We're only going to update with the most recent state, and not 
-        # regress up the history chain. However, we should try to heal any
-        # repairable ratchet.
-        # print('----------------------------------------------')
-        # print('Local dynamic address')
-        # print(bytes(obj.address))
-        # print('With local history')
-        # for ent in self._historian[obj.address]:
-        #     print(bytes(ent))
-        # print('Looking for frame')
-        # print(bytes(last_known_frame))
-        # print('Remote dynamic address')
-        # print(bytes(unpacked_binding.guid_dynamic))
-        # print('Remote frame address')
-        # print(bytes(unpacked_binding.guid))
-        # print('remote history')
-        # for ent in unpacked_binding.history:
-        #     print(bytes(ent))
-        # print('new target')
-        # print(bytes(target))
-        # print('----------------------------------------------')
         secret = self._get_secret(obj.address)
         offset = unpacked_binding.history.index(last_known_frame)
+        
         # Count backwards in index (and therefore forward in time) from the 
         # first new frame to zero (and therefore the current frame).
         # Note that we're using the previous frame's guid as salt.
+        # This attempts to heal any broken ratchet.
         for ii in range(offset, -1, -1):
             secret = self._ratchet_secret(
                 secret = secret,
@@ -704,24 +666,6 @@ class AgentBase:
         self._set_secret(unpacked_binding.guid, secret)
         self._set_secret_temporary(target, secret)
         
-        # # Combine target and history into a single iterable
-        # all_known_targets = [target]
-        # for frame_guid in unpacked_binding.history:
-        #     # Find the frame's historical content
-        #     # This could probably stand to see some optimization
-            
-        #     # First get the frame record. We're assuming the persistence
-        #     # provider has checked for consistent author.
-        #     unpacked_frame = self._identity.unpack_bind_dynamic(
-        #         self.persister.get(frame_guid)
-        #     )
-        #     all_know_targets.append(
-        #         self.receive_bind_dynamic(
-        #             binder = author, 
-        #             binding = unpacked_frame
-        #         )
-        #     )
-        
         # Check to see if we're losing anything from historian while we update
         # it. Remove those secrets.
         old_history = set(self._historian[obj.address])
@@ -731,115 +675,125 @@ class AgentBase:
         for expired_frame in expired:
             self._del_secret(expired_frame)
         
-        # Get our most recent plaintext value
-        plaintext = self._resolve_dynamic_plaintext(target)
+        # Get our most recent state and update the object.
+        obj.update(
+            state = self._resolve_dynamic_state(target), 
+            _preexisting=True
+        )
         
-        # # This will automatically collate everything using the shorter of
-        # # the two, between self._legroom and len(all_known_targets)
-        # for __, guid_cont in zip(range(self._legroom), all_known_targets):
-        #     # This could probably stand to see some optimization
-        #     packed_container = self.persister.get(guid_cont)
-        #     unpacked_container = self._identity.unpack_container(
-        #         packed_target_hist
-        #     )
-        #     secret = self._get_secret(guid_hist)
+        return True
         
-        # Update the object, do its callbacks, and return
-        obj._buffer.appendleft(plaintext)
-        for callback in obj.callbacks:
-            callback(obj)
-        return obj
-        
-    def freeze_dynamic(self, obj):
-        ''' Creates a frozen StaticObject from the most current state of
-        a DynamicObject. Returns the StaticObject.
+    def sync_static(self, obj):
+        ''' Ensures the obj's state matches its associated plaintext. If
+        not, raise.
         '''
-        if not isinstance(obj, DynamicObject):
+        raise NotImplementedError('Have yet to set up static syncing.')
+        
+    def sync_object(self, obj):
+        ''' Wraps AppObj.sync.
+        '''
+        if not isinstance(obj, AppObj):
+            raise TypeError('Must pass AppObj or subclass to sync_object.')
+            
+        return obj.sync()
+        
+    def freeze_object(self, obj):
+        ''' Wraps AppObj.freeze. Note: does not currently traverse 
+        nested dynamic bindings.
+        '''
+        if not isinstance(obj, AppObj):
             raise TypeError(
-                'Only DynamicObjects may be frozen.'
+                'Only AppObj may be frozen.'
+            )
+        return obj.freeze()
+        
+    def freeze_dynamic(self, guid_dynamic):
+        ''' Creates a static binding for the most current state of a 
+        dynamic binding. Returns the static container's guid.
+        '''
+        if not isinstance(guid_dynamic, Guid):
+            raise TypeError(
+                'Must pass a dynamic guid to freeze_dynamic.'
             )
             
         # frame_guid = self._historian[obj.address][0]
-        target = self._dynamic_targets[obj.address]
-        
-        static = StaticObject(
-            author = self._identity.guid,
-            address = target,
-            state = obj.state
-        )
-        self.hold_object(static)
+        target = self._dynamic_targets[guid_dynamic]
+        self.hold_guid(target)
         
         # Don't forget to add the actual static resource to _secrets
-        self._set_secret(target, self._get_secret(obj.address))
+        self._set_secret(target, self._get_secret(guid_dynamic))
         
-        return static
+        # Return the guid that was just held.
+        return target
         
     def hold_object(self, obj):
-        ''' Prevents the deletion of a StaticObject or DynamicObject by
-        binding to it.
+        ''' Wraps AppObj.hold.
         '''
-        if not isinstance(obj, _ObjectBase):
+        if not isinstance(obj, AppObj):
+            raise TypeError('Only AppObj may be held by hold_object.')
+        obj.hold()
+        
+    def hold_guid(self, guid):
+        ''' Prevents the deletion of a Guid by binding to it.
+        '''
+        if not isinstance(guid, Guid):
             raise TypeError(
-                'Only dynamic objects and static objects may be held to '
-                'prevent their deletion.'
+                'Only guids may be held.'
             )
         # There's not really a reason to create a binding for something you
         # already created, whether static or dynamic, but there's also not
         # really a reason to check if that's the case.
-        binding = self._make_bind(obj.address)
+        binding = self._make_bind(guid)
         self.persister.publish(binding.packed)
-        self._holdings[obj.address] = binding.guid
+        self._holdings[guid] = binding.guid
+        # Also make sure the secret is persistent.
+        self._set_secret(guid, self._get_secret(guid))
         
     def delete_object(self, obj):
-        ''' Removes an object (if possible). May produce a warning if
-        the persistence provider cannot remove the object due to another 
-        conflicting binding.
+        ''' Wraps AppObj.delete. 
         '''
-        # if isinstance(obj, StaticObject):
-            
-        # elif isinstance(obj, DynamicObject):
-        #     if obj.author 
-            
-        # else:
-        #     raise TypeError(
-        #         'Obj must be StaticObject, DynamicObject, or similar.'
-        #     )
-            
-        if not isinstance(obj, _ObjectBase):
+        if not isinstance(obj, AppObj):
             raise TypeError(
-                'Obj must be StaticObject, DynamicObject, or similar.'
+                'Obj must be AppObj or similar.'
             )
             
-        if obj.address not in self._holdings:
+        obj.delete()
+        
+    def delete_guid(self, guid):
+        ''' Removes an object identified by guid (if possible). May 
+        produce a warning if the persistence provider cannot remove the 
+        object due to another conflicting binding.
+        ''' 
+        if guid not in self._holdings:
             raise ValueError(
-                'Agents cannot attempt to delete objects they did not create. '
+                'Agents cannot attempt to delete objects they have not held. '
                 'This may also indicate that the object has already been '
                 'deleted.'
             )
             
-        binding_guid = self._holdings[obj.address]
+        binding_guid = self._holdings[guid]
         self._do_debind(binding_guid)
-        del self._holdings[obj.address]
+        del self._holdings[guid]
+        
+        return True
         
     def hand_object(self, obj, recipient_guid):
         ''' Initiates a handshake request with the recipient to share 
         the object.
+        
+        Should probably retool to be hand_guid.
         '''
         contact = self._retrieve_contact(recipient_guid)
         
-        if isinstance(obj, DynamicObject):
-            # This is, shall we say, suboptimal.
-            # frame_guid = self._historian[obj.address][0]
-            # target = self._dynamic_targets[obj.address]
-            target = obj.address
-            
-        elif isinstance(obj, StaticObject):
-            target = obj.address
-            
-        else:
+        if not isinstance(obj, AppObj):
             raise TypeError(
-                'Obj must be a StaticObject, DynamicObject, or similar.'
+                'Obj must be a AppObj or similar.'
             )
+    
+        # This is, shall we say, suboptimal, for dynamic objects.
+        # frame_guid = self._historian[obj.address][0]
+        # target = self._dynamic_targets[obj.address]
+        target = obj.address
         
         handshake = self._identity.make_handshake(
             target = target,
@@ -899,13 +853,66 @@ class AgentBase:
             
         return plaintext
         
-    def get_object(self, guid):
+    def _resolve_dynamic_state(self, target):
+        ''' Recursively find the state of the dynamic target. Correctly 
+        handles (?) nested dynamic bindings. DOES NOT GUARANTEE that it
+        will return a plaintext -- it may return nested AppObjs instead.
+        
+        However, can't currently handle using a GIDC as a target.
+        '''
+        # Unpack the target container and extract the plaintext.
+        # NOTE THAT THIS IS GOING TO CAUSE PROBLEMS if it's a nested 
+        # dynamic binding. Will probably need to make this recursive at 
+        # some point in the future.
+        unpacked = self._identity.unpack_any(
+            self.persister.get(target)
+        )
+        if isinstance(unpacked, GEOC):
+            try:
+                state = self._identity.receive_container(
+                    author = self._retrieve_contact(unpacked.author),
+                    secret = self._get_secret(target),
+                    container = unpacked
+                )
+            except SecurityError:
+                self._abandon_secret(target)
+                raise
+            else:
+                self._commit_secret(target)
+            
+        elif isinstance(unpacked, GOBD):
+            # Call recursively.
+            nested_target = self._identity.receive_bind_dynamic(
+                binder = self._retrieve_contact(unpacked.author),
+                binding = unpacked
+            )
+            upstream = self._resolve_dynamic_state(nested_target)
+            state = AppObj(
+                embed = self,
+                state = upstream,
+                dynamic = True,
+                _preexisting = True,
+                _legroom = self._legroom
+            )
+            
+        else:
+            raise RuntimeError(
+                'The dynamic binding has an illegal target and is therefore '
+                'invalid.'
+            )
+            
+        return state
+        
+    def get_guid(self, guid):
         ''' Gets a new local copy of the object, assuming the Agent has 
-        access to it, as identified by guid. Dynamic objects will 
-        automatically update themselves.
+        access to it, as identified by guid. Does not automatically 
+        create an object.
         
         Note that for dynamic objects, initial retrieval DOES NOT parse
         any history. It begins with the target and goes from there.
+        
+        returns the object's state (not necessarily its plaintext) if
+        successful.
         '''
         if not isinstance(guid, Guid):
             raise TypeError('Passed guid must be a Guid or similar.')
@@ -915,10 +922,12 @@ class AgentBase:
         self._stage_secret(unpacked)
         
         if isinstance(unpacked, GEOC):
-            author = self._retrieve_contact(unpacked.author)
+            is_dynamic = False
+            author = unpacked.author
+            contact = self._retrieve_contact(author)
             try:
-                plaintext = self._identity.receive_container(
-                    author = author,
+                state = self._identity.receive_container(
+                    author = contact,
                     secret = self._get_secret(guid),
                     container = unpacked
                 )
@@ -928,21 +937,17 @@ class AgentBase:
             else:
                 self._commit_secret(guid)
             
-            obj = StaticObject(
-                author = unpacked.author,
-                address = guid,
-                state = plaintext
-            )
-            
         elif isinstance(unpacked, GOBD):
-            author = self._retrieve_contact(unpacked.binder)
+            is_dynamic = True
+            author = unpacked.binder
+            contact = self._retrieve_contact(author)
             target = self._identity.receive_bind_dynamic(
-                binder = author,
+                binder = contact,
                 binding = unpacked
             )
             
             # Recursively grab the plaintext once we add the secret
-            plaintext = self._resolve_dynamic_plaintext(target)
+            state = self._resolve_dynamic_state(target)
             
             # Add the dynamic guid to historian using our own _legroom param.
             self._historian[guid] = collections.deque(
@@ -950,28 +955,27 @@ class AgentBase:
                 maxlen = self._legroom
             )
             
-            # Create local state. Ignore their history, and preserve our own,
-            # since we may have different ideas about how much legroom we need
-            obj = DynamicObject(
-                author = unpacked.binder,
-                address = guid,
-                _buffer = collections.deque(
-                    iterable = (plaintext,),
-                    maxlen = self._legroom
-                )
-            )
-            
-            # Create an auto-update method for obj.
-            updater = lambda __, obj=obj: self.refresh_dynamic(obj)
-            self.persister.subscribe(guid, updater)
-            
         else:
             raise ValueError(
                 'Guid resolves to an invalid Golix object. get_object must '
                 'target either a container (GEOC) or a dynamic binding (GOBD).'
             )
             
-        return obj
+        # This is gross, not sure I like it.
+        return author, is_dynamic, state
+        
+    def get_object(self, guid):
+        ''' Wraps AppObj.__init__  and get_guid for preexisting objects.
+        '''
+        author, is_dynamic, state = self.get_guid(guid)
+            
+        return AppObj(
+            # Todo: make the embed more intelligent
+            embed = self,
+            state = state,
+            dynamic = is_dynamic,
+            _preexisting = (guid, author)
+        )
         
     def cleanup_object(self, obj):
         ''' Does anything needed to clean up the object -- removing 

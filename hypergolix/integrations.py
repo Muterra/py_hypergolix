@@ -87,6 +87,12 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         self._orphan_handshakes_incoming = []
         self._orphan_handshakes_outgoing = []
         
+    def share_object(self, obj, recipient):
+        ''' Currently, this is just calling hand_object. In the future,
+        this will have a devoted key exchange subprotocol.
+        '''
+        return self.hand_object(obj, recipient)
+        
     def initiate_handshake(self, recipient, msg):
         ''' Creates a handshake for the API_id with recipient.
         
@@ -211,7 +217,7 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         endpoint = self._api_ids[owner].endpoint
         endpoint.handle_outgoing_failure(handshake)
     
-    def register_application(self, api_id=None, appdef=None):
+    def register_api(self, api_id=None, appdef=None):
         ''' Registers an application with the integration. If appdef is
         None, will create an AppDef for the app. Must define api_id XOR
         appdef.
@@ -286,12 +292,6 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         
     @abc.abstractmethod
     def update_object(self, obj, state):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def refresh_dynamic(self, obj):
         ''' Inherited from Agent.
         '''
         pass
