@@ -35,15 +35,18 @@ import threading
 
 # Control * imports.
 __all__ = [
+    # Base class for all of the above
     'HypergolixException',
+    # These are all persister errors and warnings
     'NakError',
     'UnboundContainerError',
     'DoesNotExistError',
+    'PersistenceWarning',
+    # These are Agent/integration errors
     'HandshakeError',
     'HandshakeWarning',
     'InaccessibleError',
     'UnknownPartyError',
-    'PersistenceWarning',
 ]
 
 
@@ -75,6 +78,14 @@ class DoesNotExistError(NakError):
     a request for a guid that does not exist in its object store.
     '''
     pass
+    
+    
+class PersistenceWarning(HypergolixException, RuntimeWarning):
+    ''' Raised when a debinding did not result in the removal of its
+    target -- for example, if another binding remains on the target
+    object.
+    '''
+    pass
 
 
 class HandshakeError(HypergolixException, RuntimeError):
@@ -92,14 +103,6 @@ class InaccessibleError(HypergolixException, RuntimeError):
 class UnknownPartyError(HypergolixException, RuntimeError):
     ''' Raised when an Agent cannot find an identity definition for an
     author and therefore cannot verify anything.
-    '''
-    pass
-    
-    
-class PersistenceWarning(HypergolixException, RuntimeWarning):
-    ''' Raised when a debinding did not result in the removal of its
-    target -- for example, if another binding remains on the target
-    object.
     '''
     pass
 

@@ -221,6 +221,21 @@ class DynamicObject(_ObjectBase):
             raise TypeError('Callback must be callable.')
         self._callbacks.add(callback)
         
+    def remove_callback(self, callback):
+        ''' Removes a callback.
+        
+        Raises KeyError if the callback has not been registered.
+        '''
+        if callback in self._callbacks:
+            self._callbacks.remove(callback)
+        else:
+            raise KeyError('Callback not found in dynamic obj callback set.')
+        
+    def clear_callbacks(self):
+        ''' Resets all callbacks.
+        '''
+        self._callbacks = set()
+        
     @property
     def buffer(self):
         ''' Returns a tuple of the current buffer.
