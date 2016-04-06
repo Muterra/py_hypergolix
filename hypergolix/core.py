@@ -58,6 +58,7 @@ import weakref
 import threading
 import os
 import msgpack
+import abc
 
 from golix import FirstParty
 from golix import SecondParty
@@ -90,7 +91,6 @@ from .persisters import _PersisterBase
 from .persisters import MemoryPersister
 
 from .ipc_hosts import _IPCBase
-from .ipc_hosts import TestIPC
 
 from .embeds import AppObj
         
@@ -157,12 +157,12 @@ class AgentBase:
     
     DEFAULT_LEGROOM = 3
     
-    def __init__(self, persister, ipc_host, _identity=None, _bootstrap=None, *args, **kwargs):
+    def __init__(self, persister, dispatcher, _identity=None, _bootstrap=None, *args, **kwargs):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         
         persister isinstance _PersisterBase
-        ipc_host isinstance _IPCBase
+        dispatcher isinstance DispatcherBase
         _identity isinstance golix.FirstParty
         _bootstrap isinstance tuple(golix.Guid, golix.Secret)
         '''
@@ -172,9 +172,9 @@ class AgentBase:
             raise TypeError('Persister must subclass _PersisterBase.')
         self._persister = persister
         
-        if not isinstance(ipc_host, _IPCBase):
-            raise TypeError('ipc_host must subclass _IPCBase.')
-        self._ipc_host = ipc_host
+        if not isinstance(dispatcher, DispatcherBase):
+            raise TypeError('dispatcher must subclass DispatcherBase.')
+        self._dispatcher = dispatcher
         
         # This bit is clever. We want to allow for garbage collection of 
         # secrets as soon as they're no longer needed, but we also need a way
@@ -330,7 +330,7 @@ class AgentBase:
         obj = self.get_object(request.target)
         
         try:
-            self.ipc_host.dispatch_handshake(obj)
+            self.dispatcher.dispatch_handshake(obj)
             
         except HandshakeError as e:
             # Erfolglos. Send a nak to whomever sent the handshake
@@ -356,22 +356,22 @@ class AgentBase:
         '''
         target = self._pending_requests[request.target]
         del self._pending_requests[request.target]
-        self.ipc_host.dispatch_handshake_ack(request, target)
+        self.dispatcher.dispatch_handshake_ack(request, target)
             
     def _handle_req_nak(self, request, source_guid):
         ''' Handles a handshake nak after reception.
         '''
         target = self._pending_requests[request.target]
         del self._pending_requests[request.target]
-        self.ipc_host.dispatch_handshake_nak(request, target)
+        self.dispatcher.dispatch_handshake_nak(request, target)
         
     @property
     def persister(self):
         return self._persister
         
     @property
-    def ipc_host(self):
-        return self._ipc_host
+    def dispatcher(self):
+        return self._dispatcher
         
     def _get_secret(self, guid):
         ''' Return the secret for the passed guid, if one is available.
@@ -1045,15 +1045,332 @@ class AgentBase:
         )
         
     @classmethod
-    def login(cls, password, data, persister, ipc_host):
+    def login(cls, password, data, persister, dispatcher):
         ''' Load an Agent from an identity contained within a GEOC.
         '''
         pass
         
         
-class EmbeddedMemoryAgent(AgentBase, MemoryPersister, TestIPC):
+class DispatcherBase(metaclass=abc.ABCMeta):
+    ''' Base class for dispatchers. Dispatchers handle objects; they 
+    translate between raw Golix payloads and application objects, as 
+    well as shepherding objects appropriately to/from/between different
+    applications. Dispatchers are intended to be combined with agents,
+    and vice versa.
+    '''
+    def __init__(self, ipc_host=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._ipc_host = ipc_host
+        
+        # Lookup for app_tokens -> endpoints
+        self._app_tokens = {
+            b'\x00\x00\x00\x00': False,
+        }
+        
+        # Lookup for api_ids -> AppDef.
+        self._api_ids = {}
+        
+        # Lookup for handshake guid -> handshake object
+        self._outstanding_handshakes = {}
+        # Lookup for handshake guid -> api_id
+        self._outstanding_owners = {}
+        
+        # Lookup for guid -> object
+        self._assigned_objects = {}
+        # Lookup for guid -> api_id
+        self._assigned_owners = {}
+        
+        self._orphan_handshakes_incoming = []
+        self._orphan_handshakes_outgoing = []
+        
+    def share_object(self, obj, recipient):
+        ''' Currently, this is just calling hand_object. In the future,
+        this will have a devoted key exchange subprotocol.
+        '''
+        return self.hand_object(obj, recipient)
+        
+    def initiate_handshake(self, recipient, msg):
+        ''' Creates a handshake for the API_id with recipient.
+        
+        msg isinstance dict(like) and must contain a valid api_id
+        recipient isinstance Guid
+        '''
+        # Check to make sure that we have a valid api_id in the msg
+        try:
+            api_id = msg['api_id']
+            appdef = self._api_ids[api_id]
+            
+        except KeyError as e:
+            raise ValueError(
+                'Handshake msg must contain a valid api_id that the current '
+                'agent IPC mechanism is capable of understanding.'
+            ) from e
+            
+        try:
+            packed_msg = msgpack.packb(msg)
+            
+        except (
+            msgpack.exceptions.BufferFull,
+            msgpack.exceptions.ExtraData,
+            msgpack.exceptions.OutOfData,
+            msgpack.exceptions.PackException,
+            msgpack.exceptions.PackValueError
+        ) as e:
+            raise ValueError(
+                'Couldn\'t pack handshake. Handshake msg must be dict-like.'
+            ) from e
+        
+        handshake = self.new_object(msg, dynamic=True)
+        self.hand_object(
+            obj = handshake, 
+            recipient_guid = recipient
+        )
+        
+        # This bit is still pretty tentative
+        self._outstanding_handshakes[handshake.address] = handshake
+        self._outstanding_owners[handshake.address] = api_id
+        
+    def dispatch_handshake(self, handshake):
+        ''' Receives the target *object* for a handshake (note: NOT the 
+        handshake itself) and dispatches it to the appropriate 
+        application.
+        
+        handshake is a StaticObject or DynamicObject.
+        Raises HandshakeError if unsuccessful.
+        '''
+        # First try unpacking the message.
+        try:
+            unpacked_msg = msgpack.unpackb(handshake.state)
+            api_id = unpacked_msg['api_id']
+            appdef = self._api_ids[api_id]
+            
+        # MsgPack errors mean that we don't have a properly formatted handshake
+        except (
+            msgpack.exceptions.BufferFull,
+            msgpack.exceptions.ExtraData,
+            msgpack.exceptions.OutOfData,
+            msgpack.exceptions.UnpackException,
+            msgpack.exceptions.UnpackValueError
+        ) as e:
+            raise HandshakeError(
+                'Handshake does not appear to conform to the hypergolix '
+                'handshake procedure.'
+            ) from e
+            
+        # KeyError means we don't have an app that speaks that API
+        except KeyError:
+            warnings.warn(HandshakeWarning(
+                'Agent lacks application to handle app id.'
+            ))
+            self._orphan_handshakes_incoming.append(handshake)
+            
+        # Okay, we've successfully acquired an appdef. Pass the message along
+        # to the application.
+        else:
+            try:
+                appdef.endpoint.handle_incoming(raw_msg)
+                
+            except Exception as e:
+                raise HandshakeError(
+                    'Agent application assigned to app id was unable to '
+                    'process the handshake.'
+                )
+        
+            # Lookup for guid -> object
+            self._assigned_objects[handshake.address] = handshake
+            self._assigned_owners[handshake.address] = api_id
+        
+    def dispatch_handshake_ack(self, ack, target):
+        ''' Receives a handshake acknowledgement and dispatches it to
+        the appropriate application.
+        
+        ack is a golix.AsymAck object.
+        '''
+        handshake = self._outstanding_handshakes[target]
+        owner = self._outstanding_owners[target]
+        
+        del self._outstanding_handshakes[target]
+        del self._outstanding_owners[target]
+        
+        self._assigned_objects[target] = handshake
+        self._assigned_owners[target] = owner
+        
+        endpoint = self._api_ids[owner].endpoint
+        endpoint.handle_outgoing_success(handshake)
+    
+    def dispatch_handshake_nak(self, nak, target):
+        ''' Receives a handshake nonacknowledgement and dispatches it to
+        the appropriate application.
+        
+        ack is a golix.AsymNak object.
+        '''
+        handshake = self._outstanding_handshakes[target]
+        owner = self._outstanding_owners[target]
+        
+        del self._outstanding_handshakes[target]
+        del self._outstanding_owners[target]
+        
+        endpoint = self._api_ids[owner].endpoint
+        endpoint.handle_outgoing_failure(handshake)
+    
+    def register_api(self, api_id=None, appdef=None):
+        ''' Registers an api with the IPC mechanism. If appdef is None, 
+        will create an AppDef for the app. Must define api_id XOR
+        appdef.
+        
+        Returns an AppDef object.
+        '''
+        if appdef is None and api_id is not None:
+            app_token = self.new_token()
+            endpoint = self.new_endpoint()
+            appdef = AppDef(api_id, app_token, endpoint)
+            
+        elif appdef is not None and api_id is None:
+            # Do nothing. We already have an appdef.
+            pass
+            
+        else:
+            raise ValueError('Must specify appdef XOR api_id.')
+            
+        self._app_tokens[appdef.app_token] = appdef.endpoint
+        self._api_ids[appdef.api_id] = appdef
+        
+        return appdef
+        
+    def new_token(self):
+        # Use a dummy api_id to force the while condition to be true initially
+        token = b'\x00\x00\x00\x00'
+        # Birthday paradox be damned; we can actually *enforce* uniqueness
+        while token in self._app_tokens:
+            token = os.urandom(4)
+        return token
+    
+    @property
+    @abc.abstractmethod
+    def whoami(self):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def new_object(self, state):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def new_static(self, state):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def new_dynamic(self, state):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def update_dynamic(self, obj, state):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def update_object(self, obj, state):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def freeze_dynamic(self, obj):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def hold_object(self, obj):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def delete_object(self, obj):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def hand_object(self, obj, recipient_guid):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def get_object(self, guid):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+        
+class _TestDispatcher(DispatcherBase):
+    ''' An dispatcher that ignores all dispatching for test purposes.
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self._orphan_handshakes_incoming = []
+        self._orphan_handshakes_outgoing = []
+        self._orphan_handshake_failures = []
+        
+    def dispatch_handshake(self, handshake):
+        ''' Receives the target *object* for a handshake (note: NOT the 
+        handshake itself) and dispatches it to the appropriate 
+        application.
+        
+        handshake is a StaticObject or DynamicObject.
+        Raises HandshakeError if unsuccessful.
+        '''
+        self._orphan_handshakes_incoming.append(handshake)
+        
+    def dispatch_handshake_ack(self, ack, target):
+        ''' Receives a handshake acknowledgement and dispatches it to
+        the appropriate application.
+        
+        ack is a golix.AsymAck object.
+        '''
+        self._orphan_handshakes_outgoing.append(ack)
+    
+    def dispatch_handshake_nak(self, nak, target):
+        ''' Receives a handshake nonacknowledgement and dispatches it to
+        the appropriate application.
+        
+        ack is a golix.AsymNak object.
+        '''
+        self._orphan_handshake_failures.append(nak)
+        
+    def new_endpoint(self):
+        ''' Creates a new endpoint for the IPC system. Endpoints must
+        be unique. Uniqueness must be enforced by subclasses of the
+        _IPCBase class.
+        
+        Returns an Endpoint object.
+        '''
+        return TestEndpoint()
+        
+    def retrieve_recent_handshake(self):
+        return self._orphan_handshakes_incoming.pop()
+        
+    def retrieve_recent_ack(self):
+        return self._orphan_handshakes_outgoing.pop()
+        
+    def retrieve_recent_nak(self):
+        return self._orphan_handshake_failures.pop()
+        
+        
+class EmbeddedMemoryAgent(AgentBase, MemoryPersister, _TestDispatcher):
     def __init__(self):
-        super().__init__(persister=self, ipc_host=self)
+        super().__init__(persister=self, dispatcher=self)
         
         
 def agentfactory(persisters, ipc_hosts):

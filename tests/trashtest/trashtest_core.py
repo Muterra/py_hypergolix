@@ -40,7 +40,7 @@ import collections
 
 # These are normal imports
 from hypergolix.persisters import MemoryPersister
-from hypergolix.ipc_hosts import TestIPC
+from hypergolix.core import _TestDispatcher
 
 from hypergolix import AgentBase
 from hypergolix import StaticObject
@@ -122,14 +122,14 @@ class ObjectTrashtest(unittest.TestCase):
         #     IPython.embed()
         
 
-class TestClient(AgentBase, MemoryPersister, TestIPC, _EmbedBase):
+class TestClient(AgentBase, MemoryPersister, _TestDispatcher, _EmbedBase):
     def __init__(self):
-        super().__init__(persister=self, ipc_host=self)
+        super().__init__(persister=self, dispatcher=self)
 
 
-class TestAgent(AgentBase, TestIPC, _EmbedBase):
+class TestAgent_SharedPersistence(AgentBase, _TestDispatcher, _EmbedBase):
     def __init__(self, *args, **kwargs):
-        super().__init__(ipc_host=self, *args, **kwargs)
+        super().__init__(dispatcher=self, *args, **kwargs)
         
     def subscribe(self, guid, callback):
         ''' We're not testing this right now but we need to suppress 
@@ -142,14 +142,14 @@ class TestAgent(AgentBase, TestIPC, _EmbedBase):
 class AgentTrashTest(unittest.TestCase):
     def setUp(self):
         self.persister = MemoryPersister()
-        self.agent1 = TestAgent(
+        self.agent1 = TestAgent_SharedPersistence(
             persister = self.persister
         )
-        self.agent2 = TestAgent(
+        self.agent2 = TestAgent_SharedPersistence(
             persister = self.persister
         )
-        self.ipc_host1 = self.agent1
-        self.ipc_host2 = self.agent2
+        self.dispatcher1 = self.agent1
+        self.dispatcher2 = self.agent2
         
     def test_alone(self):
         pt1 = b'Hello, world?'
@@ -211,7 +211,7 @@ class AgentTrashTest(unittest.TestCase):
             self.agent1._secrets[obj1s1.address], 
             self.agent2._secrets[obj1s1.address]
         )
-        obj1s1_shared = self.ipc_host2._orphan_handshakes_incoming.pop()
+        obj1s1_shared = self.dispatcher2._orphan_handshakes_incoming.pop()
         self.assertEqual(
             obj1s1_shared, obj1s1
         )
@@ -221,7 +221,7 @@ class AgentTrashTest(unittest.TestCase):
         self.assertIn(obj1.address, self.agent2._historian)
         # Make sure this doesn't error, checking that it's in secrets
         self.agent2._get_secret(obj1.address)
-        obj1_shared = self.ipc_host2._orphan_handshakes_incoming.pop()
+        obj1_shared = self.dispatcher2._orphan_handshakes_incoming.pop()
         self.assertEqual(
             obj1,
             obj1_shared

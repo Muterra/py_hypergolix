@@ -55,7 +55,7 @@ class _EmbedBase(metaclass=abc.ABCMeta):
     with the Hypergolix service.
     
     Note that each embed will have exactly one endpoint. However, for 
-    some types of integrations (ex: filesystems), it may make sense for
+    some types of IPC systems (ex: filesystems), it may make sense for
     a single application to use multiple endpoints.
     
     Note that this API will be merged with AgentCore when DynamicObject
@@ -77,7 +77,7 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         
     @abc.abstractmethod
     def register_api(self, api_id):
-        ''' Registers the embed with the integration as supporting the
+        ''' Registers the embed with the service as supporting the
         passed api_id.
         
         May be called multiple times to denote that a single application 
