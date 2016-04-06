@@ -46,14 +46,14 @@ from hypergolix import AgentBase
 
 from hypergolix.persisters import MemoryPersister
 
-from hypergolix.integrations import _EmbeddedIntegration
+from hypergolix.ipc_hosts import _EmbeddedIPC
 
 from hypergolix.embeds import AppObj
 
 
-class TestEmbed(AgentBase, MemoryPersister, _EmbeddedIntegration):
+class TestEmbed(AgentBase, MemoryPersister, _EmbeddedIPC):
     def __init__(self, *args, **kwargs):
-        super().__init__(persister=self, integration=self, *args, **kwargs)
+        super().__init__(persister=self, ipc_host=self, *args, **kwargs)
 
 
 # ###############################################

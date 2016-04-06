@@ -44,7 +44,7 @@ from golix import Guid
 
 from hypergolix import AgentBase
 
-from hypergolix.integrations import TestIntegration
+from hypergolix.ipc_hosts import TestIPC
 
 from hypergolix.persisters import LocalhostClient
 from hypergolix.persisters import LocalhostServer
@@ -52,9 +52,9 @@ from hypergolix.persisters import LocalhostServer
 from hypergolix.embeds import _EmbedBase
 
 
-class TestAgent(AgentBase, LocalhostClient, TestIntegration, _EmbedBase):
+class TestAgent(AgentBase, LocalhostClient, TestIPC, _EmbedBase):
     def __init__(self, *args, **kwargs):
-        super().__init__(persister=self, integration=self, *args, **kwargs)
+        super().__init__(persister=self, ipc_host=self, *args, **kwargs)
 
 
 # ###############################################

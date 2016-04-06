@@ -32,8 +32,8 @@ hypergolix: A python Golix client.
 
 # Control * imports.
 __all__ = [
-    'TestIntegration', 
-    'LocalhostIntegration'
+    'TestIPC', 
+    'LocalhostIPC'
 ]
 
 # External dependencies
@@ -52,10 +52,10 @@ from .utils import _EndpointBase
 from .embeds import _EmbedBase
 
 
-class _IntegrationBase(metaclass=abc.ABCMeta):
-    ''' Base class for a integration. Note that an integration cannot 
+class _IPCBase(metaclass=abc.ABCMeta):
+    ''' Base class for an IPC mechanism. Note that an _IPCBase cannot 
     exist without also being an agent. They are separated to allow 
-    mixing-and-matching agent/persister/integration configurations.
+    mixing-and-matching agent/persister/IPC configurations.
     
     Could subclass _EndpointBase to ensure that we can use self as an 
     endpoint for incoming messages. To prevent spoofing risks, anything
@@ -107,7 +107,7 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         except KeyError as e:
             raise ValueError(
                 'Handshake msg must contain a valid api_id that the current '
-                'agent integration is capable of understanding.'
+                'agent IPC mechanism is capable of understanding.'
             ) from e
             
         try:
@@ -158,7 +158,7 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         ) as e:
             raise HandshakeError(
                 'Handshake does not appear to conform to the hypergolix '
-                'integration handshake procedure.'
+                'handshake procedure.'
             ) from e
             
         # KeyError means we don't have an app that speaks that API
@@ -218,8 +218,8 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         endpoint.handle_outgoing_failure(handshake)
     
     def register_api(self, api_id=None, appdef=None):
-        ''' Registers an application with the integration. If appdef is
-        None, will create an AppDef for the app. Must define api_id XOR
+        ''' Registers an api with the IPC mechanism. If appdef is None, 
+        will create an AppDef for the app. Must define api_id XOR
         appdef.
         
         Returns an AppDef object.
@@ -251,9 +251,9 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         
     @abc.abstractmethod
     def new_endpoint(self):
-        ''' Creates a new endpoint for the integration. Endpoints must
+        ''' Creates a new endpoint for the IPC system. Endpoints must
         be unique. Uniqueness must be enforced by subclasses of the
-        _IntegrationBase class.
+        _IPCBase class.
         
         Returns an Endpoint object.
         '''
@@ -327,14 +327,14 @@ class _IntegrationBase(metaclass=abc.ABCMeta):
         pass
         
         
-class _EmbeddedIntegration(_IntegrationBase, _EmbedBase):
-    ''' EmbeddedIntegration wraps _EmbedBase from embeds. It also 
+class _EmbeddedIPC(_IPCBase, _EmbedBase):
+    ''' EmbeddedIPC wraps _EmbedBase from embeds. It also 
     is its own endpoint (or has its own endpoint).
     '''
     def new_endpoint(self):
-        ''' Creates a new endpoint for the integration. Endpoints must
+        ''' Creates a new endpoint for the IPC system. Endpoints must
         be unique. Uniqueness must be enforced by subclasses of the
-        _IntegrationBase class.
+        _IPCBase class.
         
         Returns an Endpoint object.
         '''
@@ -362,8 +362,8 @@ class TestEndpoint(_EndpointBase):
         pass
     
     
-class TestIntegration(_IntegrationBase):
-    ''' An integration that ignores all dispatching for test purposes.
+class TestIPC(_IPCBase):
+    ''' An IPC mechanism that ignores all dispatching for test purposes.
     '''
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -399,9 +399,9 @@ class TestIntegration(_IntegrationBase):
         self._orphan_handshake_failures.append(nak)
         
     def new_endpoint(self):
-        ''' Creates a new endpoint for the integration. Endpoints must
+        ''' Creates a new endpoint for the IPC system. Endpoints must
         be unique. Uniqueness must be enforced by subclasses of the
-        _IntegrationBase class.
+        _IPCBase class.
         
         Returns an Endpoint object.
         '''
@@ -417,13 +417,13 @@ class TestIntegration(_IntegrationBase):
         return self._orphan_handshake_failures.pop()
     
     
-class LocalhostIntegration(_IntegrationBase):
+class LocalhostIPC(_IPCBase):
     pass
     
     
-class PipeIntegration(_IntegrationBase):
+class PipeIPC(_IPCBase):
     pass
     
     
-class FileIntegration(_IntegrationBase):
+class FileIPC(_IPCBase):
     pass

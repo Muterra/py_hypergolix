@@ -89,8 +89,8 @@ from .exceptions import UnknownPartyError
 from .persisters import _PersisterBase
 from .persisters import MemoryPersister
 
-from .integrations import _IntegrationBase
-from .integrations import TestIntegration
+from .ipc_hosts import _IPCBase
+from .ipc_hosts import TestIPC
 
 from .embeds import AppObj
         
@@ -157,12 +157,12 @@ class AgentBase:
     
     DEFAULT_LEGROOM = 3
     
-    def __init__(self, persister, integration, _identity=None, _bootstrap=None, *args, **kwargs):
+    def __init__(self, persister, ipc_host, _identity=None, _bootstrap=None, *args, **kwargs):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         
         persister isinstance _PersisterBase
-        integration isinstance _IntegrationBase
+        ipc_host isinstance _IPCBase
         _identity isinstance golix.FirstParty
         _bootstrap isinstance tuple(golix.Guid, golix.Secret)
         '''
@@ -172,9 +172,9 @@ class AgentBase:
             raise TypeError('Persister must subclass _PersisterBase.')
         self._persister = persister
         
-        if not isinstance(integration, _IntegrationBase):
-            raise TypeError('Integration must subclass _IntegrationBase.')
-        self._integration = integration
+        if not isinstance(ipc_host, _IPCBase):
+            raise TypeError('ipc_host must subclass _IPCBase.')
+        self._ipc_host = ipc_host
         
         # This bit is clever. We want to allow for garbage collection of 
         # secrets as soon as they're no longer needed, but we also need a way
@@ -330,7 +330,7 @@ class AgentBase:
         obj = self.get_object(request.target)
         
         try:
-            self.integration.dispatch_handshake(obj)
+            self.ipc_host.dispatch_handshake(obj)
             
         except HandshakeError as e:
             # Erfolglos. Send a nak to whomever sent the handshake
@@ -356,22 +356,22 @@ class AgentBase:
         '''
         target = self._pending_requests[request.target]
         del self._pending_requests[request.target]
-        self.integration.dispatch_handshake_ack(request, target)
+        self.ipc_host.dispatch_handshake_ack(request, target)
             
     def _handle_req_nak(self, request, source_guid):
         ''' Handles a handshake nak after reception.
         '''
         target = self._pending_requests[request.target]
         del self._pending_requests[request.target]
-        self.integration.dispatch_handshake_nak(request, target)
+        self.ipc_host.dispatch_handshake_nak(request, target)
         
     @property
     def persister(self):
         return self._persister
         
     @property
-    def integration(self):
-        return self._integration
+    def ipc_host(self):
+        return self._ipc_host
         
     def _get_secret(self, guid):
         ''' Return the secret for the passed guid, if one is available.
@@ -1045,16 +1045,16 @@ class AgentBase:
         )
         
     @classmethod
-    def login(cls, password, data, persister, integration):
+    def login(cls, password, data, persister, ipc_host):
         ''' Load an Agent from an identity contained within a GEOC.
         '''
         pass
         
         
-class EmbeddedMemoryAgent(AgentBase, MemoryPersister, TestIntegration):
+class EmbeddedMemoryAgent(AgentBase, MemoryPersister, TestIPC):
     def __init__(self):
-        super().__init__(persister=self, integration=self)
+        super().__init__(persister=self, ipc_host=self)
         
         
-# Note: need either localhost persister, or localhost integration. integration would
-# be easier and make more sense.
+def agentfactory(persisters, ipc_hosts):
+    pass

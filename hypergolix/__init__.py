@@ -44,6 +44,6 @@ from .utils import DynamicObject
 
 # Submodules
 from . import persisters
-from . import integrations
+from . import ipc_hosts
 from . import utils
 from . import exceptions

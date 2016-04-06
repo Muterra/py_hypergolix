@@ -29,7 +29,7 @@ hypergolix: A python Golix client.
 
 ------------------------------------------------------
 '''
-# Embeds contains all of the application-side integrations. These will only
+# Embeds contains all of the application-side IPC integrations. These will only
 # be used by applications written in python.
 
 # Control * imports.
