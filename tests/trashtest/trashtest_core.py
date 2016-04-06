@@ -49,7 +49,7 @@ from hypergolix import DynamicObject
 from hypergolix.exceptions import NakError
 from hypergolix.exceptions import PersistenceWarning
 
-from hypergolix.embeds import _EmbedBase
+# from hypergolix.embeds import _EmbedBase
 
 # This is a semi-normal import
 from golix.utils import _dummy_guid
@@ -122,12 +122,12 @@ class ObjectTrashtest(unittest.TestCase):
         #     IPython.embed()
         
 
-class TestClient(AgentBase, MemoryPersister, _TestDispatcher, _EmbedBase):
+class TestClient(AgentBase, MemoryPersister, _TestDispatcher):
     def __init__(self):
         super().__init__(persister=self, dispatcher=self)
 
 
-class TestAgent_SharedPersistence(AgentBase, _TestDispatcher, _EmbedBase):
+class TestAgent_SharedPersistence(AgentBase, _TestDispatcher):
     def __init__(self, *args, **kwargs):
         super().__init__(dispatcher=self, *args, **kwargs)
         

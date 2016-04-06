@@ -47,13 +47,14 @@ from hypergolix import AgentBase
 from hypergolix.persisters import MemoryPersister
 
 from hypergolix.core import DispatcherBase
+from hypergolix.core import RawObj
 
-from hypergolix.embeds import AppObj
+# from hypergolix.embeds import AppObj
 
-from hypergolix.ipc_hosts import _EmbeddedIPC
+# from hypergolix.ipc_hosts import _EmbeddedIPC
 
 
-class TestEmbed(AgentBase, MemoryPersister, DispatcherBase, _EmbeddedIPC):
+class TestDispatch(AgentBase, MemoryPersister, DispatcherBase):
     def __init__(self, *args, **kwargs):
         super().__init__(persister=self, dispatcher=self, *args, **kwargs)
 
@@ -65,7 +66,7 @@ class TestEmbed(AgentBase, MemoryPersister, DispatcherBase, _EmbeddedIPC):
         
 class TestAppObj(unittest.TestCase):
     def setUp(self):
-        self.agent1 = TestEmbed()
+        self.agent1 = TestDispatch()
         
     def test_appobj(self):
         pt0 = b'I am a sexy stagnant beast.'
@@ -74,8 +75,8 @@ class TestAppObj(unittest.TestCase):
         pt3 = b'Listening...'
         pt4 = b'All ears!'
 
-        obj1 = AppObj(
-            embed = self.agent1,
+        obj1 = RawObj(
+            dispatch = self.agent1,
             state = pt0,
             dynamic = False
         )

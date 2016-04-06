@@ -48,8 +48,6 @@ from .exceptions import HandshakeWarning
 from .utils import AppDef
 from .utils import _EndpointBase
 
-from .embeds import _EmbedBase
-
 
 class _IPCBase(metaclass=abc.ABCMeta):
     ''' Base class for an IPC mechanism. Note that an _IPCBase cannot 
@@ -76,7 +74,7 @@ class _IPCBase(metaclass=abc.ABCMeta):
         pass
         
         
-class _EmbeddedIPC(_IPCBase, _EmbedBase):
+class _EmbeddedIPC(_IPCBase):
     ''' EmbeddedIPC wraps _EmbedBase from embeds. It also 
     is its own endpoint (or has its own endpoint). It therefore fulfills
     all of the requirements for _EmbedBase.
