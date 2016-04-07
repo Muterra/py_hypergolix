@@ -52,7 +52,7 @@ from hypergolix.persisters import LocalhostServer
 # from hypergolix.embeds import _EmbedBase
 
 
-class TestAgent(AgentBase, LocalhostClient, _TestDispatcher):
+class _TestAgent(AgentBase, LocalhostClient, _TestDispatcher):
     def __init__(self, *args, **kwargs):
         super().__init__(persister=self, dispatcher=self, *args, **kwargs)
 
@@ -72,8 +72,8 @@ class WebsocketsTrashTest(unittest.TestCase):
         )
         self.server_thread.start()
         
-        self.agent1 = TestAgent(port=5926)
-        self.agent2 = TestAgent(port=5926)
+        self.agent1 = _TestAgent(port=5926)
+        self.agent2 = _TestAgent(port=5926)
         
     def test_comms(self):
         pt0 = b'I am a sexy stagnant beast.'

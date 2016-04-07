@@ -53,14 +53,14 @@ from golix import FirstParty
 # ###############################################
 
 
-class SubscriptionNotifier(RuntimeWarning):
+class _SubscriptionNotifier(RuntimeWarning):
     pass
 
     
 class MemoryPersisterTrashtest(unittest.TestCase):
     def dummy_callback(self, guid):
         self.assertIn(guid, self.server1._store)
-        warnings.warn('Notification success!', category=SubscriptionNotifier)
+        warnings.warn('Notification success!', category=_SubscriptionNotifier)
     
     def setUp(self):
         self.server1 = MemoryPersister()
@@ -357,9 +357,9 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         
         # ---------------------------------------
         # Publish requests.
-        with self.assertWarns(SubscriptionNotifier, msg="Handshake subscription failure."):
+        with self.assertWarns(_SubscriptionNotifier, msg="Handshake subscription failure."):
             self.server1.publish(handshake1_1.packed)
-        with self.assertWarns(SubscriptionNotifier, msg="Handshake subscription failure."):
+        with self.assertWarns(_SubscriptionNotifier, msg="Handshake subscription failure."):
             self.server1.publish(handshake2_1.packed)
         with self.assertRaises(NakError, msg='Server allowed unknown recipient.'):
             self.server1.publish(handshake3_1.packed)
@@ -413,11 +413,11 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         # Now the real updates.
         # Since we already have an object for this binding, it should immediately
         # notify.
-        with self.assertWarns(SubscriptionNotifier, msg="Dynamic subscription failure."):
+        with self.assertWarns(_SubscriptionNotifier, msg="Dynamic subscription failure."):
             self.server1.publish(dyn1_1b.packed)
         # Since we need to upload the object for this binding, it should not notify
         # until we've uploaded the container itself.
-        with self.assertWarns(SubscriptionNotifier, msg="Dynamic subscription failure."):
+        with self.assertWarns(_SubscriptionNotifier, msg="Dynamic subscription failure."):
             self.server1.publish(dyn2_1b.packed)
             self.server1.publish(cont2_2.packed)
         # And now test that containers were actually GC'd
@@ -435,9 +435,9 @@ class MemoryPersisterTrashtest(unittest.TestCase):
             self.server1.publish(dyn2_1a.packed)
         
         # Now let's try debinding the dynamics.
-        with self.assertWarns(SubscriptionNotifier, msg="Dynamic debind subscription failure."):
+        with self.assertWarns(_SubscriptionNotifier, msg="Dynamic debind subscription failure."):
             self.server1.publish(dyndebind1_1.packed)
-        with self.assertWarns(SubscriptionNotifier, msg="Dynamic debind subscription failure."):
+        with self.assertWarns(_SubscriptionNotifier, msg="Dynamic debind subscription failure."):
             self.server1.publish(dyndebind2_1.packed)
         with self.assertRaises(NakError, msg='Server allowed debound dyn replay.'):
             self.server1.publish(dyn1_1a.packed)

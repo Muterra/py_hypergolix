@@ -44,9 +44,11 @@ from golix import Guid
 
 from hypergolix import AgentBase
 
+# from hypergolix.persisters import LocalhostClient
+# from hypergolix.persisters import LocalhostServer
 from hypergolix.persisters import MemoryPersister
 
-from hypergolix.core import DispatcherBase
+from hypergolix.core import Dispatcher
 from hypergolix.core import RawObj
 
 # from hypergolix.embeds import AppObj
@@ -54,9 +56,9 @@ from hypergolix.core import RawObj
 # from hypergolix.ipc_hosts import _EmbeddedIPC
 
 
-class TestDispatch(AgentBase, MemoryPersister, DispatcherBase):
+class _TestDispatch(AgentBase, Dispatcher):
     def __init__(self, *args, **kwargs):
-        super().__init__(persister=self, dispatcher=self, *args, **kwargs)
+        super().__init__(dispatcher=self, *args, **kwargs)
 
 
 # ###############################################
@@ -66,7 +68,16 @@ class TestDispatch(AgentBase, MemoryPersister, DispatcherBase):
         
 class TestAppObj(unittest.TestCase):
     def setUp(self):
-        self.agent1 = TestDispatch()
+        self.persister = MemoryPersister()
+        
+        self.agent1 = _TestDispatch(persister=self.persister)
+        
+        appdef1 = self.agent1.register_api(bytes(65), endpoint)
+        
+        
+        self.agent2 = _TestDispatch(persister=self.persister)
+        
+        appdef2 = self.agent2.register_api(bytes(65), endpoint)
         
     def test_appobj(self):
         pt0 = b'I am a sexy stagnant beast.'
@@ -80,6 +91,17 @@ class TestAppObj(unittest.TestCase):
             state = pt0,
             dynamic = False
         )
+
+        obj2 = RawObj(
+            dispatch = self.agent1,
+            state = pt1,
+            dynamic = True
+        )
+        
+        obj2.share(self.agent2.whoami)
+        # This delay, as it turns out, is important
+        time.sleep(1)
+        obj2.update(pt2)
 
         # obj1 = self.agent1.new_object(pt0, dynamic=False)
         # obj2 = self.agent1.new_object(pt1, dynamic=True)

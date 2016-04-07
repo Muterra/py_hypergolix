@@ -122,12 +122,12 @@ class ObjectTrashtest(unittest.TestCase):
         #     IPython.embed()
         
 
-class TestClient(AgentBase, MemoryPersister, _TestDispatcher):
+class _TestClient(AgentBase, MemoryPersister, _TestDispatcher):
     def __init__(self):
         super().__init__(persister=self, dispatcher=self)
 
 
-class TestAgent_SharedPersistence(AgentBase, _TestDispatcher):
+class _TestAgent_SharedPersistence(AgentBase, _TestDispatcher):
     def __init__(self, *args, **kwargs):
         super().__init__(dispatcher=self, *args, **kwargs)
         
@@ -142,10 +142,10 @@ class TestAgent_SharedPersistence(AgentBase, _TestDispatcher):
 class AgentTrashTest(unittest.TestCase):
     def setUp(self):
         self.persister = MemoryPersister()
-        self.agent1 = TestAgent_SharedPersistence(
+        self.agent1 = _TestAgent_SharedPersistence(
             persister = self.persister
         )
-        self.agent2 = TestAgent_SharedPersistence(
+        self.agent2 = _TestAgent_SharedPersistence(
             persister = self.persister
         )
         self.dispatcher1 = self.agent1
@@ -252,8 +252,8 @@ class AgentTrashTest(unittest.TestCase):
         
 class ClientTrashTest(unittest.TestCase):
     def setUp(self):
-        self.agent1 = TestClient()
-        self.agent2 = TestClient()
+        self.agent1 = _TestClient()
+        self.agent2 = _TestClient()
         
     def test_alone(self):
         pt1 = b'Hello, world?'
