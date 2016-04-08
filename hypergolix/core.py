@@ -81,6 +81,7 @@ from Crypto.Protocol.KDF import HKDF
 from .utils import _ObjectBase
 from .utils import StaticObject
 from .utils import DynamicObject
+from .utils import AppDef
 
 from .exceptions import NakError
 from .exceptions import HandshakeError
@@ -91,6 +92,7 @@ from .persisters import _PersisterBase
 from .persisters import MemoryPersister
 
 from .ipc_hosts import _IPCBase
+from .ipc_hosts import _EndpointBase
         
 # ###############################################
 # Utilities, etc
@@ -155,14 +157,13 @@ class AgentBase:
     
     DEFAULT_LEGROOM = 3
     
-    def __init__(self, persister, dispatcher, _identity=None, _bootstrap=None, *args, **kwargs):
+    def __init__(self, persister, dispatcher, _identity=None, *args, **kwargs):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         
         persister isinstance _PersisterBase
         dispatcher isinstance DispatcherBase
         _identity isinstance golix.FirstParty
-        _bootstrap isinstance tuple(golix.Guid, golix.Secret)
         '''
         super().__init__(*args, **kwargs)
         
@@ -207,38 +208,15 @@ class AgentBase:
         # self._legroom = max(1, _legroom)
         
         # In this case, we need to create our own bootstrap.
-        if _identity is None and _bootstrap is None:
+        if _identity is None:
             self._identity = FirstParty()
             self._persister.publish(self._identity.second_party.packed)
-            self._bootstrap = AgentBootstrap(
-                agent = self,
-                obj = self._new_bootstrap_container()
-            )
-            # Default for legroom. Currently hard-coded and not overrideable.
-            self._bootstrap['legroom'] = self.DEFAULT_LEGROOM
             
-        elif _identity is not None and _bootstrap is not None:
+        else:
             # Could do type checking here but currently no big deal?
             # This would also be a good spot to make sure our identity already
             # exists at the persister.
             self._identity = _identity
-            # Get bootstrap
-            self._set_secret_pending(
-                guid = _bootstrap[0],
-                secret = _bootstrap[1]
-            )
-            bootstrap_obj = self.get_object(bootstrap_guid)
-            bootstrap = AgentBootstrap.from_existing(
-                obj = bootstrap_obj,
-                agent = self
-            )
-            self._bootstrap = bootstrap
-            
-        else:
-            raise ValueError(
-                'Must either declare both _golix_firstpary and _bootstrap, or '
-                'neither of them.'
-            )
             
         # Now subscribe to my identity at the persister.
         self._persister.subscribe(
@@ -246,22 +224,12 @@ class AgentBase:
             callback = self._request_listener
         )
         
-    def _new_bootstrap_container(self):
-        ''' Creates a new container to use for the bootstrap object.
-        '''
-        padding_size = int.from_bytes(os.urandom(1), byteorder='big')
-        padding = os.urandom(padding_size)
-        return self.new_object(padding, dynamic=True)
-        
     @property
     def _legroom(self):
         ''' Get the legroom from our bootstrap. If it hasn't been 
         created yet (aka within __init__), return the class default.
         '''
-        try:
-            return self._bootstrap['legroom']
-        except (AttributeError, KeyError):
-            return self.DEFAULT_LEGROOM
+        return self.DEFAULT_LEGROOM
         
     @property
     def whoami(self):
@@ -325,17 +293,16 @@ class AgentBase:
             secret = request.secret, 
             guid = request.target
         )
-        obj = self.get_object(request.target)
         
         try:
-            self.dispatcher.dispatch_handshake(obj)
+            self.dispatcher.dispatch_handshake(request.target)
             
         except HandshakeError as e:
             # Erfolglos. Send a nak to whomever sent the handshake
             response_obj = self._identity.make_nak(
                 target = source_guid
             )
-            self.cleanup_object(obj)
+            self.cleanup_guid(request.target)
             
         else:
             # Success. Send an ack to whomever sent the handshake
@@ -486,17 +453,6 @@ class AgentBase:
         )
         self.persister.publish(debind.packed)
         
-    def new_object(self, state, dynamic=True, _legroom=None):
-        ''' Creates a new object. Wrapper for RawObj.__init__.
-        '''
-        return RawObj(
-            # Todo: update dispatch intelligently
-            dispatch = self,
-            state = state,
-            dynamic = dynamic,
-            _legroom = _legroom
-        )
-        
     def new_static(self, state):
         ''' Makes a new static object, handling binding, persistence, 
         and so on. Returns container guid.
@@ -568,23 +524,6 @@ class AgentBase:
         self._holdings[dynamic.guid_dynamic] = dynamic.guid_dynamic
         
         return dynamic.guid_dynamic
-        
-    def update_object(self, obj, state):
-        ''' Updates a dynamic object. May link to a static (or dynamic) 
-        object's address. Must pass either data or link, but not both.
-        
-        Wraps RawObj.update and modifies the dynamic object in place.
-        
-        Could add a way to update the legroom parameter while we're at
-        it. That would need to update the maxlen of both the obj._buffer
-        and the self._historian.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Obj must be an RawObj.'
-            )
-            
-        obj.update(state)
         
     def update_dynamic(self, guid_dynamic, state):
         ''' Like update_object, but does not perform type checking, and
@@ -687,24 +626,6 @@ class AgentBase:
         '''
         raise NotImplementedError('Have yet to set up static syncing.')
         
-    def sync_object(self, obj):
-        ''' Wraps RawObj.sync.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError('Must pass RawObj or subclass to sync_object.')
-            
-        return obj.sync()
-        
-    def freeze_object(self, obj):
-        ''' Wraps RawObj.freeze. Note: does not currently traverse 
-        nested dynamic bindings.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Only RawObj may be frozen.'
-            )
-        return obj.freeze()
-        
     def freeze_dynamic(self, guid_dynamic):
         ''' Creates a static binding for the most current state of a 
         dynamic binding. Returns the static container's guid.
@@ -724,13 +645,6 @@ class AgentBase:
         # Return the guid that was just held.
         return target
         
-    def hold_object(self, obj):
-        ''' Wraps RawObj.hold.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError('Only RawObj may be held by hold_object.')
-        obj.hold()
-        
     def hold_guid(self, guid):
         ''' Prevents the deletion of a Guid by binding to it.
         '''
@@ -746,16 +660,6 @@ class AgentBase:
         self._holdings[guid] = binding.guid
         # Also make sure the secret is persistent.
         self._set_secret(guid, self._get_secret(guid))
-        
-    def delete_object(self, obj):
-        ''' Wraps RawObj.delete. 
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Obj must be RawObj or similar.'
-            )
-            
-        obj.delete()
         
     def delete_guid(self, guid):
         ''' Removes an object identified by guid (if possible). May 
@@ -775,24 +679,23 @@ class AgentBase:
         
         return True
         
-    def hand_object(self, obj, recipient_guid):
+    def hand_guid(self, target, recipient):
         ''' Initiates a handshake request with the recipient to share 
-        the object.
+        the guid.
         
-        Should probably retool to be hand_guid.
+        This approach may be perhaps somewhat suboptimal for dynamic 
+        objects.
         '''
-        contact = self._retrieve_contact(recipient_guid)
-        
-        if not isinstance(obj, RawObj):
+        if not isinstance(target, Guid):
             raise TypeError(
-                'Obj must be a RawObj or similar.'
+                'target must be Guid or similar.'
             )
-    
-        # This is, shall we say, suboptimal, for dynamic objects.
-        # frame_guid = self._historian[obj.address][0]
-        # target = self._dynamic_targets[obj.address]
-        target = obj.address
-        
+        if not isinstance(recipient, Guid):
+            raise TypeError(
+                'recipient must be Guid or similar.'
+            )
+            
+        contact = self._retrieve_contact(recipient)
         handshake = self._identity.make_handshake(
             target = target,
             secret = self._get_secret(target)
@@ -806,7 +709,7 @@ class AgentBase:
         # Note the potential race condition here. Should catch errors with the
         # persister in case we need to resolve pending requests that didn't
         # successfully post.
-        self._pending_requests[request.guid] = obj.address
+        self._pending_requests[request.guid] = target
         self.persister.publish(request.packed)
         
     def _resolve_dynamic_plaintext(self, target):
@@ -962,22 +865,9 @@ class AgentBase:
         # This is gross, not sure I like it.
         return author, is_dynamic, state
         
-    def get_object(self, guid):
-        ''' Wraps RawObj.__init__  and get_guid for preexisting objects.
-        '''
-        author, is_dynamic, state = self.get_guid(guid)
-            
-        return RawObj(
-            # Todo: make the dispatch more intelligent
-            dispatch = self,
-            state = state,
-            dynamic = is_dynamic,
-            _preexisting = (guid, author)
-        )
-        
-    def cleanup_object(self, obj):
-        ''' Does anything needed to clean up the object -- removing 
-        secrets, unsubscribing from dynamic updates, etc.
+    def cleanup_guid(self, guid):
+        ''' Does anything needed to clean up the object with address 
+        guid: removing secrets, unsubscribing from dynamic updates, etc.
         '''
         pass
         
@@ -1006,6 +896,63 @@ class AgentBase:
             key = ratcheted[:len_key],
             seed = ratcheted[len_key:]
         )
+        
+        
+class AgentAccount:
+    ''' Agent accounts include various utility functions for agent 
+    persistence across multiple devices and/or logins.
+    
+    Must be paired (also classed with) AgentBase and DispatcherBase.
+    Will not work without them.
+    '''
+    def __init__(self, _preexisting=None, *args, **kwargs):
+        '''
+        _preexisting isinstance tuple
+            _preexisting[0] isinstance golix.Guid
+            _preexisting[1] isinstance golix.Secret
+        '''
+        super().__init__(_preexisting=_preexisting, *args, **kwargs)
+        
+        if _preexisting is None:
+            self._bootstrap = AgentBootstrap(
+                agent = self,
+                obj = self._new_bootstrap_container()
+            )
+            # Default for legroom. Currently hard-coded and not overrideable.
+            self._bootstrap['legroom'] = self.DEFAULT_LEGROOM
+            
+        else:
+            # Get bootstrap
+            bootstrap_guid = _preexisting[0]
+            bootstrap_secret = _preexisting[1]
+            self._set_secret_pending(
+                guid = bootstrap_guid,
+                secret = bootstrap_secret
+            )
+            bootstrap_obj = self.get_object(bootstrap_guid)
+            bootstrap = AgentBootstrap.from_existing(
+                obj = bootstrap_obj,
+                agent = self
+            )
+            self._bootstrap = bootstrap
+        
+    def _new_bootstrap_container(self):
+        ''' Creates a new container to use for the bootstrap object.
+        '''
+        padding_size = int.from_bytes(os.urandom(1), byteorder='big')
+        padding = os.urandom(padding_size)
+        return self.new_object(padding, dynamic=True)
+        
+    @property
+    def _legroom(self):
+        ''' Get the legroom from our bootstrap. If it hasn't been 
+        created yet (aka within __init__), return the class default.
+        '''
+        try:
+            return self._bootstrap['legroom']
+        except (AttributeError, KeyError):
+            # Default to the parent implementation
+            return super()._legroom
         
     def register(self, password):
         ''' Save the agent's identity to a GEOC object.
@@ -1056,9 +1003,254 @@ class DispatcherBase(metaclass=abc.ABCMeta):
     applications. Dispatchers are intended to be combined with agents,
     and vice versa.
     '''
-    def __init__(self, ipc_host=None, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._ipc_host = ipc_host
+        
+    # @abc.abstractmethod
+    # def initiate_handshake(self, data, recipient):
+    #     ''' Creates a handshake for data with recipient.
+        
+    #     data isinstance bytes-like
+    #     recipient isinstance Guid
+    #     '''
+    #     handshake = self.new_object(data, dynamic=True)
+    #     self.hand_object(
+    #         obj = handshake, 
+    #         recipient = recipient
+    #     )
+        
+    #     return handshake
+        
+    @abc.abstractmethod
+    def dispatch_handshake(self, target):
+        ''' Receives the target *object* for a handshake (note: NOT the 
+        handshake itself) and dispatches it to the appropriate 
+        application.
+        
+        handshake is a StaticObject or DynamicObject.
+        Raises HandshakeError if unsuccessful.
+        '''
+        # First first, get the object.
+        return self.get_object(target)
+        
+    @abc.abstractmethod
+    def dispatch_handshake_ack(self, ack, target):
+        ''' Receives a handshake acknowledgement and dispatches it to
+        the appropriate application.
+        
+        ack is a golix.AsymAck object.
+        '''
+        pass
+    
+    @abc.abstractmethod
+    def dispatch_handshake_nak(self, nak, target):
+        ''' Receives a handshake nonacknowledgement and dispatches it to
+        the appropriate application.
+        
+        ack is a golix.AsymNak object.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def share_object(self, obj, recipient):
+        ''' Currently, this is just calling hand_object. In the future,
+        this will have a devoted key exchange subprotocol.
+        '''
+        pass
+        
+    def new_object(self, state, dynamic=True, _legroom=None):
+        ''' Creates a new object. Wrapper for RawObj.__init__.
+        '''
+        return RawObj(
+            # Todo: update dispatch intelligently
+            dispatch = self,
+            state = state,
+            dynamic = dynamic,
+            _legroom = _legroom
+        )
+        
+    def update_object(self, obj, state):
+        ''' Updates a dynamic object. May link to a static (or dynamic) 
+        object's address. Must pass either data or link, but not both.
+        
+        Wraps RawObj.update and modifies the dynamic object in place.
+        
+        Could add a way to update the legroom parameter while we're at
+        it. That would need to update the maxlen of both the obj._buffer
+        and the self._historian.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be an RawObj.'
+            )
+            
+        obj.update(state)
+        
+    def sync_object(self, obj):
+        ''' Wraps RawObj.sync.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError('Must pass RawObj or subclass to sync_object.')
+            
+        return obj.sync()
+        
+    def freeze_object(self, obj):
+        ''' Wraps RawObj.freeze. Note: does not currently traverse 
+        nested dynamic bindings.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Only RawObj may be frozen.'
+            )
+        return obj.freeze()
+        
+    def hold_object(self, obj):
+        ''' Wraps RawObj.hold.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError('Only RawObj may be held by hold_object.')
+        obj.hold()
+        
+    def delete_object(self, obj):
+        ''' Wraps RawObj.delete. 
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be RawObj or similar.'
+            )
+            
+        obj.delete()
+        
+    def hand_object(self, obj, recipient):
+        ''' Initiates a handshake request with the recipient to share 
+        the object.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be a RawObj or similar.'
+            )
+    
+        # This is, shall we say, suboptimal, for dynamic objects.
+        # frame_guid = self._historian[obj.address][0]
+        # target = self._dynamic_targets[obj.address]
+        target = obj.address
+        self.hand_guid(target, recipient)
+        
+    def get_object(self, guid):
+        ''' Wraps RawObj.__init__  and get_guid for preexisting objects.
+        '''
+        author, is_dynamic, state = self.get_guid(guid)
+            
+        return RawObj(
+            # Todo: make the dispatch more intelligent
+            dispatch = self,
+            state = state,
+            dynamic = is_dynamic,
+            _preexisting = (guid, author)
+        )
+    
+    @property
+    @abc.abstractmethod
+    def whoami(self):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def new_static(self, state):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def new_dynamic(self, state):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def update_dynamic(self, obj, state):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def freeze_dynamic(self, obj):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+        
+class _TestDispatcher(DispatcherBase):
+    ''' An dispatcher that ignores all dispatching for test purposes.
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self._orphan_handshakes_pending = []
+        self._orphan_handshakes_incoming = []
+        self._orphan_handshakes_outgoing = []
+        self._orphan_handshake_failures = []
+        
+    # def initiate_handshake(self, obj, recipient, api_id):
+    #     ''' Creates a handshake for the API_id with recipient.
+        
+    #     msg isinstance dict(like) and must contain a valid api_id
+    #     recipient isinstance Guid
+    #     '''
+    #     handshake = super().initiate_handshake(packed_msg, recipient)
+    #     self._orphan_handshakes_pending.append(handshake)
+        
+    #     return True
+        
+    def dispatch_handshake(self, target):
+        ''' Receives the target *object* for a handshake (note: NOT the 
+        handshake itself) and dispatches it to the appropriate 
+        application.
+        
+        handshake is a StaticObject or DynamicObject.
+        Raises HandshakeError if unsuccessful.
+        '''
+        handshake = super().dispatch_handshake(target)
+        self._orphan_handshakes_incoming.append(handshake)
+        
+    def dispatch_handshake_ack(self, ack, target):
+        ''' Receives a handshake acknowledgement and dispatches it to
+        the appropriate application.
+        
+        ack is a golix.AsymAck object.
+        '''
+        self._orphan_handshakes_outgoing.append(ack)
+    
+    def dispatch_handshake_nak(self, nak, target):
+        ''' Receives a handshake nonacknowledgement and dispatches it to
+        the appropriate application.
+        
+        ack is a golix.AsymNak object.
+        '''
+        self._orphan_handshake_failures.append(nak)
+        
+    def share_object(self, obj, recipient):
+        ''' Currently, this is just calling hand_object. In the future,
+        this will have a devoted key exchange subprotocol.
+        '''
+        return self.hand_object(obj, recipient)
+        
+    def retrieve_recent_handshake(self):
+        return self._orphan_handshakes_incoming.pop()
+        
+    def retrieve_recent_ack(self):
+        return self._orphan_handshakes_outgoing.pop()
+        
+    def retrieve_recent_nak(self):
+        return self._orphan_handshake_failures.pop()
+
+
+class Dispatcher(DispatcherBase):
+    ''' A standard, working dispatcher.
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
         # Lookup for app_tokens -> endpoints
         self._app_tokens = {
@@ -1081,29 +1273,25 @@ class DispatcherBase(metaclass=abc.ABCMeta):
         self._orphan_handshakes_incoming = []
         self._orphan_handshakes_outgoing = []
         
-    def share_object(self, obj, recipient):
-        ''' Currently, this is just calling hand_object. In the future,
-        this will have a devoted key exchange subprotocol.
+    def new_object(self, *args, **kwargs):
+        ''' Wraps super to hold on to the objects, tracking them 
+        internally, so that endpoints can use them.
         '''
-        return self.hand_object(obj, recipient)
+        obj = super().new_object(*args, **kwargs)
+        self._assigned_objects[obj.address] = obj
+        return obj
         
-    def initiate_handshake(self, recipient, msg):
-        ''' Creates a handshake for the API_id with recipient.
-        
-        msg isinstance dict(like) and must contain a valid api_id
-        recipient isinstance Guid
+    @staticmethod
+    def wrap_state(state, api_id, app_token=None):
+        ''' Wraps the object state into a format that can be dispatched.
         '''
-        # Check to make sure that we have a valid api_id in the msg
-        try:
-            api_id = msg['api_id']
-            appdef = self._api_ids[api_id]
-            
-        except KeyError as e:
-            raise ValueError(
-                'Handshake msg must contain a valid api_id that the current '
-                'agent IPC mechanism is capable of understanding.'
-            ) from e
-            
+        # For now, totally ignore app tokens. May change to AppDef arg
+        # if that changes.
+        msg = {
+            'api_id': api_id,
+            'app_token': app_token,
+            'body': state,
+        }
         try:
             packed_msg = msgpack.packb(msg)
             
@@ -1115,32 +1303,20 @@ class DispatcherBase(metaclass=abc.ABCMeta):
             msgpack.exceptions.PackValueError
         ) as e:
             raise ValueError(
-                'Couldn\'t pack handshake. Handshake msg must be dict-like.'
+                'Couldn\'t wrap state. Incompatible data format?'
             ) from e
+            
+        return packed_msg
         
-        handshake = self.new_object(msg, dynamic=True)
-        self.hand_object(
-            obj = handshake, 
-            recipient_guid = recipient
-        )
-        
-        # This bit is still pretty tentative
-        self._outstanding_handshakes[handshake.address] = handshake
-        self._outstanding_owners[handshake.address] = api_id
-        
-    def dispatch_handshake(self, handshake):
-        ''' Receives the target *object* for a handshake (note: NOT the 
-        handshake itself) and dispatches it to the appropriate 
-        application.
-        
-        handshake is a StaticObject or DynamicObject.
-        Raises HandshakeError if unsuccessful.
+    @staticmethod
+    def unwrap_state(wrapped):
+        ''' Wraps the object state into a format that can be dispatched.
         '''
-        # First try unpacking the message.
         try:
-            unpacked_msg = msgpack.unpackb(handshake.state)
+            unpacked_msg = msgpack.unpackb(wrapped)
             api_id = unpacked_msg['api_id']
-            appdef = self._api_ids[api_id]
+            app_token = unpacked_msg['app_token']
+            state = unpacked_msg['body']
             
         # MsgPack errors mean that we don't have a properly formatted handshake
         except (
@@ -1155,29 +1331,93 @@ class DispatcherBase(metaclass=abc.ABCMeta):
                 'handshake procedure.'
             ) from e
             
-        # KeyError means we don't have an app that speaks that API
-        except KeyError:
+        except KeyError as e:
+            raise HandshakeError(
+                'State was successfully unpacked, but lacks an api_id and/or '
+                'body key.'
+            ) from e
+            
+        return state, api_id, app_token
+        
+    # def initiate_handshake(self, obj, recipient, api_id):
+    #     ''' Creates a handshake for the API_id with recipient.
+        
+    #     msg isinstance dict(like) and must contain a valid api_id
+    #     recipient isinstance Guid
+    #     '''
+    #     # Check to make sure that we have a valid api_id in the msg
+    #     try:
+    #         appdef = self._api_ids[api_id]
+            
+    #     except KeyError as e:
+    #         raise ValueError(
+    #             'Handshake msg must contain a valid api_id that the current '
+    #             'dispatcher is capable of understanding.'
+    #         ) from e
+            
+    #     try:
+    #         packed_msg = msgpack.packb(msg)
+            
+    #     except (
+    #         msgpack.exceptions.BufferFull,
+    #         msgpack.exceptions.ExtraData,
+    #         msgpack.exceptions.OutOfData,
+    #         msgpack.exceptions.PackException,
+    #         msgpack.exceptions.PackValueError
+    #     ) as e:
+    #         raise ValueError(
+    #             'Couldn\'t pack handshake. Handshake msg must be dict-like.'
+    #         ) from e
+        
+    #     handshake = super().initiate_handshake(packed_msg, recipient)
+        
+    #     # This bit is still pretty tentative
+    #     self._outstanding_handshakes[handshake.address] = handshake
+    #     self._outstanding_owners[handshake.address] = api_id
+        
+    #     return True
+        
+    def dispatch_handshake(self, target):
+        ''' Receives the target *object* for a handshake (note: NOT the 
+        handshake itself) and dispatches it to the appropriate 
+        application.
+        
+        handshake is a StaticObject or DynamicObject.
+        Raises HandshakeError if unsuccessful.
+        '''
+        # First first, get the object.
+        handshake = super().dispatch_handshake(target)
+        # And now unwrap state.
+        state, api_id, app_token = self.unwrap_state(handshake.state)
+        
+        if api_id not in self._api_ids:
             warnings.warn(HandshakeWarning(
                 'Agent lacks application to handle app id.'
             ))
             self._orphan_handshakes_incoming.append(handshake)
-            
-        # Okay, we've successfully acquired an appdef. Pass the message along
-        # to the application.
         else:
-            try:
-                appdef.endpoint.handle_incoming(raw_msg)
-                
-            except Exception as e:
-                raise HandshakeError(
-                    'Agent application assigned to app id was unable to '
-                    'process the handshake.'
-                )
+            # We've defined a specific app token to use, so this is a private
+            # object. Only dispatch it to that application.
+            if app_token is not None:
+                try:
+                    # Dispatch to the endpoint.
+                    self._app_tokens[app_token].handle_incoming(state)
+                except KeyError:
+                    warnings.warn(HandshakeWarning(
+                        'Agent lacks application with matching token.'
+                    ))
+                    self._orphan_handshakes_incoming.append(handshake)
+            # No specific token is defined, so dispatch it to all applicable
+            # applications
+            
+            else:
+                for appdef in self._api_ids[api_id]:
+                    self._app_tokens[appdef.app_token].handle_incoming(state)
         
             # Lookup for guid -> object
             self._assigned_objects[handshake.address] = handshake
             self._assigned_owners[handshake.address] = api_id
-        
+    
     def dispatch_handshake_ack(self, ack, target):
         ''' Receives a handshake acknowledgement and dispatches it to
         the appropriate application.
@@ -1210,27 +1450,25 @@ class DispatcherBase(metaclass=abc.ABCMeta):
         
         endpoint = self._api_ids[owner].endpoint
         endpoint.handle_outgoing_failure(handshake)
+        
+    def share_object(self, obj, recipient):
+        ''' Currently, this is just calling hand_object. In the future,
+        this will have a devoted key exchange subprotocol.
+        '''
+        return self.hand_object(obj, recipient)
+        # return self.initiate_handshake(obj, recipient, api_id)
     
-    def register_api(self, api_id=None, appdef=None):
-        ''' Registers an api with the IPC mechanism. If appdef is None, 
-        will create an AppDef for the app. Must define api_id XOR
-        appdef.
+    def register_api(self, api_id, endpoint, app_token=None):
+        ''' Registers an api with the IPC mechanism. If token is None, 
+        will create a new token for the app.
         
         Returns an AppDef object.
         '''
-        if appdef is None and api_id is not None:
+        if app_token is None:
             app_token = self.new_token()
-            endpoint = self.new_endpoint()
-            appdef = AppDef(api_id, app_token, endpoint)
             
-        elif appdef is not None and api_id is None:
-            # Do nothing. We already have an appdef.
-            pass
-            
-        else:
-            raise ValueError('Must specify appdef XOR api_id.')
-            
-        self._app_tokens[appdef.app_token] = appdef.endpoint
+        appdef = AppDef(api_id, app_token)
+        self._app_tokens[appdef.app_token] = endpoint
         self._api_ids[appdef.api_id] = appdef
         
         return appdef
@@ -1242,128 +1480,6 @@ class DispatcherBase(metaclass=abc.ABCMeta):
         while token in self._app_tokens:
             token = os.urandom(4)
         return token
-    
-    @property
-    @abc.abstractmethod
-    def whoami(self):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def new_object(self, state):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def new_static(self, state):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def new_dynamic(self, state):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def update_dynamic(self, obj, state):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def update_object(self, obj, state):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def freeze_dynamic(self, obj):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def hold_object(self, obj):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def delete_object(self, obj):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def hand_object(self, obj, recipient_guid):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def get_object(self, guid):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-        
-class _TestDispatcher(DispatcherBase):
-    ''' An dispatcher that ignores all dispatching for test purposes.
-    '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-        self._orphan_handshakes_incoming = []
-        self._orphan_handshakes_outgoing = []
-        self._orphan_handshake_failures = []
-        
-    def dispatch_handshake(self, handshake):
-        ''' Receives the target *object* for a handshake (note: NOT the 
-        handshake itself) and dispatches it to the appropriate 
-        application.
-        
-        handshake is a StaticObject or DynamicObject.
-        Raises HandshakeError if unsuccessful.
-        '''
-        self._orphan_handshakes_incoming.append(handshake)
-        
-    def dispatch_handshake_ack(self, ack, target):
-        ''' Receives a handshake acknowledgement and dispatches it to
-        the appropriate application.
-        
-        ack is a golix.AsymAck object.
-        '''
-        self._orphan_handshakes_outgoing.append(ack)
-    
-    def dispatch_handshake_nak(self, nak, target):
-        ''' Receives a handshake nonacknowledgement and dispatches it to
-        the appropriate application.
-        
-        ack is a golix.AsymNak object.
-        '''
-        self._orphan_handshake_failures.append(nak)
-        
-    def new_endpoint(self):
-        ''' Creates a new endpoint for the IPC system. Endpoints must
-        be unique. Uniqueness must be enforced by subclasses of the
-        _IPCBase class.
-        
-        Returns an Endpoint object.
-        '''
-        return TestEndpoint()
-        
-    def retrieve_recent_handshake(self):
-        return self._orphan_handshakes_incoming.pop()
-        
-    def retrieve_recent_ack(self):
-        return self._orphan_handshakes_outgoing.pop()
-        
-    def retrieve_recent_nak(self):
-        return self._orphan_handshake_failures.pop()
 
 
 class RawObj:
@@ -1688,7 +1804,7 @@ class RawObj:
         '''
         self._dispatch.share_object(
             obj = self,
-            recipient_guid = recipient
+            recipient = recipient
         )
         
     def hold(self):

@@ -377,31 +377,6 @@ def _block_on_result(future):
     return future.result()
 
 
-class _EndpointBase(metaclass=abc.ABCMeta):
-    ''' Base class for an endpoint. Defines everything needed by the 
-    Integration to communicate with an individual application.
-    '''
-    @abc.abstractmethod
-    def handle_incoming(self, obj):
-        ''' Handles an object.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def handle_outgoing_failure(self, obj):
-        ''' Handles an object that failed to be accepted by the intended
-        recipient.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def handle_outgoing_success(self, obj):
-        ''' Handles an object that failed to be accepted by the intended
-        recipient.
-        '''
-        pass
-
-
 class AppDef:
     ''' An application definition object.
         
@@ -418,7 +393,7 @@ class AppDef:
     fact, using the correct application for any given api_id, except 
     that which is verified by the app itself.
     '''
-    def __init__(self, api_id, app_token, endpoint):
+    def __init__(self, api_id, app_token):
         if len(app_token) != 4:
             raise ValueError('app_token must be 4 bytes.')
         app_token = bytes(app_token)
@@ -428,9 +403,9 @@ class AppDef:
             raise ValueError('api_id must be 65 bytes.')
         api_id = bytes(api_id)
         
-        if not isinstance(endpoint, _EndpointBase):
-            raise TypeError('endpoint must subclass _EndpointBase.')
+        # if not isinstance(endpoint, _EndpointBase):
+        #     raise TypeError('endpoint must subclass _EndpointBase.')
         
         self.api_id = api_id
         self.app_token = app_token
-        self.endpoint = endpoint
+        # self.endpoint = endpoint
