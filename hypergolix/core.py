@@ -1051,12 +1051,18 @@ class DispatcherBase(metaclass=abc.ABCMeta):
         '''
         pass
         
-    @abc.abstractmethod
-    def share_object(self, obj, recipient):
-        ''' Currently, this is just calling hand_object. In the future,
-        this will have a devoted key exchange subprotocol.
+    def get_object(self, guid):
+        ''' Wraps RawObj.__init__  and get_guid for preexisting objects.
         '''
-        pass
+        author, is_dynamic, state = self.get_guid(guid)
+            
+        return RawObj(
+            # Todo: make the dispatch more intelligent
+            dispatch = self,
+            state = state,
+            dynamic = is_dynamic,
+            _preexisting = (guid, author)
+        )
         
     def new_object(self, state, dynamic=True, _legroom=None):
         ''' Creates a new object. Wrapper for RawObj.__init__.
@@ -1094,6 +1100,37 @@ class DispatcherBase(metaclass=abc.ABCMeta):
             
         return obj.sync()
         
+    def hand_object(self, obj, recipient):
+        ''' Initiates a handshake request with the recipient to share 
+        the object.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be a RawObj or similar.'
+            )
+    
+        # This is, shall we say, suboptimal, for dynamic objects.
+        # frame_guid = self._historian[obj.address][0]
+        # target = self._dynamic_targets[obj.address]
+        target = obj.address
+        self.hand_guid(target, recipient)
+        
+    def share_guid(self, guid, recipient):
+        ''' Currently, this is just calling hand_object. In the future,
+        this will have a devoted key exchange subprotocol.
+        '''
+        return self.hand_guid(guid, recipient)
+        
+    def share_object(self, obj, recipient):
+        ''' Currently, this is just calling hand_object. In the future,
+        this will have a devoted key exchange subprotocol.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Only RawObj may be shared.'
+            )
+        return obj.share(recipient)
+        
     def freeze_object(self, obj):
         ''' Wraps RawObj.freeze. Note: does not currently traverse 
         nested dynamic bindings.
@@ -1120,34 +1157,6 @@ class DispatcherBase(metaclass=abc.ABCMeta):
             )
             
         obj.delete()
-        
-    def hand_object(self, obj, recipient):
-        ''' Initiates a handshake request with the recipient to share 
-        the object.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Obj must be a RawObj or similar.'
-            )
-    
-        # This is, shall we say, suboptimal, for dynamic objects.
-        # frame_guid = self._historian[obj.address][0]
-        # target = self._dynamic_targets[obj.address]
-        target = obj.address
-        self.hand_guid(target, recipient)
-        
-    def get_object(self, guid):
-        ''' Wraps RawObj.__init__  and get_guid for preexisting objects.
-        '''
-        author, is_dynamic, state = self.get_guid(guid)
-            
-        return RawObj(
-            # Todo: make the dispatch more intelligent
-            dispatch = self,
-            state = state,
-            dynamic = is_dynamic,
-            _preexisting = (guid, author)
-        )
     
     @property
     @abc.abstractmethod
@@ -1230,12 +1239,6 @@ class _TestDispatcher(DispatcherBase):
         '''
         self._orphan_handshake_failures.append(nak)
         
-    def share_object(self, obj, recipient):
-        ''' Currently, this is just calling hand_object. In the future,
-        this will have a devoted key exchange subprotocol.
-        '''
-        return self.hand_object(obj, recipient)
-        
     def retrieve_recent_handshake(self):
         return self._orphan_handshakes_incoming.pop()
         
@@ -1248,6 +1251,27 @@ class _TestDispatcher(DispatcherBase):
 
 class Dispatcher(DispatcherBase):
     ''' A standard, working dispatcher.
+    
+    Objects are dispatched to endpoints based on two criteria:
+    
+    1. API identifiers, or
+    2. Application tokens.
+    
+    Application tokens should never be shared, as doing so may allow for
+    local phishing. The token is meant to create a private and unique 
+    identifier for that application; it is specific to that particular
+    agent. Objects being dispatched by token will only be usable by that
+    application at that agent.
+    
+    API identifiers (and objects dispatched by them), however, may be 
+    shared as desired. They are not necessarily specific to a particular
+    application; when sharing, the originating application has no 
+    guarantees that the receiving application will be the same. They 
+    serve only to enforce data interoperability.
+    
+    Ideally, the actual agent will eventually be capable of configuring
+    which applications should have access to which APIs, but currently
+    anything installed is considered trusted.
     '''
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1450,13 +1474,6 @@ class Dispatcher(DispatcherBase):
         
         endpoint = self._api_ids[owner].endpoint
         endpoint.handle_outgoing_failure(handshake)
-        
-    def share_object(self, obj, recipient):
-        ''' Currently, this is just calling hand_object. In the future,
-        this will have a devoted key exchange subprotocol.
-        '''
-        return self.hand_object(obj, recipient)
-        # return self.initiate_handshake(obj, recipient, api_id)
     
     def register_api(self, api_id, endpoint, app_token=None):
         ''' Registers an api with the IPC mechanism. If token is None, 
@@ -1802,8 +1819,8 @@ class RawObj:
         
         recipient isinstance Guid
         '''
-        self._dispatch.share_object(
-            obj = self,
+        self._dispatch.share_guid(
+            guid = self.address,
             recipient = recipient
         )
         
@@ -1838,6 +1855,8 @@ class RawObj:
         
         # If we traverse, this will need to pick the author out from the 
         # original binding.
+        # Also note that this will break in subclasses that have more 
+        # required arguments.
         return type(self)(
             dispatch = self._dispatch,
             state = self.state,

@@ -189,12 +189,33 @@ class AppObj:
     
     Everything here is wrapped from the messagepack dispatch format, so
     state may be more than just bytes.
+    
+    Unlike RawObj instances, AppObj instances are meant to be used with
+    a specific API definition, and/or a specific token. Tokens can be 
+    used to provide a consistent PRIVATE, freeform application state,
+    whilst any objects that are being communicated to a different agent
+    must use api ids.
+    
+    Basically, token-based AppObj instances without an api_id represent
+    data that will not be shared. It can, however, be any unstructured
+    data.
+    
+    _private isinstance bool
+        if True, dispatch by token.
+        if False, dispatch by api id.
     '''
     # This should define *only* ADDITIONAL slots.
-    __slots__ = []
+    __slots__ = [
+        '_api_id',
+        '_app_token',
+        '_private'
+    ]
     
-    def __init__(self, embed, *args, **kwargs):
+    def __init__(self, embed, api_id, app_token, private=False, *args, **kwargs):
         super().__init__(dispatcher=embed, *args, **kwargs)
+        self._private = private
+        self._api_id = api_id
+        self._app_token = app_token
             
     def _link_dispatch(self, dispatch):
         ''' Typechecks dispatch and them creates a weakref to it.
@@ -207,3 +228,29 @@ class AppObj:
             self._dispatch = dispatch
         else:
             self._dispatch = weakref.proxy(dispatch)
+            
+    def share(self, recipient):
+        ''' Extends super() share behavior to disallow sharing of 
+        private objects. Overriding this behavior will cause security
+        risks for users/agents.
+        '''
+        if self.private:
+            raise TypeError('Private application objects cannot be shared.')
+        else:
+            super().share(recipient)
+            
+    @property
+    def private(self):
+        ''' Return the (immutable) property describing whether this is
+        a private application object, or a sharable api-id-dispatched
+        object.
+        '''
+        return self._private
+        
+    @property
+    def api_id(self):
+        return self._api_id
+        
+    @property
+    def app_token(self):
+        return self._app_token

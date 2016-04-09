@@ -89,20 +89,6 @@ class _EndpointBase(metaclass=abc.ABCMeta):
                 app_token = app_token
             )
             self._appdefs[api_id] = appdef
-            
-    def wrap_appobj(self, obj):
-        ''' Wraps data from an appobj state update (or initial creation)
-        ...
-        shit, I'm confused.
-        '''
-        api_id = obj.api_id
-        body = obj.state
-        wrapped = {
-            'api_id': api_id,
-            'body': body
-        }
-        # Note: the object must define its api_id.
-        
     
     @abc.abstractmethod
     def handle_incoming(self, obj):
