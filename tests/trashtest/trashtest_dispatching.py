@@ -85,7 +85,7 @@ class TestAppObj(unittest.TestCase):
         self.endpoint2 = _TestEndpoint(
             dispatch = self.agent2,
         )
-        self.appdef2 = self.agent1.register_api(
+        self.appdef2 = self.agent2.register_api(
             api_id = bytes(65),
             endpoint = self.endpoint2
         )

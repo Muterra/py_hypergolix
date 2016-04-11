@@ -59,6 +59,7 @@ import threading
 import os
 import msgpack
 import abc
+import traceback
 
 from golix import FirstParty
 from golix import SecondParty
@@ -305,6 +306,8 @@ class AgentBase:
                 target = source_guid
             )
             self.cleanup_guid(request.target)
+            # print(repr(e))
+            # traceback.print_tb(e.__traceback__)
             
         else:
             # Success. Send an ack to whomever sent the handshake
@@ -1435,6 +1438,18 @@ class Dispatcher(DispatcherBase):
         self._api_ids[appdef.api_id] = appdef
         
         return appdef
+        
+    def get_token(self, api_id):
+        ''' Gets the local app token for the passed API id.
+        '''
+        try:
+            appdef = self._api_ids[api_id]
+            token = appdef.app_token
+        except KeyError as e:
+            raise KeyError(
+                'Dispatcher does not have a token for passed api_id.'
+            ) from e
+        return token
         
     def new_token(self):
         # Use a dummy api_id to force the while condition to be true initially

@@ -35,6 +35,7 @@ import threading
 import abc
 import weakref
 import msgpack
+import traceback
 
 # Utils may only import from .exceptions or .bases (except the latter doesn't 
 # yet exist)
@@ -106,7 +107,8 @@ class RawObj:
             self._author = _preexisting[1]
             # If we're dynamic, subscribe to any updates.
             if self.is_dynamic:
-                self._dispatch.subscribe(self.address, self.sync)
+                # This feels gross. Also, it's not really un-sub-able
+                self._dispatch.persister.subscribe(self.address, self.sync)
         # _preexisting was not set, so we're creating a new object.
         else:
             self._address = self._make_golix(state, dynamic)
@@ -467,7 +469,10 @@ class RawObj:
                     'attached Agent.'
                 )
             else:
-                self._dispatch.update_dynamic(self.address, state)
+                self._dispatch.update_dynamic(
+                    self.address, 
+                    state = self._wrap_state(state)
+                )
                 
         # _preexisting has been set, so we may need to unwrap state before 
         # using it
@@ -520,6 +525,10 @@ class AppObj(RawObj):
     _private isinstance bool
         if True, dispatch by token.
         if False, dispatch by api id.
+        
+    Note: AppObj should be set up such that there is exactly one AppObj
+    per application. As such, they should probably be aware of their 
+    endpoints.
     '''
     # This should define *only* ADDITIONAL slots.
     __slots__ = [
@@ -551,6 +560,11 @@ class AppObj(RawObj):
             _preexisting = _preexisting,
             *args, **kwargs
         )
+        
+        try:
+            self.app_token
+        except AttributeError:
+            self._app_token = self._dispatch.get_token(self.api_id)
             
     def _link_dispatch(self, dispatch):
         ''' Typechecks dispatch and them creates a weakref to it.
@@ -604,7 +618,7 @@ class AppObj(RawObj):
             'body': state,
         }
         try:
-            packed_msg = msgpack.packb(msg)
+            packed_msg = msgpack.packb(msg, use_bin_type=True)
             
         except (
             msgpack.exceptions.BufferFull,
@@ -623,7 +637,7 @@ class AppObj(RawObj):
         ''' Wraps the object state into a format that can be dispatched.
         '''
         try:
-            unpacked_msg = msgpack.unpackb(state)
+            unpacked_msg = msgpack.unpackb(state, encoding='utf-8')
             api_id = unpacked_msg['api_id']
             app_token = unpacked_msg['app_token']
             state = unpacked_msg['body']
@@ -637,6 +651,9 @@ class AppObj(RawObj):
             msgpack.exceptions.UnpackValueError,
             KeyError
         ) as e:
+            # print(repr(e))
+            # traceback.print_tb(e.__traceback__)
+            # print(state)
             raise HandshakeError(
                 'Handshake does not appear to conform to the hypergolix '
                 'handshake procedure.'
@@ -645,24 +662,51 @@ class AppObj(RawObj):
         # We may have already set the attributes.
         # Wrap this in a try/catch in case we've have.
         try:
-            self._api_id = api_id
+            # print('---- app_token: ', app_token)
+            self._unwrap_api_id(api_id)
+            self._unwrap_app_token(app_token)
+            # print('---- self.app_token: ', self.app_token)
+                
+        # So, we've already set one or more of the attributes.
+        except AttributeError as e:
+            print(repr(e))
+            traceback.print_tb(e.__traceback__)
+            # # Should we double-check the consistency of _private?
+            # pass
             
+        return state
+        
+    def _unwrap_api_id(self, api_id):
+        ''' Checks to see if api_id has already been defined. If so, 
+        compares between them. If not, sets it.
+        '''
+        try:
+            if self.api_id != api_id:
+                raise RuntimeError('Mismatched api_ids across update.')
+        except AttributeError:
+            self._api_id = api_id
+        
+    def _unwrap_app_token(self, app_token):
+        ''' Checks app token for None. If None, asks dispatch for the 
+        appropriate token. Also assigns _private appropriately.
+        '''
+        try:
+            # Compare to self.app_token FIRST to force attributeerror.
+            if app_token != self.app_token and app_token is not None:
+                raise RuntimeError('Mistmatched app tokens across update.')
+            
+        # There is no existing app token.
+        except AttributeError:
             # If we have an app_token, we know this is a private object.
             if app_token is not None:
                 self._app_token = app_token
                 self._private = True
                 
-            # Otherwise, don't set the app token, so that the dispatcher can look
-            # it up. But, do set the api id.
+            # Otherwise, don't set the app token, and look it up after we've
+            # completed the rest of object initialization.
             else:
+                # self._app_token = self._dispatch.get_token(self.api_id)
                 self._private = False
-                
-        # So, we've already set one or more of the attributes.
-        except AttributeError:
-            # Should we double-check the consistency of _private?
-            pass
-            
-        return state
 
 
 class AppDef:
