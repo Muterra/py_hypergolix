@@ -49,9 +49,11 @@ from hypergolix import AgentBase
 from hypergolix.persisters import MemoryPersister
 
 from hypergolix.core import Dispatcher
-from hypergolix.core import RawObj
 
-# from hypergolix.embeds import AppObj
+from hypergolix.utils import AppObj
+# from hypergolix.utils import RawObj
+
+from hypergolix.ipc_hosts import _TestEndpoint
 
 # from hypergolix.ipc_hosts import _EmbeddedIPC
 
@@ -71,13 +73,22 @@ class TestAppObj(unittest.TestCase):
         self.persister = MemoryPersister()
         
         self.agent1 = _TestDispatch(persister=self.persister)
-        
-        appdef1 = self.agent1.register_api(bytes(65), endpoint)
-        
+        self.endpoint1 = _TestEndpoint(
+            dispatch = self.agent1
+        )
+        self.appdef1 = self.agent1.register_api(
+            api_id = bytes(65),
+            endpoint = self.endpoint1
+        )
         
         self.agent2 = _TestDispatch(persister=self.persister)
-        
-        appdef2 = self.agent2.register_api(bytes(65), endpoint)
+        self.endpoint2 = _TestEndpoint(
+            dispatch = self.agent2,
+        )
+        self.appdef2 = self.agent1.register_api(
+            api_id = bytes(65),
+            endpoint = self.endpoint2
+        )
         
     def test_appobj(self):
         pt0 = b'I am a sexy stagnant beast.'
@@ -86,21 +97,23 @@ class TestAppObj(unittest.TestCase):
         pt3 = b'Listening...'
         pt4 = b'All ears!'
 
-        obj1 = RawObj(
-            dispatch = self.agent1,
+        obj1 = AppObj(
+            embed = self.agent1,
             state = pt0,
+            appdef = self.appdef1,
+            private = False,
             dynamic = False
         )
 
-        obj2 = RawObj(
-            dispatch = self.agent1,
+        obj2 = AppObj(
+            embed = self.agent1,
             state = pt1,
+            appdef = self.appdef1,
+            private = False,
             dynamic = True
         )
         
         obj2.share(self.agent2.whoami)
-        # This delay, as it turns out, is important
-        time.sleep(1)
         obj2.update(pt2)
 
         # obj1 = self.agent1.new_object(pt0, dynamic=False)
@@ -111,11 +124,11 @@ class TestAppObj(unittest.TestCase):
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
             
-        # # Start an interactive IPython interpreter with local namespace, but
-        # # suppress all IPython-related warnings.
-        # with warnings.catch_warnings():
-        #     warnings.simplefilter('ignore')
-        #     IPython.embed()
+        # Start an interactive IPython interpreter with local namespace, but
+        # suppress all IPython-related warnings.
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            IPython.embed()
         
     
     # def tearDown(self):

@@ -33,6 +33,12 @@ hypergolix: A python Golix client.
 import collections
 import threading
 import abc
+import weakref
+import msgpack
+
+# Utils may only import from .exceptions or .bases (except the latter doesn't 
+# yet exist)
+from .exceptions import HandshakeError
 
 # Control * imports.
 __all__ = [
@@ -381,8 +387,8 @@ class RawObj:
         
         recipient isinstance Guid
         '''
-        self._dispatch.share_guid(
-            guid = self.address,
+        self._dispatch.share_object(
+            obj = self,
             recipient = recipient
         )
         
@@ -476,8 +482,9 @@ class RawObj:
     def _link_dispatch(self, dispatch):
         ''' Typechecks dispatch and them creates a weakref to it.
         '''
-        if not isinstance(dispatch, DispatcherBase):
-            raise TypeError('dispatch must subclass DispatcherBase.')
+        # This will require moving DispatcherBase to a bases module
+        # if not isinstance(dispatch, DispatcherBase):
+        #     raise TypeError('dispatch must subclass DispatcherBase.')
         
         # Copying like this seems dangerous, but I think it should be okay.
         if isinstance(dispatch, weakref.ProxyTypes):
@@ -486,7 +493,7 @@ class RawObj:
             self._dispatch = weakref.proxy(dispatch)
 
 
-class AppObj:
+class AppObj(RawObj):
     ''' A class for objects to be used by apps. Can be updated (if the 
     object was created by the connected Agent and is mutable) and have
     a state.
@@ -521,23 +528,23 @@ class AppObj:
         '_private'
     ]
     
-    def __init__(self, embed, state, api_id=None, app_token=None, 
+    def __init__(self, embed, state, appdef=None, 
     private=False, dynamic=True, callbacks=None, _preexisting=None, 
     *args, **kwargs):
         if _preexisting is not None:
             # Note that this bit will set _api_id, _private, and _app_token
+            # Note: what if app_token is missing because this is a shared obj
+            # and their token is (by definition) different?
             state = self._unwrap_state(state)
+        elif appdef is None:
+            raise TypeError('appdef must be defined for a new object.')
         else:
-            if api_id is None and app_token is None:
-                raise TypeError(
-                    'AppObj must define at least api_id or app_token.'
-                )
             self._private = private
-            self._api_id = api_id
-            self._app_token = app_token
+            self._api_id = appdef.api_id
+            self._app_token = appdef.app_token
         
         super().__init__(
-            dispatcher = embed, 
+            dispatch = embed, 
             state = state, 
             dynamic = dynamic, 
             callbacks = callbacks,
@@ -548,8 +555,8 @@ class AppObj:
     def _link_dispatch(self, dispatch):
         ''' Typechecks dispatch and them creates a weakref to it.
         '''
-        if not isinstance(dispatch, _EmbedBase):
-            raise TypeError('dispatch must subclass _EmbedBase.')
+        # if not isinstance(dispatch, _EmbedBase):
+        #     raise TypeError('dispatch must subclass _EmbedBase.')
         
         # Copying like this seems dangerous, but I think it should be okay.
         if isinstance(dispatch, weakref.ProxyTypes):

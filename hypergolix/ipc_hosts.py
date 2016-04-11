@@ -63,7 +63,7 @@ class _EndpointBase(metaclass=abc.ABCMeta):
     Alternatively, might just treat the whole appdata portion as a 
     nested binary file, and unpack that separately.
     '''
-    def __init__(self, dispatch, apis, *args, **kwargs):
+    def __init__(self, dispatch, apis=None, *args, **kwargs):
         ''' Creates an endpoint for the specified agent that handles the
         associated apis. Apis is an iterable of either AppDef objects, 
         in which case the existing tokens are used, or api_ids, in which 
@@ -73,22 +73,35 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         super().__init__(*args, **kwargs)
         
         self._dispatch = weakref.proxy(dispatch)
+        # Lookup api_id -> { appdefs }
         self._appdefs = {}
+        # Lookup token -> appdef
+        self._tokens = {}
+        
+        if apis is None:
+            apis = tuple()
         
         for api in apis:
-            if isinstance(api, AppDef):
-                api_id = api.api_id
-                app_token = api.app_token
-            else:
-                api_id = api
-                app_token = None
-                
-            appdef = self._dispatch.register_api(
-                api_id = api_id, 
-                endpoint = self,
-                app_token = app_token
-            )
-            self._appdefs[api_id] = appdef
+            self.add_api(api)
+            
+    def add_api(self, appdef):
+        ''' This adds an appdef to the endpoint. Probably not strictly
+        necessary, but helps keep track of things.
+        '''
+        if not isinstance(appdef, AppDef):
+            raise TypeError('appdef must be AppDef.')
+            
+        if appdef.api_id not in self._appdefs:
+            self._appdefs[appdef.api_id] = { appdef }
+        else:
+            # It's a set, so we don't need to worry about adding more copies
+            self._appdefs[appdef.api_id].add(appdef)
+            
+        # This should probably be a little more intelligent in the future
+        if appdef.app_token not in self._tokens:
+            self._tokens[appdef.app_token] = appdef
+        else:
+            raise RuntimeError('Cannot reuse tokens for new applications.')
     
     @abc.abstractmethod
     def handle_incoming(self, obj):
@@ -118,7 +131,22 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         
         
 class _TestEndpoint(_EndpointBase):
-    pass
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._assigned_objs = []
+        self._failed_objs = []
+        
+    def handle_incoming(self, obj):
+        self._assigned_objs.append(obj)
+        print('Incoming: ', obj)
+        
+    def handle_outgoing_failure(self, obj, recipient):
+        self._failed_objs.append(obj)
+        print('Failed: ', obj)
+        
+    def handle_outgoing_success(self, obj, recipient):
+        self._assigned_objs.append(obj)
+        print('Success: ', obj)
 
 
 class _IPCBase(metaclass=abc.ABCMeta):

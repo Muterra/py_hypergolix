@@ -1103,7 +1103,9 @@ class DispatcherBase(metaclass=abc.ABCMeta):
         return obj.sync()
         
     def hand_object(self, obj, recipient):
-        ''' Initiates a handshake request with the recipient to share 
+        ''' DEPRECATED.
+        
+        Initiates a handshake request with the recipient to share 
         the object.
         '''
         if not isinstance(obj, RawObj):
@@ -1117,12 +1119,6 @@ class DispatcherBase(metaclass=abc.ABCMeta):
         target = obj.address
         self.hand_guid(target, recipient)
         
-    def share_guid(self, guid, recipient):
-        ''' Currently, this is just calling hand_object. In the future,
-        this will have a devoted key exchange subprotocol.
-        '''
-        return self.hand_guid(guid, recipient)
-        
     def share_object(self, obj, recipient):
         ''' Currently, this is just calling hand_object. In the future,
         this will have a devoted key exchange subprotocol.
@@ -1131,7 +1127,7 @@ class DispatcherBase(metaclass=abc.ABCMeta):
             raise TypeError(
                 'Only RawObj may be shared.'
             )
-        return obj.share(recipient)
+        return self.hand_guid(obj.address, recipient)
         
     def freeze_object(self, obj):
         ''' Wraps RawObj.freeze. Note: does not currently traverse 
@@ -1289,12 +1285,12 @@ class Dispatcher(DispatcherBase):
         # Lookup for handshake guid -> handshake object
         self._outstanding_handshakes = {}
         # Lookup for handshake guid -> api_id
-        self._outstanding_owners = {}
+        self._outstanding_shares = {}
         
         # Lookup for guid -> object
         self._assigned_objects = {}
         # Lookup for guid -> api_id
-        self._assigned_owners = {}
+        self._completed_shares = {}
         
         self._orphan_handshakes_incoming = []
         self._orphan_handshakes_outgoing = []
@@ -1333,7 +1329,7 @@ class Dispatcher(DispatcherBase):
         
     #     # This bit is still pretty tentative
     #     self._outstanding_handshakes[handshake.address] = handshake
-    #     self._outstanding_owners[handshake.address] = api_id
+    #     self._outstanding_shares[handshake.address] = api_id
         
     #     return True
     
@@ -1374,7 +1370,7 @@ class Dispatcher(DispatcherBase):
                 
             else:
                 self._assigned_objects[handshake.address] = handshake
-                # self._assigned_owners[handshake.address] = api_id
+                # self._completed_shares[handshake.address] = api_id
         
         # Okay, app_token has not been set, so now we need to operate on api_id
         else:
@@ -1393,7 +1389,7 @@ class Dispatcher(DispatcherBase):
             
                 # Lookup for guid -> object
                 self._assigned_objects[handshake.address] = handshake
-                self._assigned_owners[handshake.address] = api_id
+                self._completed_shares[handshake.address] = api_id
     
     def dispatch_handshake_ack(self, ack, target):
         ''' Receives a handshake acknowledgement and dispatches it to
@@ -1401,17 +1397,13 @@ class Dispatcher(DispatcherBase):
         
         ack is a golix.AsymAck object.
         '''
-        handshake = self._outstanding_handshakes[target]
-        owner = self._outstanding_owners[target]
+        obj, recipient = self._outstanding_shares[target]
+        del self._outstanding_shares[target]
+        # We should change this to a collection of some sort.
+        self._completed_shares[target] = (obj.app_token, recipient)
         
-        del self._outstanding_handshakes[target]
-        del self._outstanding_owners[target]
-        
-        self._assigned_objects[target] = handshake
-        self._assigned_owners[target] = owner
-        
-        endpoint = self._api_ids[owner].endpoint
-        endpoint.handle_outgoing_success(handshake)
+        endpoint = self._app_tokens[obj.app_token]
+        endpoint.handle_outgoing_success(obj, recipient)
     
     def dispatch_handshake_nak(self, nak, target):
         ''' Receives a handshake nonacknowledgement and dispatches it to
@@ -1419,14 +1411,13 @@ class Dispatcher(DispatcherBase):
         
         ack is a golix.AsymNak object.
         '''
-        handshake = self._outstanding_handshakes[target]
-        owner = self._outstanding_owners[target]
+        obj, recipient = self._outstanding_shares[target]
+        del self._outstanding_shares[target]
+        # We should change this to a collection of some sort.
+        self._completed_shares[target] = (obj.app_token, recipient)
         
-        del self._outstanding_handshakes[target]
-        del self._outstanding_owners[target]
-        
-        endpoint = self._api_ids[owner].endpoint
-        endpoint.handle_outgoing_failure(handshake)
+        endpoint = self._app_tokens[obj.app_token]
+        endpoint.handle_outgoing_failure(obj, recipient)
     
     def register_api(self, api_id, endpoint, app_token=None):
         ''' Registers an api with the IPC mechanism. If token is None, 
@@ -1438,6 +1429,8 @@ class Dispatcher(DispatcherBase):
             app_token = self.new_token()
             
         appdef = AppDef(api_id, app_token)
+        endpoint.add_api(appdef)
+        
         self._app_tokens[appdef.app_token] = endpoint
         self._api_ids[appdef.api_id] = appdef
         
@@ -1489,6 +1482,18 @@ class Dispatcher(DispatcherBase):
         # we won't always be the ones creating objects?
         self._assigned_objects[obj.address] = obj
         return obj
+        
+    def share_object(self, obj, recipient):
+        ''' Do the whole super thing, and then record which application
+        initiated the request, and who the recipient was.
+        '''
+        print('Added to share: ', obj.address)
+        try:
+            self._outstanding_shares[obj.address] = (obj, recipient)
+            super().share_object(obj, recipient)
+        except:
+            del self._outstanding_shares[obj.address]
+            raise
         
         
 class EmbeddedMemoryAgent(AgentBase, MemoryPersister, _TestDispatcher):
