@@ -53,12 +53,14 @@ from hypergolix.core import Dispatcher
 from hypergolix.utils import AppObj
 # from hypergolix.utils import RawObj
 
+from hypergolix.embeds import _TestEmbed
+
 from hypergolix.ipc_hosts import _TestEndpoint
 
 # from hypergolix.ipc_hosts import _EmbeddedIPC
 
 
-class _TestDispatch(AgentBase, Dispatcher):
+class _TestDispatch(AgentBase, Dispatcher, _TestEmbed):
     def __init__(self, *args, **kwargs):
         super().__init__(dispatcher=self, *args, **kwargs)
 

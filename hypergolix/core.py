@@ -1008,23 +1008,8 @@ class DispatcherBase(metaclass=abc.ABCMeta):
     applications. Dispatchers are intended to be combined with agents,
     and vice versa.
     '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-    # @abc.abstractmethod
-    # def initiate_handshake(self, data, recipient):
-    #     ''' Creates a handshake for data with recipient.
-        
-    #     data isinstance bytes-like
-    #     recipient isinstance Guid
-    #     '''
-    #     handshake = self.new_object(data, dynamic=True)
-    #     self.hand_object(
-    #         obj = handshake, 
-    #         recipient = recipient
-    #     )
-        
-    #     return handshake
+    # def __init__(self, *args, **kwargs):
+    #     super().__init__(*args, **kwargs)
         
     @abc.abstractmethod
     def dispatch_handshake(self, target):
@@ -1053,140 +1038,6 @@ class DispatcherBase(metaclass=abc.ABCMeta):
         the appropriate application.
         
         ack is a golix.AsymNak object.
-        '''
-        pass
-        
-    def get_object(self, guid):
-        ''' Wraps RawObj.__init__  and get_guid for preexisting objects.
-        '''
-        author, is_dynamic, state = self.get_guid(guid)
-            
-        return RawObj(
-            # Todo: make the dispatch more intelligent
-            dispatch = self,
-            state = state,
-            dynamic = is_dynamic,
-            _preexisting = (guid, author)
-        )
-        
-    def new_object(self, state, dynamic=True, _legroom=None):
-        ''' Creates a new object. Wrapper for RawObj.__init__.
-        '''
-        return RawObj(
-            # Todo: update dispatch intelligently
-            dispatch = self,
-            state = state,
-            dynamic = dynamic,
-            _legroom = _legroom
-        )
-        
-    def update_object(self, obj, state):
-        ''' Updates a dynamic object. May link to a static (or dynamic) 
-        object's address. Must pass either data or link, but not both.
-        
-        Wraps RawObj.update and modifies the dynamic object in place.
-        
-        Could add a way to update the legroom parameter while we're at
-        it. That would need to update the maxlen of both the obj._buffer
-        and the self._historian.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Obj must be an RawObj.'
-            )
-            
-        obj.update(state)
-        
-    def sync_object(self, obj):
-        ''' Wraps RawObj.sync.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError('Must pass RawObj or subclass to sync_object.')
-            
-        return obj.sync()
-        
-    def hand_object(self, obj, recipient):
-        ''' DEPRECATED.
-        
-        Initiates a handshake request with the recipient to share 
-        the object.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Obj must be a RawObj or similar.'
-            )
-    
-        # This is, shall we say, suboptimal, for dynamic objects.
-        # frame_guid = self._historian[obj.address][0]
-        # target = self._dynamic_targets[obj.address]
-        target = obj.address
-        self.hand_guid(target, recipient)
-        
-    def share_object(self, obj, recipient):
-        ''' Currently, this is just calling hand_object. In the future,
-        this will have a devoted key exchange subprotocol.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Only RawObj may be shared.'
-            )
-        return self.hand_guid(obj.address, recipient)
-        
-    def freeze_object(self, obj):
-        ''' Wraps RawObj.freeze. Note: does not currently traverse 
-        nested dynamic bindings.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Only RawObj may be frozen.'
-            )
-        return obj.freeze()
-        
-    def hold_object(self, obj):
-        ''' Wraps RawObj.hold.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError('Only RawObj may be held by hold_object.')
-        obj.hold()
-        
-    def delete_object(self, obj):
-        ''' Wraps RawObj.delete. 
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Obj must be RawObj or similar.'
-            )
-            
-        obj.delete()
-    
-    @property
-    @abc.abstractmethod
-    def whoami(self):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def new_static(self, state):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def new_dynamic(self, state):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def update_dynamic(self, obj, state):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def freeze_dynamic(self, obj):
-        ''' Inherited from Agent.
         '''
         pass
         
@@ -1297,44 +1148,6 @@ class Dispatcher(DispatcherBase):
         
         self._orphan_handshakes_incoming = []
         self._orphan_handshakes_outgoing = []
-        
-    # def initiate_handshake(self, obj, recipient, api_id):
-    #     ''' Creates a handshake for the API_id with recipient.
-        
-    #     msg isinstance dict(like) and must contain a valid api_id
-    #     recipient isinstance Guid
-    #     '''
-    #     # Check to make sure that we have a valid api_id in the msg
-    #     try:
-    #         appdef = self._api_ids[api_id]
-            
-    #     except KeyError as e:
-    #         raise ValueError(
-    #             'Handshake msg must contain a valid api_id that the current '
-    #             'dispatcher is capable of understanding.'
-    #         ) from e
-            
-    #     try:
-    #         packed_msg = msgpack.packb(msg)
-            
-    #     except (
-    #         msgpack.exceptions.BufferFull,
-    #         msgpack.exceptions.ExtraData,
-    #         msgpack.exceptions.OutOfData,
-    #         msgpack.exceptions.PackException,
-    #         msgpack.exceptions.PackValueError
-    #     ) as e:
-    #         raise ValueError(
-    #             'Couldn\'t pack handshake. Handshake msg must be dict-like.'
-    #         ) from e
-        
-    #     handshake = super().initiate_handshake(packed_msg, recipient)
-        
-    #     # This bit is still pretty tentative
-    #     self._outstanding_handshakes[handshake.address] = handshake
-    #     self._outstanding_shares[handshake.address] = api_id
-        
-    #     return True
     
     def dispatch_share(self, guid):
         ''' Dispatches shares that were not created via handshake.

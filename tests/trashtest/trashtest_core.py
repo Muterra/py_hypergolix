@@ -49,6 +49,8 @@ from hypergolix import DynamicObject
 from hypergolix.exceptions import NakError
 from hypergolix.exceptions import PersistenceWarning
 
+from hypergolix.embeds import _TestEmbed
+
 # from hypergolix.embeds import _EmbedBase
 
 # This is a semi-normal import
@@ -63,6 +65,23 @@ from golix import FirstParty
 # ###############################################
 # Testing
 # ###############################################
+        
+
+class _TestClient(AgentBase, MemoryPersister, _TestEmbed, _TestDispatcher):
+    def __init__(self):
+        super().__init__(persister=self, dispatcher=self)
+
+
+class _TestAgent_SharedPersistence(AgentBase, _TestEmbed, _TestDispatcher):
+    def __init__(self, *args, **kwargs):
+        super().__init__(dispatcher=self, *args, **kwargs)
+        
+    def subscribe(self, guid, callback):
+        ''' We're not testing this right now but we need to suppress 
+        warnings about it for EmbedBase. Pass everything straight to the
+        persister.
+        '''
+        self.persister.subscribe(guid, callback)
 
     
 class ObjectTrashtest(unittest.TestCase):
@@ -120,23 +139,6 @@ class ObjectTrashtest(unittest.TestCase):
         # with warnings.catch_warnings():
         #     warnings.simplefilter('ignore')
         #     IPython.embed()
-        
-
-class _TestClient(AgentBase, MemoryPersister, _TestDispatcher):
-    def __init__(self):
-        super().__init__(persister=self, dispatcher=self)
-
-
-class _TestAgent_SharedPersistence(AgentBase, _TestDispatcher):
-    def __init__(self, *args, **kwargs):
-        super().__init__(dispatcher=self, *args, **kwargs)
-        
-    def subscribe(self, guid, callback):
-        ''' We're not testing this right now but we need to suppress 
-        warnings about it for EmbedBase. Pass everything straight to the
-        persister.
-        '''
-        self.persister.subscribe(guid, callback)
         
         
 class AgentTrashTest(unittest.TestCase):

@@ -49,10 +49,12 @@ from hypergolix.core import _TestDispatcher
 from hypergolix.persisters import LocalhostClient
 from hypergolix.persisters import LocalhostServer
 
+from hypergolix.embeds import _TestEmbed
+
 # from hypergolix.embeds import _EmbedBase
 
 
-class _TestAgent(AgentBase, LocalhostClient, _TestDispatcher):
+class _TestAgent(AgentBase, LocalhostClient, _TestEmbed, _TestDispatcher):
     def __init__(self, *args, **kwargs):
         super().__init__(persister=self, dispatcher=self, *args, **kwargs)
 
