@@ -1020,8 +1020,7 @@ class DispatcherBase(metaclass=abc.ABCMeta):
         handshake is a StaticObject or DynamicObject.
         Raises HandshakeError if unsuccessful.
         '''
-        # First first, get the object.
-        return self.get_object(target)
+        pass
         
     @abc.abstractmethod
     def dispatch_handshake_ack(self, ack, target):
@@ -1072,7 +1071,7 @@ class _TestDispatcher(DispatcherBase):
         handshake is a StaticObject or DynamicObject.
         Raises HandshakeError if unsuccessful.
         '''
-        handshake = super().dispatch_handshake(target)
+        handshake = self.get_object(target)
         self._orphan_shares_incoming.append(handshake)
         
     def dispatch_handshake_ack(self, ack, target):
@@ -1168,6 +1167,9 @@ class Dispatcher(DispatcherBase):
         
         Note that if you don't call register_object during creation, the 
         object may be garbage collected prematurely.
+        
+        Note that this gets called for all object creations, including
+        from handshakes.
         '''
         if not isinstance(obj, DispatchObj):
             raise TypeError('May only register DispatchObj instances.')
@@ -1178,6 +1180,9 @@ class Dispatcher(DispatcherBase):
             self._owner_by_guid[obj.address] = obj.app_token
         else:
             self._api_by_guid[obj.address] = obj.api_id
+            
+        # Finally, distribute the object to any applicable APIs
+        self._distribute_to_endpoints(obj)
     
     def dispatch_share(self, guid):
         ''' Dispatches shares that were not created via handshake.
@@ -1192,32 +1197,15 @@ class Dispatcher(DispatcherBase):
         handshake is a StaticObject or DynamicObject.
         Raises HandshakeError if unsuccessful.
         '''
-        # First first, get the object. Note that super() is calling get_object,
-        # so our use of DispatchObj is safe.
-        handshake = super().dispatch_handshake(target)
-        # Note that we're sending an ack to the handshake here, just to 
-        # indicate successful receipt of the share. If the app wants to check
-        # for availability, well, that's probably on them. Might want to add
-        # that into embed or ipc_host or something. Alternatively, handle that
-        # in SHARE instead of HANDSHAKE. <-- probably good idea
+        # Don't need to return it or do anything else. All notifications are 
+        # handled by register_object, which is called during object creation.
+        self.get_object(target)
         
-        # Might as well do this to save lookup operations later
-        api_id = handshake.api_id
-        app_token = handshake.app_token
-        # print(api_id)
-        # print(app_token)
-        
-        # We've defined a specific app token to use, so this is a private
-        # object. Only dispatch it to that application, and bypass API lookup.
-        # Side note: why are we receiving a handshake for a private object?
-        if app_token is not None:
-            self._attempt_contact_endpoint(app_token, 'send_object', handshake)
-        
-        # Okay, app_token has not been set, so now we need to operate on api_id
-        else:
-            # No specific token is defined, so dispatch it to all capable
-            # applications
-            self._distribute_to_api(handshake)
+        # Note that unless we raise a HandshakeError RIGHT NOW, we'll be
+        # sending an ack to the handshake, just to indicate successful receipt 
+        # of the share. If the originating app wants to check for availability, 
+        # well, that's currently on them. In the future, add handle for that in
+        # SHARE instead of HANDSHAKE? <-- probably good idea
     
     def dispatch_handshake_ack(self, ack, target):
         ''' Receives a handshake acknowledgement and dispatches it to
@@ -1254,27 +1242,39 @@ class Dispatcher(DispatcherBase):
             recipient = recipient
         )
                 
-    def _distribute_to_api(self, obj, tokens_to_skip=None):
-        ''' Passes the object to all endpoints supporting its api via command.
+    # def _distribute_to_endpoints(self, obj, tokens_to_skip=None):
+    def _distribute_to_endpoints(self, obj):
+        ''' Passes the object to all endpoints supporting its api via 
+        command.
         
         If tokens to skip is defined, they will be skipped.
         tokens_to_skip isinstance iter(app_tokens)
+        
+        Should suppressing notifications for original creator be handled
+        by the endpoint instead?
         '''
-        if tokens_to_skip is None:
-            tokens_to_skip = frozenset()
-        else:
-            tokens_to_skip = frozenset(tokens_to_skip)
+        # if tokens_to_skip is None:
+        #     tokens = self._api_ids[obj.api_id]
+        # else:
+        #     tokens = self._api_ids[obj.api_id] - frozenset(tokens_to_skip)
             
-        if obj.api_id not in self._api_ids:
-            warnings.warn(HandshakeWarning(
-                'Agent lacks application to handle app id.'
-            ))
-            self._orphan_shares_incoming.append(handshake)
+        # The app token is defined, so contact that endpoint (and only that 
+        # endpoint) directly
+        if obj.app_token is not None:
+            self._attempt_contact_endpoint(obj.app_token, 'send_object', obj)
+            
         else:
-            for token in (self._api_ids[obj.api_id] - tokens_to_skip):
-                # It's mildly dangerous to do this -- what if we throw an error
-                # in _attempt_contact_endpoint?
-                self._attempt_contact_endpoint(token, 'send_object', obj)
+            if obj.api_id not in self._api_ids:
+                warnings.warn(HandshakeWarning(
+                    'Agent lacks application to handle app id.'
+                ))
+                self._orphan_shares_incoming.append(handshake)
+            else:
+                # for token in tokens:
+                for token in self._api_ids[obj.api_id]:
+                    # It's mildly dangerous to do this -- what if we throw an 
+                    # error in _attempt_contact_endpoint?
+                    self._attempt_contact_endpoint(token, 'send_object', obj)
                 
     def _attempt_contact_endpoint(self, app_token, command, obj, *args, **kwargs):
         ''' We have a token defined for the api_id, but we don't know if
@@ -1397,7 +1397,6 @@ class Dispatcher(DispatcherBase):
         ''' Do the whole super thing, and then record which application
         initiated the request, and who the recipient was.
         '''
-        print('Added to share: ', obj.address)
         try:
             self._outstanding_shares[obj.address] = (
                 requesting_token, 

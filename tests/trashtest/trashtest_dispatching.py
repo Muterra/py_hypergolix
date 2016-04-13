@@ -79,7 +79,8 @@ class TestAppObj(unittest.TestCase):
         self.agent1 = _TestDispatch(persister=self.persister)
         self.endpoint1 = _TestEndpoint(
             dispatch = self.agent1,
-            apis = [self.__api_id]
+            apis = [self.__api_id],
+            name = 'Agent1, ep1'
         )
         self.agent1.register_endpoint(self.endpoint1)
         # This is fucking gross. Oh well, that's why it's a trashtest.
@@ -88,9 +89,16 @@ class TestAppObj(unittest.TestCase):
         self.agent2 = _TestDispatch(persister=self.persister)
         self.endpoint2 = _TestEndpoint(
             dispatch = self.agent2,
-            apis = [self.__api_id]
+            apis = [self.__api_id],
+            name = 'Agent2, ep1'
+        )
+        self.endpoint3 = _TestEndpoint(
+            dispatch = self.agent2,
+            apis = [self.__api_id],
+            name = 'Agent2, ep2'
         )
         self.agent2.register_endpoint(self.endpoint2)
+        self.agent2.register_endpoint(self.endpoint3)
         # This is fucking gross. See above.
         self.agent2.app_token = self.endpoint2.app_token
         
@@ -125,6 +133,21 @@ class TestAppObj(unittest.TestCase):
             requesting_token = self.agent1.app_token
         )
         obj2.update(pt2)
+
+        obj3 = DispatchObj(
+            dispatch = self.agent2,
+            state = pt0,
+            app_token = self.agent2.app_token,
+            api_id = self.__api_id,
+            dynamic = False
+        )
+
+        obj2 = DispatchObj(
+            dispatch = self.agent2,
+            state = pt1,
+            api_id = self.__api_id,
+            dynamic = True
+        )
 
         # obj1 = self.agent1.new_object(pt0, dynamic=False)
         # obj2 = self.agent1.new_object(pt1, dynamic=True)

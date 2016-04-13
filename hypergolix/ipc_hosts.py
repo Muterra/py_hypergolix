@@ -208,26 +208,27 @@ class _MsgpackEndpointBase(_EndpointBase):
         
         
 class _TestEndpoint(_EndpointBase):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, name, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.__name = name
         self._assigned_objs = []
         self._failed_objs = []
         
     def send_object(self, obj):
         self._assigned_objs.append(obj)
-        print('Incoming: ', obj)
+        print('Endpoint ', self.__name, ' incoming: ', obj)
         
     def send_update(self, obj):
         self._assigned_objs.append(obj)
-        print('Updated: ', obj)
+        print('Endpoint ', self.__name, ' updated: ', obj)
         
     def notify_share_failure(self, obj, recipient):
         self._failed_objs.append(obj)
-        print('Failed: ', obj)
+        print('Endpoint ', self.__name, ' failed: ', obj)
         
     def notify_share_success(self, obj, recipient):
         self._assigned_objs.append(obj)
-        print('Success: ', obj)
+        print('Endpoint ', self.__name, ' success: ', obj)
 
 
 class _IPCBase(metaclass=abc.ABCMeta):
