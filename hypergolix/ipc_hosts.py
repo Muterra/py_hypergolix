@@ -78,6 +78,7 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         super().__init__(*args, **kwargs)
         
         self._dispatch = weakref.proxy(dispatch)
+        self._known_guids = set()
         
         if token is None:
             token = self.dispatch.new_token()
@@ -134,6 +135,16 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         ''' Sends an updated object to the emedded client.
         '''
         pass
+        
+    def notify_object(self, obj):
+        ''' Notifies the endpoint that the object is available. May be
+        either a new object, or an updated one.
+        '''
+        if obj.address in self._known_guids:
+            self.send_update(obj)
+        else:
+            self._known_guids.add(obj.address)
+            self.send_object(obj)
         
     @abc.abstractmethod
     def notify_share_failure(self, obj, recipient):

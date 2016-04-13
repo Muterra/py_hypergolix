@@ -1181,6 +1181,10 @@ class Dispatcher(DispatcherBase):
         else:
             self._api_by_guid[obj.address] = obj.api_id
             
+        # Register distribution as an update callback if it's dynamic
+        if obj.is_dynamic:
+            obj.add_callback(self._distribute_to_endpoints)
+            
         # Finally, distribute the object to any applicable APIs
         self._distribute_to_endpoints(obj)
     
@@ -1261,7 +1265,7 @@ class Dispatcher(DispatcherBase):
         # The app token is defined, so contact that endpoint (and only that 
         # endpoint) directly
         if obj.app_token is not None:
-            self._attempt_contact_endpoint(obj.app_token, 'send_object', obj)
+            self._attempt_contact_endpoint(obj.app_token, 'notify_object', obj)
             
         else:
             if obj.api_id not in self._api_ids:
@@ -1274,7 +1278,7 @@ class Dispatcher(DispatcherBase):
                 for token in self._api_ids[obj.api_id]:
                     # It's mildly dangerous to do this -- what if we throw an 
                     # error in _attempt_contact_endpoint?
-                    self._attempt_contact_endpoint(token, 'send_object', obj)
+                    self._attempt_contact_endpoint(token, 'notify_object', obj)
                 
     def _attempt_contact_endpoint(self, app_token, command, obj, *args, **kwargs):
         ''' We have a token defined for the api_id, but we don't know if
@@ -1308,7 +1312,7 @@ class Dispatcher(DispatcherBase):
             
             try:
                 do_dispatch = {
-                    'send_object': endpoint.send_object,
+                    'notify_object': endpoint.notify_object,
                     'notify_share_success': endpoint.notify_share_success,
                     'notify_share_failure': endpoint.notify_share_failure,
                 }[command]
