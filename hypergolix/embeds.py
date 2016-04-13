@@ -63,6 +63,18 @@ class _EmbedBase(metaclass=abc.ABCMeta):
     Note that this API will be merged with AgentCore when DynamicObject
     and StaticObject are reconciled with AppObj.
     '''
+    @property
+    def app_token(self):
+        ''' Get your app token.
+        '''
+        return self._token
+        
+    @app_token.setter
+    def app_token(self, value):
+        ''' Set your app token.
+        '''
+        self._token = value
+    
     @abc.abstractmethod
     def register_api(self, api_id):
         ''' Registers the embed with the service as supporting the

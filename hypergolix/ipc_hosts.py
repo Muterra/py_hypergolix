@@ -47,9 +47,108 @@ from .exceptions import HandshakeError
 from .exceptions import HandshakeWarning
 
 from .utils import AppDef
+from .utils import AppObj
 
 
 class _EndpointBase(metaclass=abc.ABCMeta):
+    ''' Base class for an endpoint. Defines everything needed by the 
+    Integration to communicate with an individual application.
+    
+    ENDPOINTS HAVE A 1:1 CORRELATION WITH APPLICATION TOKENS. A token
+    denotes a singular application, and one endpoint is used for one
+    application.
+    
+    Note: endpoints have all the necessary information to wrap objects
+    in the messagepack definition of their api_id, etc.
+    
+    Note on messagepack optimization: in the future, can change pack and
+    unpack to look specifically (and only) at the relevant keys. Check
+    out read_map_header.
+    
+    Alternatively, might just treat the whole appdata portion as a 
+    nested binary file, and unpack that separately.
+    '''
+    def __init__(self, dispatch, token=None, apis=None, *args, **kwargs):
+        ''' Creates an endpoint for the specified agent that handles the
+        associated apis. Apis is an iterable of either AppDef objects, 
+        in which case the existing tokens are used, or api_ids, in which 
+        case, new tokens are generated. The iterable may mix those as 
+        well.
+        '''
+        super().__init__(*args, **kwargs)
+        
+        self._dispatch = weakref.proxy(dispatch)
+        
+        if token is None:
+            token = self.dispatch.new_token()
+        if apis is None:
+            apis = tuple()
+            
+        self._token = token
+        # Set of available apis -> appdefs.
+        self._apis = {}
+        
+        for api in apis:
+            self.add_api(api)
+            
+    def add_api(self, api_id):
+        ''' This adds an appdef to the endpoint. Probably not strictly
+        necessary, but helps keep track of things.
+        '''
+        # Type check by creating an appdef.
+        appdef = AppDef(api_id, self._token)
+        self._apis[api_id] = appdef
+        
+    @property
+    def dispatch(self):
+        ''' Access the agent.
+        '''
+        return self._dispatch
+        
+    @property
+    def app_token(self):
+        ''' Access the app token.
+        '''
+        return self._token
+        
+    @property
+    def apis(self):
+        ''' Access a frozen set of the apis supported by the endpoint.
+        '''
+        return frozenset(self._apis)
+        
+    @property
+    def appdefs(self):
+        ''' Return tuple of all current appdefs.
+        '''
+        return tuple(self._apis.values())
+    
+    @abc.abstractmethod
+    def send_object(self, obj):
+        ''' Sends a new object to the emedded client.
+        '''
+        pass
+    
+    @abc.abstractmethod
+    def send_update(self, obj):
+        ''' Sends an updated object to the emedded client.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def notify_failed_share(self, obj, recipient):
+        ''' Notifies the embedded client of an unsuccessful share.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def notify_successful_share(self, obj, recipient):
+        ''' Notifies the embedded client of a successful share.
+        '''
+        pass
+
+
+class _MsgpackEndpointBase(_EndpointBase):
     ''' Base class for an endpoint. Defines everything needed by the 
     Integration to communicate with an individual application.
     
@@ -63,71 +162,49 @@ class _EndpointBase(metaclass=abc.ABCMeta):
     Alternatively, might just treat the whole appdata portion as a 
     nested binary file, and unpack that separately.
     '''
-    def __init__(self, dispatch, apis=None, *args, **kwargs):
-        ''' Creates an endpoint for the specified agent that handles the
-        associated apis. Apis is an iterable of either AppDef objects, 
-        in which case the existing tokens are used, or api_ids, in which 
-        case, new tokens are generated. The iterable may mix those as 
-        well.
+    def pack_command(self, command, obj):
+        ''' Packs an object/command pair for transit.
         '''
-        super().__init__(*args, **kwargs)
-        
-        self._dispatch = weakref.proxy(dispatch)
-        # Lookup api_id -> { appdefs }
-        self._appdefs = {}
-        # Lookup token -> appdef
-        self._tokens = {}
-        
-        if apis is None:
-            apis = tuple()
-        
-        for api in apis:
-            self.add_api(api)
+        if not isinstance(obj, AppObj):
+            raise TypeError('obj must be appobj.')
             
-    def add_api(self, appdef):
-        ''' This adds an appdef to the endpoint. Probably not strictly
-        necessary, but helps keep track of things.
-        '''
-        if not isinstance(appdef, AppDef):
-            raise TypeError('appdef must be AppDef.')
-            
-        if appdef.api_id not in self._appdefs:
-            self._appdefs[appdef.api_id] = { appdef }
-        else:
-            # It's a set, so we don't need to worry about adding more copies
-            self._appdefs[appdef.api_id].add(appdef)
-            
-        # This should probably be a little more intelligent in the future
-        if appdef.app_token not in self._tokens:
-            self._tokens[appdef.app_token] = appdef
-        else:
-            raise RuntimeError('Cannot reuse tokens for new applications.')
-    
-    @abc.abstractmethod
-    def handle_incoming(self, obj):
-        ''' Handles an object.
-        '''
-        pass
+        if command not in {
+            'send_new', 
+            'send_failure', 
+            'send_success', 
+            'send_update'
+        }:
+            raise ValueError('Invalid command.')
         
-    @abc.abstractmethod
-    def handle_outgoing_failure(self, obj):
-        ''' Handles an object that failed to be accepted by the intended
-        recipient.
-        '''
-        pass
+        # Should token not be used? Is leaking the app_token a security risk?
+        # I mean, if it's going to someone who doesn't already have it, we 
+        # majorly fucked up, but what about damage mitigation? On the other
+        # hand, what if we have (in the future) a secure way to use a single
+        # endpoint for multiple applications? (admittedly that seems unlikely).
+        obj_pack = {
+            'app_token': obj.app_token,
+            'state': obj.state,
+            'api_id': obj.api_id,
+            'private': obj.private,
+            'dynamic': obj.is_dynamic,
+            'address': obj.address,
+            'author': obj.author,
+            # # Ehh, let's hold off on this for now
+            # legroom = obj._state.maxlen
+        }
         
-    @abc.abstractmethod
-    def handle_outgoing_success(self, obj):
-        ''' Handles an object that failed to be accepted by the intended
-        recipient.
-        '''
-        pass
+        return msgpack.packb(
+            {
+                'command': command,
+                'obj': obj_pack,
+            },
+            use_bin_type = True    
+        )
         
-    @property
-    def dispatch(self):
-        ''' Access the agent.
+    def unpack_command(self, packed):
+        ''' Packs an object/command pair for transit.
         '''
-        return self._dispatch
+        unpacked = msgpack.unpackb(packed, encoding='utf-8')
         
         
 class _TestEndpoint(_EndpointBase):
@@ -136,15 +213,19 @@ class _TestEndpoint(_EndpointBase):
         self._assigned_objs = []
         self._failed_objs = []
         
-    def handle_incoming(self, obj):
+    def send_object(self, obj):
         self._assigned_objs.append(obj)
         print('Incoming: ', obj)
         
-    def handle_outgoing_failure(self, obj, recipient):
+    def send_update(self, obj):
+        self._assigned_objs.append(obj)
+        print('Updated: ', obj)
+        
+    def notify_failed_share(self, obj, recipient):
         self._failed_objs.append(obj)
         print('Failed: ', obj)
         
-    def handle_outgoing_success(self, obj, recipient):
+    def notify_successful_share(self, obj, recipient):
         self._assigned_objs.append(obj)
         print('Success: ', obj)
 
@@ -189,7 +270,10 @@ class _EmbeddedIPC(_IPCBase):
         pass
     
     
-class LocalhostIPC(_IPCBase):
+class WebsocketsIPC(_IPCBase):
+    ''' Websockets IPC via localhost.
+    '''
+    
     pass
     
     

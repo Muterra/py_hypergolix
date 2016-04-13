@@ -534,23 +534,28 @@ class AppObj(RawObj):
     __slots__ = [
         '_api_id',
         '_app_token',
-        '_private'
+        '_private',
+        '_raw'
     ]
     
-    def __init__(self, embed, state, appdef=None, 
+    def __init__(self, embed, state, api_id=None, 
     private=False, dynamic=True, callbacks=None, _preexisting=None, 
     *args, **kwargs):
+        self._raw = collections.deque(maxlen=1)
+        # Why the fuck are objects even using this? This should only be in the
+        # embed. Grrrrrr
+        self._app_token = embed.app_token
+        
         if _preexisting is not None:
             # Note that this bit will set _api_id, _private, and _app_token
             # Note: what if app_token is missing because this is a shared obj
             # and their token is (by definition) different?
             state = self._unwrap_state(state)
-        elif appdef is None:
+        elif api_id is None:
             raise TypeError('appdef must be defined for a new object.')
         else:
             self._private = private
-            self._api_id = appdef.api_id
-            self._app_token = appdef.app_token
+            self._api_id = api_id
         
         super().__init__(
             dispatch = embed, 
@@ -560,11 +565,6 @@ class AppObj(RawObj):
             _preexisting = _preexisting,
             *args, **kwargs
         )
-        
-        try:
-            self.app_token
-        except AttributeError:
-            self._app_token = self._dispatch.get_token(self.api_id)
             
     def _link_dispatch(self, dispatch):
         ''' Typechecks dispatch and them creates a weakref to it.
@@ -604,6 +604,12 @@ class AppObj(RawObj):
     def app_token(self):
         return self._app_token
         
+    @property
+    def raw(self):
+        ''' The raw packed bytes. Maybe useful for IPC?
+        '''
+        return self._raw[0]
+        
     def _wrap_state(self, state):
         ''' Wraps the passed state into a format that can be dispatched.
         '''
@@ -631,11 +637,14 @@ class AppObj(RawObj):
                 'Couldn\'t wrap state. Incompatible data format?'
             ) from e
             
+        self._raw.append(packed_msg)
         return packed_msg
         
     def _unwrap_state(self, state):
         ''' Wraps the object state into a format that can be dispatched.
         '''
+        raw = state
+        
         try:
             unpacked_msg = msgpack.unpackb(state, encoding='utf-8')
             api_id = unpacked_msg['api_id']
@@ -674,6 +683,7 @@ class AppObj(RawObj):
             # # Should we double-check the consistency of _private?
             # pass
             
+        self._raw.append(raw)
         return state
         
     def _unwrap_api_id(self, api_id):
@@ -1082,3 +1092,14 @@ def _block_on_result(future):
         raise exc
         
     return future.result()
+    
+    
+class _JitSetDict(dict):
+    ''' Just-in-time set dictionary. A dictionary of sets. Attempting to
+    access a value that does not exist will automatically create it as 
+    an empty set.
+    '''
+    def __getitem__(self, key):
+        if key not in self:
+            self[key] = set()
+        return super().__getitem__(key)

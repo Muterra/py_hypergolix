@@ -79,6 +79,7 @@ from Crypto.Hash import SHA512
 from Crypto.Protocol.KDF import HKDF
 
 # Intra-package dependencies
+from .utils import _JitSetDict
 from .utils import _ObjectBase
 from .utils import StaticObject
 from .utils import DynamicObject
@@ -1048,10 +1049,10 @@ class _TestDispatcher(DispatcherBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        self._orphan_handshakes_pending = []
-        self._orphan_handshakes_incoming = []
-        self._orphan_handshakes_outgoing = []
-        self._orphan_handshake_failures = []
+        self._orphan_shares_pending = []
+        self._orphan_shares_incoming = []
+        self._orphan_shares_outgoing = []
+        self._orphan_shares_failed = []
         
     # def initiate_handshake(self, obj, recipient, api_id):
     #     ''' Creates a handshake for the API_id with recipient.
@@ -1060,7 +1061,7 @@ class _TestDispatcher(DispatcherBase):
     #     recipient isinstance Guid
     #     '''
     #     handshake = super().initiate_handshake(packed_msg, recipient)
-    #     self._orphan_handshakes_pending.append(handshake)
+    #     self._orphan_shares_pending.append(handshake)
         
     #     return True
         
@@ -1073,7 +1074,7 @@ class _TestDispatcher(DispatcherBase):
         Raises HandshakeError if unsuccessful.
         '''
         handshake = super().dispatch_handshake(target)
-        self._orphan_handshakes_incoming.append(handshake)
+        self._orphan_shares_incoming.append(handshake)
         
     def dispatch_handshake_ack(self, ack, target):
         ''' Receives a handshake acknowledgement and dispatches it to
@@ -1081,7 +1082,7 @@ class _TestDispatcher(DispatcherBase):
         
         ack is a golix.AsymAck object.
         '''
-        self._orphan_handshakes_outgoing.append(ack)
+        self._orphan_shares_outgoing.append(ack)
     
     def dispatch_handshake_nak(self, nak, target):
         ''' Receives a handshake nonacknowledgement and dispatches it to
@@ -1089,16 +1090,16 @@ class _TestDispatcher(DispatcherBase):
         
         ack is a golix.AsymNak object.
         '''
-        self._orphan_handshake_failures.append(nak)
+        self._orphan_shares_failed.append(nak)
         
     def retrieve_recent_handshake(self):
-        return self._orphan_handshakes_incoming.pop()
+        return self._orphan_shares_incoming.pop()
         
     def retrieve_recent_ack(self):
-        return self._orphan_handshakes_outgoing.pop()
+        return self._orphan_shares_outgoing.pop()
         
     def retrieve_recent_nak(self):
-        return self._orphan_handshake_failures.pop()
+        return self._orphan_shares_failed.pop()
 
 
 class Dispatcher(DispatcherBase):
@@ -1128,13 +1129,15 @@ class Dispatcher(DispatcherBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        # Lookup for app_tokens -> endpoints
+        # Lookup for app_tokens -> endpoints. Will be specific to the current
+        # state of this particular client for this agent.
         self._app_tokens = {
             b'\x00\x00\x00\x00': False,
         }
         
-        # Lookup for api_ids -> AppDef.
-        self._api_ids = {}
+        # Lookup for api_ids -> app_tokens. Should be made persistent across 
+        # all clients for any given agent.
+        self._api_ids = _JitSetDict()
         
         # Lookup for handshake guid -> handshake object
         self._outstanding_handshakes = {}
@@ -1146,8 +1149,9 @@ class Dispatcher(DispatcherBase):
         # Lookup for guid -> api_id
         self._completed_shares = {}
         
-        self._orphan_handshakes_incoming = []
-        self._orphan_handshakes_outgoing = []
+        self._orphan_shares_incoming = []
+        self._orphan_shares_outgoing_success = []
+        self._orphan_shares_outgoing_failed = []
     
     def dispatch_share(self, guid):
         ''' Dispatches shares that were not created via handshake.
@@ -1173,39 +1177,40 @@ class Dispatcher(DispatcherBase):
         # We've defined a specific app token to use, so this is a private
         # object. Only dispatch it to that application, and bypass API lookup.
         if app_token is not None:
-            try:
-                # Dispatch directly to the endpoint.
-                self._app_tokens[app_token].handle_incoming(handshake)
-            
-            # Huh. We don't know this token.
-            except KeyError:
-                warnings.warn(HandshakeWarning(
-                    'Agent lacks application with matching token.'
-                ))
-                self._orphan_handshakes_incoming.append(handshake)
-                
-            else:
-                self._assigned_objects[handshake.address] = handshake
-                # self._completed_shares[handshake.address] = api_id
+            self._attempt_share_to_endpoint(handshake, app_token)
         
         # Okay, app_token has not been set, so now we need to operate on api_id
-        else:
-            # Warn if we don't know the API_ID.
-            if api_id not in self._api_ids:
-                warnings.warn(HandshakeWarning(
-                    'Agent lacks application to handle app id.'
-                ))
-                self._orphan_handshakes_incoming.append(handshake)
+        elif api_id not in self._api_ids:
+            warnings.warn(HandshakeWarning(
+                'Agent lacks application to handle app id.'
+            ))
+            self._orphan_shares_incoming.append(handshake)
                 
-            else:
-                # No specific token is defined, so dispatch it to all capable
-                # applications
-                for appdef in self._api_ids[api_id]:
-                    self._app_tokens[appdef.app_token].handle_incoming(state)
+        else:
+            # No specific token is defined, so dispatch it to all capable
+            # applications
+            for token in self._api_ids[api_id]:
+                self._attempt_share_to_endpoint(handshake, token)
+        
+            # # Lookup for guid -> object
+            # self._assigned_objects[handshake.address] = handshake
+            # self._completed_shares[handshake.address] = api_id
+                
+    def _attempt_share_to_endpoint(self, obj, app_token):
+        ''' We have a token defined for the api_id, but we don't know if
+        the application is locally installed and running. Try to use it,
+        and if we can't, warn and stash the object.
+        '''
+        if app_token not in self._app_tokens:
+            warnings.warn(HandshakeWarning(
+                'Agent lacks operating application with matching token.'
+            ))
+            self._orphan_shares_incoming.append(obj)
             
-                # Lookup for guid -> object
-                self._assigned_objects[handshake.address] = handshake
-                self._completed_shares[handshake.address] = api_id
+        else:
+            self._app_tokens[app_token].send_object(obj)
+            self._assigned_objects[obj.address] = obj
+            # self._completed_shares[handshake.address] = api_id
     
     def dispatch_handshake_ack(self, ack, target):
         ''' Receives a handshake acknowledgement and dispatches it to
@@ -1213,13 +1218,27 @@ class Dispatcher(DispatcherBase):
         
         ack is a golix.AsymAck object.
         '''
+        # This was added in our overriden share_object
         obj, recipient = self._outstanding_shares[target]
         del self._outstanding_shares[target]
-        # We should change this to a collection of some sort.
-        self._completed_shares[target] = (obj.app_token, recipient)
         
-        endpoint = self._app_tokens[obj.app_token]
-        endpoint.handle_outgoing_success(obj, recipient)
+        # Note: we're currently just assuming we already have the application,
+        # because how else could we get an ack? However, that's insecure. The
+        # consequence of a bad actor would be artificial inflation of our 
+        # _JitSetDict in self._api_ids.
+        
+        # For now, just try notifying all of the endpoints, but we really need
+        # a way of tracking which application requested the share.
+        for app_token in self._api_ids[obj.api_id]:
+            if app_token not in self._app_tokens:
+                warnings.warn(HandshakeWarning(
+                    'Agent lacks operating application with matching token.'
+                ))
+                self._orphan_shares_outgoing_success.append(obj)
+                
+            else:
+                self._app_tokens[app_token].notify_successful_share(obj, recipient)
+                self._assigned_objects[obj.address] = obj
     
     def dispatch_handshake_nak(self, nak, target):
         ''' Receives a handshake nonacknowledgement and dispatches it to
@@ -1229,40 +1248,58 @@ class Dispatcher(DispatcherBase):
         '''
         obj, recipient = self._outstanding_shares[target]
         del self._outstanding_shares[target]
-        # We should change this to a collection of some sort.
-        self._completed_shares[target] = (obj.app_token, recipient)
         
-        endpoint = self._app_tokens[obj.app_token]
-        endpoint.handle_outgoing_failure(obj, recipient)
+        # Note: we're currently just assuming we already have the application,
+        # because how else could we get an ack? However, that's insecure. The
+        # consequence of a bad actor would be artificial inflation of our 
+        # _JitSetDict in self._api_ids.
+        
+        # For now, just try notifying all of the endpoints, but we really need
+        # a way of tracking which application requested the share.
+        for app_token in self._api_ids[obj.api_id]:
+            if app_token not in self._app_tokens:
+                warnings.warn(HandshakeWarning(
+                    'Agent lacks operating application with matching token.'
+                ))
+                self._orphan_shares_outgoing_failed.append(obj)
+                
+            else:
+                self._app_tokens[app_token].notify_failed_share(obj, recipient)
+                self._assigned_objects[obj.address] = obj
     
-    def register_api(self, api_id, endpoint, app_token=None):
-        ''' Registers an api with the IPC mechanism. If token is None, 
-        will create a new token for the app.
-        
-        Returns an AppDef object.
+    def register_endpoint(self, endpoint):
+        ''' Registers an endpoint and all of its appdefs / APIs. If the
+        endpoint has already been registered, updates it.
         '''
-        if app_token is None:
-            app_token = self.new_token()
+        app_token = endpoint.app_token
+        if app_token in self._app_tokens:
+            if self._app_tokens[app_token] is not endpoint:
+                raise RuntimeError(
+                    'Attempt to reregister a new endpoint for the same token. '
+                    'Each app token must have exactly one endpoint.'
+                )
+        else:
+            self._app_tokens[app_token] = endpoint
+        
+        for api in endpoint.apis:
+            self._api_ids[api].add(app_token)
             
-        appdef = AppDef(api_id, app_token)
-        endpoint.add_api(appdef)
+    def close_endpoint(self, endpoint):
+        ''' Closes this client's connection to the endpoint, meaning it
+        will not be able to handle any more requests. However, does not
+        (and should not) clean tokens from the api_id dict.
+        '''
+        del self._app_tokens[endpoint.app_token]
         
-        self._app_tokens[appdef.app_token] = endpoint
-        self._api_ids[appdef.api_id] = appdef
-        
-        return appdef
-        
-    def get_token(self, api_id):
+    def get_tokens(self, api_id):
         ''' Gets the local app token for the passed API id.
         '''
-        try:
-            appdef = self._api_ids[api_id]
-            token = appdef.app_token
-        except KeyError as e:
+        if api_id in self._api_ids:
+            return frozenset(self._api_ids[api_id])
+        else:
             raise KeyError(
                 'Dispatcher does not have a token for passed api_id.'
-            ) from e
-        return token
+            )
         
     def new_token(self):
         # Use a dummy api_id to force the while condition to be true initially
@@ -1279,12 +1316,14 @@ class Dispatcher(DispatcherBase):
         the objects into the internal _assigned_objects store, so that
         they aren't GC'd by Python and can therefore be used by end
         applications.
+        
+        This really cannot keep using AppObj, because AppObj requires an
+        endpoint and a singular app token.
         '''
         obj = AppObj(
             embed = self,
             state = state,
             api_id = api_id,
-            app_token = app_token,
             private = private,
             *args, **kwargs
         )

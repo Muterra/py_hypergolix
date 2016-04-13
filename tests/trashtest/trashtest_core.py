@@ -213,7 +213,7 @@ class AgentTrashTest(unittest.TestCase):
             self.agent1._secrets[obj1s1.address], 
             self.agent2._secrets[obj1s1.address]
         )
-        obj1s1_shared = self.dispatcher2._orphan_handshakes_incoming.pop()
+        obj1s1_shared = self.dispatcher2.retrieve_recent_handshake()
         self.assertEqual(
             obj1s1_shared, obj1s1
         )
@@ -223,7 +223,7 @@ class AgentTrashTest(unittest.TestCase):
         self.assertIn(obj1.address, self.agent2._historian)
         # Make sure this doesn't error, checking that it's in secrets
         self.agent2._get_secret(obj1.address)
-        obj1_shared = self.dispatcher2._orphan_handshakes_incoming.pop()
+        obj1_shared = self.dispatcher2.retrieve_recent_handshake()
         self.assertEqual(
             obj1,
             obj1_shared

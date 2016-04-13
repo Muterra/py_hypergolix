@@ -76,21 +76,21 @@ class TestAppObj(unittest.TestCase):
         
         self.agent1 = _TestDispatch(persister=self.persister)
         self.endpoint1 = _TestEndpoint(
-            dispatch = self.agent1
+            dispatch = self.agent1,
+            apis = [bytes(65)]
         )
-        self.appdef1 = self.agent1.register_api(
-            api_id = bytes(65),
-            endpoint = self.endpoint1
-        )
+        self.agent1.register_endpoint(self.endpoint1)
+        # This is fucking gross.
+        self.agent1.app_token = self.endpoint1.app_token
         
         self.agent2 = _TestDispatch(persister=self.persister)
         self.endpoint2 = _TestEndpoint(
             dispatch = self.agent2,
+            apis = [bytes(65)]
         )
-        self.appdef2 = self.agent2.register_api(
-            api_id = bytes(65),
-            endpoint = self.endpoint2
-        )
+        self.agent2.register_endpoint(self.endpoint2)
+        # This is fucking gross.
+        self.agent2.app_token = self.endpoint2.app_token
         
     def test_appobj(self):
         pt0 = b'I am a sexy stagnant beast.'
@@ -102,7 +102,7 @@ class TestAppObj(unittest.TestCase):
         obj1 = AppObj(
             embed = self.agent1,
             state = pt0,
-            appdef = self.appdef1,
+            api_id = bytes(65),
             private = False,
             dynamic = False
         )
@@ -110,7 +110,7 @@ class TestAppObj(unittest.TestCase):
         obj2 = AppObj(
             embed = self.agent1,
             state = pt1,
-            appdef = self.appdef1,
+            api_id = bytes(65),
             private = False,
             dynamic = True
         )
