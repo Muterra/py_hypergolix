@@ -109,6 +109,7 @@ class RawObj:
             if self.is_dynamic:
                 # This feels gross. Also, it's not really un-sub-able
                 self._dispatch.persister.subscribe(self.address, self.sync)
+            state = self._unwrap_state(state)
         # _preexisting was not set, so we're creating a new object.
         else:
             self._address = self._make_golix(state, dynamic)
@@ -487,15 +488,232 @@ class RawObj:
     def _link_dispatch(self, dispatch):
         ''' Typechecks dispatch and them creates a weakref to it.
         '''
-        # This will require moving DispatcherBase to a bases module
-        # if not isinstance(dispatch, DispatcherBase):
-        #     raise TypeError('dispatch must subclass DispatcherBase.')
-        
         # Copying like this seems dangerous, but I think it should be okay.
         if isinstance(dispatch, weakref.ProxyTypes):
             self._dispatch = dispatch
         else:
             self._dispatch = weakref.proxy(dispatch)
+
+
+class DispatchObj(RawObj):
+    ''' A class for objects to be used by dispatchers.
+    
+    Has an api_id and POTENTIALLY an app token. If app token is defined,
+    this is a private object for that application only. In that case,
+    api_id is ignored during dispatching.
+    
+    Unlike RawObj instances, AppObj instances are meant to be used with
+    a specific API definition, and/or a specific token. Tokens can be 
+    used to provide a consistent PRIVATE, freeform application state,
+    whilst any objects that are being communicated to a different agent
+    must use api ids.
+    
+    Basically, token-based AppObj instances without an api_id represent
+    data that will not be shared. It can, however, be any unstructured
+    data.
+    
+    _private isinstance bool
+        if True, dispatch by token.
+        if False, dispatch by api id.
+    
+    DispatchObj instances will wrap their state in a dispatch structure 
+    before updating golix containers. 
+    '''
+    # This should define *only* ADDITIONAL slots.
+    __slots__ = [
+        '_api_id',
+        '_app_token'
+    ]
+    
+    def __init__(self, dispatch, state, api_id=None, app_token=None, 
+    dynamic=True, callbacks=None, _preexisting=None, *args, **kwargs):
+        ''' Edit: I don't think the following is true. I believe it is
+        correctly handled during unwrap.
+        
+        This is a bit awkward, but if we're making use of the non-
+        public _preexisting argument, we should require api_id and/or 
+        app_token to be set to True/False/Whatever.
+        '''
+        # Do this first to prevent extraneous creation of golix objects
+        if _preexisting is None:
+            
+            # Make sure we were passed one or the other.
+            if api_id is None and app_token is None:
+                raise TypeError(
+                    'api_id or app_token must be defined for a new object.'
+                )
+                
+            # Now set them both, and let @property handle Nones
+            else:
+                self.app_token2 = app_token
+                self.api_id2 = api_id
+        
+        super().__init__(
+            dispatch = dispatch, 
+            state = state, 
+            dynamic = dynamic,
+            callbacks = callbacks,
+            _preexisting = _preexisting,
+            *args, **kwargs
+        )
+                
+    @property
+    def api_id(self):
+        return self._api_id
+        
+    @property
+    def api_id2(self):
+        '''
+        This version is predominantly intended for packing/unpacking and
+        safely performing internal operations when the underlying _attr
+        is in an unknown state.
+        '''
+        try:
+            if self._api_id is None:
+                return bytes(65)
+            else:
+                return self._api_id
+        except AttributeError:
+            return None
+            
+    @api_id2.setter
+    def api_id2(self, value):
+        ''' Sets the api_id. Note that this cannot be changed once it's
+        been created, so we don't need to worry about accidental update
+        shenanigans.
+        
+        This version is predominantly intended for packing/unpacking and
+        safely performing internal operations when the underlying _attr
+        is in an unknown state.
+        '''
+        # Only do this if we lack an existing value.
+        if self.api_id2 is None:
+            # This might be a smart place for some type checking...
+            if value == bytes(65):
+                self._api_id = None
+            else:
+                self._api_id = value
+                
+        # If this is an attempted update, just check to make sure they match.
+        elif self.api_id2 != value:
+            print(self.api_id2)
+            print(value)
+            raise RuntimeError(
+                'Attempting to change api_id during update is not allowed.'
+            )
+            
+    @property
+    def app_token(self):
+        return self._app_token
+        
+    @property
+    def app_token2(self):
+        '''
+        This version is predominantly intended for packing/unpacking and
+        safely performing internal operations when the underlying _attr
+        is in an unknown state.
+        '''
+        try:
+            if self._app_token is None:
+                return bytes(4)
+            else:
+                return self._app_token
+        except AttributeError:
+            return None
+            
+    @app_token2.setter
+    def app_token2(self, value):
+        ''' Sets the token. Note that this cannot be changed once it's
+        been created, so we don't need to worry about accidental update
+        shenanigans.
+        
+        This version is predominantly intended for packing/unpacking and
+        safely performing internal operations when the underlying _attr
+        is in an unknown state.
+        '''
+        # Only do this if we lack an existing value.
+        if self.app_token2 is None:
+            # This might be a smart place for some type checking...
+            if value == bytes(4):
+                self._app_token = None
+            else:
+                self._app_token = value
+                
+        # If this is an attempted update, just check to make sure they match.
+        elif self.app_token2 != value:
+            raise RuntimeError(
+                'Attempting to change app_token during update is not allowed.'
+            )
+            
+    def _link_dispatch(self, dispatch):
+        ''' Typechecks dispatch and them creates a weakref to it.
+        '''
+        # This will require moving DispatcherBase to a bases module
+        # if not isinstance(dispatch, DispatcherBase):
+        #     raise TypeError('dispatch must subclass DispatcherBase.')
+        
+        super()._link_dispatch(dispatch)
+        
+    def _wrap_state(self, state):
+        ''' Wraps the passed state into a format that can be dispatched.
+        
+        This should probably use something other than messagepack, which
+        is massive, massive overkill.
+        '''
+        msg = {
+            'api_id': self.api_id2,
+            'app_token': self.app_token2,
+            'body': state,
+        }
+        try:
+            packed_msg = msgpack.packb(msg, use_bin_type=True)
+            
+        except (
+            msgpack.exceptions.BufferFull,
+            msgpack.exceptions.ExtraData,
+            msgpack.exceptions.OutOfData,
+            msgpack.exceptions.PackException,
+            msgpack.exceptions.PackValueError
+        ) as e:
+            raise ValueError(
+                'Couldn\'t wrap state. Incompatible data format?'
+            ) from e
+            
+        return packed_msg
+        
+    def _unwrap_state(self, state):
+        ''' Wraps the object state into a format that can be dispatched.
+        
+        Note that this is also called during updates.
+        '''
+        try:
+            unpacked_msg = msgpack.unpackb(state, encoding='utf-8')
+            api_id = unpacked_msg['api_id']
+            app_token = unpacked_msg['app_token']
+            state = unpacked_msg['body']
+            
+        # MsgPack errors mean that we don't have a properly formatted handshake
+        except (
+            msgpack.exceptions.BufferFull,
+            msgpack.exceptions.ExtraData,
+            msgpack.exceptions.OutOfData,
+            msgpack.exceptions.UnpackException,
+            msgpack.exceptions.UnpackValueError,
+            KeyError
+        ) as e:
+            # print(repr(e))
+            # traceback.print_tb(e.__traceback__)
+            # print(state)
+            raise HandshakeError(
+                'Handshake does not appear to conform to the hypergolix '
+                'handshake procedure.'
+            ) from e
+            
+        # The setters handle all of the error catching here.
+        self.api_id2 = api_id
+        self.app_token2 = app_token
+            
+        return state
 
 
 class AppObj(RawObj):
@@ -546,17 +764,6 @@ class AppObj(RawObj):
         # embed. Grrrrrr
         self._app_token = embed.app_token
         
-        if _preexisting is not None:
-            # Note that this bit will set _api_id, _private, and _app_token
-            # Note: what if app_token is missing because this is a shared obj
-            # and their token is (by definition) different?
-            state = self._unwrap_state(state)
-        elif api_id is None:
-            raise TypeError('appdef must be defined for a new object.')
-        else:
-            self._private = private
-            self._api_id = api_id
-        
         super().__init__(
             dispatch = embed, 
             state = state, 
@@ -565,6 +772,16 @@ class AppObj(RawObj):
             _preexisting = _preexisting,
             *args, **kwargs
         )
+        
+        if _preexisting is not None:
+            # Note that this is now covered by super().
+            # state = self._unwrap_state(state)
+            pass
+        elif api_id is None:
+            raise TypeError('appdef must be defined for a new object.')
+        else:
+            self._private = private
+            self._api_id = api_id
             
     def _link_dispatch(self, dispatch):
         ''' Typechecks dispatch and them creates a weakref to it.
@@ -572,11 +789,7 @@ class AppObj(RawObj):
         # if not isinstance(dispatch, _EmbedBase):
         #     raise TypeError('dispatch must subclass _EmbedBase.')
         
-        # Copying like this seems dangerous, but I think it should be okay.
-        if isinstance(dispatch, weakref.ProxyTypes):
-            self._dispatch = dispatch
-        else:
-            self._dispatch = weakref.proxy(dispatch)
+        super()._link_dispatch(dispatch)
             
     def share(self, recipient):
         ''' Extends super() share behavior to disallow sharing of 

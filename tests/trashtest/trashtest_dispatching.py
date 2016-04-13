@@ -50,7 +50,8 @@ from hypergolix.persisters import MemoryPersister
 
 from hypergolix.core import Dispatcher
 
-from hypergolix.utils import AppObj
+from hypergolix.utils import DispatchObj
+# from hypergolix.utils import AppObj
 # from hypergolix.utils import RawObj
 
 from hypergolix.embeds import _TestEmbed
@@ -73,11 +74,12 @@ class _TestDispatch(AgentBase, Dispatcher, _TestEmbed):
 class TestAppObj(unittest.TestCase):
     def setUp(self):
         self.persister = MemoryPersister()
+        self.__api_id = bytes(64) + b'1'
         
         self.agent1 = _TestDispatch(persister=self.persister)
         self.endpoint1 = _TestEndpoint(
             dispatch = self.agent1,
-            apis = [bytes(65)]
+            apis = [self.__api_id]
         )
         self.agent1.register_endpoint(self.endpoint1)
         # This is fucking gross.
@@ -86,7 +88,7 @@ class TestAppObj(unittest.TestCase):
         self.agent2 = _TestDispatch(persister=self.persister)
         self.endpoint2 = _TestEndpoint(
             dispatch = self.agent2,
-            apis = [bytes(65)]
+            apis = [self.__api_id]
         )
         self.agent2.register_endpoint(self.endpoint2)
         # This is fucking gross.
@@ -99,19 +101,18 @@ class TestAppObj(unittest.TestCase):
         pt3 = b'Listening...'
         pt4 = b'All ears!'
 
-        obj1 = AppObj(
-            embed = self.agent1,
+        obj1 = DispatchObj(
+            dispatch = self.agent1,
             state = pt0,
-            api_id = bytes(65),
-            private = False,
+            app_token = self.agent1.app_token,
+            api_id = self.__api_id,
             dynamic = False
         )
 
-        obj2 = AppObj(
-            embed = self.agent1,
+        obj2 = DispatchObj(
+            dispatch = self.agent1,
             state = pt1,
-            api_id = bytes(65),
-            private = False,
+            api_id = self.__api_id,
             dynamic = True
         )
         

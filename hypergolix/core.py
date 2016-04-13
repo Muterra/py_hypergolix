@@ -47,8 +47,6 @@ DO PERSISTENCE PROVIDERS FIRST.
 # package through __init__.py
 __all__ = [
     'AgentBase', 
-    'StaticObject',
-    'DynamicObject',
     'EmbeddedMemoryAgent'
 ]
 
@@ -60,6 +58,7 @@ import os
 import msgpack
 import abc
 import traceback
+import warnings
 
 from golix import FirstParty
 from golix import SecondParty
@@ -80,15 +79,12 @@ from Crypto.Protocol.KDF import HKDF
 
 # Intra-package dependencies
 from .utils import _JitSetDict
-from .utils import _ObjectBase
-from .utils import StaticObject
-from .utils import DynamicObject
-from .utils import AppDef
 from .utils import RawObj
-from .utils import AppObj
+from .utils import DispatchObj
 
 from .exceptions import NakError
 from .exceptions import HandshakeError
+from .exceptions import HandshakeWarning
 from .exceptions import InaccessibleError
 from .exceptions import UnknownPartyError
 
@@ -1167,12 +1163,14 @@ class Dispatcher(DispatcherBase):
         Raises HandshakeError if unsuccessful.
         '''
         # First first, get the object. Note that super() is calling get_object,
-        # so our use of AppObj is safe.
+        # so our use of DispatchObj is safe.
         handshake = super().dispatch_handshake(target)
         
         # Might as well do this to save lookup operations later
         api_id = handshake.api_id
         app_token = handshake.app_token
+        # print(api_id)
+        # print(app_token)
         
         # We've defined a specific app token to use, so this is a private
         # object. Only dispatch it to that application, and bypass API lookup.
@@ -1310,21 +1308,18 @@ class Dispatcher(DispatcherBase):
         return token
         
     # def new_object(self, state, dynamic=True, _legroom=None):
-    def new_object(self, state, api_id, app_token, private, *args, **kwargs):
-        ''' Overrides super() object creation (except it doesn't yet) to
-        support AppObj instances instead of RawObj instances. Also puts
+    def new_object(self, state, api_id=None, app_token=None, *args, **kwargs):
+        ''' Overrides super() object creation to support DispatchObj
+         instances instead of RawObj instances. Also puts
         the objects into the internal _assigned_objects store, so that
         they aren't GC'd by Python and can therefore be used by end
         applications.
-        
-        This really cannot keep using AppObj, because AppObj requires an
-        endpoint and a singular app token.
         '''
-        obj = AppObj(
-            embed = self,
+        obj = DispatchObj(
+            dispatch = self,
             state = state,
             api_id = api_id,
-            private = private,
+            app_token = app_token,
             *args, **kwargs
         )
         # Is this line necessary? Maybe the endpoints should hold on, since
@@ -1333,14 +1328,14 @@ class Dispatcher(DispatcherBase):
         return obj
         
     def get_object(self, guid):
-        ''' Overrides super() object getting (except it doesn't yet) to
-        support AppObj instances instead of RawObj instances.
+        ''' Overrides super() object getting to
+        support DispatchObj instances instead of RawObj instances.
         '''
         author, is_dynamic, state = self.get_guid(guid)
             
-        obj = AppObj(
+        obj = DispatchObj(
             # Todo: make the dispatch more intelligent
-            embed = self,
+            dispatch = self,
             state = state,
             dynamic = is_dynamic,
             _preexisting = (guid, author)
