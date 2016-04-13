@@ -47,6 +47,9 @@ __all__ = [
     'HandshakeWarning',
     'InaccessibleError',
     'UnknownPartyError',
+    # These are dispatch errors
+    'DispatchError',
+    'DispatchWarning'
 ]
 
 
@@ -110,5 +113,17 @@ class UnknownPartyError(HypergolixException, RuntimeError):
 class HandshakeWarning(HypergolixException, RuntimeWarning):
     ''' Raised when handshakes use an unknown app_id, but are otherwise
     legit.
+    '''
+    pass
+
+
+class DispatchError(HypergolixException, RuntimeError):
+    ''' Raised when something fails with dispatch.
+    '''
+    pass
+
+
+class DispatchWarning(HypergolixException, RuntimeWarning):
+    ''' Raised when something goes moderately wrong with dispatch.
     '''
     pass

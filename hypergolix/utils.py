@@ -315,6 +315,10 @@ class RawObj:
             self._is_dynamic = False
             
     @property
+    def dispatch(self):
+        return self._dispatch
+            
+    @property
     def is_dynamic(self):
         ''' Indicates whether this object is dynamic.
         returns True/False.
@@ -527,12 +531,10 @@ class DispatchObj(RawObj):
     
     def __init__(self, dispatch, state, api_id=None, app_token=None, 
     dynamic=True, callbacks=None, _preexisting=None, *args, **kwargs):
-        ''' Edit: I don't think the following is true. I believe it is
-        correctly handled during unwrap.
-        
-        This is a bit awkward, but if we're making use of the non-
-        public _preexisting argument, we should require api_id and/or 
-        app_token to be set to True/False/Whatever.
+        ''' NOTE: If app_token is not None, this will be considered a 
+        private object. Though DispatchObjs do not explicitly disallow
+        sharing app-private objects (unlike AppObjs, which do), sharing
+        tokens is suuuuper bad practice.
         '''
         # Do this first to prevent extraneous creation of golix objects
         if _preexisting is None:
@@ -556,6 +558,9 @@ class DispatchObj(RawObj):
             _preexisting = _preexisting,
             *args, **kwargs
         )
+        
+        # Make sure to call this or we may be prematurely GC'd
+        self.dispatch.register_object(self)
                 
     @property
     def api_id(self):
@@ -714,6 +719,18 @@ class DispatchObj(RawObj):
         self.app_token2 = app_token
             
         return state
+        
+    def share(*args, **kwargs):
+        ''' Override normal share behavior to force use of IPC host to
+        pass in objects.
+        
+        Note that sharing is (currently) always handled by the embed, so
+        it's not an issue right now that we're changing its behavior.
+        '''
+        raise NotImplementedError(
+            'DispatchObj cannot be shared from the obj; it must be shared '
+            'from the IPC host.'
+        )
 
 
 class AppObj(RawObj):
@@ -1315,4 +1332,15 @@ class _JitSetDict(dict):
     def __getitem__(self, key):
         if key not in self:
             self[key] = set()
+        return super().__getitem__(key)
+    
+    
+class _JitDictDict(dict):
+    ''' Just-in-time dict dict. A dictionary of dictionaries. Attempting 
+    to access a value that does not exist will automatically create it 
+    as an empty dictionary.
+    '''
+    def __getitem__(self, key):
+        if key not in self:
+            self[key] = {}
         return super().__getitem__(key)

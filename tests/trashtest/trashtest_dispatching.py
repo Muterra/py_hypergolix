@@ -82,7 +82,7 @@ class TestAppObj(unittest.TestCase):
             apis = [self.__api_id]
         )
         self.agent1.register_endpoint(self.endpoint1)
-        # This is fucking gross.
+        # This is fucking gross. Oh well, that's why it's a trashtest.
         self.agent1.app_token = self.endpoint1.app_token
         
         self.agent2 = _TestDispatch(persister=self.persister)
@@ -91,7 +91,7 @@ class TestAppObj(unittest.TestCase):
             apis = [self.__api_id]
         )
         self.agent2.register_endpoint(self.endpoint2)
-        # This is fucking gross.
+        # This is fucking gross. See above.
         self.agent2.app_token = self.endpoint2.app_token
         
     def test_appobj(self):
@@ -116,7 +116,14 @@ class TestAppObj(unittest.TestCase):
             dynamic = True
         )
         
-        obj2.share(self.agent2.whoami)
+        # Manually calling share here to bypass things. Technically this should
+        # be called from the endpoint, but let's just do it like this as a test
+        # fixture.
+        self.agent1.share_object(
+            obj = obj2, 
+            recipient = self.agent2.whoami, 
+            requesting_token = self.agent1.app_token
+        )
         obj2.update(pt2)
 
         # obj1 = self.agent1.new_object(pt0, dynamic=False)

@@ -136,13 +136,13 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         pass
         
     @abc.abstractmethod
-    def notify_failed_share(self, obj, recipient):
+    def notify_share_failure(self, obj, recipient):
         ''' Notifies the embedded client of an unsuccessful share.
         '''
         pass
         
     @abc.abstractmethod
-    def notify_successful_share(self, obj, recipient):
+    def notify_share_success(self, obj, recipient):
         ''' Notifies the embedded client of a successful share.
         '''
         pass
@@ -221,11 +221,11 @@ class _TestEndpoint(_EndpointBase):
         self._assigned_objs.append(obj)
         print('Updated: ', obj)
         
-    def notify_failed_share(self, obj, recipient):
+    def notify_share_failure(self, obj, recipient):
         self._failed_objs.append(obj)
         print('Failed: ', obj)
         
-    def notify_successful_share(self, obj, recipient):
+    def notify_share_success(self, obj, recipient):
         self._assigned_objs.append(obj)
         print('Success: ', obj)
 
