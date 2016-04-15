@@ -49,7 +49,9 @@ __all__ = [
     'UnknownPartyError',
     # These are dispatch errors
     'DispatchError',
-    'DispatchWarning'
+    'DispatchWarning',
+    # These are IPC errors
+    'IPCError',
 ]
 
 
@@ -125,5 +127,11 @@ class DispatchError(HypergolixException, RuntimeError):
 
 class DispatchWarning(HypergolixException, RuntimeWarning):
     ''' Raised when something goes moderately wrong with dispatch.
+    '''
+    pass
+    
+    
+class IPCError(HypergolixException, RuntimeError):
+    ''' Raised when something goes wrong with IPC (bad commands, etc).
     '''
     pass

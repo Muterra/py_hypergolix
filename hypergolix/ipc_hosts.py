@@ -41,13 +41,39 @@ import msgpack
 import os
 import warnings
 import weakref
+import threading
+
+
+
+
+
+
+# import collections
+# import warnings
+# import functools
+# import struct
+
+import asyncio
+import websockets
+from websockets.exceptions import ConnectionClosed
+
+import time
+# import string
+import traceback
+
+
+
+
+
 
 # Intrapackage dependencies
 from .exceptions import HandshakeError
 from .exceptions import HandshakeWarning
+from .exceptions import IPCError
 
-from .utils import AppDef
 from .utils import AppObj
+
+from .comms import Websocketeer
 
 
 class _EndpointBase(metaclass=abc.ABCMeta):
@@ -68,37 +94,33 @@ class _EndpointBase(metaclass=abc.ABCMeta):
     Alternatively, might just treat the whole appdata portion as a 
     nested binary file, and unpack that separately.
     '''
-    def __init__(self, dispatch, token=None, apis=None, *args, **kwargs):
+    def __init__(self, dispatch, app_token=None, apis=None, *args, **kwargs):
         ''' Creates an endpoint for the specified agent that handles the
-        associated apis. Apis is an iterable of either AppDef objects, 
-        in which case the existing tokens are used, or api_ids, in which 
-        case, new tokens are generated. The iterable may mix those as 
-        well.
+        associated apis. Apis is an iterable of api_ids. If token is not
+        specified, generates a new one from dispatch.
         '''
         super().__init__(*args, **kwargs)
         
         self._dispatch = weakref.proxy(dispatch)
+        self._expecting_exchange = threading.Lock()
         self._known_guids = set()
         
-        if token is None:
-            token = self.dispatch.new_token()
-        if apis is None:
-            apis = tuple()
+        if app_token is None:
+            app_token = self.dispatch.new_token()
             
         self._token = token
-        # Set of available apis -> appdefs.
-        self._apis = {}
+        self._apis = set()
         
-        for api in apis:
-            self.add_api(api)
+        if apis is not None:
+            for api in apis:
+                self.add_api(api)
             
     def add_api(self, api_id):
-        ''' This adds an appdef to the endpoint. Probably not strictly
+        ''' This adds an api_id to the endpoint. Probably not strictly
         necessary, but helps keep track of things.
         '''
-        # Type check by creating an appdef.
-        appdef = AppDef(api_id, self._token)
-        self._apis[api_id] = appdef
+        # Need to add a type check.
+        self._apis.add(api_id)
         
     @property
     def dispatch(self):
@@ -118,11 +140,19 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         '''
         return frozenset(self._apis)
         
-    @property
-    def appdefs(self):
-        ''' Return tuple of all current appdefs.
+    def notify_object(self, obj):
+        ''' Notifies the endpoint that the object is available. May be
+        either a new object, or an updated one.
+        
+        Checks to make sure we're not currently expecting and update to
+        suppress.
         '''
-        return tuple(self._apis.values())
+        # if not self._expecting_exchange.locked():
+        if obj.address in self._known_guids:
+            self.send_update(obj)
+        else:
+            self._known_guids.add(obj.address)
+            self.send_object(obj)
     
     @abc.abstractmethod
     def send_object(self, obj):
@@ -135,16 +165,6 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         ''' Sends an updated object to the emedded client.
         '''
         pass
-        
-    def notify_object(self, obj):
-        ''' Notifies the endpoint that the object is available. May be
-        either a new object, or an updated one.
-        '''
-        if obj.address in self._known_guids:
-            self.send_update(obj)
-        else:
-            self._known_guids.add(obj.address)
-            self.send_object(obj)
         
     @abc.abstractmethod
     def notify_share_failure(self, obj, recipient):
@@ -180,10 +200,10 @@ class _MsgpackEndpointBase(_EndpointBase):
             raise TypeError('obj must be appobj.')
             
         if command not in {
-            'send_new', 
-            'send_failure', 
-            'send_success', 
-            'send_update'
+            'send_object', 
+            'send_update',
+            'notify_share_failure', 
+            'notify_share_success', 
         }:
             raise ValueError('Invalid command.')
         
@@ -193,7 +213,7 @@ class _MsgpackEndpointBase(_EndpointBase):
         # hand, what if we have (in the future) a secure way to use a single
         # endpoint for multiple applications? (admittedly that seems unlikely).
         obj_pack = {
-            'app_token': obj.app_token,
+            # 'app_token': obj.app_token,
             'state': obj.state,
             'api_id': obj.api_id,
             'private': obj.private,
@@ -216,6 +236,27 @@ class _MsgpackEndpointBase(_EndpointBase):
         ''' Packs an object/command pair for transit.
         '''
         unpacked = msgpack.unpackb(packed, encoding='utf-8')
+
+        # This bit cleverly selects the command.
+        command = unpacked['command']
+        try:
+            command = {
+                'register_api': self.register_api,
+                'whoami': self.whoami,
+                'get_object': self.get_object,
+                'new_object': self.new_object,
+                'update_object': self.update_object,
+                'sync_object': self.sync_object,
+                'share_object': self.share_object,
+                'freeze_object': self.freeze_object,
+                'hold_object': self.hold_object,
+                'delete_object': self.delete_object
+            }[command]
+        except KeyError as e:
+            raise IPCError('Invalid command.') from e
+        
+        args = unpacked['args']
+        kwargs = unpacked['kwargs']
         
         
 class _TestEndpoint(_EndpointBase):
@@ -253,8 +294,17 @@ class _IPCBase(metaclass=abc.ABCMeta):
     Or, we could just handle all of our operations directly with the 
     agent bootstrap object. Yeah, let's do that instead.
     '''
-    def __init__(self, *args, **kwargs):
+    def __init__(self, dispatch, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Don't weakref.proxy, since dispatchers never contact the ipcbase,
+        # just the endpoints.
+        self._dispatch = dispatch
+        
+    @property
+    def dispatch(self):
+        ''' Sorta superluous right now.
+        '''
+        return self._dispatch
         
     @abc.abstractmethod
     def new_endpoint(self):
@@ -280,18 +330,144 @@ class _EmbeddedIPC(_IPCBase):
         Returns an Endpoint object.
         '''
         pass
+        
+        
+class WSEndpoint(_EndpointBase):
+    def send_object(self, obj):
+        ''' Sends a new object to the emedded client.
+        '''
+        pass
+    
+    def send_update(self, obj):
+        ''' Sends an updated object to the emedded client.
+        '''
+        pass
+        
+    def notify_share_failure(self, obj, recipient):
+        ''' Notifies the embedded client of an unsuccessful share.
+        '''
+        pass
+        
+    def notify_share_success(self, obj, recipient):
+        ''' Notifies the embedded client of a successful share.
+        '''
+        pass
     
     
-class WebsocketsIPC(_IPCBase):
-    ''' Websockets IPC via localhost.
+class WebsocketsIPC(_IPCBase, Websocketeer):
+    ''' Websockets IPC via localhost. Sets up a server.
     '''
-    
-    pass
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+    def new_endpoint(self, connid, app_token=None, apis=None):
+        ''' Creates a new endpoint for the IPC system. Endpoints must
+        be unique. Uniqueness must be enforced by subclasses of the
+        _IPCBase class.
+        
+        Returns an Endpoint object.
+        '''
+        return WSEndpoint(
+            dispatch = self.dispatch,
+            app_token = app_token,
+            apis = apis,
+        )
+        
+    def __trash_handle_new_app_registration(self):
+        ''' Scratchpad for how to handle new connections.
+        '''
+        connection_id = get_connection_id()
+        endpoint = self.new_endpoint(connection_id)
+        self.dispatch.register_endpoint(endpoint)
+        
+    @asyncio.coroutine
+    def init_connection(self, websocket, connid):
+        ''' Does anything necessary to initialize a connection. Has 
+        access to self.connections[connid], which will contain None.
+        '''
+        # First command on the wire MUST be registering the application.
+        # msg = yield from websocket.recv()
+        pass
+        
+    @asyncio.coroutine
+    def producer(self, connid):
+        ''' Produces anything needed to send to the connection indicated
+        by connid. Must return bytes.
+        '''
+        pass
+        
+    @asyncio.coroutine
+    def consumer(self, msg, connid):
+        ''' Consumes the msg produced by the websockets receiver 
+        listening at connid.
+        '''
+        pass
+        
+    @asyncio.coroutine
+    def _request_handler(self, websocket, exchange_lock, dispatch_lookup):
+        ''' Handles incoming requests from the websocket in parallel 
+        with outgoing subscription updates.
+        '''
+        rcv = yield from websocket.recv()
+            
+        # Acquire the exchange lock so we can guarantee an orderly response
+        # print('Getting exchange lock for request.')
+        yield from exchange_lock
+        try:
+            framed = memoryview(rcv)
+            header = bytes(framed[0:2])
+            body = framed[2:]
+            
+            # This will automatically dispatch the request based on the
+            # two-byte header
+            response_preheader = dispatch_lookup[header](body)
+            # print('-----------------------------------------------')
+            print('Successful ', header, ' ', bytes(body[:4]))
+            response = self._frame_response(response_preheader)
+            # print(bytes(body))
+                
+        except Exception as e:
+            # We should log the exception, but exceptions here should never
+            # be allowed to take down a server.
+            response_preheader = False
+            response_body = (str(e)).encode('utf8')
+            response = self._frame_response(
+                preheader = response_preheader, 
+                body = response_body
+            )
+            print('Failed to dispatch ', header, ' ', bytes(body[:4]))
+            # print(rcv)
+            # print(repr(e))
+            # traceback.print_tb(e.__traceback__)
+            
+        finally:
+            yield from websocket.send(response)
+            exchange_lock.release()
+        # print('Released exchange lock for request.')
+            
+    @asyncio.coroutine
+    def _update_handler(self, websocket, exchange_lock, sub_queue):
+        ''' Handles updates through a queue into sending out.
+        '''
+        # This will grab the notification guid from the queue.
+        update = yield from sub_queue.get()
+        
+        # Immediately acquire the exchange lock when update yields.
+        # print('Getting exchange lock for update.')
+        yield from exchange_lock
+        try:
+            # print('Preparing to send sub update.')
+            msg_preheader = b'!!'
+            msg_body = bytes(update)
+            msg = msg_preheader + msg_body
+            yield from websocket.send(msg)
+            # Note: should this expect a response?
+            # print('Sub update sent.')
+            
+        finally:
+            exchange_lock.release()
+        # print('Released exchange lock for update.')
     
     
 class PipeIPC(_IPCBase):
-    pass
-    
-    
-class FileIPC(_IPCBase):
     pass

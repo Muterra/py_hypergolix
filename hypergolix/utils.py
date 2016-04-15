@@ -45,7 +45,6 @@ from .exceptions import HandshakeError
 __all__ = [
     'StaticObject',
     'DynamicObject',
-    'AppDef',
     'RawObj',
     'AppObj',
 ]
@@ -795,7 +794,7 @@ class AppObj(RawObj):
             # state = self._unwrap_state(state)
             pass
         elif api_id is None:
-            raise TypeError('appdef must be defined for a new object.')
+            raise TypeError('api_id must be defined for a new object.')
         else:
             self._private = private
             self._api_id = api_id
@@ -947,40 +946,6 @@ class AppObj(RawObj):
             else:
                 # self._app_token = self._dispatch.get_token(self.api_id)
                 self._private = False
-
-
-class AppDef:
-    ''' An application definition object.
-        
-    Note that the tokens contained within AppDefs are specific to the 
-    agent. They will always be the same for the same agent, but they are 
-    extremely unlikely to be the same for different agents. They are 
-    generated as random 32-bit unique identifiers.
-    
-    Tokens prevent local apps from spoofing other local apps, a la many
-    phishing strategies. They are never transmitted.
-    
-    HOWEVER, api_ids are specific to an application and never change.
-    There is no inherent guarantee that a conversation parter is, in 
-    fact, using the correct application for any given api_id, except 
-    that which is verified by the app itself.
-    '''
-    def __init__(self, api_id, app_token):
-        if len(app_token) != 4:
-            raise ValueError('app_token must be 4 bytes.')
-        app_token = bytes(app_token)
-        
-        # Currently hard-code API_ids to be same size as guids
-        if len(api_id) != 65:
-            raise ValueError('api_id must be 65 bytes.')
-        api_id = bytes(api_id)
-        
-        # if not isinstance(endpoint, _EndpointBase):
-        #     raise TypeError('endpoint must subclass _EndpointBase.')
-        
-        self.api_id = api_id
-        self.app_token = app_token
-        # self.endpoint = endpoint
         
 
 class _ObjectBase:
