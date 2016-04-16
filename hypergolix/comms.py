@@ -33,6 +33,7 @@ hypergolix: A python Golix client.
 import abc
 import asyncio
 import websockets
+from websockets.exceptions import ConnectionClosed
 import threading
 
 # Note: this is used exclusively for connection ID generation in _Websocketeer
@@ -235,6 +236,10 @@ class Websockee(metaclass=abc.ABCMeta):
         self._cts = threading.Event()
         self._init_shutdown = asyncio.Event(loop=self._ws_loop)
         
+        # These are our communication queues.
+        self._outgoing_q = asyncio.Queue(loop = self._ws_loop)
+        self._incoming_q = asyncio.Queue(loop = self._ws_loop)
+        
         # Set up a (daemon) thread for the websockets client
         self._ws_thread = threading.Thread(
             target = self._ws_robot,
@@ -245,6 +250,75 @@ class Websockee(metaclass=abc.ABCMeta):
         # Start listening for subscription responses as soon as possible (but 
         # wait until then to return control of the thread to caller).
         self._cts.wait()
+        
+    def send(self, msg):
+        ''' Threadsafe wrapper to add things to the outgoing queue.
+        '''
+        sender = asyncio.run_coroutine_threadsafe(
+            coro = self._outgoing_q.put(msg),
+            loop = self._ws_loop
+        )
+        
+        # Block on completion of coroutine and then raise any created exception
+        exc = sender.exception()
+        if exc:
+            raise exc
+            
+        return True
+        
+    @asyncio.coroutine
+    def _pop_incoming_nowait(self):
+        ''' Wrapper to call get from within the event loop.
+        '''
+        return self._incoming_q.get_nowait()
+        
+    def receive_nowait(self):
+        ''' Threadsafe wrapper to immediately return the first item in
+        the incoming queue. If none available, raises QueueEmpty.
+        '''
+        receiver = asyncio.run_coroutine_threadsafe(
+            coro = self._pop_incoming_nowait(),
+            loop = self._ws_loop
+        )
+        
+        # Block on completion of coroutine and then raise any created exception
+        exc = sender.exception()
+        if exc:
+            raise exc
+            
+        return receiver.result()
+        
+    def receive_blocking(self):
+        ''' Performs a blocking synchronous call to receive the first 
+        item in the incoming queue.
+        '''
+        receiver = asyncio.run_coroutine_threadsafe(
+            coro = self._incoming_q.get(),
+            loop = self._ws_loop
+        )
+        
+        # Block on completion of coroutine and then raise any created exception
+        exc = receiver.exception()
+        if exc:
+            raise exc
+            
+        return receiver.result()
+        
+    @asyncio.coroutine
+    def receive(self):
+        ''' NON THREADSAFE coroutine for waiting on an incoming message.
+        '''
+        return (yield from self._incoming_q.get())
+        
+    @asyncio.coroutine
+    def receive_threadsafe(self):
+        ''' Threadsafe coroutine for waiting on an incoming message. DO
+        NOT CALL THIS FROM THE SAME EVENT LOOP AS THE WEBSOCKETS CLIENT!
+        '''
+        raise NotImplementedError(
+            'Sorry, haven\'t had a chance to implement this yet and haven\'t '
+            'personally had a use for it?'
+        )
         
     def halt(self):
         ''' Sets the shutdown flag, killing the connection and client.
@@ -286,7 +360,7 @@ class Websockee(metaclass=abc.ABCMeta):
         try:
             while not self._init_shutdown.is_set():
                 listener = asyncio.ensure_future(self._websocket.recv())
-                producer = asyncio.ensure_future(self.producer())
+                producer = asyncio.ensure_future(self._outgoing_q.get())
                 interrupter = asyncio.ensure_future(self._init_shutdown.wait())
                 
                 finished, pending = yield from asyncio.wait(
@@ -310,7 +384,7 @@ class Websockee(metaclass=abc.ABCMeta):
                 # If it was the listener, consume it
                 elif listener is finished:
                     yield from self.handle_listener_exc(finished.exception())
-                    yield from self.consumer(finished.result())
+                    yield from self._incoming_q.put(finished.result())
                 
                 # If it was the interrupter, yield to cleanup.
                 # Actually, just don't do anything. We won't execute the next
@@ -342,21 +416,21 @@ class Websockee(metaclass=abc.ABCMeta):
         '''
         pass
         
-    @asyncio.coroutine
-    @abc.abstractmethod
-    def producer(self):
-        ''' Produces anything needed to send to the connection. Must 
-        return bytes.
-        '''
-        pass
+    # @asyncio.coroutine
+    # @abc.abstractmethod
+    # def producer(self):
+    #     ''' Produces anything needed to send to the connection. Must 
+    #     return bytes.
+    #     '''
+    #     pass
         
-    @asyncio.coroutine
-    @abc.abstractmethod
-    def consumer(self, msg):
-        ''' Consumes the msg produced by the websockets receiver 
-        listening to the connection.
-        '''
-        pass
+    # @asyncio.coroutine
+    # @abc.abstractmethod
+    # def consumer(self, msg):
+    #     ''' Consumes the msg produced by the websockets receiver 
+    #     listening to the connection.
+    #     '''
+    #     pass
         
     @asyncio.coroutine
     @abc.abstractmethod

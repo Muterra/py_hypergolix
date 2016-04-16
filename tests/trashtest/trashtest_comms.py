@@ -48,20 +48,27 @@ from hypergolix.comms import Websockee
 
 
 class TestServer(Websocketeer):
+    def __init__(self, *args, **kwargs):
+        self._incoming_counter = 0
+        super().__init__(*args, **kwargs)
+        
     @asyncio.coroutine
     def init_connection(self, websocket, connid):
         ''' Does anything necessary to initialize a connection. Has 
         access to self.connections[connid], which will contain None.
         '''
-        print('Connection established, Morty.')
+        print('Connection established, whoeveryouare.')
         
     @asyncio.coroutine
     def producer(self, connid):
         ''' Produces anything needed to send to the connection indicated
         by connid. Must return bytes.
+        
+        NOTE: IF THIS IS ALWAYS SLOWER THAN THE CONSUMER, IT WILL NEVER
+        RUN!
         '''
         burp = b'B' + (b'u' * random.randint(1, 14)) + b'rp'
-        yield from asyncio.sleep(3)
+        yield from asyncio.sleep(random.randint(1,4))
         return burp
         
     @asyncio.coroutine
@@ -69,32 +76,52 @@ class TestServer(Websocketeer):
         ''' Consumes the msg produced by the websockets receiver 
         listening at connid.
         '''
-        print('Got message from connection ', connid, ': ')
+        self._incoming_counter += 1
+        print('Got message #', self._incoming_counter ,' from connection ', connid, ': ')
         print(msg)
     
     
 class TestClient(Websockee):
+    def __init__(self, name, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self._incoming_counter = 0
+        self._name = name
+        
+        self.producer_thread = threading.Thread(
+            target = self.producer,
+            daemon = True,
+        )
+        self.producer_thread.start()
+        self.consumer_thread = threading.Thread(
+            target = self.consumer,
+            daemon = True,
+        )
+        self.consumer_thread.start()
+    
     @asyncio.coroutine
     def init_connection(self, websocket):
         ''' Does anything necessary to initialize a connection.
         '''
-        print('Connection established.')
+        print('Connection established, Rick.')
         
-    @asyncio.coroutine
     def producer(self):
         ''' Produces anything needed to send to the connection. Must 
         return bytes.
         '''
-        yield from asyncio.sleep(5)
-        return b'Goodbye, Moonman.'
+        while True:
+            time.sleep(random.randint(2,7))
+            print(self._name, ' sending.')
+            self.send(b'Goodbye, Moonman.')
         
-    @asyncio.coroutine
-    def consumer(self, msg):
+    def consumer(self):
         ''' Consumes the msg produced by the websockets receiver 
         listening to the connection.
         '''
-        print('Got message from serveRick:')
-        print(msg)
+        while True:
+            self._incoming_counter += 1
+            msg = self.receive_blocking()
+            print(self._name, ' got message #', self._incoming_counter ,' from serveRick: ', msg)
         
     @asyncio.coroutine
     def handle_producer_exc(self, exc):
@@ -138,8 +165,8 @@ class WebsocketsTrashTest(unittest.TestCase):
         )
         self.server_thread.start()
         
-        self.client1 = TestClient(port=9317)
-        self.client2 = TestClient(port=9317)
+        self.client1 = TestClient(port=9317, name='OneTrueMorty')
+        self.client2 = TestClient(port=9317, name='HammerMorty')
         
     def test_comms(self):
         # pass
