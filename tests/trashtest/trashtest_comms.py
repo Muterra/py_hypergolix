@@ -165,8 +165,18 @@ class WebsocketsTrashTest(unittest.TestCase):
         )
         self.server_thread.start()
         
-        self.client1 = TestClient(port=9317, name='OneTrueMorty')
-        self.client2 = TestClient(port=9317, name='HammerMorty')
+        self.client1 = TestClient(
+            host = 'ws://localhost', 
+            port = 9317, 
+            name = 'OneTrueMorty',
+            threaded = True
+        )
+        self.client2 = TestClient(
+            host = 'ws://localhost', 
+            port = 9317, 
+            name = 'HammerMorty',
+            threaded = True
+        )
         
     def test_comms(self):
         # pass

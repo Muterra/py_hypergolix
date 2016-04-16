@@ -38,6 +38,238 @@ import threading
 
 # Note: this is used exclusively for connection ID generation in _Websocketeer
 import random
+
+
+class WSBase(metaclass=abc.ABCMeta):
+    ''' Common stuff for websockets clients and servers.
+    '''
+    def __init__(self, host, port, threaded=True, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self._ws_port = port
+        self._ws_host = host
+        
+        if threaded:
+            self._ws_loop = asyncio.new_event_loop()
+        else:
+            self._ws_loop = asyncio.get_event_loop()
+            
+        # Set up an some admin objects
+        self._cts = threading.Event()
+        self._init_shutdown = asyncio.Event(loop=self._ws_loop)
+        
+        # These are our communication queues.
+        self._outgoing_q = asyncio.Queue(loop = self._ws_loop)
+        self._incoming_q = asyncio.Queue(loop = self._ws_loop)
+        
+        if threaded:
+            # Set up a (daemon) thread for the websockets process
+            self._ws_thread = threading.Thread(
+                target = self.ws_run,
+                daemon = True
+            )
+            self._ws_thread.start()
+        
+            # Start listening for subscription responses as soon as possible 
+            # (but wait until then to return control of the thread to caller).
+            self._cts.wait()
+            
+        else:
+            self._ws_thread = None
+            
+    @property
+    def _ws_loc(self):
+        return self._ws_host + ':' + str(self._ws_port) + '/'
+            
+    @abc.abstractmethod
+    def ws_run(self):
+        ''' Threaded stuff and things. MUST be called via super().
+        '''
+        if self._ws_thread is not None:
+            asyncio.set_event_loop(self._ws_loop)
+        
+    def send(self, msg):
+        ''' Threadsafe wrapper to add things to the outgoing queue.
+        '''
+        sender = asyncio.run_coroutine_threadsafe(
+            coro = self._outgoing_q.put(msg),
+            loop = self._ws_loop
+        )
+        
+        # Block on completion of coroutine and then raise any created exception
+        exc = sender.exception()
+        if exc:
+            raise exc
+            
+        return True
+        
+    @asyncio.coroutine
+    def _pop_incoming_nowait(self):
+        ''' Wrapper to call get from within the event loop.
+        '''
+        return self._incoming_q.get_nowait()
+        
+    def receive_nowait(self):
+        ''' Threadsafe wrapper to immediately return the first item in
+        the incoming queue. If none available, raises QueueEmpty.
+        '''
+        receiver = asyncio.run_coroutine_threadsafe(
+            coro = self._pop_incoming_nowait(),
+            loop = self._ws_loop
+        )
+        
+        # Block on completion of coroutine and then raise any created exception
+        exc = sender.exception()
+        if exc:
+            raise exc
+            
+        return receiver.result()
+        
+    def receive_blocking(self):
+        ''' Performs a blocking synchronous call to receive the first 
+        item in the incoming queue.
+        '''
+        receiver = asyncio.run_coroutine_threadsafe(
+            coro = self._incoming_q.get(),
+            loop = self._ws_loop
+        )
+        
+        # Block on completion of coroutine and then raise any created exception
+        exc = receiver.exception()
+        if exc:
+            raise exc
+            
+        return receiver.result()
+        
+    @asyncio.coroutine
+    def receive(self):
+        ''' NON THREADSAFE coroutine for waiting on an incoming message.
+        '''
+        return (yield from self._incoming_q.get())
+        
+    @asyncio.coroutine
+    def receive_threadsafe(self):
+        ''' Threadsafe coroutine for waiting on an incoming message. DO
+        NOT CALL THIS FROM THE SAME EVENT LOOP AS THE WEBSOCKETS CLIENT!
+        '''
+        raise NotImplementedError(
+            'Sorry, haven\'t had a chance to implement this yet and haven\'t '
+            'personally had a use for it?'
+        )
+        
+    def halt(self):
+        ''' Sets the shutdown flag, killing the connection and client.
+        '''
+        self._ws_loop.call_soon_threadsafe(self._init_shutdown.set)
+        
+    @asyncio.coroutine
+    def _ws_connect(self):
+        ''' This handles an entire websockets connection.
+        '''
+        self._websocket = yield from websockets.connect(self._ws_loc)
+        print('Socket connected.')
+        
+        yield from self.init_connection(self._websocket)
+        
+        # Signal __init__ that the connection is live.
+        self._cts.set()
+        
+        try:
+            while not self._init_shutdown.is_set():
+                listener = asyncio.ensure_future(self._websocket.recv())
+                producer = asyncio.ensure_future(self._outgoing_q.get())
+                interrupter = asyncio.ensure_future(self._init_shutdown.wait())
+                
+                finished, pending = yield from asyncio.wait(
+                    fs = [producer, listener, interrupter],
+                    return_when = asyncio.FIRST_COMPLETED
+                )
+                
+                # We have exactly two tasks, so no need to iterate on them.
+                # Finished is a set with exactly one item, so...
+                finished = finished.pop()
+                
+                # Manage canceling the other task
+                for task in pending:
+                    task.cancel()
+                
+                # If it was the producer, send it out
+                if producer is finished:
+                    yield from self.handle_producer_exc(finished.exception())
+                    yield from self._websocket.send(finished.result())
+                    
+                # If it was the listener, consume it
+                elif listener is finished:
+                    yield from self.handle_listener_exc(finished.exception())
+                    yield from self._incoming_q.put(finished.result())
+                
+                # If it was the interrupter, yield to cleanup.
+                # Actually, just don't do anything. We won't execute the next
+                # while loop, so just let it close out below.
+                else:
+                    pass
+                    # yield from self._conn_cleanup()
+                    
+        finally:
+            print('Listener successfully shut down.')
+            yield from self._websocket.close()
+            print('Connection closed.')
+            print('Stopping loop.')
+            self._ws_loop.stop()
+            
+    @asyncio.coroutine
+    def _conn_cleanup(self):
+        ''' This handles a single websocket REQUEST, not an entire 
+        connection.
+        '''
+        print('Got shutdown signal.')
+        # self._ws_loop.stop()
+        # print('Stopped loop.')
+        
+    @asyncio.coroutine
+    @abc.abstractmethod
+    def init_connection(self, websocket):
+        ''' Does anything necessary to initialize a connection.
+        '''
+        pass
+        
+    # @asyncio.coroutine
+    # @abc.abstractmethod
+    # def producer(self):
+    #     ''' Produces anything needed to send to the connection. Must 
+    #     return bytes.
+    #     '''
+    #     pass
+        
+    # @asyncio.coroutine
+    # @abc.abstractmethod
+    # def consumer(self, msg):
+    #     ''' Consumes the msg produced by the websockets receiver 
+    #     listening to the connection.
+    #     '''
+    #     pass
+        
+    @asyncio.coroutine
+    @abc.abstractmethod
+    def handle_producer_exc(self, exc):
+        ''' Handles the exception (if any) created by the producer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        pass
+        
+    @asyncio.coroutine
+    @abc.abstractmethod
+    def handle_listener_exc(self, exc):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        pass
         
         
 class Websocketeer(metaclass=abc.ABCMeta):
@@ -220,116 +452,19 @@ class Websocketeer(metaclass=abc.ABCMeta):
         pass
         
         
-class Websockee(metaclass=abc.ABCMeta):
+class Websockee(WSBase):
     ''' Generic websockets client.
     
     Note that this doesn't block or anything. You're free to continue on
     in the thread where this was created, and if you don't, it will 
     close down.
-    '''
-    def __init__(self, port, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._ws_loc = 'ws://localhost:' + str(port) + '/'
-        
-        # Set up an event loop and some admin objects
-        self._ws_loop = asyncio.new_event_loop()
-        self._cts = threading.Event()
-        self._init_shutdown = asyncio.Event(loop=self._ws_loop)
-        
-        # These are our communication queues.
-        self._outgoing_q = asyncio.Queue(loop = self._ws_loop)
-        self._incoming_q = asyncio.Queue(loop = self._ws_loop)
-        
-        # Set up a (daemon) thread for the websockets client
-        self._ws_thread = threading.Thread(
-            target = self._ws_robot,
-            daemon = True
-        )
-        self._ws_thread.start()
-        
-        # Start listening for subscription responses as soon as possible (but 
-        # wait until then to return control of the thread to caller).
-        self._cts.wait()
-        
-    def send(self, msg):
-        ''' Threadsafe wrapper to add things to the outgoing queue.
+    '''     
+    def ws_run(self):
+        ''' Starts running the listener.
         '''
-        sender = asyncio.run_coroutine_threadsafe(
-            coro = self._outgoing_q.put(msg),
-            loop = self._ws_loop
-        )
+        # Must be called to set local event loop when threaded.
+        super().ws_run()
         
-        # Block on completion of coroutine and then raise any created exception
-        exc = sender.exception()
-        if exc:
-            raise exc
-            
-        return True
-        
-    @asyncio.coroutine
-    def _pop_incoming_nowait(self):
-        ''' Wrapper to call get from within the event loop.
-        '''
-        return self._incoming_q.get_nowait()
-        
-    def receive_nowait(self):
-        ''' Threadsafe wrapper to immediately return the first item in
-        the incoming queue. If none available, raises QueueEmpty.
-        '''
-        receiver = asyncio.run_coroutine_threadsafe(
-            coro = self._pop_incoming_nowait(),
-            loop = self._ws_loop
-        )
-        
-        # Block on completion of coroutine and then raise any created exception
-        exc = sender.exception()
-        if exc:
-            raise exc
-            
-        return receiver.result()
-        
-    def receive_blocking(self):
-        ''' Performs a blocking synchronous call to receive the first 
-        item in the incoming queue.
-        '''
-        receiver = asyncio.run_coroutine_threadsafe(
-            coro = self._incoming_q.get(),
-            loop = self._ws_loop
-        )
-        
-        # Block on completion of coroutine and then raise any created exception
-        exc = receiver.exception()
-        if exc:
-            raise exc
-            
-        return receiver.result()
-        
-    @asyncio.coroutine
-    def receive(self):
-        ''' NON THREADSAFE coroutine for waiting on an incoming message.
-        '''
-        return (yield from self._incoming_q.get())
-        
-    @asyncio.coroutine
-    def receive_threadsafe(self):
-        ''' Threadsafe coroutine for waiting on an incoming message. DO
-        NOT CALL THIS FROM THE SAME EVENT LOOP AS THE WEBSOCKETS CLIENT!
-        '''
-        raise NotImplementedError(
-            'Sorry, haven\'t had a chance to implement this yet and haven\'t '
-            'personally had a use for it?'
-        )
-        
-    def halt(self):
-        ''' Sets the shutdown flag, killing the connection and client.
-        '''
-        self._ws_loop.call_soon_threadsafe(self._init_shutdown.set)
-            
-    def _ws_robot(self):
-        ''' Sets the local event loop and then starts running the 
-        listener.
-        '''
-        asyncio.set_event_loop(self._ws_loop)
         # _ws_future is useful for blocking during halt.
         self._ws_future = asyncio.ensure_future(
             self._ws_connect(), 
@@ -344,112 +479,3 @@ class Websockee(metaclass=abc.ABCMeta):
         exc = self._ws_future.exception()
         if exc is not None:
             raise exc
-        
-    @asyncio.coroutine
-    def _ws_connect(self):
-        ''' This handles an entire websockets connection.
-        '''
-        self._websocket = yield from websockets.connect(self._ws_loc)
-        print('Socket connected.')
-        
-        yield from self.init_connection(self._websocket)
-        
-        # Signal __init__ that the connection is live.
-        self._cts.set()
-        
-        try:
-            while not self._init_shutdown.is_set():
-                listener = asyncio.ensure_future(self._websocket.recv())
-                producer = asyncio.ensure_future(self._outgoing_q.get())
-                interrupter = asyncio.ensure_future(self._init_shutdown.wait())
-                
-                finished, pending = yield from asyncio.wait(
-                    fs = [producer, listener, interrupter],
-                    return_when = asyncio.FIRST_COMPLETED
-                )
-                
-                # We have exactly two tasks, so no need to iterate on them.
-                # Finished is a set with exactly one item, so...
-                finished = finished.pop()
-                
-                # Manage canceling the other task
-                for task in pending:
-                    task.cancel()
-                
-                # If it was the producer, send it out
-                if producer is finished:
-                    yield from self.handle_producer_exc(finished.exception())
-                    yield from self._websocket.send(finished.result())
-                    
-                # If it was the listener, consume it
-                elif listener is finished:
-                    yield from self.handle_listener_exc(finished.exception())
-                    yield from self._incoming_q.put(finished.result())
-                
-                # If it was the interrupter, yield to cleanup.
-                # Actually, just don't do anything. We won't execute the next
-                # while loop, so just let it close out below.
-                else:
-                    pass
-                    # yield from self._conn_cleanup()
-                    
-        finally:
-            print('Listener successfully shut down.')
-            yield from self._websocket.close()
-            print('Connection closed.')
-            print('Stopping loop.')
-            self._ws_loop.stop()
-            
-    @asyncio.coroutine
-    def _conn_cleanup(self):
-        ''' This handles a single websocket REQUEST, not an entire 
-        connection.
-        '''
-        print('Got shutdown signal.')
-        # self._ws_loop.stop()
-        # print('Stopped loop.')
-        
-    @asyncio.coroutine
-    @abc.abstractmethod
-    def init_connection(self, websocket):
-        ''' Does anything necessary to initialize a connection.
-        '''
-        pass
-        
-    # @asyncio.coroutine
-    # @abc.abstractmethod
-    # def producer(self):
-    #     ''' Produces anything needed to send to the connection. Must 
-    #     return bytes.
-    #     '''
-    #     pass
-        
-    # @asyncio.coroutine
-    # @abc.abstractmethod
-    # def consumer(self, msg):
-    #     ''' Consumes the msg produced by the websockets receiver 
-    #     listening to the connection.
-    #     '''
-    #     pass
-        
-    @asyncio.coroutine
-    @abc.abstractmethod
-    def handle_producer_exc(self, exc):
-        ''' Handles the exception (if any) created by the producer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        pass
-        
-    @asyncio.coroutine
-    @abc.abstractmethod
-    def handle_listener_exc(self, exc):
-        ''' Handles the exception (if any) created by the consumer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        pass
