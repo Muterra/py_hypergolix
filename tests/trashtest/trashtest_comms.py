@@ -100,10 +100,11 @@ class TestClient(Websockee):
         self.consumer_thread.start()
     
     @asyncio.coroutine
-    def init_connection(self, websocket):
+    def init_connection(self, *args, **kwargs):
         ''' Does anything necessary to initialize a connection.
         '''
         print('Connection established, Rick.')
+        return (yield from super().init_connection(*args, **kwargs))
         
     def producer(self):
         ''' Produces anything needed to send to the connection. Must 
@@ -112,7 +113,7 @@ class TestClient(Websockee):
         while True:
             time.sleep(random.randint(2,7))
             print(self._name, ' sending.')
-            self.send(b'Goodbye, Moonman.')
+            self._connection.send(b'Goodbye, Moonman.')
         
     def consumer(self):
         ''' Consumes the msg produced by the websockets receiver 
@@ -120,11 +121,11 @@ class TestClient(Websockee):
         '''
         while True:
             self._incoming_counter += 1
-            msg = self.receive_blocking()
+            msg = self._connection.receive_blocking()
             print(self._name, ' got message #', self._incoming_counter ,' from serveRick: ', msg)
         
     @asyncio.coroutine
-    def handle_producer_exc(self, exc):
+    def handle_producer_exc(self, connection, exc):
         ''' Handles the exception (if any) created by the producer task.
         
         exc is either:
@@ -137,7 +138,7 @@ class TestClient(Websockee):
             raise exc
         
     @asyncio.coroutine
-    def handle_listener_exc(self, exc):
+    def handle_listener_exc(self, connection, exc):
         ''' Handles the exception (if any) created by the consumer task.
         
         exc is either:

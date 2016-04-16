@@ -40,59 +40,36 @@ import threading
 import random
 
 
-class WSBase(metaclass=abc.ABCMeta):
-    ''' Common stuff for websockets clients and servers.
+class _WSConnection:
+    ''' Bookkeeping object for a single websocket connection (client or
+    server).
+    
+    This should definitely use slots, to save on server memory usage.
     '''
-    def __init__(self, host, port, threaded=True, *args, **kwargs):
+    def __init__(self, loop, websocket, path=None, connid=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
-        self._ws_port = port
-        self._ws_host = host
-        
-        if threaded:
-            self._ws_loop = asyncio.new_event_loop()
-        else:
-            self._ws_loop = asyncio.get_event_loop()
-            
-        # Set up an some admin objects
-        self._cts = threading.Event()
-        self._init_shutdown = asyncio.Event(loop=self._ws_loop)
+        self.websocket = websocket
+        self.path = path
+        self.connid = connid
+        self._ws_loop = loop
         
         # These are our communication queues.
-        self._outgoing_q = asyncio.Queue(loop = self._ws_loop)
-        self._incoming_q = asyncio.Queue(loop = self._ws_loop)
+        self.outgoing_q = asyncio.Queue(loop=loop)
+        self.incoming_q = asyncio.Queue(loop=loop)
         
-        if threaded:
-            # Set up a (daemon) thread for the websockets process
-            self._ws_thread = threading.Thread(
-                target = self.ws_run,
-                daemon = True
-            )
-            self._ws_thread.start()
+        self.cts = threading.Event()
         
-            # Start listening for subscription responses as soon as possible 
-            # (but wait until then to return control of the thread to caller).
-            self._cts.wait()
-            
-        else:
-            self._ws_thread = None
-            
-    @property
-    def _ws_loc(self):
-        return self._ws_host + ':' + str(self._ws_port) + '/'
-            
-    @abc.abstractmethod
-    def ws_run(self):
-        ''' Threaded stuff and things. MUST be called via super().
+    @asyncio.coroutine
+    def close(self):
+        ''' Wraps websocket.close.
         '''
-        if self._ws_thread is not None:
-            asyncio.set_event_loop(self._ws_loop)
+        yield from self.websocket.close()
         
-    def send(self, msg):
+    def send_threadsafe(self, msg):
         ''' Threadsafe wrapper to add things to the outgoing queue.
         '''
         sender = asyncio.run_coroutine_threadsafe(
-            coro = self._outgoing_q.put(msg),
+            coro = self.outgoing_q.put(msg),
             loop = self._ws_loop
         )
         
@@ -104,10 +81,29 @@ class WSBase(metaclass=abc.ABCMeta):
         return True
         
     @asyncio.coroutine
+    def send(self, msg):
+        ''' NON THREADSAFE wrapper to add things to the outgoing queue.
+        '''
+        yield from self.outgoing_q.put(msg)
+        
+    @asyncio.coroutine
+    def _await_send(self):
+        ''' NON THREADSAFE wrapper to get things from the outgoing queue.
+        '''
+        return (yield from self.outgoing_q.get())
+        
+    @asyncio.coroutine
+    def _await_receive(self, msg):
+        ''' NON THREADSAFE wrapper to put things into the incoming 
+        queue.
+        '''
+        return (yield from self.incoming_q.put(msg))
+        
+    @asyncio.coroutine
     def _pop_incoming_nowait(self):
         ''' Wrapper to call get from within the event loop.
         '''
-        return self._incoming_q.get_nowait()
+        return self.incoming_q.get_nowait()
         
     def receive_nowait(self):
         ''' Threadsafe wrapper to immediately return the first item in
@@ -130,7 +126,7 @@ class WSBase(metaclass=abc.ABCMeta):
         item in the incoming queue.
         '''
         receiver = asyncio.run_coroutine_threadsafe(
-            coro = self._incoming_q.get(),
+            coro = self.incoming_q.get(),
             loop = self._ws_loop
         )
         
@@ -145,7 +141,7 @@ class WSBase(metaclass=abc.ABCMeta):
     def receive(self):
         ''' NON THREADSAFE coroutine for waiting on an incoming message.
         '''
-        return (yield from self._incoming_q.get())
+        return (yield from self.incoming_q.get())
         
     @asyncio.coroutine
     def receive_threadsafe(self):
@@ -157,27 +153,65 @@ class WSBase(metaclass=abc.ABCMeta):
             'personally had a use for it?'
         )
         
+
+class WSBase(metaclass=abc.ABCMeta):
+    ''' Common stuff for websockets clients and servers.
+    '''
+    def __init__(self, threaded, host, port, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self._ws_port = port
+        self._ws_host = host
+        
+        if threaded:
+            self._ws_loop = asyncio.new_event_loop()
+            # Set up a shutdown event
+            self._init_shutdown = asyncio.Event(loop=self._ws_loop)
+            # Set up a (daemon) thread for the websockets process
+            self._ws_thread = threading.Thread(
+                target = self.ws_run,
+                daemon = True
+            )
+            self._ws_thread.start()
+            
+        else:
+            self._ws_loop = asyncio.get_event_loop()
+            # Set up a shutdown event
+            self._init_shutdown = asyncio.Event(loop=self._ws_loop)
+            # Declare the thread as nothing.
+            self._ws_thread = None
+            
+    @property
+    def _ws_loc(self):
+        return self._ws_host + ':' + str(self._ws_port) + '/'
+            
+    @abc.abstractmethod
+    def ws_run(self):
+        ''' Threaded stuff and things. MUST be called via super().
+        '''
+        if self._ws_thread is not None:
+            asyncio.set_event_loop(self._ws_loop)
+        
     def halt(self):
         ''' Sets the shutdown flag, killing the connection and client.
         '''
         self._ws_loop.call_soon_threadsafe(self._init_shutdown.set)
         
     @asyncio.coroutine
-    def _ws_connect(self):
+    def _ws_connect(self, websocket, path=None):
         ''' This handles an entire websockets connection.
         '''
-        self._websocket = yield from websockets.connect(self._ws_loc)
         print('Socket connected.')
         
-        yield from self.init_connection(self._websocket)
+        connection = yield from self.init_connection(websocket, path)
         
-        # Signal __init__ that the connection is live.
-        self._cts.set()
+        # Signal that the connection is live.
+        connection.cts.set()
         
         try:
             while not self._init_shutdown.is_set():
-                listener = asyncio.ensure_future(self._websocket.recv())
-                producer = asyncio.ensure_future(self._outgoing_q.get())
+                listener = asyncio.ensure_future(websocket.recv())
+                producer = asyncio.ensure_future(connection._await_send())
                 interrupter = asyncio.ensure_future(self._init_shutdown.wait())
                 
                 finished, pending = yield from asyncio.wait(
@@ -195,13 +229,13 @@ class WSBase(metaclass=abc.ABCMeta):
                 
                 # If it was the producer, send it out
                 if producer is finished:
-                    yield from self.handle_producer_exc(finished.exception())
-                    yield from self._websocket.send(finished.result())
+                    yield from self.handle_producer_exc(connection, finished.exception())
+                    yield from websocket.send(finished.result())
                     
                 # If it was the listener, consume it
                 elif listener is finished:
-                    yield from self.handle_listener_exc(finished.exception())
-                    yield from self._incoming_q.put(finished.result())
+                    yield from self.handle_listener_exc(connection, finished.exception())
+                    yield from connection._await_receive(finished.result())
                 
                 # If it was the interrupter, yield to cleanup.
                 # Actually, just don't do anything. We won't execute the next
@@ -212,10 +246,9 @@ class WSBase(metaclass=abc.ABCMeta):
                     
         finally:
             print('Listener successfully shut down.')
-            yield from self._websocket.close()
+            yield from connection.close()
             print('Connection closed.')
             print('Stopping loop.')
-            self._ws_loop.stop()
             
     @asyncio.coroutine
     def _conn_cleanup(self):
@@ -228,8 +261,10 @@ class WSBase(metaclass=abc.ABCMeta):
         
     @asyncio.coroutine
     @abc.abstractmethod
-    def init_connection(self, websocket):
+    def init_connection(self, websocket, path=None):
         ''' Does anything necessary to initialize a connection.
+        
+        Must return a _WSConnection object.
         '''
         pass
         
@@ -251,7 +286,7 @@ class WSBase(metaclass=abc.ABCMeta):
         
     @asyncio.coroutine
     @abc.abstractmethod
-    def handle_producer_exc(self, exc):
+    def handle_producer_exc(self, connection, exc):
         ''' Handles the exception (if any) created by the producer task.
         
         exc is either:
@@ -262,7 +297,7 @@ class WSBase(metaclass=abc.ABCMeta):
         
     @asyncio.coroutine
     @abc.abstractmethod
-    def handle_listener_exc(self, exc):
+    def handle_listener_exc(self, connection, exc):
         ''' Handles the exception (if any) created by the consumer task.
         
         exc is either:
@@ -280,12 +315,13 @@ class Websocketeer(metaclass=abc.ABCMeta):
         Note: birthdays must be > 1000, or it will be ignored, and will
         default to a 40-bit space.
         '''
-        super().__init__(*args, **kwargs)
-        
         # When creating new connection ids,
         # Select a pseudorandom number from approx 40-bit space. Should have 1%
         # collision probability at 150k connections and 25% at 800k
         self._birthdays = 2 ** 40
+        
+        # Make sure to call this last, lest we drop immediately into a thread.
+        super().__init__(*args, **kwargs)
         
         self._ws_port = port
         self._admin_lock = asyncio.Lock()
@@ -393,6 +429,7 @@ class Websocketeer(metaclass=abc.ABCMeta):
         
         # This is just normal stuff
         port = int(self._ws_port)
+        # Serve is a coroutine.
         serve = websockets.serve(self._connection_handler, 'localhost', port)
         self._intrrptng_cow = asyncio.ensure_future(
             self.catch_interrupt(), 
@@ -458,7 +495,38 @@ class Websockee(WSBase):
     Note that this doesn't block or anything. You're free to continue on
     in the thread where this was created, and if you don't, it will 
     close down.
-    '''     
+    '''    
+    def __init__(self, threaded, *args, **kwargs):
+        super().__init__(threaded, *args, **kwargs)
+        # First create a connection without a websocket. We'll add that later.
+        # This seems a bit janky.
+        self._connection = _WSConnection(self._ws_loop, None)
+        
+        # Start listening for subscription responses as soon as possible 
+        # (but wait until then to return control of the thread to caller).
+        if threaded:
+            self._connection.cts.wait()
+     
+    @asyncio.coroutine
+    def ws_client(self):
+        ''' Client coroutine. Initiates a connection with server.
+        '''
+        self._websocket = yield from websockets.connect(self._ws_loc)
+        # Don't forget to update the actual websocket.
+        self._connection.websocket = self._websocket
+        
+        result = yield from self._ws_connect(self._websocket)
+        
+        return result
+        
+    @asyncio.coroutine
+    def init_connection(self, websocket, path):
+        ''' Returns self._connection.
+        
+        Must be called from super() if overridden.
+        '''
+        return self._connection
+    
     def ws_run(self):
         ''' Starts running the listener.
         '''
@@ -467,12 +535,13 @@ class Websockee(WSBase):
         
         # _ws_future is useful for blocking during halt.
         self._ws_future = asyncio.ensure_future(
-            self._ws_connect(), 
+            self.ws_client(), 
             loop = self._ws_loop
         )
         self._ws_loop.run_until_complete(self._ws_future)
         
-        # Close down the loop. It should have been stopped by _ws_connect.
+        # Close down the loop. It should have stopped on its own.
+        # self._ws_loop.stop()
         self._ws_loop.close()
         
         # Figure out what our exception is, if anything, and raise it
