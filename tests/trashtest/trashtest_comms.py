@@ -77,23 +77,22 @@ class TestServer(Websocketeer):
         return bytes.
         '''
         while True:
+            # This clearly doesn't scale, but we wouldn't normally be iterating
+            # across all connections to send out something.
             for connection in list(self._connections.values()):
                 time.sleep(random.randint(1,4))
                 print('Get it together, Morty #', str(connection.connid), '.')
                 time.sleep(.5)
                 # buuuuuuurp
-                connection.send_threadsafe(b'B' + (b'u' * random.randint(1, 14)) + b'rp')
-                # print('That\'ll show him.')
+                self.send_threadsafe(connection, b'B' + (b'u' * random.randint(1, 14)) + b'rp')
         
     def consumer(self):
         ''' Consumes the msg produced by the websockets receiver 
         listening to the connection.
         '''
         while True:
-            # This does not scale AT ALL.
-            for connection in list(self._connections.values()):
-                msg = connection.receive_blocking()
-                print('Shuddup Morty #', str(connection.connid), '.')
+            connection, msg = self.receive_blocking()
+            print('Shuddup Morty #', str(connection.connid), '.')
         
     @asyncio.coroutine
     def handle_producer_exc(self, connection, exc):
@@ -154,7 +153,7 @@ class TestClient(Websockee):
         while True:
             time.sleep(random.randint(2,7))
             print('Rick, ', self._name, ' wants attention!')
-            self._connection.send_threadsafe(b'Goodbye, Moonman.')
+            self.send_threadsafe(self._connection, b'Goodbye, Moonman.')
         
     def consumer(self):
         ''' Consumes the msg produced by the websockets receiver 
@@ -162,7 +161,7 @@ class TestClient(Websockee):
         '''
         while True:
             self._incoming_counter += 1
-            msg = self._connection.receive_blocking()
+            connection, msg = self.receive_blocking()
             print(
                 'For the ', self._incoming_counter, 
                 'th time, Rick just told me, ', self._name, ', ', msg

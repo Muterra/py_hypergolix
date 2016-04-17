@@ -53,9 +53,8 @@ class _WSConnection:
         self.connid = connid
         self._ws_loop = loop
         
-        # These are our communication queues.
+        # This is our outgoing comms queue.
         self.outgoing_q = asyncio.Queue(loop=loop)
-        self.incoming_q = asyncio.Queue(loop=loop)
         
         self.cts = threading.Event()
         
@@ -92,22 +91,61 @@ class _WSConnection:
         '''
         return (yield from self.outgoing_q.get())
         
+
+class WSBase(metaclass=abc.ABCMeta):
+    ''' Common stuff for websockets clients and servers.
+    '''
+    def __init__(self, threaded, host, port, debug=False, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self._ws_port = port
+        self._ws_host = host
+        
+        if threaded:
+            self._ws_loop = asyncio.new_event_loop()
+            self._ws_loop.set_debug(debug)
+            self.incoming_q = asyncio.Queue(loop=self._ws_loop)
+            # Set up a shutdown event
+            self._init_shutdown = asyncio.Event(loop=self._ws_loop)
+            # Set up a (daemon) thread for the websockets process
+            self._ws_thread = threading.Thread(
+                target = self.ws_run,
+                daemon = True
+            )
+            self._ws_thread.start()
+            
+        else:
+            self._ws_loop = asyncio.get_event_loop()
+            self._ws_loop.set_debug(debug)
+            self.incoming_q = asyncio.Queue(loop=self._ws_loop)
+            # Set up a shutdown event
+            self._init_shutdown = asyncio.Event(loop=self._ws_loop)
+            # Declare the thread as nothing.
+            self._ws_thread = None
+        
     @asyncio.coroutine
-    def _await_receive(self, msg):
+    def _await_receive(self, connection, msg):
         ''' NON THREADSAFE wrapper to put things into the incoming 
         queue.
         '''
-        return (yield from self.incoming_q.put(msg))
+        return (
+            yield from self.incoming_q.put(
+                # We're putting on a tuple.
+                (connection, msg)
+            )
+        )
         
     @asyncio.coroutine
     def _pop_incoming_nowait(self):
         ''' Wrapper to call get from within the event loop.
+        Returns connection, msg tuple.
         '''
         return self.incoming_q.get_nowait()
         
     def receive_nowait(self):
         ''' Threadsafe wrapper to immediately return the first item in
         the incoming queue. If none available, raises QueueEmpty.
+        Returns connection, msg tuple.
         '''
         receiver = asyncio.run_coroutine_threadsafe(
             coro = self._pop_incoming_nowait(),
@@ -124,6 +162,7 @@ class _WSConnection:
     def receive_blocking(self):
         ''' Performs a blocking synchronous call to receive the first 
         item in the incoming queue.
+        Returns connection, msg tuple.
         '''
         receiver = asyncio.run_coroutine_threadsafe(
             coro = self.incoming_q.get(),
@@ -140,6 +179,7 @@ class _WSConnection:
     @asyncio.coroutine
     def receive(self):
         ''' NON THREADSAFE coroutine for waiting on an incoming message.
+        Returns connection, msg tuple.
         '''
         return (yield from self.incoming_q.get())
         
@@ -147,41 +187,29 @@ class _WSConnection:
     def receive_threadsafe(self):
         ''' Threadsafe coroutine for waiting on an incoming message. DO
         NOT CALL THIS FROM THE SAME EVENT LOOP AS THE WEBSOCKETS CLIENT!
+        Returns connection, msg tuple.
         '''
         raise NotImplementedError(
             'Sorry, haven\'t had a chance to implement this yet and haven\'t '
             'personally had a use for it?'
         )
         
-
-class WSBase(metaclass=abc.ABCMeta):
-    ''' Common stuff for websockets clients and servers.
-    '''
-    def __init__(self, threaded, host, port, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def send_threadsafe(self, connection, msg):
+        ''' Wraps connection.send_threadsafe.
+        '''
+        return connection.send_threadsafe(msg)
         
-        self._ws_port = port
-        self._ws_host = host
+    @asyncio.coroutine
+    def send(self, connection, msg):
+        ''' Wraps connection.send.
+        '''
+        return (yield from connection.send(msg))
         
-        if threaded:
-            self._ws_loop = asyncio.new_event_loop()
-            # # Toggle this to enable debug.
-            # self._ws_loop.set_debug(True)
-            # Set up a shutdown event
-            self._init_shutdown = asyncio.Event(loop=self._ws_loop)
-            # Set up a (daemon) thread for the websockets process
-            self._ws_thread = threading.Thread(
-                target = self.ws_run,
-                daemon = True
-            )
-            self._ws_thread.start()
-            
-        else:
-            self._ws_loop = asyncio.get_event_loop()
-            # Set up a shutdown event
-            self._init_shutdown = asyncio.Event(loop=self._ws_loop)
-            # Declare the thread as nothing.
-            self._ws_thread = None
+    @asyncio.coroutine
+    def _await_send(self, connection):
+        ''' Wraps connection._await_send
+        '''
+        return (yield from connection._await_send())
             
     @property
     def _ws_loc(self):
@@ -244,7 +272,10 @@ class WSBase(metaclass=abc.ABCMeta):
                     else:
                         yield from self.handle_listener_exc(connection, exc)
                     # No exception, so continue on our business
-                    yield from connection._await_receive(finished.result())
+                    yield from self._await_receive(
+                        connection = connection, 
+                        msg = finished.result()
+                    )
                 
                 # If it was the interrupter, yield to cleanup.
                 # Actually, just don't do anything. We won't execute the next
