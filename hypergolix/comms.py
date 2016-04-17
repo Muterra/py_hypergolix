@@ -165,6 +165,8 @@ class WSBase(metaclass=abc.ABCMeta):
         
         if threaded:
             self._ws_loop = asyncio.new_event_loop()
+            # # Toggle this to enable debug.
+            # self._ws_loop.set_debug(True)
             # Set up a shutdown event
             self._init_shutdown = asyncio.Event(loop=self._ws_loop)
             # Set up a (daemon) thread for the websockets process
@@ -234,7 +236,14 @@ class WSBase(metaclass=abc.ABCMeta):
                     
                 # If it was the listener, consume it
                 elif listener is finished:
-                    yield from self.handle_listener_exc(connection, finished.exception())
+                    exc = finished.exception()
+                    # Make sure the connection is still live
+                    if isinstance(exc, ConnectionClosed):
+                        raise exc
+                    # If so, handle any actual exception
+                    else:
+                        yield from self.handle_listener_exc(connection, exc)
+                    # No exception, so continue on our business
                     yield from connection._await_receive(finished.result())
                 
                 # If it was the interrupter, yield to cleanup.
@@ -249,6 +258,18 @@ class WSBase(metaclass=abc.ABCMeta):
             yield from connection.close()
             print('Connection closed.')
             print('Stopping loop.')
+        
+    @asyncio.coroutine
+    def catch_interrupt(self):
+        ''' Workaround for Windows not passing signals well for doing
+        interrupts.
+        
+        Standard websockets stuff.
+        
+        Deprecated? Currently unused anyways.
+        '''
+        while not self._shutdown:
+            yield from asyncio.sleep(5)
             
     @asyncio.coroutine
     def _conn_cleanup(self):
@@ -307,10 +328,10 @@ class WSBase(metaclass=abc.ABCMeta):
         pass
         
         
-class Websocketeer(metaclass=abc.ABCMeta):
+class Websocketeer(WSBase):
     ''' Generic websockets server.
     '''
-    def __init__(self, port, *args, **kwargs):
+    def __init__(self, threaded, *args, **kwargs):
         ''' 
         Note: birthdays must be > 1000, or it will be ignored, and will
         default to a 40-bit space.
@@ -319,60 +340,48 @@ class Websocketeer(metaclass=abc.ABCMeta):
         # Select a pseudorandom number from approx 40-bit space. Should have 1%
         # collision probability at 150k connections and 25% at 800k
         self._birthdays = 2 ** 40
+        self._connections = {}
+        self._ctr = threading.Event()
         
         # Make sure to call this last, lest we drop immediately into a thread.
-        super().__init__(*args, **kwargs)
+        super().__init__(threaded, *args, **kwargs)
         
-        self._ws_port = port
-        self._admin_lock = asyncio.Lock()
-        self._shutdown = False
-        self._connections = {}
+        # Start listening for subscription responses as soon as possible 
+        # (but wait until then to return control of the thread to caller).
+        if threaded:
+            self._ctr.wait()
         
     @property
     def connections(self):
         ''' Access the connections dict.
         '''
         return self._connections
-    
+        
     @asyncio.coroutine
-    def _connection_handler(self, websocket, path):
-        ''' Handles a single websocket CONNECTION. Does NOT handle a 
-        single websocket exchange.
+    def init_connection(self, websocket, path):
+        ''' Generates a new connection object for the current conn.
+        
+        Must be called from super() if overridden.
         '''
         # Note that this overhead happens only once per connection.
         yield from self._admin_lock
         try:
             # Grab a connid and initialize it before releasing
             connid = self._new_connid()
+            # Go ahead and set it to None so we block for absolute minimum time
             self._connections[connid] = None
         finally:
             self._admin_lock.release()
         
-        yield from self.init_connection(websocket, connid)
+        connection = _WSConnection(
+            loop = self._ws_loop, 
+            websocket = websocket,
+            path = path,
+            connid = connid
+        )
+        self._connections[connid] = connection
         
-        while True:
-            listener = asyncio.ensure_future(websocket.recv())
-            producer = asyncio.ensure_future(self.producer(connid))
-            
-            finished, unfinished = yield from asyncio.wait(
-                fs = [producer, listener],
-                return_when = asyncio.FIRST_COMPLETED
-            )
-            
-            # We have exactly two tasks, so no need to iterate on them.
-            finished = finished.pop()
-            unfinished = unfinished.pop()
-            
-            # Manage canceling the other task and handling exceptions
-            self._log_exc(finished.exception())
-            unfinished.cancel()
-            
-            # If it was the producer, send it out
-            if producer is finished:
-                yield from websocket.send(finished.result())
-            # If it was the listener, consume it
-            else:
-                yield from self.consumer(finished.result(), connid)
+        return connection
                 
     def _new_connid(self):
         ''' Creates a new connection ID. Does not need to use CSRNG, so
@@ -389,104 +398,43 @@ class Websocketeer(metaclass=abc.ABCMeta):
         if connid in self._connections:
             connid = self._new_connid()
         return connid
-                    
-    def _log_exc(self, exc):
-        ''' Handles any potential internal exceptions from tasks during
-        a connection. If it's a ConnectionClosed, raise it to break the
-        parent loop.
-        
-        Standard websockets stuff.
-        '''
-        if exc is None:
-            return
-        else:
-            print(exc)
-            if isinstance(exc, ConnectionClosed):
-                raise exc
-        
-    @asyncio.coroutine
-    def catch_interrupt(self):
-        ''' Workaround for Windows not passing signals well for doing
-        interrupts.
-        
-        Standard websockets stuff.
-        '''
-        while not self._shutdown:
-            yield from asyncio.sleep(5)
     
-    def run(self):
+    def ws_run(self):
         ''' Starts a LocalhostPersister server. Runs until the heat 
         death of the universe (or an interrupt is generated somehow).
-        
-        Standard websockets stuff.
         '''
-        # This is so we can support running in a separate thread
-        try:
-            self._loop = asyncio.get_event_loop()
-        except RuntimeError:
-            self._loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._loop)
+        # Must be called to set local event loop when threaded.
+        super().ws_run()
         
-        # This is just normal stuff
-        port = int(self._ws_port)
-        # Serve is a coroutine.
-        serve = websockets.serve(self._connection_handler, 'localhost', port)
-        self._intrrptng_cow = asyncio.ensure_future(
-            self.catch_interrupt(), 
-            loop=self._loop
+        # This is used for getting connection ID numbers.
+        self._admin_lock = asyncio.Lock(loop=self._ws_loop)
+        
+        # Serve is a coroutine. This should happen before setting CTR
+        self._ws_future = asyncio.ensure_future(
+            websockets.serve(
+                self._ws_connect, 
+                self._ws_host, 
+                self._ws_port
+            ),
+            loop = self._ws_loop
         )
+        # Do this once the loop starts up
+        # self._ws_loop.call_soon(self._ctr.set)
+        self._ctr.set()
+        # Go johnny go!
+        server = self._ws_loop.run_until_complete(self._ws_future)
+        self._ws_loop.run_until_complete(server.wait_closed())
         
-        try:
-            self._server_future = self._loop.run_until_complete(serve)
-            _intrrpt_future = self._loop.run_until_complete(self._intrrptng_cow)
-            # I don't think this is actually getting called, but the above is 
-            # evidently still fixing the windows scheduler bug thig... Odd
-            _block_on_result(_intrrpt_future)
+        # Close down the loop. It should have stopped on its own.
+        # self._ws_loop.stop()
+        self._ws_loop.close()
             
-        # Catch and handle errors that fully propagate
-        except KeyboardInterrupt as e:
-            # Note that this will still call _halt.
-            return
-            
-        # Also call halt on exit.
-        finally:
-            self._halt()
-            
-    def _halt(self):
-        ''' Standard websockets stuff.
-        '''
-        try:
-            self._shutdown = True
-            self._intrrptng_cow.cancel()
-            # Restart the loop to close down the loop
-            self._loop.stop()
-            self._loop.run_forever()
-        finally:
-            self._loop.close()
+        # print('XXXXXX Loop closed.')
         
-    @asyncio.coroutine
-    @abc.abstractmethod
-    def init_connection(self, websocket, connid):
-        ''' Does anything necessary to initialize a connection. Has 
-        access to self.connections[connid], which will contain None.
-        '''
-        pass
-        
-    @asyncio.coroutine
-    @abc.abstractmethod
-    def producer(self, connid):
-        ''' Produces anything needed to send to the connection indicated
-        by connid. Must return bytes.
-        '''
-        pass
-        
-    @asyncio.coroutine
-    @abc.abstractmethod
-    def consumer(self, msg, connid):
-        ''' Consumes the msg produced by the websockets receiver 
-        listening at connid.
-        '''
-        pass
+        # Figure out what our exception is, if anything, and raise it
+        exc = self._ws_future.exception()
+        if exc is not None:
+            raise exc
         
         
 class Websockee(WSBase):

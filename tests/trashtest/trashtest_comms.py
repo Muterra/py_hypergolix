@@ -52,33 +52,74 @@ class TestServer(Websocketeer):
         self._incoming_counter = 0
         super().__init__(*args, **kwargs)
         
+        self.producer_thread = threading.Thread(
+            target = self.producer,
+            daemon = True,
+        )
+        self.producer_thread.start()
+        self.consumer_thread = threading.Thread(
+            target = self.consumer,
+            daemon = True,
+        )
+        self.consumer_thread.start()
+    
     @asyncio.coroutine
-    def init_connection(self, websocket, connid):
-        ''' Does anything necessary to initialize a connection. Has 
-        access to self.connections[connid], which will contain None.
+    def init_connection(self, *args, **kwargs):
+        ''' Does anything necessary to initialize a connection.
         '''
-        print('Connection established, whoeveryouare.')
+        # print('----Starting connection.')
+        connection = yield from super().init_connection(*args, **kwargs)
+        print('Connection established, Morty #', str(connection.connid), '.')
+        return connection
         
-    @asyncio.coroutine
-    def producer(self, connid):
-        ''' Produces anything needed to send to the connection indicated
-        by connid. Must return bytes.
-        
-        NOTE: IF THIS IS ALWAYS SLOWER THAN THE CONSUMER, IT WILL NEVER
-        RUN!
+    def producer(self):
+        ''' Produces anything needed to send to the connection. Must 
+        return bytes.
         '''
-        burp = b'B' + (b'u' * random.randint(1, 14)) + b'rp'
-        yield from asyncio.sleep(random.randint(1,4))
-        return burp
+        while True:
+            for connection in self._connections.values():
+                time.sleep(random.randint(1,4))
+                print('Get it together, Morty #', str(connection.connid), '.')
+                time.sleep(.5)
+                # buuuuuuurp
+                connection.send(b'B' + (b'u' * random.randint(1, 14)) + b'rp')
+                print('That\'ll show him.')
         
-    @asyncio.coroutine
-    def consumer(self, msg, connid):
+    def consumer(self):
         ''' Consumes the msg produced by the websockets receiver 
-        listening at connid.
+        listening to the connection.
         '''
-        self._incoming_counter += 1
-        print('Got message #', self._incoming_counter ,' from connection ', connid, ': ')
-        print(msg)
+        while True:
+            # This does not scale AT ALL.
+            for connection in self._connections.values():
+                msg = connection.receive_blocking()
+                print('Shuddup Morty #', str(connection.connid), '.')
+        
+    @asyncio.coroutine
+    def handle_producer_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the producer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_listener_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            raise exc
     
     
 class TestClient(Websockee):
@@ -112,7 +153,7 @@ class TestClient(Websockee):
         '''
         while True:
             time.sleep(random.randint(2,7))
-            print(self._name, ' sending.')
+            print('Rick, ', self._name, ' wants attention!')
             self._connection.send(b'Goodbye, Moonman.')
         
     def consumer(self):
@@ -122,7 +163,10 @@ class TestClient(Websockee):
         while True:
             self._incoming_counter += 1
             msg = self._connection.receive_blocking()
-            print(self._name, ' got message #', self._incoming_counter ,' from serveRick: ', msg)
+            print(
+                'For the ', self._incoming_counter, 
+                'th time, Rick just told me, ', self._name, ', ', msg
+            )
         
     @asyncio.coroutine
     def handle_producer_exc(self, connection, exc):
@@ -158,13 +202,14 @@ class TestClient(Websockee):
         
 class WebsocketsTrashTest(unittest.TestCase):
     def setUp(self):
-        self.server = TestServer(port=9317)
-        self.server_thread = threading.Thread(
-            target = self.server.run,
-            daemon = True,
-            name = 'server_thread'
+        self.server = TestServer(
+            host = 'localhost',
+            port = 9317,
+            threaded = True
         )
-        self.server_thread.start()
+        
+        # print('-----Server running.')
+        time.sleep(1)
         
         self.client1 = TestClient(
             host = 'ws://localhost', 
@@ -172,12 +217,18 @@ class WebsocketsTrashTest(unittest.TestCase):
             name = 'OneTrueMorty',
             threaded = True
         )
+        
+        # Simulate connection offset between the two
+        # print('-----Client1 running.')
+        time.sleep(10)
+        
         self.client2 = TestClient(
             host = 'ws://localhost', 
             port = 9317, 
             name = 'HammerMorty',
             threaded = True
         )
+        # print('-----Client2 running.')
         
     def test_comms(self):
         # pass
