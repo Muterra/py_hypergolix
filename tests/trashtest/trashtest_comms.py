@@ -77,13 +77,13 @@ class TestServer(Websocketeer):
         return bytes.
         '''
         while True:
-            for connection in self._connections.values():
+            for connection in list(self._connections.values()):
                 time.sleep(random.randint(1,4))
                 print('Get it together, Morty #', str(connection.connid), '.')
                 time.sleep(.5)
                 # buuuuuuurp
-                connection.send(b'B' + (b'u' * random.randint(1, 14)) + b'rp')
-                print('That\'ll show him.')
+                connection.send_threadsafe(b'B' + (b'u' * random.randint(1, 14)) + b'rp')
+                # print('That\'ll show him.')
         
     def consumer(self):
         ''' Consumes the msg produced by the websockets receiver 
@@ -91,7 +91,7 @@ class TestServer(Websocketeer):
         '''
         while True:
             # This does not scale AT ALL.
-            for connection in self._connections.values():
+            for connection in list(self._connections.values()):
                 msg = connection.receive_blocking()
                 print('Shuddup Morty #', str(connection.connid), '.')
         
@@ -154,7 +154,7 @@ class TestClient(Websockee):
         while True:
             time.sleep(random.randint(2,7))
             print('Rick, ', self._name, ' wants attention!')
-            self._connection.send(b'Goodbye, Moonman.')
+            self._connection.send_threadsafe(b'Goodbye, Moonman.')
         
     def consumer(self):
         ''' Consumes the msg produced by the websockets receiver 
