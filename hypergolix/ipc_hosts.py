@@ -73,7 +73,7 @@ from .exceptions import IPCError
 
 from .utils import AppObj
 
-from .comms import Websocketeer
+from .comms import WSReqResServer
 
 
 class _EndpointBase(metaclass=abc.ABCMeta):
@@ -354,7 +354,7 @@ class WSEndpoint(_EndpointBase):
         pass
     
     
-class WebsocketsIPC(_IPCBase, Websocketeer):
+class WebsocketsIPC(_IPCBase, WSReqResServer):
     ''' Websockets IPC via localhost. Sets up a server.
     '''
     def __init__(self, *args, **kwargs):

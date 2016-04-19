@@ -35,9 +35,13 @@ import asyncio
 import websockets
 from websockets.exceptions import ConnectionClosed
 import threading
+import collections.abc
 
 # Note: this is used exclusively for connection ID generation in _Websocketeer
 import random
+
+from .exceptions import RequestFinished
+from .exceptions import RequestUnknown
 
 
 class _WSConnection:
@@ -68,7 +72,7 @@ class _WSConnection:
         ''' Threadsafe wrapper to add things to the outgoing queue.
         '''
         sender = asyncio.run_coroutine_threadsafe(
-            coro = self.outgoing_q.put(msg),
+            coro = self.send(msg),
             loop = self._ws_loop
         )
         
@@ -122,6 +126,12 @@ class WSBase(metaclass=abc.ABCMeta):
             self._init_shutdown = asyncio.Event(loop=self._ws_loop)
             # Declare the thread as nothing.
             self._ws_thread = None
+            
+    def new_connection(self, *args, **kwargs):
+        ''' Wrapper for creating a new connection. Mostly here to make
+        subclasses simpler.
+        '''
+        return _WSConnection(*args, **kwargs)
         
     @asyncio.coroutine
     def _await_receive(self, connection, msg):
@@ -135,37 +145,13 @@ class WSBase(metaclass=abc.ABCMeta):
             )
         )
         
-    @asyncio.coroutine
-    def _pop_incoming_nowait(self):
-        ''' Wrapper to call get from within the event loop.
-        Returns connection, msg tuple.
-        '''
-        return self.incoming_q.get_nowait()
-        
-    def receive_nowait(self):
-        ''' Threadsafe wrapper to immediately return the first item in
-        the incoming queue. If none available, raises QueueEmpty.
-        Returns connection, msg tuple.
-        '''
-        receiver = asyncio.run_coroutine_threadsafe(
-            coro = self._pop_incoming_nowait(),
-            loop = self._ws_loop
-        )
-        
-        # Block on completion of coroutine and then raise any created exception
-        exc = sender.exception()
-        if exc:
-            raise exc
-            
-        return receiver.result()
-        
     def receive_blocking(self):
         ''' Performs a blocking synchronous call to receive the first 
         item in the incoming queue.
         Returns connection, msg tuple.
         '''
         receiver = asyncio.run_coroutine_threadsafe(
-            coro = self.incoming_q.get(),
+            coro = self.receive(),
             loop = self._ws_loop
         )
         
@@ -174,6 +160,7 @@ class WSBase(metaclass=abc.ABCMeta):
         if exc:
             raise exc
             
+        # Note: return (connection, msg) tuple.
         return receiver.result()
         
     @asyncio.coroutine
@@ -181,6 +168,7 @@ class WSBase(metaclass=abc.ABCMeta):
         ''' NON THREADSAFE coroutine for waiting on an incoming message.
         Returns connection, msg tuple.
         '''
+        # Note: return (connection, msg) tuple.
         return (yield from self.incoming_q.get())
         
     @asyncio.coroutine
@@ -194,10 +182,24 @@ class WSBase(metaclass=abc.ABCMeta):
             'personally had a use for it?'
         )
         
-    def send_threadsafe(self, connection, msg):
-        ''' Wraps connection.send_threadsafe.
+    def send_threadsafe(self, connection, msg, *args, **kwargs):
+        ''' Threadsafe wrapper to add things to the outgoing queue. 
+        Don't necessarily directly wrap connection.send, in case our 
+        version of send is overridden or extended in a subclass.
+        
+        Passes extra args and kwargs to self.send.
         '''
-        return connection.send_threadsafe(msg)
+        sender = asyncio.run_coroutine_threadsafe(
+            coro = self.send(connection, msg, *args, **kwargs),
+            loop = self._ws_loop
+        )
+        
+        # Block on completion of coroutine and then raise any created exception
+        exc = sender.exception()
+        if exc:
+            raise exc
+            
+        return True
         
     @asyncio.coroutine
     def send(self, connection, msg):
@@ -230,6 +232,9 @@ class WSBase(metaclass=abc.ABCMeta):
     @asyncio.coroutine
     def _ws_connect(self, websocket, path=None):
         ''' This handles an entire websockets connection.
+        
+        Note: could move the shutdown listener outside of the while loop
+        for performance optimization.
         '''
         print('Socket connected.')
         
@@ -320,22 +325,6 @@ class WSBase(metaclass=abc.ABCMeta):
         '''
         pass
         
-    # @asyncio.coroutine
-    # @abc.abstractmethod
-    # def producer(self):
-    #     ''' Produces anything needed to send to the connection. Must 
-    #     return bytes.
-    #     '''
-    #     pass
-        
-    # @asyncio.coroutine
-    # @abc.abstractmethod
-    # def consumer(self, msg):
-    #     ''' Consumes the msg produced by the websockets receiver 
-    #     listening to the connection.
-    #     '''
-    #     pass
-        
     @asyncio.coroutine
     @abc.abstractmethod
     def handle_producer_exc(self, connection, exc):
@@ -350,7 +339,7 @@ class WSBase(metaclass=abc.ABCMeta):
     @asyncio.coroutine
     @abc.abstractmethod
     def handle_listener_exc(self, connection, exc):
-        ''' Handles the exception (if any) created by the consumer task.
+        ''' Handles the exception (if any) created by the listener task.
         
         exc is either:
         1. the exception, if it was raised
@@ -359,7 +348,334 @@ class WSBase(metaclass=abc.ABCMeta):
         pass
         
         
-class Websocketeer(WSBase):
+class _ReqResWSConnection(_WSConnection):
+    ''' A request/response websockets connection.
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        # Lookup for request token -> event
+        self.pending_requests = {}
+        # Lookup for request token -> response
+        self.pending_responses = {}
+        
+        self._req_lock = asyncio.Lock()
+        
+    @asyncio.coroutine
+    def _gen_req_token(self):
+        ''' Gets a new (well, currently unused) request token. Sets it
+        in pending_requests to prevent race conditions.
+        '''
+        yield from self._req_lock
+        try:
+            token = self._gen_unused_token()
+            # Do this just so we can release the lock ASAP
+            self.pending_requests[token] = None
+        finally:
+            self._req_lock.release()
+            
+        return token
+            
+    def _gen_unused_token(self):
+        ''' Recursive search for unused token. THIS IS NOT THREADSAFE
+        NOR ASYNC SAFE! Must be called from within parent lock.
+        '''
+        # Get a random-ish (no need for CSRNG) 16-bit token
+        token = random.getrandbits(16)
+        if token in self.pending_requests:
+            token = self._get_unused_token()
+        return token
+        
+    @asyncio.coroutine
+    def send(self, msg, version, expect_reply=True):
+        ''' NON THREADSAFE wrapper to add things to the outgoing queue.
+        If expect_reply, Will wait for a response to return.
+        
+        Version should be int-like.
+        
+        Returns response, version if expect_reply
+        Returns None, None otherwise
+        '''
+        # Get a token and pack the message.
+        token = yield from self._gen_req_token()
+        packed_msg = (
+            version.to_bytes(length=1, byteorder='big', signed=False) + 
+            token.to_bytes(length=2, byteorder='big', signed=False) +
+            msg
+        )
+        
+        # Create an event to signal response waiting and then put the outgoing
+        # in the send queue
+        if expect_reply:
+            self.pending_requests[token] = asyncio.Event(loop=self._ws_loop)
+        yield from self.outgoing_q.put(packed_msg)
+        
+        # Now wait for the response and then cleanup
+        if expect_reply:
+            # instrumentation
+            print('Waiting for reply.')
+            yield from self.pending_requests[token].wait()
+            response, version = self.pending_responses[token]
+            del self.pending_responses[token]
+        else:
+            response = None
+            version = None
+        # We still need to remove the response token regardless -- gen_token 
+        # sets it to None to avoid a race condition.
+        del self.pending_requests[token]
+        
+        return response, version
+        
+    @asyncio.coroutine
+    def send_nowait(self, msg, version):
+        ''' NON THREADSAFE wrapper to add things to the outgoing queue.
+        Does not wait for a response to return. Returns a future.
+        '''
+        raise NotImplementedError('Not implemented yet.')
+        
+    @asyncio.coroutine
+    def _await_send(self):
+        ''' NON THREADSAFE wrapper to get things from the outgoing queue.
+        '''
+        return (yield from self.outgoing_q.get())
+        
+        
+class ReqResWSBase(WSBase):
+    ''' Builds a request/response framework on top of the underlying 
+    order-independent websockets implementation.
+    
+    req_handler will be passed connection, token, body.
+    
+    req_handlers should be a mapping:
+        key(2 bytes): callable
+        
+    the request callable should return: res body, res code tuple, OR it 
+    should raise RequestFinished to denote the end of a req/res chain.
+    
+    Note that a request handler will never wait for a reply from its 
+    response (ie, reply recursion is impossible).
+    '''
+    def __init__(self, req_handlers, failure_code, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.req_handlers = req_handlers
+        self.failure_code = failure_code
+        
+        # Use the default executor.
+        self._receipt_executor = None
+        
+    @property
+    def failure_code(self):
+        return self._failure_code
+        
+    @failure_code.setter
+    def failure_code(self, value):
+        if value not in self.req_handlers:
+            raise ValueError('Failure code must exist in self.req_handlers.')
+        self._failure_code = value
+        
+    @property
+    def req_handlers(self):
+        return self._req_handlers
+        
+    @req_handlers.setter
+    def req_handlers(self, value):
+        ''' Does duck/type checking for setting request/response codes.
+        '''
+        # First make sure it's a mapping
+        if not isinstance(value, collections.abc.Mapping):
+            raise TypeError('Reqres codes must be a mapping.')
+        # Now make sure all keys are len(2) and bytes compatible
+        for code in value:
+            try:
+                if len(code) != 2:
+                    raise ValueError()
+                # Try turning it into bytes
+                bytes(code)
+            except (TypeError, ValueError) as e:
+                raise TypeError(
+                    'Reqres codes must be bytes-compatible objects of len 2.'
+                ) from e
+        # Finally, make sure all values are callable
+        for handler in value.values():
+            if not callable(handler):
+                raise TypeError('All reqres code handlers must be callable.')
+                
+        self._req_handlers = value
+        
+    def new_connection(self, *args, **kwargs):
+        ''' Override default implementation to return a ReqRes conn.
+        '''
+        return _ReqResWSConnection(*args, **kwargs)
+        
+    @asyncio.coroutine
+    def send(self, connection, msg, req_code, expect_reply=True):
+        ''' Overrides super().send to wrap with a request code and to
+        pass a version to connection.send.
+        '''
+        # Raise now if req_code unknown; we won't be able to handle a response
+        if req_code not in self.req_handlers:
+            raise RequestUnknown(repr(req_code))
+        # Note that the reqres_codes setter handles checking to make sure the
+        # code is of length 2.
+        
+        # instrumentation
+        print('About to send.')
+        
+        # Hard-coded zero version.
+        return (yield from connection.send(
+            msg = req_code + msg,
+            version = 0,
+            expect_reply = expect_reply
+        ))
+        
+        # instrumentation
+        print('Successfully sent.')
+            
+    @asyncio.coroutine            
+    def _receipthandler(self, connection, msg):
+        ''' Handles the receipt of a msg from connection without
+        blocking the event loop or the receive task.
+        '''
+        # Pre-initialize so that any failure to assign doesn't break things
+        version = None
+        token = None
+        req_code = None
+        body = None
+        
+        try:
+            # Pull out the version, token, body from msg
+            version = int.from_bytes(
+                bytes = msg[0:1], 
+                byteorder = 'big', 
+                signed = False
+            )
+            token = int.from_bytes(
+                bytes = msg[1:3], 
+                byteorder = 'big', 
+                signed = False
+            )
+            req_code = msg[3:5]
+            body = raw_response[5:]
+            
+            if req_code not in self.req_handlers:
+                raise RequestUnknown(repr(req_code))
+            else:
+                res_handler = self.req_handlers[req_code]
+                
+            # If we don't raise RequestFinished, get the response body and code
+            res_body, res_code = yield from self._ws_loop.run_in_executor(
+                executor = self._receipt_executor,
+                # Call the handler for this request code
+                func = res_handler,
+                # Pass it the connection and the body.
+                args = (connection, token, body)
+            )
+            
+        # This denotes the end of a req/res chain; we don't need to reply back.
+        except RequestFinished as e:
+            pass
+                
+        # Any other exception means we failed.
+        except Exception as e:
+            msg = yield from self.handle_autoresponder_exc(
+                exc = e,
+                token = token,
+            )
+            yield from self.send(
+                connection,
+                msg = msg,
+                req_code = self.failure_code,
+                expect_reply = False
+            )
+            
+        # No error; formulate response.
+        else:
+            yield from self.send(
+                connection, 
+                msg = res_body, 
+                req_code = res_code,
+                expect_reply = False
+            )
+            
+    def notify_response(self, connection, token, response):
+        ''' Alerts a waiting sender of an available response.
+        '''
+        # Lookup for request token -> response
+        connection.pending_responses[token] = response
+        # Lookup for request token -> event
+        connection.pending_requests[token].set()
+            
+    @asyncio.coroutine
+    def autoresponder(self):
+        ''' Handle all incoming messages.
+        Should be called via run_coroutine_threadsafe, and then 
+        (preferably) canceled when the client/server stops. However, 
+        should also auto-stop when shutdown flag set.
+        '''
+        interrupter = asyncio.ensure_future(self._init_shutdown.wait())
+        
+        while not self._init_shutdown.is_set():
+            consumer = asyncio.ensure_future(self.receive())
+            
+            finished, pending = yield from asyncio.wait(
+                fs = [consumer, interrupter],
+                return_when = asyncio.FIRST_COMPLETED
+            )
+            
+            # We have exactly two tasks, so no need to iterate on them.
+            # Finished is a set with exactly one item, so...
+            finished = finished.pop()
+            
+            # If it was the producer, send it out
+            if consumer is finished:
+                # instrumentation
+                print('Autoresponding.')
+                
+                # This is straight-up wrong, the method doesn't even exist
+                # yield from self.handle_consumer_exc(finished.exception())
+                # We could store this somewhere (with connection maybe?) but 
+                # why would we? It's currently unused anyways.
+                
+                # instrumentation
+                print('No exception.')
+                
+                asyncio.ensure_future(
+                    self._receipthandler(connection, msg), 
+                    loop = self._ws_loop
+                )
+                
+                # instrumentation
+                print('Resuming listening from autoresponse.')
+                
+            # Got a shutdown. Cancel the consumer.
+            else:
+                consumer.cancel()
+        
+    @asyncio.coroutine
+    @abc.abstractmethod
+    def handle_autoresponder_exc(self, exc, token):
+        ''' Handles an exception created by the autoresponder.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        
+        Must return the body of the message to reply with.
+        '''
+        pass
+            
+    @abc.abstractmethod
+    def ws_run(self):
+        ''' Add the autoresponder execution. MUST be called via super().
+        '''
+        super().ws_run()
+        self._autoresponder_task = asyncio.run_coroutine_threadsafe(
+            self.autoresponder(),
+            loop = self._ws_loop
+        )
+        
+        
+class WSBasicServer(WSBase):
     ''' Generic websockets server.
     '''
     def __init__(self, threaded, *args, **kwargs):
@@ -375,7 +691,7 @@ class Websocketeer(WSBase):
         self._ctr = threading.Event()
         
         # Make sure to call this last, lest we drop immediately into a thread.
-        super().__init__(threaded, *args, **kwargs)
+        super().__init__(threaded=threaded, *args, **kwargs)
         
         # Start listening for subscription responses as soon as possible 
         # (but wait until then to return control of the thread to caller).
@@ -404,7 +720,7 @@ class Websocketeer(WSBase):
         finally:
             self._admin_lock.release()
         
-        connection = _WSConnection(
+        connection = self.new_connection(
             loop = self._ws_loop, 
             websocket = websocket,
             path = path,
@@ -468,7 +784,7 @@ class Websocketeer(WSBase):
             raise exc
         
         
-class Websockee(WSBase):
+class WSBasicClient(WSBase):
     ''' Generic websockets client.
     
     Note that this doesn't block or anything. You're free to continue on
@@ -476,15 +792,21 @@ class Websockee(WSBase):
     close down.
     '''    
     def __init__(self, threaded, *args, **kwargs):
-        super().__init__(threaded, *args, **kwargs)
+        super().__init__(threaded=threaded, *args, **kwargs)
         # First create a connection without a websocket. We'll add that later.
         # This seems a bit janky.
-        self._connection = _WSConnection(self._ws_loop, None)
+        self._connection = self.new_connection(self._ws_loop, None)
         
         # Start listening for subscription responses as soon as possible 
         # (but wait until then to return control of the thread to caller).
         if threaded:
             self._connection.cts.wait()
+            
+    @property
+    def connection(self):
+        ''' Read-only access to our connection.
+        '''
+        return self._connection
      
     @asyncio.coroutine
     def ws_client(self):
@@ -527,3 +849,15 @@ class Websockee(WSBase):
         exc = self._ws_future.exception()
         if exc is not None:
             raise exc
+            
+            
+class WSReqResServer(WSBasicServer, ReqResWSBase):
+    ''' An autoresponding request/response server for websockets.
+    '''
+    pass
+            
+            
+class WSReqResClient(WSBasicClient, ReqResWSBase):
+    ''' An autoresponding request/response client for websockets.
+    '''
+    pass

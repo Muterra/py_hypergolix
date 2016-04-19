@@ -43,11 +43,15 @@ import asyncio
 import random
 import traceback
 
-from hypergolix.comms import Websocketeer
-from hypergolix.comms import Websockee
+from hypergolix.comms import WSBasicServer
+from hypergolix.comms import WSBasicClient
+from hypergolix.comms import WSReqResServer
+from hypergolix.comms import WSReqResClient
+
+from hypergolix.exceptions import RequestFinished
 
 
-class TestServer(Websocketeer):
+class BareTestServer(WSBasicServer):
     def __init__(self, *args, **kwargs):
         self._incoming_counter = 0
         super().__init__(*args, **kwargs)
@@ -121,7 +125,7 @@ class TestServer(Websocketeer):
             raise exc
     
     
-class TestClient(Websockee):
+class BareTestClient(WSBasicClient):
     def __init__(self, name, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
@@ -153,7 +157,7 @@ class TestClient(Websockee):
         while True:
             time.sleep(random.randint(2,7))
             print('Rick, ', self._name, ' wants attention!')
-            self.send_threadsafe(self._connection, b'Goodbye, Moonman.')
+            self.send_threadsafe(self.connection, b'Goodbye, Moonman.')
         
     def consumer(self):
         ''' Consumes the msg produced by the websockets receiver 
@@ -194,25 +198,216 @@ class TestClient(Websockee):
             raise exc
 
 
+class ReqResTestServer(WSReqResServer):
+    def __init__(self, *args, **kwargs):
+        req_handlers = {
+            # Successful
+            b'+S': self.__success,
+            # Unsuccessful
+            b'-S': self.__failure,
+            # Parrot
+            b'!P': self.parrot,
+        }
+        
+        self._incoming_counter = 0
+        super().__init__(req_handlers = req_handlers, failure_code = b'-S', *args, **kwargs)
+        
+        self.producer_thread = threading.Thread(
+            target = self.producer,
+            daemon = True,
+        )
+        self.producer_thread.start()
+        
+    def __success(self, connection, token, response):
+        self.notify_response(connection, token, response)
+        raise RequestFinished()
+        
+    def __failure(self, connection, token, response):
+        response = RuntimeError('REQUEST FAILED!')
+        self.notify_response(connection, token, response)
+        raise RequestFinished()
+        
+    def parrot(self, connection, token, response):
+        print('Msg from client ' + repr(connection) + ': ' + repr(response))
+        return b'Successful parrot.', b'+S'
+    
+    @asyncio.coroutine
+    def init_connection(self, *args, **kwargs):
+        ''' Does anything necessary to initialize a connection.
+        '''
+        # print('----Starting connection.')
+        connection = yield from super().init_connection(*args, **kwargs)
+        print('Connection established: client', str(connection.connid))
+        return connection
+        
+    def producer(self):
+        ''' Produces anything needed to send to the connection. Must 
+        return bytes.
+        '''
+        while True:
+            # This clearly doesn't scale, but we wouldn't normally be iterating
+            # across all connections to send out something.
+            for connection in list(self._connections.values()):
+                time.sleep(random.randint(2,7))
+                print('Requesting parrot from connection', str(connection.connid))
+                self.send_threadsafe(connection, b'B' + (b'u' * random.randint(1, 14)) + b'rp', b'!P')
+        
+    @asyncio.coroutine
+    def handle_producer_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the producer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_listener_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_autoresponder_exc(self, exc, token):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+        return repr(exc)
+    
+    
+class ReqResTestClient(WSReqResClient):
+    def __init__(self, name, *args, **kwargs):
+        req_handlers = {
+            # Successful
+            b'+S': self.__success,
+            # Unsuccessful
+            b'-S': self.__failure,
+            # Parrot
+            b'!P': self.parrot,
+        }
+        
+        self._incoming_counter = 0
+        self._name = name
+        super().__init__(req_handlers = req_handlers, failure_code = b'-S', *args, **kwargs)
+        
+        self.producer_thread = threading.Thread(
+            target = self.producer,
+            daemon = True,
+        )
+        self.producer_thread.start()
+        
+    def __success(self, connection, token, response):
+        print('Received success!')
+        self.notify_response(connection, token, response)
+        raise RequestFinished()
+        
+    def __failure(self, connection, token, response):
+        print('Received failure!')
+        response = RuntimeError('REQUEST FAILED!')
+        self.notify_response(connection, token, response)
+        raise RequestFinished()
+        
+    def parrot(self, connection, token, response):
+        print('Msg from client ' + repr(connection) + ': ' + repr(response))
+        return b'Successful parrot.', b'+S'
+    
+    @asyncio.coroutine
+    def init_connection(self, *args, **kwargs):
+        ''' Does anything necessary to initialize a connection.
+        '''
+        # print('----Starting connection.')
+        connection = yield from super().init_connection(*args, **kwargs)
+        print('Connection established: server.')
+        return connection
+        
+    def producer(self):
+        ''' Produces anything needed to send to the connection. Must 
+        return bytes.
+        '''
+        while True:
+            # This clearly doesn't scale, but we wouldn't normally be iterating
+            # across all connections to send out something.
+            time.sleep(random.randint(2,7))
+            print('Requesting parrot from server.')
+            self.send_threadsafe(self.connection, b'Gro' + (b's' * random.randint(2, 14)), b'!P')
+        
+    @asyncio.coroutine
+    def handle_producer_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the producer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_listener_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_autoresponder_exc(self, exc, token):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+        return repr(exc)
+
+
 # ###############################################
 # Testing
 # ###############################################
         
         
-class WebsocketsTrashTest(unittest.TestCase):
+class BareWebsocketsTrashTest(unittest.TestCase):
     def setUp(self):
-        self.server = TestServer(
+        self.server = ReqResTestServer(
             host = 'localhost',
-            port = 9317,
-            threaded = True
+            port = 9318,
+            threaded = True,
+            debug = True
         )
         
         # print('-----Server running.')
         time.sleep(1)
         
-        self.client1 = TestClient(
+        self.client1 = ReqResTestClient(
             host = 'ws://localhost', 
-            port = 9317, 
+            port = 9318, 
             name = 'OneTrueMorty',
             threaded = True
         )
@@ -221,9 +416,9 @@ class WebsocketsTrashTest(unittest.TestCase):
         # print('-----Client1 running.')
         time.sleep(10)
         
-        self.client2 = TestClient(
+        self.client2 = ReqResTestClient(
             host = 'ws://localhost', 
-            port = 9317, 
+            port = 9318, 
             name = 'HammerMorty',
             threaded = True
         )

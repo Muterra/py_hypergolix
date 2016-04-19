@@ -52,6 +52,10 @@ __all__ = [
     'DispatchWarning',
     # These are IPC errors
     'IPCError',
+    # These are comms errors
+    'CommsError',
+    'RequestFinished',
+    'RequestUnknown'
 ]
 
 
@@ -133,5 +137,23 @@ class DispatchWarning(HypergolixException, RuntimeWarning):
     
 class IPCError(HypergolixException, RuntimeError):
     ''' Raised when something goes wrong with IPC (bad commands, etc).
+    '''
+    pass
+    
+    
+class CommsError(HypergolixException, RuntimeError):
+    ''' Raised when something goes wrong with IPC (bad commands, etc).
+    '''
+    pass
+    
+    
+class RequestFinished(CommsError):
+    ''' Raised when something goes wrong with IPC (bad commands, etc).
+    '''
+    pass
+    
+    
+class RequestUnknown(CommsError):
+    ''' Raised when a request code is unknown.
     '''
     pass
