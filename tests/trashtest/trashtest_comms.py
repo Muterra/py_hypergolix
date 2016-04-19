@@ -201,16 +201,20 @@ class BareTestClient(WSBasicClient):
 class ReqResTestServer(WSReqResServer):
     def __init__(self, *args, **kwargs):
         req_handlers = {
-            # Successful
-            b'+S': self.__success,
-            # Unsuccessful
-            b'-S': self.__failure,
             # Parrot
             b'!P': self.parrot,
         }
+        # # Successful
+        # b'+S': self.__success,
+        # # Unsuccessful
+        # b'-S': self.__failure,
         
         self._incoming_counter = 0
-        super().__init__(req_handlers = req_handlers, failure_code = b'-S', *args, **kwargs)
+        super().__init__(
+            req_handlers = req_handlers, 
+            failure_code = b'-S', 
+            success_code = b'+S', 
+            *args, **kwargs)
         
         self.producer_thread = threading.Thread(
             target = self.producer,
@@ -295,17 +299,22 @@ class ReqResTestServer(WSReqResServer):
 class ReqResTestClient(WSReqResClient):
     def __init__(self, name, *args, **kwargs):
         req_handlers = {
-            # Successful
-            b'+S': self.__success,
-            # Unsuccessful
-            b'-S': self.__failure,
             # Parrot
             b'!P': self.parrot,
         }
+        # # Successful
+        # b'+S': self.__success,
+        # # Unsuccessful
+        # b'-S': self.__failure,
         
-        self._incoming_counter = 0
         self._name = name
-        super().__init__(req_handlers = req_handlers, failure_code = b'-S', *args, **kwargs)
+        self._incoming_counter = 0
+        
+        super().__init__(
+            req_handlers = req_handlers, 
+            failure_code = b'-S', 
+            success_code = b'+S', 
+            *args, **kwargs)
         
         self.producer_thread = threading.Thread(
             target = self.producer,
@@ -409,18 +418,20 @@ class BareWebsocketsTrashTest(unittest.TestCase):
             host = 'ws://localhost', 
             port = 9318, 
             name = 'OneTrueMorty',
-            threaded = True
+            threaded = True,
+            debug = True
         )
         
         # Simulate connection offset between the two
         # print('-----Client1 running.')
-        time.sleep(10)
+        time.sleep(15)
         
         self.client2 = ReqResTestClient(
             host = 'ws://localhost', 
             port = 9318, 
             name = 'HammerMorty',
-            threaded = True
+            threaded = True,
+            debug = True
         )
         # print('-----Client2 running.')
         

@@ -36,12 +36,16 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 import threading
 import collections.abc
+import collections
 
 # Note: this is used exclusively for connection ID generation in _Websocketeer
 import random
 
+from .exceptions import RequestError
 from .exceptions import RequestFinished
 from .exceptions import RequestUnknown
+
+from .utils import _BijectDict
 
 
 class _WSConnection:
@@ -410,19 +414,27 @@ class _ReqResWSConnection(_WSConnection):
             self.pending_requests[token] = asyncio.Event(loop=self._ws_loop)
         yield from self.outgoing_q.put(packed_msg)
         
-        # Now wait for the response and then cleanup
-        if expect_reply:
-            # instrumentation
-            print('Waiting for reply.')
-            yield from self.pending_requests[token].wait()
-            response, version = self.pending_responses[token]
-            del self.pending_responses[token]
-        else:
-            response = None
-            version = None
-        # We still need to remove the response token regardless -- gen_token 
-        # sets it to None to avoid a race condition.
-        del self.pending_requests[token]
+        try:
+            # Now wait for the response and then cleanup
+            if expect_reply:
+                # instrumentation
+                print('Waiting for reply.')
+                yield from self.pending_requests[token].wait()
+                response, version = self.pending_responses[token]
+                del self.pending_responses[token]
+                
+                # If the response was, in fact, an exception, raise it.
+                if isinstance(response, Exception):
+                    raise response
+                    
+            else:
+                response = None
+                version = None
+            
+        finally:
+            # We still need to remove the response token regardless; gen_token 
+            # sets it to None to avoid a race condition.
+            del self.pending_requests[token]
         
         return response, version
         
@@ -455,37 +467,49 @@ class ReqResWSBase(WSBase):
     Note that a request handler will never wait for a reply from its 
     response (ie, reply recursion is impossible).
     '''
-    def __init__(self, req_handlers, failure_code, *args, **kwargs):
+    # def __init__(self, req_handlers, failure_code, *args, **kwargs):
+    def __init__(self, req_handlers, success_code, failure_code, 
+    error_lookup=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.req_handlers = req_handlers
-        self.failure_code = failure_code
         
         # Use the default executor.
         self._receipt_executor = None
         
-    @property
-    def failure_code(self):
-        return self._failure_code
+        # Assign the error lookup
+        if error_lookup is None:
+            error_lookup = {}
+        if b'\x00\x00' in error_lookup:
+            raise ValueError(
+                'Cannot override generic error code 0x00.'
+            )
+        self._error_lookup = _BijectDict(error_lookup)
         
-    @failure_code.setter
-    def failure_code(self, value):
-        if value not in self.req_handlers:
-            raise ValueError('Failure code must exist in self.req_handlers.')
-        self._failure_code = value
+        # Set incoming (request) handlers
+        self.req_handlers = req_handlers
+        # self.req_handlers[success_code] = self.unpack_success
+        # self.req_handlers[failure_code] = self.unpack_failure
+        # Set success/failure handlers and codes
+        self.response_handlers = {
+            success_code: self.pack_success,
+            failure_code: self.pack_failure,
+        }
+        self._success_code = success_code
+        self._failure_code = failure_code
         
-    @property
-    def req_handlers(self):
-        return self._req_handlers
+        # Call a loose LBYL type check on all handlers.
+        self._check_handlers()
         
-    @req_handlers.setter
-    def req_handlers(self, value):
+    def new_connection(self, *args, **kwargs):
+        ''' Override default implementation to return a ReqRes conn.
+        '''
+        return _ReqResWSConnection(*args, **kwargs)
+        
+    def _check_handlers(self):
         ''' Does duck/type checking for setting request/response codes.
         '''
-        # First make sure it's a mapping
-        if not isinstance(value, collections.abc.Mapping):
-            raise TypeError('Reqres codes must be a mapping.')
-        # Now make sure all keys are len(2) and bytes compatible
-        for code in value:
+        # We don't need to join req_handlers and response_handlers, because
+        # response_handlers were set with the same failure/success codes.
+        for code in set(self.req_handlers):
             try:
                 if len(code) != 2:
                     raise ValueError()
@@ -493,19 +517,96 @@ class ReqResWSBase(WSBase):
                 bytes(code)
             except (TypeError, ValueError) as e:
                 raise TypeError(
-                    'Reqres codes must be bytes-compatible objects of len 2.'
+                    'Codes must be bytes-compatible objects of len 2.'
                 ) from e
-        # Finally, make sure all values are callable
-        for handler in value.values():
+        for handler in (list(self.req_handlers.values()) + 
+        list(self.response_handlers.values())):
             if not callable(handler):
-                raise TypeError('All reqres code handlers must be callable.')
-                
-        self._req_handlers = value
+                raise TypeError('Handlers must be callable.')
         
-    def new_connection(self, *args, **kwargs):
-        ''' Override default implementation to return a ReqRes conn.
+    @property
+    def error_lookup(self):
+        ''' Error_lookup itself cannot be changed, but its contents
+        absolutely may.
         '''
-        return _ReqResWSConnection(*args, **kwargs)
+        return self._error_lookup
+                
+    def pack_success(self, token, data):
+        ''' Packs data into a "success" response.
+        '''
+        if not isinstance(data, bytes):
+            data = bytes(data)
+        return token + data
+        
+    def pack_failure(self, token, exc):
+        ''' Packs an exception into a "failure" response.
+        '''
+        try:
+            code = self.error_lookup[exc]
+            body = str(exc).encode('utf-8')
+        except KeyError:
+            code = b'\x00\x00'
+            body = repr(exc).encode('utf-8')
+        except:
+            code = b'\x00\x00'
+            body = b'Failure followed by exception while handling failure.'
+        return token + code + body
+        
+    def unpack_success(self, data):
+        ''' Unpacks data from a "success" response.
+        Note: Currently inefficient for large responses.
+        '''
+        token = data[0:2]
+        data = data[2:]
+        return token, data
+        
+    def unpack_failure(self, data):
+        ''' Unpacks data from a "failure" response and raises the 
+        exception that generated it (or something close to it).
+        '''
+        token = data[0:2]
+        code = data[2:4]
+        body = data[4:].decode('utf-8')
+        
+        try:
+            exc = self.error_lookup[code]
+        except KeyError:
+            exc = RequestError
+            
+        exc = exc(body)
+        return token, exc
+        
+    def _handle_success(self, connection, msg):
+        ''' Unpacks and then handles any successful request. (For now at
+        least) silences any errors.
+        '''
+        try:
+            token, response = self.unpack_success(msg)
+        except:
+            pass
+        else:
+            self._respond_to_token(connection, token, response)
+        
+    def _handle_failure(self, connection, msg):
+        ''' Unpacks and then handles any unsuccessful request. (For now 
+        at least) silences any errors.
+        '''
+        try:
+            token, exc = self.unpack_failure(msg)
+        except:
+            pass
+        else:
+            self._respond_to_token(connection, token, response)
+        
+    def _respond_to_token(self, connection, token, response):
+        ''' Attempts to deliver a response to the token at connection.
+        If anything goes wrong, (at least for now), silences errors.
+        '''
+        try:
+            connection.pending_responses[token] = response
+            connection.pending_requests[token].set()
+        except:
+            connection.pending_responses.pop(token, default=None)
         
     @asyncio.coroutine
     def send(self, connection, msg, req_code, expect_reply=True):
@@ -536,6 +637,8 @@ class ReqResWSBase(WSBase):
         ''' Handles the receipt of a msg from connection without
         blocking the event loop or the receive task.
         '''
+        # instrumentation
+        print('Entering receipthandler')
         # Pre-initialize so that any failure to assign doesn't break things
         version = None
         token = None
@@ -557,53 +660,34 @@ class ReqResWSBase(WSBase):
             req_code = msg[3:5]
             body = raw_response[5:]
             
-            if req_code not in self.req_handlers:
-                raise RequestUnknown(repr(req_code))
-            else:
+            if req_code == self._success_code:
+                self._handle_success(connection, body)
+                return
+            elif req_code == self._failure_code:
+                self._handle_failure(connection, body)
+                return
+                
+            try:
                 res_handler = self.req_handlers[req_code]
+            except KeyError as e:
+                raise RequestUnknown(repr(req_code)) from e
                 
-            # If we don't raise RequestFinished, get the response body and code
-            res_body, res_code = yield from self._ws_loop.run_in_executor(
-                executor = self._receipt_executor,
-                # Call the handler for this request code
-                func = res_handler,
-                # Pass it the connection and the body.
-                args = (connection, token, body)
-            )
-            
-        # This denotes the end of a req/res chain; we don't need to reply back.
-        except RequestFinished as e:
-            pass
+            # Should this be in a separate try/catch block?
+            response = self.pack_success(res_handler(body))
+            response_code = self._success_code
                 
-        # Any other exception means we failed.
+        # In the future these should probably be run in an executor
+                
         except Exception as e:
-            msg = yield from self.handle_autoresponder_exc(
-                exc = e,
-                token = token,
-            )
-            yield from self.send(
-                connection,
-                msg = msg,
-                req_code = self.failure_code,
-                expect_reply = False
-            )
+            response = self.pack_failure(e)
+            response_code = self._failure_code
             
-        # No error; formulate response.
-        else:
-            yield from self.send(
-                connection, 
-                msg = res_body, 
-                req_code = res_code,
-                expect_reply = False
-            )
-            
-    def notify_response(self, connection, token, response):
-        ''' Alerts a waiting sender of an available response.
-        '''
-        # Lookup for request token -> response
-        connection.pending_responses[token] = response
-        # Lookup for request token -> event
-        connection.pending_requests[token].set()
+        yield from self.send(
+            connection, 
+            msg = response, 
+            req_code = response_code,
+            expect_reply = False
+        )
             
     @asyncio.coroutine
     def autoresponder(self):
@@ -615,7 +699,7 @@ class ReqResWSBase(WSBase):
         interrupter = asyncio.ensure_future(self._init_shutdown.wait())
         
         while not self._init_shutdown.is_set():
-            consumer = asyncio.ensure_future(self.receive())
+            consumer = asyncio.ensure_future(self.receive(), loop=self._ws_loop)
             
             finished, pending = yield from asyncio.wait(
                 fs = [consumer, interrupter],
@@ -639,10 +723,14 @@ class ReqResWSBase(WSBase):
                 # instrumentation
                 print('No exception.')
                 
-                asyncio.ensure_future(
-                    self._receipthandler(connection, msg), 
-                    loop = self._ws_loop
-                )
+                # This needs to have a way to be run in parallel. Unfortunately
+                # that may mean spinning off a thread to start autoresponders
+                # or something.
+                yield from self._receipthandler(connection, msg)
+                # asyncio.run_coroutine_threadsafe(
+                #     coro = self._receipthandler(connection, msg), 
+                #     loop = self._ws_loop
+                # )
                 
                 # instrumentation
                 print('Resuming listening from autoresponse.')

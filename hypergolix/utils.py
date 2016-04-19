@@ -1309,3 +1309,53 @@ class _JitDictDict(dict):
         if key not in self:
             self[key] = {}
         return super().__getitem__(key)
+        
+        
+class _BijectDict:
+    ''' A bijective dictionary. Aka, a dictionary where one key 
+    corresponds to exactly one value, and one value to exactly one key.
+    
+    Implemented as two dicts, with forward and backwards versions.
+    '''
+    def __init__(self, *args, **kwargs):
+        self._fwd = dict(*args, **kwargs)
+        # Make sure no values repeat and that all are hashable
+        if len(list(self._fwd.values())) != len(set(self._fwd.values())):
+            raise TypeError('_BijectDict values must be hashable and unique.')
+        self._rev = {value: key for key, value in self._fwd.items()}
+    
+    def __getitem__(self, key):
+        try:
+            return self._fwd[key]
+        except KeyError:
+            return self._rev[key]
+    
+    def __setitem__(self, key, value):
+        # Remove any previous connections with these values
+        if value in self._fwd:
+            raise ValueError('Value already exists as a forward key.')
+        if key in self._rev:
+            raise ValueError('Key already exists as a forward value.')
+        # Note: this isn't perfectly atomic, as it won't restore a previous 
+        # value that we just failed to replace.
+        try:
+            self._fwd[key] = value
+            self._rev[value] = key
+        except:
+            self._fwd.pop(key, default=None)
+            self._rev.pop(value, default=None)
+            raise
+
+    def __delitem__(self, key):
+        try:
+            value = self._fwd.pop(key)
+            del self._rev[value]
+        except KeyError:
+            value = self._rev.pop(key)
+            del self._fwd[value]
+
+    def __len__(self):
+        return len(self._fwd)
+        
+    def __contains__(self, key):
+        return key in self._fwd or key in self._rev

@@ -147,13 +147,19 @@ class CommsError(HypergolixException, RuntimeError):
     pass
     
     
-class RequestFinished(CommsError):
+class RequestError(CommsError):
     ''' Raised when something goes wrong with IPC (bad commands, etc).
     '''
     pass
     
     
-class RequestUnknown(CommsError):
+class RequestFinished(RequestError):
+    ''' Raised when something goes wrong with IPC (bad commands, etc).
+    '''
+    pass
+    
+    
+class RequestUnknown(RequestError):
     ''' Raised when a request code is unknown.
     '''
     pass
