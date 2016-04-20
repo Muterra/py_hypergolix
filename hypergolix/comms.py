@@ -413,7 +413,7 @@ class _ReqResWSConnection(_WSConnection):
         # in the send queue
         if expect_reply:
             self.pending_requests[token] = asyncio.Event(loop=self._ws_loop)
-        yield from self.outgoing_q.put(packed_msg)
+        yield from super().send(packed_msg)
         
         try:
             # Now wait for the response and then cleanup
