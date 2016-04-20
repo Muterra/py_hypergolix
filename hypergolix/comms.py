@@ -571,7 +571,7 @@ class ReqResWSBase(WSBase):
         ''' Unpacks data from a "success" response.
         Note: Currently inefficient for large responses.
         '''
-        token = data[0:2]
+        token = int.from_bytes(data[0:2], byteorder='big', signed=False)
         data = data[2:]
         return token, data
         
@@ -579,7 +579,7 @@ class ReqResWSBase(WSBase):
         ''' Unpacks data from a "failure" response and raises the 
         exception that generated it (or something close to it).
         '''
-        token = data[0:2]
+        token = int.from_bytes(data[0:2], byteorder='big', signed=False)
         code = data[2:4]
         body = data[4:].decode('utf-8')
         
