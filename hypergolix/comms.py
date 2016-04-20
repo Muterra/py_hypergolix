@@ -554,17 +554,23 @@ class ReqResWSBase(WSBase):
         If anything goes wrong, (at least for now), silences errors.
         '''
         try:
-            print('Responding to token.')
+            # Instrumentation
+            # print('Responding to token.')
             # Dictionaries are already threadsafe, but this may or may not be
             # a race condition. Currently it isn't, but if we add more logic
             # that mutates the dict, it could be.
             if token in connection.pending_requests:
                 connection.pending_responses[token] = response
-                print('Setting flag.')
+                # Instrumentation
+                # print('Setting flag.')
                 connection.pending_requests[token].set()
-                print('Flag set.')
+                # Instrumentation
+                # print('Flag set.')
             else:
-                print('Token was not in pending requests.')
+                # Instrumentation
+                # print('Token was not in pending requests.')
+                # Note: this should really log the bad token or something.
+                pass
             
         except:
             # Use a default of None
@@ -598,13 +604,13 @@ class ReqResWSBase(WSBase):
                 connection.pending_requests[token] = threading.Event()
                 
             # Instrumentation
-            print('Sending the request.')
+            # print('Sending the request.')
             super().send_threadsafe(connection, packed_msg)
             
             # Now wait for the response and then cleanup
             if expect_reply:
                 # instrumentation
-                print('Waiting for reply.')
+                # print('Waiting for reply.')
                 connection.pending_requests[token].wait()
                 response = connection.pending_responses[token]
                 del connection.pending_responses[token]
@@ -675,7 +681,7 @@ class ReqResWSBase(WSBase):
             connection, msg = self.receive_blocking()
             
             # instrumentation
-            print('Autoresponding.')
+            # print('Autoresponding.')
             
             # Just in case we fail to extract a token:
             their_token = 0
@@ -684,12 +690,14 @@ class ReqResWSBase(WSBase):
                 version, their_token, req_code, body = self._unpack_request(msg)
         
                 if req_code == self._success_code:
-                    print('Handling success.')
+                    # Instrumentation
+                    # print('Handling success.')
                     # If this errors out, we will send a reply back = BAD.
                     self._handle_success(connection, body)
                     continue
                 elif req_code == self._failure_code:
-                    print('Handling failure.')
+                    # Instrumentation
+                    # print('Handling failure.')
                     # If this errors out, we will send a reply back = BAD.
                     self._handle_failure(connection, body)
                     continue
@@ -711,17 +719,19 @@ class ReqResWSBase(WSBase):
                 
             # Finally (but not try:finally, or the return statement will also
             # execute) send out the response.
-            print('Ready to send reply.')
+            # Instrumentation
+            # print('Ready to send reply.')
             self.send_threadsafe(
                 connection = connection, 
                 msg = response, 
                 request_code = response_code,
                 expect_reply = False
             )
-            print('Reply sent.')
+            # Instrumentation
+            # print('Reply sent.')
                 
             # instrumentation
-            print('Resuming listening from autoresponse.')
+            # print('Resuming listening from autoresponse.')
         
     # @asyncio.coroutine
     # @abc.abstractmethod
