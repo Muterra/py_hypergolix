@@ -232,7 +232,7 @@ class ReqResTestServer(WSReqResServer):
         raise RequestFinished()
         
     def parrot(self, connection, msg):
-        print('Msg from client ' + repr(connection) + ': ' + repr(msg))
+        print('Msg from client ' + str(connection.connid) + ': ' + repr(msg))
         return b'Successful parrot.'
     
     @asyncio.coroutine
@@ -334,7 +334,7 @@ class ReqResTestClient(WSReqResClient):
         raise RequestFinished()
         
     def parrot(self, connection, response):
-        print('Msg from client ' + repr(connection) + ': ' + repr(response))
+        print(self._name + ': msg from server: ' + repr(response))
         return b'Successful parrot.'
     
     @asyncio.coroutine
@@ -408,7 +408,7 @@ class BareWebsocketsTrashTest(unittest.TestCase):
             host = 'localhost',
             port = 9318,
             threaded = True,
-            debug = True
+            # debug = True
         )
         
         # print('-----Server running.')
@@ -419,7 +419,7 @@ class BareWebsocketsTrashTest(unittest.TestCase):
             port = 9318, 
             name = 'OneTrueMorty',
             threaded = True,
-            debug = True
+            # debug = True
         )
         
         # Simulate connection offset between the two
@@ -431,7 +431,7 @@ class BareWebsocketsTrashTest(unittest.TestCase):
             port = 9318, 
             name = 'HammerMorty',
             threaded = True,
-            debug = True
+            # debug = True
         )
         # print('-----Client2 running.')
         

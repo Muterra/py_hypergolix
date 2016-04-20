@@ -364,20 +364,16 @@ class _ReqResWSConnection(_WSConnection):
         # Lookup for request token -> response
         self.pending_responses = {}
         
-        self._req_lock = asyncio.Lock()
+        self._req_lock = threading.Lock()
         
-    @asyncio.coroutine
     def _gen_req_token(self):
         ''' Gets a new (well, currently unused) request token. Sets it
         in pending_requests to prevent race conditions.
         '''
-        yield from self._req_lock
-        try:
+        with self._req_lock:
             token = self._gen_unused_token()
             # Do this just so we can release the lock ASAP
             self.pending_requests[token] = None
-        finally:
-            self._req_lock.release()
             
         return token
             
@@ -390,67 +386,6 @@ class _ReqResWSConnection(_WSConnection):
         if token in self.pending_requests:
             token = self._get_unused_token()
         return token
-        
-    @asyncio.coroutine
-    def send(self, msg, version, expect_reply=True):
-        ''' NON THREADSAFE wrapper to add things to the outgoing queue.
-        If expect_reply, Will wait for a response to return.
-        
-        Version should be int-like.
-        
-        Returns response, version if expect_reply
-        Returns None, None otherwise
-        '''
-        # Get a token and pack the message.
-        token = yield from self._gen_req_token()
-        packed_msg = (
-            version.to_bytes(length=1, byteorder='big', signed=False) + 
-            token.to_bytes(length=2, byteorder='big', signed=False) +
-            msg
-        )
-        
-        # Create an event to signal response waiting and then put the outgoing
-        # in the send queue
-        if expect_reply:
-            self.pending_requests[token] = asyncio.Event(loop=self._ws_loop)
-        yield from super().send(packed_msg)
-        
-        try:
-            # Now wait for the response and then cleanup
-            if expect_reply:
-                # instrumentation
-                print('Waiting for reply.')
-                yield from self.pending_requests[token].wait()
-                response, version = self.pending_responses[token]
-                del self.pending_responses[token]
-                
-                # If the response was, in fact, an exception, raise it.
-                if isinstance(response, Exception):
-                    raise response
-                    
-            else:
-                response = None
-                version = None
-            
-        finally:
-            # We still need to remove the response token regardless; gen_token 
-            # sets it to None to avoid a race condition.
-            del self.pending_requests[token]
-        
-        return response, version
-        
-    @asyncio.coroutine
-    def send_nowait(self, msg, version):
-        ''' NON THREADSAFE wrapper to add things to the outgoing queue.
-        Does not wait for a response to return. Returns a future.
-        '''
-        raise NotImplementedError('Not implemented yet.')
-        
-    @asyncio.coroutine
-    def _await_send(self):
-        ''' NON THREADSAFE wrapper to get things from the outgoing queue.
-        '''
-        return (yield from self.outgoing_q.get())
         
         
 class ReqResWSBase(WSBase):
@@ -473,6 +408,9 @@ class ReqResWSBase(WSBase):
     error_lookup=None, *args, **kwargs):
         # Use the default executor.
         self._receipt_executor = None
+        
+        # Hard-code a version number for now
+        self._version = 0
         
         # Assign the error lookup
         if error_lookup is None:
@@ -540,22 +478,22 @@ class ReqResWSBase(WSBase):
         '''
         return self._error_lookup
                 
-    def pack_success(self, token, data):
+    def pack_success(self, their_token, data):
         ''' Packs data into a "success" response.
         '''
-        token = token.to_bytes(length=2, byteorder='big', signed=False)
+        token = their_token.to_bytes(length=2, byteorder='big', signed=False)
         if not isinstance(data, bytes):
             data = bytes(data)
         return token + data
         
-    def pack_failure(self, token, exc):
+    def pack_failure(self, their_token, exc):
         ''' Packs an exception into a "failure" response.
         
         NOTE: MUST BE CAREFUL NOT TO LEAK LOCAL INFORMATION WHEN SENDING
         ERRORS AND ERROR CODES. Sending the body of an arbitrary error
         exposes information!
         '''
-        token = token.to_bytes(length=2, byteorder='big', signed=False)
+        token = their_token.to_bytes(length=2, byteorder='big', signed=False)
         try:
             code = self.error_lookup[exc]
             body = str(exc).encode('utf-8')
@@ -571,7 +509,7 @@ class ReqResWSBase(WSBase):
         ''' Unpacks data from a "success" response.
         Note: Currently inefficient for large responses.
         '''
-        token = data[0:2]
+        token = int.from_bytes(data[0:2], byteorder='big', signed=False)
         data = data[2:]
         return token, data
         
@@ -579,7 +517,7 @@ class ReqResWSBase(WSBase):
         ''' Unpacks data from a "failure" response and raises the 
         exception that generated it (or something close to it).
         '''
-        token = data[0:2]
+        token = int.from_bytes(data[0:2], byteorder='big', signed=False)
         code = data[2:4]
         body = data[4:].decode('utf-8')
         
@@ -597,10 +535,9 @@ class ReqResWSBase(WSBase):
         '''
         try:
             token, response = self.unpack_success(msg)
+            self._wake_sender(connection, token, response)
         except:
             pass
-        else:
-            self._respond_to_token(connection, token, response)
         
     def _handle_failure(self, connection, msg):
         ''' Unpacks and then handles any unsuccessful request. (For now 
@@ -608,47 +545,84 @@ class ReqResWSBase(WSBase):
         '''
         try:
             token, exc = self.unpack_failure(msg)
+            self._wake_sender(connection, token, exc)
         except:
             pass
-        else:
-            self._respond_to_token(connection, token, exc)
         
-    def _respond_to_token(self, connection, token, response):
+    def _wake_sender(self, connection, token, response):
         ''' Attempts to deliver a response to the token at connection.
         If anything goes wrong, (at least for now), silences errors.
         '''
         try:
-            connection.pending_responses[token] = response
-            connection.pending_requests[token].set()
+            print('Responding to token.')
+            # Dictionaries are already threadsafe, but this may or may not be
+            # a race condition. Currently it isn't, but if we add more logic
+            # that mutates the dict, it could be.
+            if token in connection.pending_requests:
+                connection.pending_responses[token] = response
+                print('Setting flag.')
+                connection.pending_requests[token].set()
+                print('Flag set.')
+            else:
+                print('Token was not in pending requests.')
+            
         except:
             # Use a default of None
             connection.pending_responses.pop(token, None)
         
-    @asyncio.coroutine
-    def send(self, connection, msg, req_code, expect_reply=True):
-        ''' Overrides super().send to wrap with a request code and to
-        pass a version to connection.send.
-        '''
+    def _check_request_code(self, request_code):
         # Raise now if req_code unknown; we won't be able to handle a response
-        if (req_code not in self.req_handlers and 
-        req_code != self._success_code and 
-        req_code != self._failure_code):
+        if (request_code not in self.req_handlers and 
+        request_code != self._success_code and 
+        request_code != self._failure_code):
             raise RequestUnknown(repr(req_code))
         # Note that the reqres_codes setter handles checking to make sure the
         # code is of length 2.
         
-        # instrumentation
-        print('About to send.')
+    def send_threadsafe(self, connection, msg, request_code, expect_reply=True):
+        ''' The only way to actually use a req/res server! Well, for now
+        anyways.
+        '''
+        # Make sure we "speak" the req code.
+        self._check_request_code(request_code)
         
-        # Hard-coded zero version.
-        return (yield from connection.send(
-            msg = req_code + msg,
-            version = 0,
-            expect_reply = expect_reply
-        ))
+        version = self._version
+        # Get a token and pack the message.
+        token = connection._gen_req_token()
+        try:
+            packed_msg = self._pack_request(version, token, request_code, msg)
+            
+            # Create an event to signal response waiting and then put the outgoing
+            # in the send queue
+            if expect_reply:
+                connection.pending_requests[token] = threading.Event()
+                
+            # Instrumentation
+            print('Sending the request.')
+            super().send_threadsafe(connection, packed_msg)
+            
+            # Now wait for the response and then cleanup
+            if expect_reply:
+                # instrumentation
+                print('Waiting for reply.')
+                connection.pending_requests[token].wait()
+                response = connection.pending_responses[token]
+                del connection.pending_responses[token]
+                
+                # If the response was, in fact, an exception, raise it.
+                if isinstance(response, Exception):
+                    raise response
+                    
+            else:
+                response = None
+                version = None
+            
+        finally:
+            # We still need to remove the response token regardless; gen_token 
+            # sets it to None to avoid a race condition.
+            del connection.pending_requests[token]
         
-        # instrumentation
-        print('Successfully sent.')
+        return response
                        
     def _get_recv_handler(self, req_code, body):
         ''' Handles the receipt of a msg from connection without
@@ -661,7 +635,7 @@ class ReqResWSBase(WSBase):
         
         return res_handler
         
-    def _digest_request(self, msg):
+    def _unpack_request(self, msg):
         ''' Extracts version, token, request code, and body from a msg.
         '''
         # Pull out the version, token, body from msg
@@ -679,6 +653,18 @@ class ReqResWSBase(WSBase):
         body = msg[5:]
         
         return version, token, req_code, body
+        
+    def _pack_request(self, version, token, req_code, body):
+        ''' Extracts version, token, request code, and body from a msg.
+        '''
+        if len(req_code) != 2:
+            raise ValueError('Improper request code while packing request.')
+        
+        # Pull out the version, token, body from msg
+        version = version.to_bytes(length=1, byteorder='big', signed=False)
+        token = token.to_bytes(length=2, byteorder='big', signed=False)
+        
+        return version + token + req_code + body
             
     def autoresponder(self):
         ''' Handle all incoming messages. Preferably a daemon, but 
@@ -692,23 +678,25 @@ class ReqResWSBase(WSBase):
             print('Autoresponding.')
             
             # Just in case we fail to extract a token:
-            token = bytes(2)
+            their_token = 0
             
             try:
-                version, token, req_code, body = self._digest_request(msg)
+                version, their_token, req_code, body = self._unpack_request(msg)
         
                 if req_code == self._success_code:
+                    print('Handling success.')
                     # If this errors out, we will send a reply back = BAD.
                     self._handle_success(connection, body)
                     continue
                 elif req_code == self._failure_code:
+                    print('Handling failure.')
                     # If this errors out, we will send a reply back = BAD.
                     self._handle_failure(connection, body)
                     continue
                 
                 res_handler = self._get_recv_handler(req_code, msg)
                 response = self.pack_success(
-                    token = token, 
+                    their_token = their_token, 
                     data = res_handler(connection, body)
                 )
                 response_code = self._success_code
@@ -718,33 +706,35 @@ class ReqResWSBase(WSBase):
                 print(repr(e))
                 traceback.print_tb(e.__traceback__)
                 
-                response = self.pack_failure(token, e)
+                response = self.pack_failure(their_token, e)
                 response_code = self._failure_code
                 
             # Finally (but not try:finally, or the return statement will also
             # execute) send out the response.
+            print('Ready to send reply.')
             self.send_threadsafe(
                 connection = connection, 
                 msg = response, 
-                req_code = response_code,
+                request_code = response_code,
                 expect_reply = False
             )
+            print('Reply sent.')
                 
             # instrumentation
             print('Resuming listening from autoresponse.')
         
-    @asyncio.coroutine
-    @abc.abstractmethod
-    def handle_autoresponder_exc(self, exc, token):
-        ''' Handles an exception created by the autoresponder.
+    # @asyncio.coroutine
+    # @abc.abstractmethod
+    # def handle_autoresponder_exc(self, exc, token):
+    #     ''' Handles an exception created by the autoresponder.
         
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
+    #     exc is either:
+    #     1. the exception, if it was raised
+    #     2. None, if no exception was encountered
         
-        Must return the body of the message to reply with.
-        '''
-        pass
+    #     Must return the body of the message to reply with.
+    #     '''
+    #     pass
             
     @abc.abstractmethod
     def ws_run(self):
