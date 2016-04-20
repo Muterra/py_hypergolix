@@ -231,9 +231,9 @@ class ReqResTestServer(WSReqResServer):
         self.notify_response(connection, token, response)
         raise RequestFinished()
         
-    def parrot(self, connection, token, response):
-        print('Msg from client ' + repr(connection) + ': ' + repr(response))
-        return b'Successful parrot.', b'+S'
+    def parrot(self, connection, msg):
+        print('Msg from client ' + repr(connection) + ': ' + repr(msg))
+        return b'Successful parrot.'
     
     @asyncio.coroutine
     def init_connection(self, *args, **kwargs):
@@ -333,9 +333,9 @@ class ReqResTestClient(WSReqResClient):
         self.notify_response(connection, token, response)
         raise RequestFinished()
         
-    def parrot(self, connection, token, response):
+    def parrot(self, connection, response):
         print('Msg from client ' + repr(connection) + ': ' + repr(response))
-        return b'Successful parrot.', b'+S'
+        return b'Successful parrot.'
     
     @asyncio.coroutine
     def init_connection(self, *args, **kwargs):

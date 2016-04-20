@@ -37,6 +37,7 @@ from websockets.exceptions import ConnectionClosed
 import threading
 import collections.abc
 import collections
+import traceback
 
 # Note: this is used exclusively for connection ID generation in _Websocketeer
 import random
@@ -470,8 +471,6 @@ class ReqResWSBase(WSBase):
     # def __init__(self, req_handlers, failure_code, *args, **kwargs):
     def __init__(self, req_handlers, success_code, failure_code, 
     error_lookup=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
         # Use the default executor.
         self._receipt_executor = None
         
@@ -498,6 +497,16 @@ class ReqResWSBase(WSBase):
         
         # Call a loose LBYL type check on all handlers.
         self._check_handlers()
+        
+        # This will need to be more than just a thread at some point.
+        self._autoresponder_thread = threading.Thread(
+            target = self.autoresponder,
+            daemon = True
+        )
+        
+        # This needs to be called last, otherwise we set up the event loop too
+        # early.
+        super().__init__(*args, **kwargs)
         
     def new_connection(self, *args, **kwargs):
         ''' Override default implementation to return a ReqRes conn.
@@ -534,13 +543,19 @@ class ReqResWSBase(WSBase):
     def pack_success(self, token, data):
         ''' Packs data into a "success" response.
         '''
+        token = token.to_bytes(length=2, byteorder='big', signed=False)
         if not isinstance(data, bytes):
             data = bytes(data)
         return token + data
         
     def pack_failure(self, token, exc):
         ''' Packs an exception into a "failure" response.
+        
+        NOTE: MUST BE CAREFUL NOT TO LEAK LOCAL INFORMATION WHEN SENDING
+        ERRORS AND ERROR CODES. Sending the body of an arbitrary error
+        exposes information!
         '''
+        token = token.to_bytes(length=2, byteorder='big', signed=False)
         try:
             code = self.error_lookup[exc]
             body = str(exc).encode('utf-8')
@@ -596,7 +611,7 @@ class ReqResWSBase(WSBase):
         except:
             pass
         else:
-            self._respond_to_token(connection, token, response)
+            self._respond_to_token(connection, token, exc)
         
     def _respond_to_token(self, connection, token, response):
         ''' Attempts to deliver a response to the token at connection.
@@ -606,7 +621,8 @@ class ReqResWSBase(WSBase):
             connection.pending_responses[token] = response
             connection.pending_requests[token].set()
         except:
-            connection.pending_responses.pop(token, default=None)
+            # Use a default of None
+            connection.pending_responses.pop(token, None)
         
     @asyncio.coroutine
     def send(self, connection, msg, req_code, expect_reply=True):
@@ -614,7 +630,9 @@ class ReqResWSBase(WSBase):
         pass a version to connection.send.
         '''
         # Raise now if req_code unknown; we won't be able to handle a response
-        if req_code not in self.req_handlers:
+        if (req_code not in self.req_handlers and 
+        req_code != self._success_code and 
+        req_code != self._failure_code):
             raise RequestUnknown(repr(req_code))
         # Note that the reqres_codes setter handles checking to make sure the
         # code is of length 2.
@@ -631,113 +649,89 @@ class ReqResWSBase(WSBase):
         
         # instrumentation
         print('Successfully sent.')
-            
-    @asyncio.coroutine            
-    def _receipthandler(self, connection, msg):
+                       
+    def _get_recv_handler(self, req_code, body):
         ''' Handles the receipt of a msg from connection without
         blocking the event loop or the receive task.
         '''
-        # instrumentation
-        print('Entering receipthandler')
-        # Pre-initialize so that any failure to assign doesn't break things
-        version = None
-        token = None
-        req_code = None
-        body = None
-        
         try:
-            # Pull out the version, token, body from msg
-            version = int.from_bytes(
-                bytes = msg[0:1], 
-                byteorder = 'big', 
-                signed = False
-            )
-            token = int.from_bytes(
-                bytes = msg[1:3], 
-                byteorder = 'big', 
-                signed = False
-            )
-            req_code = msg[3:5]
-            body = raw_response[5:]
-            
-            if req_code == self._success_code:
-                self._handle_success(connection, body)
-                return
-            elif req_code == self._failure_code:
-                self._handle_failure(connection, body)
-                return
-                
-            try:
-                res_handler = self.req_handlers[req_code]
-            except KeyError as e:
-                raise RequestUnknown(repr(req_code)) from e
-                
-            # Should this be in a separate try/catch block?
-            response = self.pack_success(res_handler(body))
-            response_code = self._success_code
-                
-        # In the future these should probably be run in an executor
-                
-        except Exception as e:
-            response = self.pack_failure(e)
-            response_code = self._failure_code
-            
-        yield from self.send(
-            connection, 
-            msg = response, 
-            req_code = response_code,
-            expect_reply = False
-        )
-            
-    @asyncio.coroutine
-    def autoresponder(self):
-        ''' Handle all incoming messages.
-        Should be called via run_coroutine_threadsafe, and then 
-        (preferably) canceled when the client/server stops. However, 
-        should also auto-stop when shutdown flag set.
-        '''
-        interrupter = asyncio.ensure_future(self._init_shutdown.wait())
+            res_handler = self.req_handlers[req_code]
+        except KeyError as e:
+            raise RequestUnknown(repr(req_code)) from e
         
+        return res_handler
+        
+    def _digest_request(self, msg):
+        ''' Extracts version, token, request code, and body from a msg.
+        '''
+        # Pull out the version, token, body from msg
+        version = int.from_bytes(
+            bytes = msg[0:1], 
+            byteorder = 'big', 
+            signed = False
+        )
+        token = int.from_bytes(
+            bytes = msg[1:3], 
+            byteorder = 'big', 
+            signed = False
+        )
+        req_code = msg[3:5]
+        body = msg[5:]
+        
+        return version, token, req_code, body
+            
+    def autoresponder(self):
+        ''' Handle all incoming messages. Preferably a daemon, but 
+        should also auto-stop when shutdown flag set. However, may hang
+        while waiting to exit from loop.
+        '''
         while not self._init_shutdown.is_set():
-            consumer = asyncio.ensure_future(self.receive(), loop=self._ws_loop)
+            connection, msg = self.receive_blocking()
             
-            finished, pending = yield from asyncio.wait(
-                fs = [consumer, interrupter],
-                return_when = asyncio.FIRST_COMPLETED
+            # instrumentation
+            print('Autoresponding.')
+            
+            # Just in case we fail to extract a token:
+            token = bytes(2)
+            
+            try:
+                version, token, req_code, body = self._digest_request(msg)
+        
+                if req_code == self._success_code:
+                    # If this errors out, we will send a reply back = BAD.
+                    self._handle_success(connection, body)
+                    continue
+                elif req_code == self._failure_code:
+                    # If this errors out, we will send a reply back = BAD.
+                    self._handle_failure(connection, body)
+                    continue
+                
+                res_handler = self._get_recv_handler(req_code, msg)
+                response = self.pack_success(
+                    token = token, 
+                    data = res_handler(connection, body)
+                )
+                response_code = self._success_code
+                    
+            except Exception as e:
+                # Instrumentation
+                print(repr(e))
+                traceback.print_tb(e.__traceback__)
+                
+                response = self.pack_failure(token, e)
+                response_code = self._failure_code
+                
+            # Finally (but not try:finally, or the return statement will also
+            # execute) send out the response.
+            self.send_threadsafe(
+                connection = connection, 
+                msg = response, 
+                req_code = response_code,
+                expect_reply = False
             )
-            
-            # We have exactly two tasks, so no need to iterate on them.
-            # Finished is a set with exactly one item, so...
-            finished = finished.pop()
-            
-            # If it was the producer, send it out
-            if consumer is finished:
-                # instrumentation
-                print('Autoresponding.')
                 
-                # This is straight-up wrong, the method doesn't even exist
-                # yield from self.handle_consumer_exc(finished.exception())
-                # We could store this somewhere (with connection maybe?) but 
-                # why would we? It's currently unused anyways.
-                
-                # instrumentation
-                print('No exception.')
-                
-                # This needs to have a way to be run in parallel. Unfortunately
-                # that may mean spinning off a thread to start autoresponders
-                # or something.
-                yield from self._receipthandler(connection, msg)
-                # asyncio.run_coroutine_threadsafe(
-                #     coro = self._receipthandler(connection, msg), 
-                #     loop = self._ws_loop
-                # )
-                
-                # instrumentation
-                print('Resuming listening from autoresponse.')
-                
-            # Got a shutdown. Cancel the consumer.
-            else:
-                consumer.cancel()
+            # instrumentation
+            print('Resuming listening from autoresponse.')
         
     @asyncio.coroutine
     @abc.abstractmethod
@@ -754,13 +748,10 @@ class ReqResWSBase(WSBase):
             
     @abc.abstractmethod
     def ws_run(self):
-        ''' Add the autoresponder execution. MUST be called via super().
+        ''' In addition to super, start the autoresponder.
         '''
         super().ws_run()
-        self._autoresponder_task = asyncio.run_coroutine_threadsafe(
-            self.autoresponder(),
-            loop = self._ws_loop
-        )
+        self._autoresponder_thread.start()
         
         
 class WSBasicServer(WSBase):

@@ -1342,16 +1342,17 @@ class _BijectDict:
             self._fwd[key] = value
             self._rev[value] = key
         except:
-            self._fwd.pop(key, default=None)
-            self._rev.pop(value, default=None)
+            # Default to None when popping to avoid KeyError
+            self._fwd.pop(key, None)
+            self._rev.pop(value, None)
             raise
 
     def __delitem__(self, key):
         try:
-            value = self._fwd.pop(key)
+            value = self._fwd.pop(key, None)
             del self._rev[value]
         except KeyError:
-            value = self._rev.pop(key)
+            value = self._rev.pop(key, None)
             del self._fwd[value]
 
     def __len__(self):
