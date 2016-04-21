@@ -121,6 +121,8 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         '''
         # Need to add a type check.
         self._apis.add(api_id)
+        # Don't forget to update the dispatch. For now, just reregister self.
+        self.dispatch.register_endpoint(self)
         
     @property
     def dispatch(self):
@@ -316,6 +318,61 @@ class _IPCBase(metaclass=abc.ABCMeta):
         '''
         pass
         
+    def new_token_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        '''
+        pass
+        
+    def add_api_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        '''
+        pass
+        
+    def whoami_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        '''
+        pass
+        
+    def get_object_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        '''
+        pass
+        
+    def new_object_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        '''
+        pass
+        
+    def sync_object_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        '''
+        pass
+        
+    def update_object_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        '''
+        pass
+        
+    def share_object_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        '''
+        pass
+        
+    def freeze_object_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        '''
+        pass
+        
+    def hold_object_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        '''
+        pass
+        
+    def delete_object_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        '''
+        pass
+        
         
 class _EmbeddedIPC(_IPCBase):
     ''' EmbeddedIPC wraps _EmbedBase from embeds. It also 
@@ -358,7 +415,40 @@ class WebsocketsIPC(_IPCBase, WSReqResServer):
     ''' Websockets IPC via localhost. Sets up a server.
     '''
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        req_handlers = {
+            # Get new app token
+            b'+T': self.new_token_wrapper,
+            # # Register existing app token
+            # b'@T': self,
+            # Register an API
+            b'@A': self.add_api_wrapper,
+            # Whoami?
+            b'?I': self.whoami_wrapper,
+            # Get object
+            b'>O': self.get_object_wrapper,
+            # New object
+            b'<O': self.new_object_wrapper,
+            # Sync object
+            b'~O': self.sync_object_wrapper,
+            # Update object
+            b'!O': self.update_object_wrapper,
+            # Share object
+            b'^O': self.share_object_wrapper,
+            # Freeze object
+            b'*O': self.freeze_object_wrapper,
+            # Hold object
+            b'#O': self.hold_object_wrapper,
+            # Delete object
+            b'XO': self.delete_object_wrapper,
+        }
+        
+        super().__init__(
+            req_handlers = req_handlers,
+            success_code = b'AK',
+            failure_code = b'NK',
+            # Note: can also add error_lookup = {b'er': RuntimeError}
+            *args, **kwargs
+        )
         
     def new_endpoint(self, connid, app_token=None, apis=None):
         ''' Creates a new endpoint for the IPC system. Endpoints must

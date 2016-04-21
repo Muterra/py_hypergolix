@@ -1166,10 +1166,11 @@ class Dispatcher(DispatcherBase):
         ''' Starts tracking an object. Must be DispatchObj.
         
         Note that if you don't call register_object during creation, the 
-        object may be garbage collected prematurely.
+        object may be garbage collected (by python, not golix) 
+        prematurely.
         
         Note that this gets called for all object creations, including
-        from handshakes.
+        from handshakes. There should be no need to call it manually.
         '''
         if not isinstance(obj, DispatchObj):
             raise TypeError('May only register DispatchObj instances.')
@@ -1337,8 +1338,10 @@ class Dispatcher(DispatcherBase):
             self._known_tokens.add(app_token)
             self._active_tokens[app_token] = endpoint
         
+        # Do this regardless, so that the endpoint can use this to update apis.
         for api in endpoint.apis:
             self._api_ids[api].add(app_token)
+        # Note: how to handle removing api_ids?
             
     def close_endpoint(self, endpoint):
         ''' Closes this client's connection to the endpoint, meaning it
@@ -1348,7 +1351,8 @@ class Dispatcher(DispatcherBase):
         del self._active_tokens[endpoint.app_token]
         
     def get_tokens(self, api_id):
-        ''' Gets the local app token for the passed API id.
+        ''' Gets the local app tokens registered as capable of handling
+        the passed API id.
         '''
         if api_id in self._api_ids:
             return frozenset(self._api_ids[api_id])

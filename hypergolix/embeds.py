@@ -65,7 +65,7 @@ class _EmbedBase(metaclass=abc.ABCMeta):
     '''
     @property
     def app_token(self):
-        ''' Get your app token.
+        ''' Get your app token, or if you have none, register a new one.
         '''
         return self._token
         
