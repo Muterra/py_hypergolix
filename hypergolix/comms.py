@@ -119,7 +119,10 @@ class WSBase(metaclass=abc.ABCMeta):
             # Set up a (daemon) thread for the websockets process
             self._ws_thread = threading.Thread(
                 target = self.ws_run,
+                # This may result in errors during closing.
                 daemon = True
+                # This isn't currently stable enough to close properly.
+                # daemon = False
             )
             self._ws_thread.start()
             
@@ -233,6 +236,7 @@ class WSBase(metaclass=abc.ABCMeta):
         ''' Sets the shutdown flag, killing the connection and client.
         '''
         self._ws_loop.call_soon_threadsafe(self._init_shutdown.set)
+        # self._ws_loop.call_soon_threadsafe(self._ws_loop.stop)
         
     @asyncio.coroutine
     def _ws_connect(self, websocket, path=None):
@@ -836,20 +840,33 @@ class WSBasicServer(WSBase):
         self._admin_lock = asyncio.Lock(loop=self._ws_loop)
         
         # Serve is a coroutine. This should happen before setting CTR
-        self._ws_future = asyncio.ensure_future(
+        # self._ws_future = asyncio.ensure_future(
+        #     websockets.serve(
+        #         self._ws_connect, 
+        #         self._ws_host, 
+        #         self._ws_port
+        #     ),
+        #     loop = self._ws_loop
+        # )
+        self._server = self._ws_loop.run_until_complete(
             websockets.serve(
                 self._ws_connect, 
                 self._ws_host, 
                 self._ws_port
-            ),
-            loop = self._ws_loop
+            )
         )
+        
         # Do this once the loop starts up
         # self._ws_loop.call_soon(self._ctr.set)
         self._ctr.set()
+        print('Flag set.')
+        # self._ws_loop.run_forever()
         # Go johnny go!
-        server = self._ws_loop.run_until_complete(self._ws_future)
-        self._ws_loop.run_until_complete(server.wait_closed())
+        # print('------Server not yet open?')
+        # server = self._ws_loop.run_until_complete(self._ws_future)
+        # print('------Waiting for server close.')
+        self._ws_loop.run_until_complete(self._server.wait_closed())
+        print('Done running forever.')
         
         # Close down the loop. It should have stopped on its own.
         # self._ws_loop.stop()
@@ -858,9 +875,13 @@ class WSBasicServer(WSBase):
         # print('XXXXXX Loop closed.')
         
         # Figure out what our exception is, if anything, and raise it
-        exc = self._ws_future.exception()
-        if exc is not None:
-            raise exc
+        # exc = self._ws_future.exception()
+        # if exc is not None:
+        #     raise exc
+            
+    def halt(self):
+        super().halt()
+        self._ws_loop.call_soon_threadsafe(self._server.close)
         
         
 class WSBasicClient(WSBase):
@@ -895,9 +916,12 @@ class WSBasicClient(WSBase):
         # Don't forget to update the actual websocket.
         self._connection.websocket = self._websocket
         
-        result = yield from self._ws_connect(self._websocket)
+        try:
+            yield from self._ws_connect(self._websocket)
+        except ConnectionClosed as e:
+            pass
         
-        return result
+        return True
         
     @asyncio.coroutine
     def init_connection(self, websocket, path):
@@ -914,20 +938,11 @@ class WSBasicClient(WSBase):
         super().ws_run()
         
         # _ws_future is useful for blocking during halt.
-        self._ws_future = asyncio.ensure_future(
-            self.ws_client(), 
-            loop = self._ws_loop
-        )
-        self._ws_loop.run_until_complete(self._ws_future)
+        self._ws_loop.run_until_complete(self.ws_client())
         
         # Close down the loop. It should have stopped on its own.
         # self._ws_loop.stop()
         self._ws_loop.close()
-        
-        # Figure out what our exception is, if anything, and raise it
-        exc = self._ws_future.exception()
-        if exc is not None:
-            raise exc
             
             
 class WSReqResServer(WSBasicServer, ReqResWSBase):

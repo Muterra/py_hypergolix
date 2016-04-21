@@ -204,36 +204,18 @@ class ReqResTestServer(WSReqResServer):
             # Parrot
             b'!P': self.parrot,
         }
-        # # Successful
-        # b'+S': self.__success,
-        # # Unsuccessful
-        # b'-S': self.__failure,
         
         self._incoming_counter = 0
+        
         super().__init__(
             req_handlers = req_handlers, 
             failure_code = b'-S', 
             success_code = b'+S', 
             *args, **kwargs)
         
-        self.producer_thread = threading.Thread(
-            target = self.producer,
-            daemon = True,
-        )
-        self.producer_thread.start()
-        
-    def __success(self, connection, token, response):
-        self.notify_response(connection, token, response)
-        raise RequestFinished()
-        
-    def __failure(self, connection, token, response):
-        response = RuntimeError('REQUEST FAILED!')
-        self.notify_response(connection, token, response)
-        raise RequestFinished()
-        
     def parrot(self, connection, msg):
-        print('Msg from client ' + str(connection.connid) + ': ' + repr(msg))
-        return b'Successful parrot.'
+        # print('Msg from client ' + str(connection.connid) + ': ' + repr(msg))
+        return msg
     
     @asyncio.coroutine
     def init_connection(self, *args, **kwargs):
@@ -243,18 +225,6 @@ class ReqResTestServer(WSReqResServer):
         connection = yield from super().init_connection(*args, **kwargs)
         print('Connection established: client', str(connection.connid))
         return connection
-        
-    def producer(self):
-        ''' Produces anything needed to send to the connection. Must 
-        return bytes.
-        '''
-        while True:
-            # This clearly doesn't scale, but we wouldn't normally be iterating
-            # across all connections to send out something.
-            for connection in list(self._connections.values()):
-                time.sleep(random.randint(2,7))
-                print('Requesting parrot from connection', str(connection.connid))
-                self.send_threadsafe(connection, b'B' + (b'u' * random.randint(1, 14)) + b'rp', b'!P')
         
     @asyncio.coroutine
     def handle_producer_exc(self, connection, exc):
@@ -302,10 +272,6 @@ class ReqResTestClient(WSReqResClient):
             # Parrot
             b'!P': self.parrot,
         }
-        # # Successful
-        # b'+S': self.__success,
-        # # Unsuccessful
-        # b'-S': self.__failure,
         
         self._name = name
         self._incoming_counter = 0
@@ -316,26 +282,9 @@ class ReqResTestClient(WSReqResClient):
             success_code = b'+S', 
             *args, **kwargs)
         
-        self.producer_thread = threading.Thread(
-            target = self.producer,
-            daemon = True,
-        )
-        self.producer_thread.start()
-        
-    def __success(self, connection, token, response):
-        print('Received success!')
-        self.notify_response(connection, token, response)
-        raise RequestFinished()
-        
-    def __failure(self, connection, token, response):
-        print('Received failure!')
-        response = RuntimeError('REQUEST FAILED!')
-        self.notify_response(connection, token, response)
-        raise RequestFinished()
-        
-    def parrot(self, connection, response):
-        print(self._name + ': msg from server: ' + repr(response))
-        return b'Successful parrot.'
+    def parrot(self, connection, msg):
+        # print(self._name + ': msg from server: ' + repr(msg))
+        return msg
     
     @asyncio.coroutine
     def init_connection(self, *args, **kwargs):
@@ -345,17 +294,6 @@ class ReqResTestClient(WSReqResClient):
         connection = yield from super().init_connection(*args, **kwargs)
         print('Connection established: server.')
         return connection
-        
-    def producer(self):
-        ''' Produces anything needed to send to the connection. Must 
-        return bytes.
-        '''
-        while True:
-            # This clearly doesn't scale, but we wouldn't normally be iterating
-            # across all connections to send out something.
-            time.sleep(random.randint(2,7))
-            print('Requesting parrot from server.')
-            self.send_threadsafe(self.connection, b'Gro' + (b's' * random.randint(2, 14)), b'!P')
         
     @asyncio.coroutine
     def handle_producer_exc(self, connection, exc):
@@ -402,7 +340,7 @@ class ReqResTestClient(WSReqResClient):
 # ###############################################
         
         
-class BareWebsocketsTrashTest(unittest.TestCase):
+class ReqResWSTrashTest(unittest.TestCase):
     def setUp(self):
         self.server = ReqResTestServer(
             host = 'localhost',
@@ -410,9 +348,6 @@ class BareWebsocketsTrashTest(unittest.TestCase):
             threaded = True,
             # debug = True
         )
-        
-        # print('-----Server running.')
-        time.sleep(1)
         
         self.client1 = ReqResTestClient(
             host = 'ws://localhost', 
@@ -422,10 +357,6 @@ class BareWebsocketsTrashTest(unittest.TestCase):
             # debug = True
         )
         
-        # Simulate connection offset between the two
-        # print('-----Client1 running.')
-        time.sleep(15)
-        
         self.client2 = ReqResTestClient(
             host = 'ws://localhost', 
             port = 9318, 
@@ -433,25 +364,58 @@ class BareWebsocketsTrashTest(unittest.TestCase):
             threaded = True,
             # debug = True
         )
-        # print('-----Client2 running.')
         
-    def test_comms(self):
+    def test_client1(self):
+        for ii in range(1000):
+            msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
+            msg = msg.encode('utf-8')
+            response = self.client1.send_threadsafe(
+                connection = self.client1.connection, 
+                msg = msg,
+                request_code = b'!P'
+            )
+            self.assertEqual(msg, response)
+        
+    def test_client2(self):
+        for ii in range(1000):
+            msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
+            msg = msg.encode('utf-8')
+            response = self.client2.send_threadsafe(
+                connection = self.client2.connection, 
+                msg = msg,
+                request_code = b'!P'
+            )
+            self.assertEqual(msg, response)
+        
+    def test_server(self):
+        for ii in range(1000):
+            for connection in list(self.server._connections.values()):
+                msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
+                msg = msg.encode('utf-8')
+                response = self.server.send_threadsafe(
+                    connection = connection, 
+                    msg = msg,
+                    request_code = b'!P'
+                )
+                self.assertEqual(msg, response)
         # pass
         # self.server._halt()
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
             
-        # Start an interactive IPython interpreter with local namespace, but
-        # suppress all IPython-related warnings.
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            IPython.embed()
+        # # Start an interactive IPython interpreter with local namespace, but
+        # # suppress all IPython-related warnings.
+        # with warnings.catch_warnings():
+        #     warnings.simplefilter('ignore')
+        #     IPython.embed()
         
     
-    # def tearDown(self):
-    #     self.server._halt()
-        
+    def tearDown(self):
+        self.client1.halt()
+        self.client2.halt()
+        self.server.halt()
+        # time.sleep(5)
 
 if __name__ == "__main__":
     unittest.main()
