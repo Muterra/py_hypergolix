@@ -74,6 +74,7 @@ from .exceptions import IPCError
 from .utils import AppObj
 
 from .comms import WSReqResServer
+from .comms import _ReqResWSConnection
 
 
 class _EndpointBase(metaclass=abc.ABCMeta):
@@ -108,7 +109,7 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         if app_token is None:
             app_token = self.dispatch.new_token()
             
-        self._token = token
+        self._token = app_token
         self._apis = set()
         
         if apis is not None:
@@ -158,13 +159,15 @@ class _EndpointBase(metaclass=abc.ABCMeta):
     
     @abc.abstractmethod
     def send_object(self, obj):
-        ''' Sends a new object to the emedded client.
+        ''' Sends a new object to the emedded client. This originates 
+        upstream and is not solicited by the client.
         '''
         pass
     
     @abc.abstractmethod
     def send_update(self, obj):
-        ''' Sends an updated object to the emedded client.
+        ''' Sends an updated object to the emedded client. Originates 
+        upstream and is not solicited by the client.
         '''
         pass
         
@@ -304,74 +307,69 @@ class _IPCBase(metaclass=abc.ABCMeta):
         
     @property
     def dispatch(self):
-        ''' Sorta superluous right now.
+        ''' Sorta superfluous right now.
         '''
         return self._dispatch
         
-    @abc.abstractmethod
-    def new_endpoint(self):
-        ''' Creates a new endpoint for the IPC system. Endpoints must
-        be unique. Uniqueness must be enforced by subclasses of the
-        _IPCBase class.
+    # @abc.abstractmethod
+    # def new_endpoint(self):
+    #     ''' Creates a new endpoint for the IPC system. Endpoints must
+    #     be unique. Uniqueness must be enforced by subclasses of the
+    #     _IPCBase class.
         
-        Returns an Endpoint object.
-        '''
-        pass
-        
-    def new_token_wrapper(self, endpoint, request_body):
-        ''' Wraps self.dispatch.new_token into a bytes return.
-        '''
-        pass
+    #     Returns an Endpoint object.
+    #     '''
+    #     pass
         
     def add_api_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        pass
+        return b''
         
     def whoami_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        pass
+        return b''
         
     def get_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        pass
+        return b''
         
     def new_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        pass
+        return b''
         
     def sync_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        pass
+        return b''
         
     def update_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        pass
+        return b''
         
     def share_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        pass
+        return b''
         
     def freeze_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        pass
+        return b''
         
     def hold_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        pass
+        return b''
         
     def delete_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        pass
+        return b''
         
         
 class _EmbeddedIPC(_IPCBase):
@@ -389,7 +387,7 @@ class _EmbeddedIPC(_IPCBase):
         pass
         
         
-class WSEndpoint(_EndpointBase):
+class WSEndpoint(_EndpointBase, _ReqResWSConnection):
     def send_object(self, obj):
         ''' Sends a new object to the emedded client.
         '''
@@ -416,8 +414,9 @@ class WebsocketsIPC(_IPCBase, WSReqResServer):
     '''
     def __init__(self, *args, **kwargs):
         req_handlers = {
-            # Get new app token
-            b'+T': self.new_token_wrapper,
+            # New app tokens are handled during endpoint creation.
+            # # Get new app token
+            # b'+T': self.new_token_wrapper,
             # # Register existing app token
             # b'@T': self,
             # Register an API
@@ -450,113 +449,114 @@ class WebsocketsIPC(_IPCBase, WSReqResServer):
             *args, **kwargs
         )
         
-    def new_endpoint(self, connid, app_token=None, apis=None):
-        ''' Creates a new endpoint for the IPC system. Endpoints must
-        be unique. Uniqueness must be enforced by subclasses of the
-        _IPCBase class.
-        
-        Returns an Endpoint object.
+    def new_connection(self, app_token=None, apis=None, *args, **kwargs):
+        ''' Merge the connection and endpoint to the same thing.
         '''
         return WSEndpoint(
-            dispatch = self.dispatch,
-            app_token = app_token,
-            apis = apis,
+            dispatch = self.dispatch, 
+            app_token=None, 
+            apis=None, 
+            *args, **kwargs
         )
         
-    def __trash_handle_new_app_registration(self):
-        ''' Scratchpad for how to handle new connections.
-        '''
-        connection_id = get_connection_id()
-        endpoint = self.new_endpoint(connection_id)
-        self.dispatch.register_endpoint(endpoint)
-        
     @asyncio.coroutine
-    def init_connection(self, websocket, connid):
-        ''' Does anything necessary to initialize a connection. Has 
-        access to self.connections[connid], which will contain None.
+    def init_connection(self, websocket, path):
+        ''' Initializes the connection with the client, creating an 
+        endpoint/connection object, and registering it with dispatch.
         '''
         # First command on the wire MUST be registering the application.
-        # msg = yield from websocket.recv()
-        pass
-        
-    @asyncio.coroutine
-    def producer(self, connid):
-        ''' Produces anything needed to send to the connection indicated
-        by connid. Must return bytes.
-        '''
-        pass
-        
-    @asyncio.coroutine
-    def consumer(self, msg, connid):
-        ''' Consumes the msg produced by the websockets receiver 
-        listening at connid.
-        '''
-        pass
-        
-    @asyncio.coroutine
-    def _request_handler(self, websocket, exchange_lock, dispatch_lookup):
-        ''' Handles incoming requests from the websocket in parallel 
-        with outgoing subscription updates.
-        '''
-        rcv = yield from websocket.recv()
-            
-        # Acquire the exchange lock so we can guarantee an orderly response
-        # print('Getting exchange lock for request.')
-        yield from exchange_lock
+        msg = yield from websocket.recv()
+        # This insulates us from unpacking problems during the except bit
+        req_token = 0
         try:
-            framed = memoryview(rcv)
-            header = bytes(framed[0:2])
-            body = framed[2:]
+            version, req_token, req_code, body = self._unpack_request(msg)
             
-            # This will automatically dispatch the request based on the
-            # two-byte header
-            response_preheader = dispatch_lookup[header](body)
-            # print('-----------------------------------------------')
-            print('Successful ', header, ' ', bytes(body[:4]))
-            response = self._frame_response(response_preheader)
-            # print(bytes(body))
-                
-        except Exception as e:
-            # We should log the exception, but exceptions here should never
-            # be allowed to take down a server.
-            response_preheader = False
-            response_body = (str(e)).encode('utf8')
-            response = self._frame_response(
-                preheader = response_preheader, 
-                body = response_body
+            # New app requesting a new token.
+            if req_code == b'+T':
+                app_token = self.dispatch.new_token()
+            # Existing app registering existing token.
+            elif req_code == b'@T':
+                app_token = body[0:4]
+            else:
+                raise ValueError('Improper handshake command.')
+            
+            connection = yield from super().init_connection(
+                websocket = websocket, 
+                path = path, 
+                app_token = app_token
             )
-            print('Failed to dispatch ', header, ' ', bytes(body[:4]))
-            # print(rcv)
-            # print(repr(e))
-            # traceback.print_tb(e.__traceback__)
+            self.dispatch.register_endpoint(connection)
             
-        finally:
-            yield from websocket.send(response)
-            exchange_lock.release()
-        # print('Released exchange lock for request.')
+        # If anything there went wrong, notify the app and then terminate.
+        except Exception as e:
+            # Send a failure nak and reraise.
+            reply = self._pack_request(
+                version = self._version,
+                token = 0,
+                req_code = self._failure_code,
+                body = self.pack_failure(
+                    their_token = req_token,
+                    exc = e
+                )
+            )
+            yield from websocket.send(reply)
+            raise
             
-    @asyncio.coroutine
-    def _update_handler(self, websocket, exchange_lock, sub_queue):
-        ''' Handles updates through a queue into sending out.
-        '''
-        # This will grab the notification guid from the queue.
-        update = yield from sub_queue.get()
+        # Nothing went wrong, so notify the app and continue.
+        else:
+            # Send a success message and continue.
+            reply = self._pack_request(
+                version = self._version,
+                token = 0,
+                req_code = self._success_code,
+                body = self.pack_success(
+                    their_token = req_token,
+                    data = app_token
+                )
+            )
+            yield from websocket.send(reply)
+            
+        print('Connection established with embedded client', str(app_token))
+        return connection
         
-        # Immediately acquire the exchange lock when update yields.
-        # print('Getting exchange lock for update.')
-        yield from exchange_lock
-        try:
-            # print('Preparing to send sub update.')
-            msg_preheader = b'!!'
-            msg_body = bytes(update)
-            msg = msg_preheader + msg_body
-            yield from websocket.send(msg)
-            # Note: should this expect a response?
-            # print('Sub update sent.')
-            
-        finally:
-            exchange_lock.release()
-        # print('Released exchange lock for update.')
+    @asyncio.coroutine
+    def handle_producer_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the producer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_listener_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_autoresponder_exc(self, exc, token):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+        return repr(exc)
     
     
 class PipeIPC(_IPCBase):

@@ -1325,8 +1325,15 @@ class Dispatcher(DispatcherBase):
     def register_endpoint(self, endpoint):
         ''' Registers an endpoint and all of its appdefs / APIs. If the
         endpoint has already been registered, updates it.
+        
+        Note: this cannot be used to create new app tokens! The token 
+        must already be known to the dispatcher.
         '''
         app_token = endpoint.app_token
+        # This cannot be used to create new app tokens!
+        if app_token not in self._known_tokens:
+            raise ValueError('Endpoint app token is unknown to dispatcher.')
+        
         if app_token in self._active_tokens:
             if self._active_tokens[app_token] is not endpoint:
                 raise RuntimeError(
@@ -1334,8 +1341,6 @@ class Dispatcher(DispatcherBase):
                     'Each app token must have exactly one endpoint.'
                 )
         else:
-            # known_tokens is a set so we don't need to check if it exists
-            self._known_tokens.add(app_token)
             self._active_tokens[app_token] = endpoint
         
         # Do this regardless, so that the endpoint can use this to update apis.
@@ -1367,6 +1372,9 @@ class Dispatcher(DispatcherBase):
         # Birthday paradox be damned; we can actually *enforce* uniqueness
         while token in self._known_tokens:
             token = os.urandom(4)
+        # Do this right away to prevent race condition (todo: also use lock?)
+        # Todo: something to make sure the token is actually being used?
+        self._known_tokens.add(token)
         return token
         
     # def new_object(self, state, dynamic=True, _legroom=None):

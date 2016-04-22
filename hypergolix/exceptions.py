@@ -50,7 +50,7 @@ __all__ = [
     # These are dispatch errors
     'DispatchError',
     'DispatchWarning',
-    # These are IPC errors
+    # These are IPC/embed errors
     'IPCError',
     # These are comms errors
     'CommsError',
@@ -136,7 +136,8 @@ class DispatchWarning(HypergolixException, RuntimeWarning):
     
     
 class IPCError(HypergolixException, RuntimeError):
-    ''' Raised when something goes wrong with IPC (bad commands, etc).
+    ''' Raised when something goes wrong with IPC or embed (bad 
+    commands, etc).
     '''
     pass
     

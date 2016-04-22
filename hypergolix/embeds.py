@@ -43,12 +43,17 @@ import abc
 import msgpack
 import weakref
 import collections
+import asyncio
 
 from golix import Guid
 
 # Inter-package dependencies
 from .utils import RawObj
 from .utils import AppObj
+
+from .comms import WSReqResClient
+
+from .exceptions import IPCError
         
 
 class _EmbedBase(metaclass=abc.ABCMeta):
@@ -63,6 +68,12 @@ class _EmbedBase(metaclass=abc.ABCMeta):
     Note that this API will be merged with AgentCore when DynamicObject
     and StaticObject are reconciled with AppObj.
     '''
+    def __init__(self, app_token=None, *args, **kwargs):
+        ''' Initializes self.
+        '''
+        self.app_token = app_token
+        super().__init__(*args, **kwargs)
+    
     @property
     def app_token(self):
         ''' Get your app token, or if you have none, register a new one.
@@ -145,6 +156,33 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         Agent has bound to it.
         '''
         pass
+        
+    def deliver_object_wrapper(self, connection, request_body):
+        ''' Deserializes an incoming object delivery, dispatches it to
+        the application, and serializes a response to the IPC host.
+        '''
+        return b''
+
+    def update_object_wrapper(self, connection, request_body):
+        ''' Deserializes an incoming object update, updates the AppObj
+        instance(s) accordingly, and serializes a response to the IPC 
+        host.
+        '''
+        return b''
+
+    def notify_share_failure_wrapper(self, connection, request_body):
+        ''' Deserializes an incoming async share failure notification, 
+        dispatches that to the app, and serializes a response to the IPC 
+        host.
+        '''
+        return b''
+
+    def notify_share_success_wrapper(self, connection, request_body):
+        ''' Deserializes an incoming async share failure notification, 
+        dispatches that to the app, and serializes a response to the IPC 
+        host.
+        '''
+        return b''
         
         
 class _TestEmbed(_EmbedBase):
@@ -286,3 +324,252 @@ class _TestEmbed(_EmbedBase):
         ''' Inherited from Agent.
         '''
         pass
+        
+        
+class WebsocketsEmbed(_EmbedBase, WSReqResClient):
+    def __init__(self, *args, **kwargs):
+        # Note that these are only for unsolicited contact from the server.
+        req_handlers = {
+            # Receive/dispatch a new object.
+            b'vO': self.deliver_object_wrapper,
+            # Receive an update for an existing object.
+            b'!O': self.update_object_wrapper,
+            # Receive an async notification of a sharing failure.
+            b'^F': self.notify_share_failure_wrapper,
+            # Receive an async notification of a sharing success.
+            b'^S': self.notify_share_success_wrapper,
+        
+            # # Get new app token
+            # b'+T': None,
+            # # Register existing app token
+            # b'@T': None,
+            # # Register an API
+            # b'@A': self.add_api_wrapper,
+            # # Whoami?
+            # b'?I': self.whoami_wrapper,
+            # # Get object
+            # b'>O': self.get_object_wrapper,
+            # # New object
+            # b'<O': self.new_object_wrapper,
+            # # Sync object
+            # b'~O': self.sync_object_wrapper,
+            # # Update object
+            # b'!O': self.update_object_wrapper,
+            # # Share object
+            # b'^O': self.share_object_wrapper,
+            # # Freeze object
+            # b'*O': self.freeze_object_wrapper,
+            # # Hold object
+            # b'#O': self.hold_object_wrapper,
+            # # Delete object
+            # b'XO': self.delete_object_wrapper,
+        }
+        
+        super().__init__(
+            req_handlers = req_handlers,
+            success_code = b'AK',
+            failure_code = b'NK',
+            # Note: can also add error_lookup = {b'er': RuntimeError}
+            *args, **kwargs
+        )
+        
+    @asyncio.coroutine
+    def init_connection(self, websocket, path):
+        ''' Initializes the connection with the client, creating an 
+        endpoint/connection object, and registering it with dispatch.
+        '''
+        connection = yield from super().init_connection(
+            websocket = websocket, 
+            path = path
+        )
+        
+        # First command on the wire MUST be us registering the application.
+        if self.app_token is None:
+            app_token = b''
+            request_code = b'+T'
+        else:
+            app_token = self.app_token
+            request_code = b'@T'
+        
+        msg = self._pack_request(
+            version = self._version, 
+            token = 0, 
+            req_code = request_code, 
+            body = app_token
+        )
+        
+        yield from websocket.send(msg)
+        reply = yield from websocket.recv()
+        
+        version, resp_token, resp_code, resp_body = self._unpack_request(reply)
+        
+        if resp_code == self._success_code:
+            # Note: somewhere, app_token consistency should be checked.
+            my_token, app_token = self.unpack_success(resp_body)
+            self.app_token = app_token
+            
+        elif resp_code == self._failure_code:
+            my_token, exc = self.unpack_failure(resp_body)
+            raise IPCError('IPC host denied app registration.') from exc
+            
+        else:
+            raise IPCError(
+                'IPC host did not respond appropriately during initial app '
+                'handshake.'
+            )
+            
+        print('Connection established with IPC server.')
+        return connection
+        
+    def register_api(self, *args, **kwargs):
+        ''' Just here to silence errors from ABC.
+        '''
+        pass
+    
+    def get_object(self, guid):
+        ''' Wraps RawObj.__init__  and get_guid for preexisting objects.
+        '''
+        author, is_dynamic, state = self.get_guid(guid)
+            
+        return RawObj(
+            # Todo: make the dispatch more intelligent
+            dispatch = self,
+            state = state,
+            dynamic = is_dynamic,
+            _preexisting = (guid, author)
+        )
+        
+    def new_object(self, state, dynamic=True, _legroom=None):
+        ''' Creates a new object. Wrapper for RawObj.__init__.
+        '''
+        return RawObj(
+            # Todo: update dispatch intelligently
+            dispatch = self,
+            state = state,
+            dynamic = dynamic,
+            _legroom = _legroom
+        )
+        
+    def update_object(self, obj, state):
+        ''' Updates a dynamic object. May link to a static (or dynamic) 
+        object's address. Must pass either data or link, but not both.
+        
+        Wraps RawObj.update and modifies the dynamic object in place.
+        
+        Could add a way to update the legroom parameter while we're at
+        it. That would need to update the maxlen of both the obj._buffer
+        and the self._historian.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be an RawObj.'
+            )
+            
+        obj.update(state)
+        
+    def sync_object(self, obj):
+        ''' Wraps RawObj.sync.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError('Must pass RawObj or subclass to sync_object.')
+            
+        return obj.sync()
+        
+    def hand_object(self, obj, recipient):
+        ''' DEPRECATED.
+        
+        Initiates a handshake request with the recipient to share 
+        the object.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be a RawObj or similar.'
+            )
+    
+        # This is, shall we say, suboptimal, for dynamic objects.
+        # frame_guid = self._historian[obj.address][0]
+        # target = self._dynamic_targets[obj.address]
+        target = obj.address
+        self.hand_guid(target, recipient)
+        
+    def share_object(self, obj, recipient):
+        ''' Currently, this is just calling hand_object. In the future,
+        this will have a devoted key exchange subprotocol.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Only RawObj may be shared.'
+            )
+        return self.hand_guid(obj.address, recipient)
+        
+    def freeze_object(self, obj):
+        ''' Wraps RawObj.freeze. Note: does not currently traverse 
+        nested dynamic bindings.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Only RawObj may be frozen.'
+            )
+        return obj.freeze()
+        
+    def hold_object(self, obj):
+        ''' Wraps RawObj.hold.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError('Only RawObj may be held by hold_object.')
+        obj.hold()
+        
+    def delete_object(self, obj):
+        ''' Wraps RawObj.delete. 
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be RawObj or similar.'
+            )
+            
+        obj.delete()
+    
+    @property
+    def whoami(self):
+        ''' Inherited from Agent.
+        '''
+        pass
+        
+    @asyncio.coroutine
+    def handle_producer_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the producer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_listener_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_autoresponder_exc(self, exc, token):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+        return repr(exc)

@@ -707,6 +707,9 @@ class ReqResWSBase(WSBase):
                     continue
                 
                 res_handler = self._get_recv_handler(req_code, msg)
+                # Note: we should probably wrap the res_handler into something
+                # that tolerates no return value (probably by wrapping None 
+                # into b'')
                 response = self.pack_success(
                     their_token = their_token, 
                     data = res_handler(connection, body)
@@ -788,7 +791,7 @@ class WSBasicServer(WSBase):
         return self._connections
         
     @asyncio.coroutine
-    def init_connection(self, websocket, path):
+    def init_connection(self, websocket, path, *args, **kwargs):
         ''' Generates a new connection object for the current conn.
         
         Must be called from super() if overridden.
@@ -807,7 +810,8 @@ class WSBasicServer(WSBase):
             loop = self._ws_loop, 
             websocket = websocket,
             path = path,
-            connid = connid
+            connid = connid,
+            *args, **kwargs
         )
         self._connections[connid] = connection
         
