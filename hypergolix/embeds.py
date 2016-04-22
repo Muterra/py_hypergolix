@@ -327,6 +327,33 @@ class _TestEmbed(_EmbedBase):
         
         
 class WebsocketsEmbed(_EmbedBase, WSReqResClient):
+    REQUEST_CODES = {
+        # # Get new app token
+        # b'+T': None,
+        # # Register existing app token
+        # b'@T': None,
+        # Register an API
+        'add_api': b'@A',
+        # Whoami?
+        'whoami': b'?I',
+        # Get object
+        'get_object': b'>O',
+        # New object
+        'new_object': b'<O',
+        # Sync object
+        'sync_object': b'~O',
+        # Update object
+        'update_object': b'!O',
+        # Share object
+        'share_object': b'^O',
+        # Freeze object
+        'freeze_object': b'*O',
+        # Hold object
+        'hold_object': b'#O',
+        # Delete object
+        'delete_object': b'XO',
+    }
+    
     def __init__(self, *args, **kwargs):
         # Note that these are only for unsolicited contact from the server.
         req_handlers = {
@@ -338,31 +365,6 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             b'^F': self.notify_share_failure_wrapper,
             # Receive an async notification of a sharing success.
             b'^S': self.notify_share_success_wrapper,
-        
-            # # Get new app token
-            # b'+T': None,
-            # # Register existing app token
-            # b'@T': None,
-            # # Register an API
-            # b'@A': self.add_api_wrapper,
-            # # Whoami?
-            # b'?I': self.whoami_wrapper,
-            # # Get object
-            # b'>O': self.get_object_wrapper,
-            # # New object
-            # b'<O': self.new_object_wrapper,
-            # # Sync object
-            # b'~O': self.sync_object_wrapper,
-            # # Update object
-            # b'!O': self.update_object_wrapper,
-            # # Share object
-            # b'^O': self.share_object_wrapper,
-            # # Freeze object
-            # b'*O': self.freeze_object_wrapper,
-            # # Hold object
-            # b'#O': self.hold_object_wrapper,
-            # # Delete object
-            # b'XO': self.delete_object_wrapper,
         }
         
         super().__init__(
@@ -533,7 +535,12 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
     def whoami(self):
         ''' Inherited from Agent.
         '''
-        pass
+        raw_guid = self.send_threadsafe(
+            connection = self.connection,
+            msg = b'',
+            request_code = self.REQUEST_CODES['whoami']
+        )
+        return Guid.from_bytes(raw_guid)
         
     @asyncio.coroutine
     def handle_producer_exc(self, connection, exc):

@@ -329,7 +329,8 @@ class _IPCBase(metaclass=abc.ABCMeta):
     def whoami_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        return b''
+        guid = self.dispatch.whoami
+        return bytes(guid)
         
     def get_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.

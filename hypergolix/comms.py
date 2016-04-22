@@ -585,7 +585,7 @@ class ReqResWSBase(WSBase):
         if (request_code not in self.req_handlers and 
         request_code != self._success_code and 
         request_code != self._failure_code):
-            raise RequestUnknown(repr(req_code))
+            raise RequestUnknown(repr(request_code))
         # Note that the reqres_codes setter handles checking to make sure the
         # code is of length 2.
         
@@ -593,8 +593,8 @@ class ReqResWSBase(WSBase):
         ''' The only way to actually use a req/res server! Well, for now
         anyways.
         '''
-        # Make sure we "speak" the req code.
-        self._check_request_code(request_code)
+        # # Make sure we "speak" the req code.
+        # self._check_request_code(request_code)
         
         version = self._version
         # Get a token and pack the message.
