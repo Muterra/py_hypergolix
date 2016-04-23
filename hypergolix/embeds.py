@@ -333,7 +333,7 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         # # Register existing app token
         # b'@T': None,
         # Register an API
-        'add_api': b'@A',
+        'register_api': b'@A',
         # Whoami?
         'whoami': b'?I',
         # Get object
@@ -423,10 +423,22 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         print('Connection established with IPC server.')
         return connection
         
-    def register_api(self, *args, **kwargs):
-        ''' Just here to silence errors from ABC.
+    def register_api(self, api_id):
+        ''' Registers an API ID with the hypergolix service for this 
+        application.
         '''
-        pass
+        if len(api_id) != 65:
+            raise ValueError('Invalid API ID.')
+        
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = api_id,
+            request_code = self.REQUEST_CODES['register_api']
+        )
+        if response == b'\x01':
+            return True
+        else:
+            raise RuntimeError('Unknown error while registering API.')
     
     def get_object(self, guid):
         ''' Wraps RawObj.__init__  and get_guid for preexisting objects.

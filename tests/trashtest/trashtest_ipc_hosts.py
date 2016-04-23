@@ -96,9 +96,23 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             # debug = True
         )
         
+        self.app1endpoint = list(self.host.connections.values())[0]
+        
     def test_client1(self):
         time.sleep(1)
+        # Make sure we have an app token.
         print(self.app1.app_token)
+        
+        # Test whoami
+        whoami = self.app1.whoami
+        print('whoami', whoami)
+        
+        # Test registering an api_id
+        api_id = bytes(65)
+        self.app1.register_api(api_id)
+        self.assertIn(api_id, self.app1endpoint.apis)
+        
+        
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired

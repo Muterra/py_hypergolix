@@ -324,7 +324,10 @@ class _IPCBase(metaclass=abc.ABCMeta):
     def add_api_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        return b''
+        if len(request_body) != 65:
+            raise ValueError('Invalid API ID format.')
+        endpoint.add_api(request_body)
+        return b'\x01'
         
     def whoami_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
