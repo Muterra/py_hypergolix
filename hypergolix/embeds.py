@@ -160,6 +160,14 @@ class AppObj(RawObj):
         # attempt to register callbacks on static object)
         self._set_callbacks(callbacks)
         
+    @classmethod
+    def _init2(self, embed, state, api_id=None, private=False, dynamic=True, 
+    callbacks=None, _preexisting=None, _legroom=None, *args, **kwargs):
+        ''' Does local init stuff. Can be called from embed to create an
+        object without updating the embed.
+        '''
+        pass
+        
     @property
     def author(self):
         ''' The guid address of the agent that created the object.
@@ -282,11 +290,23 @@ class AppObj(RawObj):
             raise TypeError('Private application objects cannot be shared.')
         else:
             return self.dispatch.share_object(self, recipient)
+            
+    def _share(self, recipient):
+        ''' Handles the actual sharing **for the object only.** Does not
+        update or involve the embed.
+        '''
+        pass
         
     def hold(self):
         ''' Binds to the object, preventing its deletion.
         '''
         return self._embed.hold_object(self)
+            
+    def _hold(self):
+        ''' Handles the actual holding **for the object only.** Does not
+        update or involve the embed.
+        '''
+        pass
         
     def freeze(self):
         ''' Creates a static snapshot of the dynamic object. Returns a 
@@ -308,12 +328,24 @@ class AppObj(RawObj):
                 'call hold instead.'
             )
             
+    def _freeze(self):
+        ''' Handles the actual freezing **for the object only.** Does 
+        not update or involve the embed.
+        '''
+        pass
+            
     def sync(self, *args):
         ''' Checks the current state matches the state at the connected
         Agent. If this is a dynamic and an update is available, do that.
         If it's a static and the state mismatches, raise error.
         '''
         return self._embed.sync_object(self)
+            
+    def _sync(self, *args):
+        ''' Handles the actual syncing **for the object only.** Does not
+        update or involve the embed.
+        '''
+        pass
             
     def update(self, state, _preexisting=False):
         ''' Updates a mutable object to a new state.
@@ -351,6 +383,12 @@ class AppObj(RawObj):
         for callback in self.callbacks:
             callback(self)
             
+    def _update(self, state, _preexisting=False):
+        ''' Handles the actual updating **for the object only.** Does 
+        not update or involve the embed.
+        '''
+        pass
+            
     def delete(self):
         ''' Tells any persisters to delete. Clears local state. Future
         attempts to access will raise ValueError, but does not (and 
@@ -363,6 +401,12 @@ class AppObj(RawObj):
         super().__setattr__('_author', None)
         super().__setattr__('_address', None)
         super().__setattr__('_dispatch', None)
+            
+    def _delete(self):
+        ''' Handles the actual deleting **for the object only.** Does 
+        not update or involve the embed.
+        '''
+        pass
     
     # This might be a little excessive, but I guess it's nice to have a
     # little extra protection against updates?
@@ -649,8 +693,22 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         pass
         
     @abc.abstractmethod
+    def _new_object(self, state, api_id, app_token, private, dynamic=True, callbacks=None, _legroom=None):
+        ''' Handles only the creation of a new object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+        
+    @abc.abstractmethod
     def update_object(self, obj, state):
         ''' Wrapper for obj.update.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def _update_object(self, obj, state):
+        ''' Handles only the updating of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
         '''
         pass
         
@@ -662,8 +720,22 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         pass
         
     @abc.abstractmethod
+    def _sync_object(self, obj):
+        ''' Handles only the syncing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+        
+    @abc.abstractmethod
     def share_object(self, obj, recipient):
         ''' Shares an object with someone else.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def _share_object(self, obj, recipient):
+        ''' Handles only the sharing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
         '''
         pass
         
@@ -674,8 +746,22 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         pass
         
     @abc.abstractmethod
+    def _freeze_object(self, obj):
+        ''' Handles only the freezing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+        
+    @abc.abstractmethod
     def hold_object(self, obj):
         ''' Binds an object, preventing its deletion.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def _hold_object(self, obj):
+        ''' Handles only the holding of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
         '''
         pass
         
@@ -683,6 +769,13 @@ class _EmbedBase(metaclass=abc.ABCMeta):
     def delete_object(self, obj):
         ''' Attempts to delete an object. May not succeed, if another 
         Agent has bound to it.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def _delete_object(self, obj):
+        ''' Handles only the deleting of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
         '''
         pass
         
