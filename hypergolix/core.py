@@ -1273,7 +1273,7 @@ class Dispatcher(DispatcherBase):
                 warnings.warn(HandshakeWarning(
                     'Agent lacks application to handle app id.'
                 ))
-                self._orphan_shares_incoming.append(handshake)
+                self._orphan_shares_incoming.append(obj)
             else:
                 # for token in tokens:
                 for token in self._api_ids[obj.api_id]:

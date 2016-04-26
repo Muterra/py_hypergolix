@@ -55,10 +55,10 @@ from .comms import WSReqResClient
 
 from .exceptions import IPCError
 
+from .utils import IPCPackerMixIn
 
 
-
-class AppObj(RawObj):
+class AppObj:
     ''' A class for objects to be used by apps. Can be updated (if the 
     object was created by the connected Agent and is mutable) and have
     a state.
@@ -101,6 +101,7 @@ class AppObj(RawObj):
         '_state',
         '_api_id',
         '_private',
+        '_legroom',
     ]
     
     # Restore the original behavior of hash
@@ -121,52 +122,38 @@ class AppObj(RawObj):
         NOTE: entirely replaces RawObj.__init__.
         '''
         # This needs to be done first so we have access to object creation
-        self._link_embed(embed)
+        self._init_embed(embed)
         self._deleted = False
-        self._callbacks = set()
-        self._set_dynamic(dynamic)
-        
-        # Legroom is None. Infer it from the dispatch.
-        if _legroom is None:
-            _legroom = self._embed._legroom
         
         # _preexisting was set, so we're loading an existing object.
         # "Trust" anything using _preexisting to have passed a correct value
         # for state and dynamic.
         if _preexisting is not None:
-            self._address = _preexisting[0]
-            self._author = _preexisting[1]
-            # If we're dynamic, subscribe to any updates.
-            # if self.is_dynamic:
-            #     # This feels gross. Also, it's not really un-sub-able
-            #     # Also, it breaks if we use this in AppObj.
-            #     self._embed.persister.subscribe(self.address, self.sync)
-            state = self._unwrap_state(state)
+            address = _preexisting[0]
+            author = _preexisting[1]
+            state, api_id, private, dynamic, _legroom = state
             
-        # Make sure api_id is defined for a new object that isn't private
-        elif api_id is None and not private:
-            raise TypeError('api_id must be defined for a non-private object.')
+        # Now do all of the common init stuff.
+        self._init_dynamic(dynamic)
+        self._init_legroom(_legroom)
+        self._init_state(state)
+        self._api_id = api_id
+        self._private = private
             
-        # _preexisting was not set, so we're creating a new object.
-        else:
-            self._address = self._make_golix(state, dynamic)
-            self._author = self._embed.whoami
-            self._private = private
-            self._api_id = api_id
-            
-        # Now actually set the state.
-        self._init_state(state, _legroom)
         # Finally, set the callbacks. Will error if inappropriate def (ex: 
         # attempt to register callbacks on static object)
-        self._set_callbacks(callbacks)
-        
-    @classmethod
-    def _init2(self, embed, state, api_id=None, private=False, dynamic=True, 
-    callbacks=None, _preexisting=None, _legroom=None, *args, **kwargs):
-        ''' Does local init stuff. Can be called from embed to create an
-        object without updating the embed.
-        '''
-        pass
+        self._init_callbacks(callbacks)
+            
+        # Now that we have successfully created a new AppObj, if this is a new
+        # object, let's update upstream. Split this from above so we can do the
+        # middle (dangerous) stuff without ever calling this.
+        if _preexisting is None:
+            # This creates an actual Golix object via hypergolix service.
+            address, author = self._embed._new_object(obj=self)
+                
+        # These bits should always work, so we don't need to worry about it.
+        self._author = author
+        self._address = address
         
     @property
     def author(self):
@@ -190,6 +177,9 @@ class AppObj(RawObj):
         
     @property
     def api_id(self):
+        ''' The api_id (if one exists) of the object. Private objects
+        may or may not omit this.
+        '''
         return self._api_id
         
     @property
@@ -213,7 +203,7 @@ class AppObj(RawObj):
         
         returns True/False.
         '''
-        return self._dispatch.whoami == self.author
+        return self._embed.whoami == self.author
             
     @property
     def mutable(self):
@@ -230,7 +220,7 @@ class AppObj(RawObj):
             current = self._state[0]
             
             # Recursively resolve any nested/linked objects
-            if isinstance(current, RawObj):
+            if isinstance(current, AppObj):
                 current = current.state
                 
             return current
@@ -239,9 +229,29 @@ class AppObj(RawObj):
             
     @state.setter
     def state(self, value):
-        ''' Wraps update().
+        ''' Wraps update() for dynamic objects. Attempts to directly set
+        self._state for static objects, but will return AttributeError
+        if state is already set.
         '''
-        self.update(value)
+        if self.is_dynamic:
+            self.update(value)
+            
+        else:
+            # Note that we don't need a LBYL for existing state, since our
+            # modified __setattr__ will prevent updates
+            try:
+                # Typecheck AppObj specifically, since it is not allowed for
+                # static objects, but declaring it will create problems for the
+                # packing and unpacking.
+                if isinstance(value, AppObj):
+                    raise ValueError(
+                        'Static objects cannot link to other objects.'
+                    )
+                self._state = value
+            except AttributeError as e:
+                raise AttributeError(
+                    'Cannot update the state of a static object.'
+                ) from e
         
     def add_callback(self, callback):
         ''' Registers a callback to be called when the object receives
@@ -413,6 +423,10 @@ class AppObj(RawObj):
     def __setattr__(self, name, value):
         ''' Prevent rewriting declared attributes in slots. Does not
         prevent assignment using @property.
+        
+        Note: if this gets removed, or re-assingment is otherwise
+        implemented, you will need to add a check for overwriting an 
+        existing state in static objects.
         '''
         if name in self.__slots__:
             try:
@@ -465,115 +479,72 @@ class AppObj(RawObj):
         # Return the result of the whole comparison
         return meta_comparison and state_comparison
             
-    def _link_embed(self, embed):
-        ''' Typechecks dispatch and them creates a weakref to it.
+    def _init_embed(self, embed):
+        ''' Typechecks embed and them creates a weakref to it.
         '''
         # Copying like this seems dangerous, but I think it should be okay.
         if isinstance(embed, weakref.ProxyTypes):
-            self._embed = dispatch
+            self._embed = embed
         else:
-            self._embed = weakref.proxy(dispatch)
-        
-    def _init_state(self, state, _legroom):
-        ''' Makes the first state commit for the object, regardless of
-        whether or not the object is new or loaded. Even dynamic objects
-        are initially loaded with a single frame of history.
-        '''
-        if self.is_dynamic:
-            self._state = collections.deque(
-                iterable = (state,),
-                maxlen = _legroom
-            )
-        else:
-            self._state = state
+            self._embed = weakref.proxy(embed)
             
-    def _set_dynamic(self, dynamic):
+    def _init_dynamic(self, dynamic):
         ''' Sets whether or not we're dynamic based on dynamic.
         '''
         if dynamic:
             self._is_dynamic = True
         else:
             self._is_dynamic = False
-        
-    def _wrap_state(self, state):
-        ''' Wraps the passed state into a format that can be dispatched.
+            
+    def _init_legroom(self, legroom):
+        ''' Sets up our legroom. If not defined, then default to the 
+        embed's preference.
         '''
-        if self.private:
-            app_token = self.app_token
-        else:
-            app_token = None
-        
-        msg = {
-            'api_id': self.api_id,
-            'app_token': app_token,
-            'body': state,
-        }
-        try:
-            packed_msg = msgpack.packb(msg, use_bin_type=True)
-            
-        except (
-            msgpack.exceptions.BufferFull,
-            msgpack.exceptions.ExtraData,
-            msgpack.exceptions.OutOfData,
-            msgpack.exceptions.PackException,
-            msgpack.exceptions.PackValueError
-        ) as e:
-            raise ValueError(
-                'Couldn\'t wrap state. Incompatible data format?'
-            ) from e
-            
-        return packed_msg
-        
-    def _unwrap_state(self, state):
-        ''' Wraps the object state into a format that can be dispatched.
-        '''
-        try:
-            unpacked_msg = msgpack.unpackb(state, encoding='utf-8')
-            api_id = unpacked_msg['api_id']
-            app_token = unpacked_msg['app_token']
-            state = unpacked_msg['body']
-            
-        # MsgPack errors mean that we don't have a properly formatted handshake
-        except (
-            msgpack.exceptions.BufferFull,
-            msgpack.exceptions.ExtraData,
-            msgpack.exceptions.OutOfData,
-            msgpack.exceptions.UnpackException,
-            msgpack.exceptions.UnpackValueError,
-            KeyError
-        ) as e:
-            # print(repr(e))
-            # traceback.print_tb(e.__traceback__)
-            # print(state)
-            raise HandshakeError(
-                'Handshake does not appear to conform to the hypergolix '
-                'handshake procedure.'
-            ) from e
-            
-        # We may have already set the attributes.
-        # Wrap this in a try/catch in case we've have.
-        try:
-            # print('---- app_token: ', app_token)
-            self._unwrap_api_id(api_id)
-            self._unwrap_app_token(app_token)
-            # print('---- self.app_token: ', self.app_token)
+        # Only proceed to define legroom if this is dynamic.
+        if self.is_dynamic:
+            # Legroom is None. Infer it from the dispatch.
+            if legroom is None:
+                legroom = self._embed._legroom
                 
-        # So, we've already set one or more of the attributes.
-        except AttributeError as e:
-            print(repr(e))
-            traceback.print_tb(e.__traceback__)
-            # # Should we double-check the consistency of _private?
-            # pass
+            self._legroom = legroom
+        
+    def _init_state(self, state):
+        ''' Makes the first state commit for the object, regardless of
+        whether or not the object is new or loaded. Even dynamic objects
+        are initially loaded with a single frame of history.
+        '''
+        if self.is_dynamic:
+            self._state = collections.deque(
+                maxlen = self._legroom
+            )
+            self._state.append(state)
+        else:
+            self._state = state
             
-        return state
-            
-    def _set_callbacks(self, callbacks):
+    def _init_callbacks(self, callbacks):
         ''' Initializes callbacks.
         '''
-        if callbacks is None:
-            callbacks = tuple()
-        for callback in callbacks:
-            self.add_callback(callback)
+        # Only proceed if dynamic, and if callbacks is defined.
+        if self.is_dynamic:
+            self._callbacks = set()
+            
+            if callbacks is not None:
+                for callback in callbacks:
+                    self.add_callback(callback)
+        
+    # def collate(self):
+    #     ''' Converts state (and any ancillary information) into a format
+    #     that can be packed by the embed. Mostly here to allow subclasses
+    #     to intelligently extend the AppObj class.
+    #     '''
+    #     return self.state
+        
+    # def decollate(self, collated):
+    #     ''' Handles any ancillary information required by subclasses of
+    #     AppObj. MUST return the state of the object. Has access to all
+    #     of the AppObj except the author and address.
+    #     '''
+    #     return collated
         
     def _unwrap_api_id(self, api_id):
         ''' Checks to see if api_id has already been defined. If so, 
@@ -607,28 +578,8 @@ class AppObj(RawObj):
                 # self._app_token = self._embed.get_token(self.api_id)
                 self._private = False
         
-    def _make_golix(self, state, dynamic):
-        ''' Creates an object based on dynamic. Returns the guid for a
-        static object, and the dynamic guid for a dynamic object.
-        '''
-        if dynamic:
-            if isinstance(state, RawObj):
-                guid = self._embed.new_dynamic(
-                    state = state
-                )
-            else:
-                guid = self._embed.new_dynamic(
-                    state = self._wrap_state(state)
-                )
-        else:
-            guid = self._embed.new_static(
-                state = self._wrap_state(state)
-            )
-            
-        return guid
-        
 
-class _EmbedBase(metaclass=abc.ABCMeta):
+class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     ''' Embeds are what you put in the actual application to communicate
     with the Hypergolix service.
     
@@ -684,22 +635,53 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         service.
         '''
         pass
+        state, is_link, api_id, app_token, private, dynamic, _legroom = self._unpack_object_def(data)
         
-    @abc.abstractmethod
-    def new_object(self, state, api_id, app_token, private, dynamic=True, callbacks=None, _legroom=None):
+    def new_object(self, *args, **kwargs):
         ''' Alternative constructor for AppObj that does not require 
         passing the embed explicitly.
         '''
-        pass
+        # We don't need to do anything special here, since AppObj will call
+        # _new_object for us.
+        return AppObj(embed=self, *args, **kwargs)
         
     @abc.abstractmethod
-    def _new_object(self, state, api_id, app_token, private, dynamic=True, callbacks=None, _legroom=None):
+    def _new_object(self, obj):
         ''' Handles only the creation of a new object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass
         
-    @abc.abstractmethod
+        return address, author
+        '''
+        if obj.api_id is None and not obj.private:
+            raise TypeError('api_id must be defined for a non-private object.')
+            
+        if obj.private:
+            app_token = self.app_token
+        else:
+            app_token = bytes(4)
+            
+        if isinstance(obj.state, AppObj):
+            is_link = True
+        else:
+            is_link = False
+            
+        if obj.is_dynamic:
+            _legroom = obj._legroom
+        else:
+            _legroom = None
+            
+        payload = self._pack_object_def(
+            obj.state,
+            is_link,
+            obj.api_id,
+            app_token,
+            obj.private,
+            obj.is_dynamic,
+            _legroom
+        )
+        
+        return payload, obj.api_id, app_token
+        
     def update_object(self, obj, state):
         ''' Wrapper for obj.update.
         '''
@@ -712,7 +694,6 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         '''
         pass
         
-    @abc.abstractmethod
     def sync_object(self, obj):
         ''' Checks for an update to a dynamic object, and if one is 
         available, performs an update.
@@ -726,7 +707,6 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         '''
         pass
         
-    @abc.abstractmethod
     def share_object(self, obj, recipient):
         ''' Shares an object with someone else.
         '''
@@ -739,7 +719,6 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         '''
         pass
         
-    @abc.abstractmethod
     def freeze_object(self, obj):
         ''' Converts a dynamic object to a static object.
         '''
@@ -752,7 +731,6 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         '''
         pass
         
-    @abc.abstractmethod
     def hold_object(self, obj):
         ''' Binds an object, preventing its deletion.
         '''
@@ -765,7 +743,6 @@ class _EmbedBase(metaclass=abc.ABCMeta):
         '''
         pass
         
-    @abc.abstractmethod
     def delete_object(self, obj):
         ''' Attempts to delete an object. May not succeed, if another 
         Agent has bound to it.
@@ -959,9 +936,9 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         # Whoami?
         'whoami': b'?I',
         # Get object
-        'get_object': b'>O',
+        'get_object': b'<O',
         # New object
-        'new_object': b'<O',
+        'new_object': b'>O',
         # Sync object
         'sync_object': b'~O',
         # Update object
@@ -1044,6 +1021,17 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             
         print('Connection established with IPC server.')
         return connection
+    
+    @property
+    def whoami(self):
+        ''' Inherited from Agent.
+        '''
+        raw_guid = self.send_threadsafe(
+            connection = self.connection,
+            msg = b'',
+            request_code = self.REQUEST_CODES['whoami']
+        )
+        return Guid.from_bytes(raw_guid)
         
     def register_api(self, api_id):
         ''' Registers an API ID with the hypergolix service for this 
@@ -1061,6 +1049,109 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             return True
         else:
             raise RuntimeError('Unknown error while registering API.')
+        
+    @asyncio.coroutine
+    def handle_producer_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the producer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_listener_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_autoresponder_exc(self, exc, token):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+        return repr(exc)
+        
+    def _new_object(self, obj):
+        ''' Handles only the creation of a new object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        
+        return address, author
+        '''
+        # Pack and get the payload from super.
+        payload, api_id, app_token = super()._new_object(obj)
+        
+        # Note that currently, we're not re-packing the api_id or app_token.
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = payload,
+            request_code = self.REQUEST_CODES['new_object']
+        )
+        
+        address = Guid.from_bytes(response)
+            
+        # Note that the upstream ipc_host will automatically send us updates.
+            
+        return address, self.whoami
+        
+    def _update_object(self, obj, state):
+        ''' Handles only the updating of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _sync_object(self, obj):
+        ''' Handles only the syncing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _share_object(self, obj, recipient):
+        ''' Handles only the sharing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _freeze_object(self, obj):
+        ''' Handles only the freezing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _hold_object(self, obj):
+        ''' Handles only the holding of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _delete_object(self, obj):
+        ''' Handles only the deleting of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+    
+    
+    
+    
+    
+    
     
     def get_object(self, guid):
         ''' Wraps RawObj.__init__  and get_guid for preexisting objects.
@@ -1077,21 +1168,6 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             state = state,
             dynamic = is_dynamic,
             _preexisting = (guid, author)
-        )
-        
-    def new_object(self, state, api_id=None, private=False, dynamic=True, *args, **kwargs):
-        ''' Creates a new object. Wrapper for RawObj.__init__.
-        '''
-        # First we need to do upstream stuff
-        
-        # Now we need to return an actual usable object
-        return AppObj(
-            embed = self,
-            state = state,
-            api_id = api_id,
-            private = private,
-            dynamic = dynamic,
-            *args, **kwargs
         )
         
     def update_object(self, obj, state):
@@ -1172,53 +1248,3 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             )
             
         obj.delete()
-    
-    @property
-    def whoami(self):
-        ''' Inherited from Agent.
-        '''
-        raw_guid = self.send_threadsafe(
-            connection = self.connection,
-            msg = b'',
-            request_code = self.REQUEST_CODES['whoami']
-        )
-        return Guid.from_bytes(raw_guid)
-        
-    @asyncio.coroutine
-    def handle_producer_exc(self, connection, exc):
-        ''' Handles the exception (if any) created by the producer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            print(repr(exc))
-            traceback.print_tb(exc.__traceback__)
-            raise exc
-        
-    @asyncio.coroutine
-    def handle_listener_exc(self, connection, exc):
-        ''' Handles the exception (if any) created by the consumer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            print(repr(exc))
-            traceback.print_tb(exc.__traceback__)
-            raise exc
-        
-    @asyncio.coroutine
-    def handle_autoresponder_exc(self, exc, token):
-        ''' Handles the exception (if any) created by the consumer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            print(repr(exc))
-            traceback.print_tb(exc.__traceback__)
-        return repr(exc)

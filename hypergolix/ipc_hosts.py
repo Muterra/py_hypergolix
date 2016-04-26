@@ -71,7 +71,8 @@ from .exceptions import HandshakeError
 from .exceptions import HandshakeWarning
 from .exceptions import IPCError
 
-from .utils import AppObj
+from .utils import IPCPackerMixIn
+from .utils import RawObj
 
 from .comms import WSReqResServer
 from .comms import _ReqResWSConnection
@@ -182,86 +183,6 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         ''' Notifies the embedded client of a successful share.
         '''
         pass
-
-
-class _MsgpackEndpointBase(_EndpointBase):
-    ''' Base class for an endpoint. Defines everything needed by the 
-    Integration to communicate with an individual application.
-    
-    Note: endpoints have all the necessary information to wrap objects
-    in the messagepack definition of their api_id, etc.
-    
-    Note on messagepack optimization: in the future, can change pack and
-    unpack to look specifically (and only) at the relevant keys. Check
-    out read_map_header.
-    
-    Alternatively, might just treat the whole appdata portion as a 
-    nested binary file, and unpack that separately.
-    '''
-    def pack_command(self, command, obj):
-        ''' Packs an object/command pair for transit.
-        '''
-        if not isinstance(obj, AppObj):
-            raise TypeError('obj must be appobj.')
-            
-        if command not in {
-            'send_object', 
-            'send_update',
-            'notify_share_failure', 
-            'notify_share_success', 
-        }:
-            raise ValueError('Invalid command.')
-        
-        # Should token not be used? Is leaking the app_token a security risk?
-        # I mean, if it's going to someone who doesn't already have it, we 
-        # majorly fucked up, but what about damage mitigation? On the other
-        # hand, what if we have (in the future) a secure way to use a single
-        # endpoint for multiple applications? (admittedly that seems unlikely).
-        obj_pack = {
-            # 'app_token': obj.app_token,
-            'state': obj.state,
-            'api_id': obj.api_id,
-            'private': obj.private,
-            'dynamic': obj.is_dynamic,
-            'address': obj.address,
-            'author': obj.author,
-            # # Ehh, let's hold off on this for now
-            # legroom = obj._state.maxlen
-        }
-        
-        return msgpack.packb(
-            {
-                'command': command,
-                'obj': obj_pack,
-            },
-            use_bin_type = True    
-        )
-        
-    def unpack_command(self, packed):
-        ''' Packs an object/command pair for transit.
-        '''
-        unpacked = msgpack.unpackb(packed, encoding='utf-8')
-
-        # This bit cleverly selects the command.
-        command = unpacked['command']
-        try:
-            command = {
-                'register_api': self.register_api,
-                'whoami': self.whoami,
-                'get_object': self.get_object,
-                'new_object': self.new_object,
-                'update_object': self.update_object,
-                'sync_object': self.sync_object,
-                'share_object': self.share_object,
-                'freeze_object': self.freeze_object,
-                'hold_object': self.hold_object,
-                'delete_object': self.delete_object
-            }[command]
-        except KeyError as e:
-            raise IPCError('Invalid command.') from e
-        
-        args = unpacked['args']
-        kwargs = unpacked['kwargs']
         
         
 class _TestEndpoint(_EndpointBase):
@@ -288,7 +209,7 @@ class _TestEndpoint(_EndpointBase):
         print('Endpoint ', self.__name, ' success: ', obj)
 
 
-class _IPCBase(metaclass=abc.ABCMeta):
+class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     ''' Base class for an IPC mechanism. Note that an _IPCBase cannot 
     exist without also being an agent. They are separated to allow 
     mixing-and-matching agent/persister/IPC configurations.
@@ -343,7 +264,47 @@ class _IPCBase(metaclass=abc.ABCMeta):
     def new_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        return b''
+        # Create the object upstream
+            # If we're dynamic, subscribe to any updates.
+            # if self.is_dynamic:
+            #     # This feels gross. Also, it's not really un-sub-able
+            #     # Also, it breaks if we use this in AppObj.
+            #     self._embed.persister.subscribe(self.address, self.sync)
+        state, is_link, api_id, app_token, private, dynamic, _legroom = self._unpack_object_def(request_body)
+        
+        if is_link:
+            # Note: this is a really silly workaround as a substitute to 
+            # re-writing a bunch of other code. #technicaldebt
+            # TODO: FIX THIS!
+            link = Guid.from_bytes(state)
+            author = link
+            state = RawObj(
+                dispatch = self.dispatch, 
+                # State is never used.
+                state = bytes(),
+                # This prevents recursive state lookup to non-existing objects
+                dynamic = False,
+                # Really the only thing we need in this entire chain is link.
+                _preexisting = (link, author),
+            )
+            
+        if dynamic:
+            callbacks = (endpoint.send_update,)
+            
+        else:
+            callbacks = None
+        
+        obj = self.dispatch.new_object(
+            # This is inefficient but, well, whatever
+            state = request_body, 
+            api_id = api_id, 
+            app_token = app_token, 
+            dynamic = dynamic,
+            callbacks = callbacks,
+            _legroom = _legroom
+        )
+        
+        return bytes(obj.address)
         
     def sync_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
@@ -428,9 +389,9 @@ class WebsocketsIPC(_IPCBase, WSReqResServer):
             # Whoami?
             b'?I': self.whoami_wrapper,
             # Get object
-            b'>O': self.get_object_wrapper,
+            b'<O': self.get_object_wrapper,
             # New object
-            b'<O': self.new_object_wrapper,
+            b'>O': self.new_object_wrapper,
             # Sync object
             b'~O': self.sync_object_wrapper,
             # Update object

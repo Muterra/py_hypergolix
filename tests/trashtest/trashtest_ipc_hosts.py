@@ -98,7 +98,15 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         
         self.app1endpoint = list(self.host.connections.values())[0]
         
+        self.__api_id = bytes(64) + b'1'
+        
     def test_client1(self):
+        pt0 = b'I am a sexy stagnant beast.'
+        pt1 = b'Hello, world?'
+        pt2 = b'Hiyaback!'
+        pt3 = b'Listening...'
+        pt4 = b'All ears!'
+        
         time.sleep(1)
         # Make sure we have an app token.
         print(self.app1.app_token)
@@ -112,7 +120,19 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         self.app1.register_api(api_id)
         self.assertIn(api_id, self.app1endpoint.apis)
         
+        obj1 = self.app1.new_object(
+            state = pt0,
+            api_id = self.__api_id,
+            dynamic = False
+        )
+        self.assertIn(obj1.address, self.host._store)
         
+        obj2 = self.app1.new_object(
+            state = pt1,
+            api_id = self.__api_id,
+            dynamic = True
+        )
+        self.assertIn(obj2.address, self.host._store)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired

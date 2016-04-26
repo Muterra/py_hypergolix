@@ -107,6 +107,7 @@ class RawObj:
             # If we're dynamic, subscribe to any updates.
             if self.is_dynamic:
                 # This feels gross. Also, it's not really un-sub-able
+                # Also, it breaks if we use this in AppObj.
                 self._dispatch.persister.subscribe(self.address, self.sync)
             state = self._unwrap_state(state)
         # _preexisting was not set, so we're creating a new object.
@@ -730,127 +731,22 @@ class DispatchObj(RawObj):
             'DispatchObj cannot be shared from the obj; it must be shared '
             'from the IPC host.'
         )
-
-
-class AppObj(RawObj):
-    ''' A class for objects to be used by apps. Can be updated (if the 
-    object was created by the connected Agent and is mutable) and have
-    a state.
-    
-    AppObj instances will wrap their state in a dispatch structure 
-    before updating golix containers.
-    
-    Can be initiated directly using a reference to an embed. May also be
-    constructed from _EmbedBase.new_object.
-    
-    Everything here is wrapped from the messagepack dispatch format, so
-    state may be more than just bytes.
-    
-    Unlike RawObj instances, AppObj instances are meant to be used with
-    a specific API definition, and/or a specific token. Tokens can be 
-    used to provide a consistent PRIVATE, freeform application state,
-    whilst any objects that are being communicated to a different agent
-    must use api ids.
-    
-    Basically, token-based AppObj instances without an api_id represent
-    data that will not be shared. It can, however, be any unstructured
-    data.
-    
-    _private isinstance bool
-        if True, dispatch by token.
-        if False, dispatch by api id.
         
-    Note: AppObj should be set up such that there is exactly one AppObj
-    per application. As such, they should probably be aware of their 
-    endpoints.
+        
+class IPCPackerMixIn:
+    ''' Mix-in class for packing objects for IPC usage.
     '''
-    # This should define *only* ADDITIONAL slots.
-    __slots__ = [
-        '_api_id',
-        '_app_token',
-        '_private',
-        '_raw'
-    ]
-    
-    def __init__(self, embed, state, api_id=None, 
-    private=False, dynamic=True, callbacks=None, _preexisting=None, 
-    *args, **kwargs):
-        self._raw = collections.deque(maxlen=1)
-        # Why the fuck are objects even using this? This should only be in the
-        # embed. Grrrrrr
-        self._app_token = embed.app_token
-        
-        super().__init__(
-            dispatch = embed, 
-            state = state, 
-            dynamic = dynamic, 
-            callbacks = callbacks,
-            _preexisting = _preexisting,
-            *args, **kwargs
-        )
-        
-        if _preexisting is not None:
-            # Note that this is now covered by super().
-            # state = self._unwrap_state(state)
-            pass
-        elif api_id is None:
-            raise TypeError('api_id must be defined for a new object.')
-        else:
-            self._private = private
-            self._api_id = api_id
-            
-    def _link_dispatch(self, dispatch):
-        ''' Typechecks dispatch and them creates a weakref to it.
+    def _pack_object_def(self, state, is_link, api_id, app_token, private, dynamic, _legroom):
+        ''' Serializes an object definition.
         '''
-        # if not isinstance(dispatch, _EmbedBase):
-        #     raise TypeError('dispatch must subclass _EmbedBase.')
-        
-        super()._link_dispatch(dispatch)
-            
-    def share(self, recipient):
-        ''' Extends super() share behavior to disallow sharing of 
-        private objects. Overriding this behavior will cause security
-        risks for users/agents.
-        '''
-        if self.private:
-            raise TypeError('Private application objects cannot be shared.')
-        else:
-            super().share(recipient)
-            
-    @property
-    def private(self):
-        ''' Return the (immutable) property describing whether this is
-        a private application object, or a sharable api-id-dispatched
-        object.
-        '''
-        return self._private
-        
-    @property
-    def api_id(self):
-        return self._api_id
-        
-    @property
-    def app_token(self):
-        return self._app_token
-        
-    @property
-    def raw(self):
-        ''' The raw packed bytes. Maybe useful for IPC?
-        '''
-        return self._raw[0]
-        
-    def _wrap_state(self, state):
-        ''' Wraps the passed state into a format that can be dispatched.
-        '''
-        if self.private:
-            app_token = self.app_token
-        else:
-            app_token = None
-        
         msg = {
-            'api_id': self.api_id,
+            'state': state,
+            'is_link': is_link,
+            'api_id': api_id,
             'app_token': app_token,
-            'body': state,
+            'private': private,
+            'dynamic': dynamic,
+            '_legroom': _legroom,
         }
         try:
             packed_msg = msgpack.packb(msg, use_bin_type=True)
@@ -863,22 +759,16 @@ class AppObj(RawObj):
             msgpack.exceptions.PackValueError
         ) as e:
             raise ValueError(
-                'Couldn\'t wrap state. Incompatible data format?'
+                'Couldn\'t pack object definition. Incompatible data format?'
             ) from e
             
-        self._raw.append(packed_msg)
         return packed_msg
         
-    def _unwrap_state(self, state):
-        ''' Wraps the object state into a format that can be dispatched.
+    def _unpack_object_def(self, data):
+        ''' Deserializes an object from bytes.
         '''
-        raw = state
-        
         try:
-            unpacked_msg = msgpack.unpackb(state, encoding='utf-8')
-            api_id = unpacked_msg['api_id']
-            app_token = unpacked_msg['app_token']
-            state = unpacked_msg['body']
+            unpacked_msg = msgpack.unpackb(data, encoding='utf-8')
             
         # MsgPack errors mean that we don't have a properly formatted handshake
         except (
@@ -887,65 +777,30 @@ class AppObj(RawObj):
             msgpack.exceptions.OutOfData,
             msgpack.exceptions.UnpackException,
             msgpack.exceptions.UnpackValueError,
-            KeyError
         ) as e:
             # print(repr(e))
             # traceback.print_tb(e.__traceback__)
             # print(state)
-            raise HandshakeError(
-                'Handshake does not appear to conform to the hypergolix '
-                'handshake procedure.'
+            raise ValueError(
+                'Unable to unpack object definition. Different serialization?'
             ) from e
             
         # We may have already set the attributes.
         # Wrap this in a try/catch in case we've have.
         try:
-            # print('---- app_token: ', app_token)
-            self._unwrap_api_id(api_id)
-            self._unwrap_app_token(app_token)
-            # print('---- self.app_token: ', self.app_token)
-                
-        # So, we've already set one or more of the attributes.
-        except AttributeError as e:
-            print(repr(e))
-            traceback.print_tb(e.__traceback__)
-            # # Should we double-check the consistency of _private?
-            # pass
-            
-        self._raw.append(raw)
-        return state
-        
-    def _unwrap_api_id(self, api_id):
-        ''' Checks to see if api_id has already been defined. If so, 
-        compares between them. If not, sets it.
-        '''
-        try:
-            if self.api_id != api_id:
-                raise RuntimeError('Mismatched api_ids across update.')
-        except AttributeError:
-            self._api_id = api_id
-        
-    def _unwrap_app_token(self, app_token):
-        ''' Checks app token for None. If None, asks dispatch for the 
-        appropriate token. Also assigns _private appropriately.
-        '''
-        try:
-            # Compare to self.app_token FIRST to force attributeerror.
-            if app_token != self.app_token and app_token is not None:
-                raise RuntimeError('Mistmatched app tokens across update.')
-            
-        # There is no existing app token.
-        except AttributeError:
-            # If we have an app_token, we know this is a private object.
-            if app_token is not None:
-                self._app_token = app_token
-                self._private = True
-                
-            # Otherwise, don't set the app token, and look it up after we've
-            # completed the rest of object initialization.
-            else:
-                # self._app_token = self._dispatch.get_token(self.api_id)
-                self._private = False
+            return (
+                unpacked_msg['state'], 
+                unpacked_msg['is_link'],
+                unpacked_msg['api_id'], 
+                unpacked_msg['app_token'],
+                unpacked_msg['private'], 
+                unpacked_msg['dynamic'], 
+                unpacked_msg['_legroom']
+            )
+        except KeyError as e:
+            raise ValueError(
+                'Insufficient keys for object definition unpacking.'
+            ) from e
         
 
 class _ObjectBase:
