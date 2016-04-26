@@ -56,6 +56,8 @@ from .comms import WSReqResClient
 from .exceptions import IPCError
 
 from .utils import IPCPackerMixIn
+# Currently only an issue for the _TestEmbed
+from .utils import RawObj
 
 
 class AppObj:
@@ -594,7 +596,14 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def __init__(self, app_token=None, *args, **kwargs):
         ''' Initializes self.
         '''
-        self._legroom = 3
+        try:    
+            self._legroom = 3
+        
+        # Something strange using _TestEmbed is causing this, suppress it for
+        # now until technical debt can be reduced
+        except AttributeError:
+            pass
+        
         self.app_token = app_token
         super().__init__(*args, **kwargs)
     
@@ -629,13 +638,19 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         '''
         pass
         
-    @abc.abstractmethod
     def get_object(self, guid):
         ''' Loads an object into local memory from the hypergolix 
         service.
         '''
         pass
         state, is_link, api_id, app_token, private, dynamic, _legroom = self._unpack_object_def(data)
+        
+    @abc.abstractmethod
+    def _get_object(self, guid):
+        ''' Gets the serialized version of the object from the 
+        hypergolix service.
+        '''
+        pass
         
     def new_object(self, *args, **kwargs):
         ''' Alternative constructor for AppObj that does not require 
@@ -924,6 +939,56 @@ class _TestEmbed(_EmbedBase):
         '''
         pass
         
+    def _get_object(self, guid):
+        ''' Loads an object into local memory from the hypergolix 
+        service.
+        '''
+        pass
+        
+    def _new_object(self, obj):
+        ''' Handles only the creation of a new object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        
+        return address, author
+        '''
+        pass
+        
+    def _update_object(self, obj, state):
+        ''' Handles only the updating of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _sync_object(self, obj):
+        ''' Handles only the syncing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _share_object(self, obj, recipient):
+        ''' Handles only the sharing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _freeze_object(self, obj):
+        ''' Handles only the freezing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _hold_object(self, obj):
+        ''' Handles only the holding of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _delete_object(self, obj):
+        ''' Handles only the deleting of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+        
         
 class WebsocketsEmbed(_EmbedBase, WSReqResClient):
     REQUEST_CODES = {
@@ -1088,6 +1153,12 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             print(repr(exc))
             traceback.print_tb(exc.__traceback__)
         return repr(exc)
+        
+    def _get_object(self, guid):
+        ''' Loads an object into local memory from the hypergolix 
+        service.
+        '''
+        pass
         
     def _new_object(self, obj):
         ''' Handles only the creation of a new object via the hypergolix

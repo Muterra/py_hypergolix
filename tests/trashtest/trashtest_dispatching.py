@@ -157,11 +157,11 @@ class TestAppObj(unittest.TestCase):
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
             
-        # Start an interactive IPython interpreter with local namespace, but
-        # suppress all IPython-related warnings.
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            IPython.embed()
+        # # Start an interactive IPython interpreter with local namespace, but
+        # # suppress all IPython-related warnings.
+        # with warnings.catch_warnings():
+        #     warnings.simplefilter('ignore')
+        #     IPython.embed()
         
     
     # def tearDown(self):
