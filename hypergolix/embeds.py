@@ -91,6 +91,12 @@ class AppObj:
     Note: AppObj should be set up such that there is exactly one AppObj
     per application. As such, they should probably be aware of their 
     endpoints.
+    
+    Note: TODO: Add some kind of automatic garbage collection mechanism
+    such that, when gc'd because, for example, it is only defined within
+    the scope of an AppObj state (as when linking between dynamic 
+    objects), we don't continue to get updates for an object that we no
+    longer retain.
     '''
     # This should define *only* ADDITIONAL slots.
     __slots__ = [
@@ -215,17 +221,35 @@ class AppObj:
         return self.is_dynamic and self.is_owned
         
     @property
+    def is_link(self):
+        if self.is_dynamic:
+            if isinstance(self._state[0], AppObj):
+                return True
+            else:
+                return False
+        else:
+            return None
+            
+    @property
+    def link_address(self):
+        ''' Only available when is_link is True. Otherwise, will return
+        None.
+        '''
+        if self.is_dynamic and self.is_link:
+            return self._state[0].address
+        else:
+            return None
+        
+    @property
     def state(self):
         if self._deleted:
             raise ValueError('Object has already been deleted.')
         elif self.is_dynamic:
-            current = self._state[0]
-            
-            # Recursively resolve any nested/linked objects
-            if isinstance(current, AppObj):
-                current = current.state
-                
-            return current
+            if self.is_link:
+                # Recursively resolve any nested/linked objects
+                return self._state[0].state
+            else:
+                return self._state[0]
         else:
             return self._state
             
@@ -452,17 +476,19 @@ class AppObj:
         )
         
     def __eq__(self, other):
-        if not isinstance(other, RawObj):
+        if not isinstance(other, AppObj):
             raise TypeError(
                 'Cannot compare RawObj instances to incompatible types.'
             )
             
         # Short-circuit if dynamic mismatches
-        if not self.is_dynamic == other.is_dynamic:
+        if self.is_dynamic != other.is_dynamic:
             return False
             
         meta_comparison = (
-            # self.is_owned == other.is_owned and
+            # Don't compare is_owned, because we want shared objects to be ==
+            # Don't compare app_token, because we want shared objects to be ==
+            self.api_id == other.api_id and
             self.address == other.address and
             self.author == other.author
         )
@@ -642,8 +668,36 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         ''' Loads an object into local memory from the hypergolix 
         service.
         '''
-        pass
-        state, is_link, api_id, app_token, private, dynamic, _legroom = self._unpack_object_def(data)
+        response = self._get_object(guid)
+        (
+            address,
+            author,
+            state, 
+            is_link, 
+            api_id, 
+            app_token, 
+            private, 
+            dynamic, 
+            _legroom
+        ) = self._unpack_object_def(response)
+        
+        if app_token == bytes(4):
+            app_token = None
+            
+        if is_link:
+            link = Guid.from_bytes(state)
+            state = self.get_object(link)
+            
+        state = (state, api_id, private, dynamic, _legroom)
+            
+        # TODO: add subscription handling for dynamic objects. Note that any
+        # updates will be passed to the embed, not to the object itself.
+        
+        return AppObj(
+            embed = self,
+            state = state,
+            _preexisting = (address, author),
+        )
         
     @abc.abstractmethod
     def _get_object(self, guid):
@@ -675,10 +729,10 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         else:
             app_token = bytes(4)
             
-        if isinstance(obj.state, AppObj):
-            is_link = True
+        if obj.is_link:
+            state = obj.link_address
         else:
-            is_link = False
+            state = obj.state
             
         if obj.is_dynamic:
             _legroom = obj._legroom
@@ -686,8 +740,10 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
             _legroom = None
             
         payload = self._pack_object_def(
-            obj.state,
-            is_link,
+            None,
+            None,
+            state,
+            obj.is_link,
             obj.api_id,
             app_token,
             obj.private,
@@ -1158,7 +1214,13 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         ''' Loads an object into local memory from the hypergolix 
         service.
         '''
-        pass
+        # Simple enough. super().get_object() will handle converting this to an
+        # actual object.
+        return self.send_threadsafe(
+            connection = self.connection,
+            msg = bytes(guid),
+            request_code = self.REQUEST_CODES['get_object']
+        )
         
     def _new_object(self, obj):
         ''' Handles only the creation of a new object via the hypergolix
@@ -1223,23 +1285,6 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
     
     
     
-    
-    def get_object(self, guid):
-        ''' Wraps RawObj.__init__  and get_guid for preexisting objects.
-        '''
-        
-        # Note: we need to register a call to self.sync for any updates that 
-        # come in from upstream.
-        
-        author, is_dynamic, state = self.get_guid(guid)
-            
-        return RawObj(
-            # Todo: make the dispatch more intelligent
-            dispatch = self,
-            state = state,
-            dynamic = is_dynamic,
-            _preexisting = (guid, author)
-        )
         
     def update_object(self, obj, state):
         ''' Updates a dynamic object. May link to a static (or dynamic) 

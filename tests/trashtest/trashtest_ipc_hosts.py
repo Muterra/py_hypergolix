@@ -98,6 +98,13 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         
         self.app1endpoint = list(self.host.connections.values())[0]
         
+        self.app2 = WebsocketsEmbed(
+            host = 'ws://localhost', 
+            port = 4628, 
+            threaded = True,
+            # debug = True
+        )
+        
         self.__api_id = bytes(64) + b'1'
         
     def test_client1(self):
@@ -134,15 +141,20 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         )
         self.assertIn(obj2.address, self.host._store)
         
+        shared1 = self.app2.get_object(obj1.address)
+        self.assertEqual(obj1, shared1)
+        
+        shared2 = self.app2.get_object(obj2.address)
+        self.assertEqual(obj2, shared2)
+        
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
             
-        # # Start an interactive IPython interpreter with local namespace, but
-        # # suppress all IPython-related warnings.
-        # with warnings.catch_warnings():
-        #     warnings.simplefilter('ignore')
-        #     IPython.embed()
-        
+        # Start an interactive IPython interpreter with local namespace, but
+        # suppress all IPython-related warnings.
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            IPython.embed()
     
     def tearDown(self):
         self.app1.halt()

@@ -37,6 +37,8 @@ import weakref
 import msgpack
 import traceback
 
+from golix import Guid
+
 # Utils may only import from .exceptions or .bases (except the latter doesn't 
 # yet exist)
 from .exceptions import HandshakeError
@@ -355,17 +357,35 @@ class RawObj:
         super().__setattr__('_dispatch', None)
         
     @property
+    def is_link(self):
+        if self.is_dynamic:
+            if isinstance(self._state[0], RawObj):
+                return True
+            else:
+                return False
+        else:
+            return None
+            
+    @property
+    def link_address(self):
+        ''' Only available when is_link is True. Otherwise, will return
+        None.
+        '''
+        if self.is_dynamic and self.is_link:
+            return self._state[0].address
+        else:
+            return None
+        
+    @property
     def state(self):
         if self._deleted:
             raise ValueError('Object has already been deleted.')
         elif self.is_dynamic:
-            current = self._state[0]
-            
-            # Recursively resolve any nested/linked objects
-            if isinstance(current, RawObj):
-                current = current.state
-                
-            return current
+            if self.is_link:
+                # Recursively resolve any nested/linked objects
+                return self._state[0].state
+            else:
+                return self._state[0]
         else:
             return self._state
             
@@ -736,10 +756,18 @@ class DispatchObj(RawObj):
 class IPCPackerMixIn:
     ''' Mix-in class for packing objects for IPC usage.
     '''
-    def _pack_object_def(self, state, is_link, api_id, app_token, private, dynamic, _legroom):
+    def _pack_object_def(self, address, author, state, is_link, api_id, app_token, private, dynamic, _legroom):
         ''' Serializes an object definition.
         '''
+        if author is not None:
+            author = bytes(author)
+            
+        if address is not None:
+            address = bytes(address)
+        
         msg = {
+            'author': author,
+            'address': address,
             'state': state,
             'is_link': is_link,
             'api_id': api_id,
@@ -785,10 +813,18 @@ class IPCPackerMixIn:
                 'Unable to unpack object definition. Different serialization?'
             ) from e
             
+        if unpacked_msg['address'] is not None:
+            unpacked_msg['address'] = Guid.from_bytes(unpacked_msg['address'])
+            
+        if unpacked_msg['author'] is not None:
+            unpacked_msg['author'] = Guid.from_bytes(unpacked_msg['author'])
+            
         # We may have already set the attributes.
         # Wrap this in a try/catch in case we've have.
         try:
             return (
+                unpacked_msg['address'], 
+                unpacked_msg['author'], 
                 unpacked_msg['state'], 
                 unpacked_msg['is_link'],
                 unpacked_msg['api_id'], 

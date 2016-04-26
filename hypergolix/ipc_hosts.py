@@ -43,6 +43,8 @@ import warnings
 import weakref
 import threading
 
+from golix import Guid
+
 
 
 
@@ -259,7 +261,40 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def get_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        return b''
+        guid = Guid.from_bytes(request_body)
+        # This will return a DispatchObj
+        obj = self.dispatch.get_object(guid)
+        
+        # Todo: Note: need to add callback for subscriptions, right?
+        
+        if obj.app_token is None:
+            app_token = bytes(4)
+            private = False
+        else:
+            app_token = obj.app_token
+            private = True
+        
+        if obj.is_link:
+            state = obj.link_address
+        else:
+            state = obj.state
+            
+        if obj.is_dynamic:
+            _legroom = obj._state.maxlen
+        else:
+            _legroom = None
+        
+        return self._pack_object_def(
+            obj.address,
+            obj.author,
+            state,
+            obj.is_link,
+            obj.api_id,
+            app_token,
+            private,
+            obj.is_dynamic,
+            _legroom
+        )
         
     def new_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
@@ -270,7 +305,17 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
             #     # This feels gross. Also, it's not really un-sub-able
             #     # Also, it breaks if we use this in AppObj.
             #     self._embed.persister.subscribe(self.address, self.sync)
-        state, is_link, api_id, app_token, private, dynamic, _legroom = self._unpack_object_def(request_body)
+        (
+            address, # Unused and set to None.
+            author, # Unused and set to None.
+            state, 
+            is_link, 
+            api_id, 
+            app_token, 
+            private, 
+            dynamic, 
+            _legroom
+        ) = self._unpack_object_def(request_body)
         
         if is_link:
             # Note: this is a really silly workaround as a substitute to 
@@ -296,7 +341,7 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         
         obj = self.dispatch.new_object(
             # This is inefficient but, well, whatever
-            state = request_body, 
+            state = state, 
             api_id = api_id, 
             app_token = app_token, 
             dynamic = dynamic,
