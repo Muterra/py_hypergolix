@@ -147,6 +147,17 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         shared2 = self.app2.get_object(obj2.address)
         self.assertEqual(obj2, shared2)
         
+        obj3 = self.app1.new_object(
+            state = pt1,
+            api_id = self.__api_id,
+            dynamic = True
+        )
+        self.assertIn(obj3.address, self.host._store)
+        
+        self.app1.update_object(obj3, pt2)
+        shared3 = self.app2.get_object(obj3.address)
+        self.assertEqual(obj3, shared3)
+        
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
             

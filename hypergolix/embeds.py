@@ -317,21 +317,82 @@ class AppObj:
         # It's meaningless to call this on a static object, but there's also 
         # no need to error out
             
-    def share(self, recipient):
-        ''' Extends super() share behavior to disallow sharing of 
-        private objects. Overriding this behavior will cause security
-        risks for users/agents.
+    def update(self, state):
+        ''' Updates a mutable object to a new state.
+        
+        May only be called on a dynamic object that was created by the
+        attached Agent.
+        
+        If _preexisting is True, this is an update coming down from a
+        persister, and we will NOT push it upstream.
         '''
-        if self.private:
-            raise TypeError('Private application objects cannot be shared.')
-        else:
-            return self.dispatch.share_object(self, recipient)
+        # First operate on the object, since it's easier to undo local changes
+        self._update(state)
+        self.embed._update_object(self, state)
+        # Todo: add try-catch to revert update after failed upstream push
+            
+    def _update(self, state):
+        ''' Handles the actual updating **for the object only.** Does 
+        not update or involve the embed.
+        '''
+        if self._deleted:
+            raise ValueError('Object has already been deleted.')
+            
+        if not self.is_dynamic:
+            raise TypeError('Cannot update a static object.')
+            
+        if not self.is_owned:
+            raise TypeError(
+                'Cannot update an object that was not created by the '
+                'attached Agent.'
+            )
+            
+        # Update local state.
+        self._state.appendleft(state)
+        
+        # Todo: figure out some mechanism to delay this until confirmed upsream
+        # successful push
+        # INFORM THE OTHERS
+        for callback in self.callbacks:
+            callback(self)
+            
+    def sync(self, *args):
+        ''' Checks the current state matches the state at the connected
+        Agent. If this is a dynamic and an update is available, do that.
+        If it's a static and the state mismatches, raise error.
+        '''
+        return self._embed.sync_object(self)
+            
+    def _sync(self, *args):
+        ''' Handles the actual syncing **for the object only.** Does not
+        update or involve the embed.
+        '''
+        pass
+            
+    def share(self, recipient):
+        ''' Public accessor for sharing via object.
+        '''
+        # Todo: add try-catch to undo local changes after failed upstream share
+        # First operate on the object, since it's easier to undo local changes
+        self._share(recipient)
+        self.embed._share_object(self, recipient)
             
     def _share(self, recipient):
         ''' Handles the actual sharing **for the object only.** Does not
         update or involve the embed.
+        
+        This prevents the sharing of private objects.
+        
+        Overriding this without calling super() may result in security
+        risks for applications.
         '''
-        pass
+        # Note: should this be moved into the Embed? That might be a little bit
+        # safer. Or, should the hypergolix service check to make sure nothing
+        # with an app_token is shared?
+        if self.private:
+            raise TypeError('Private application objects cannot be shared.')
+        else:
+            return True
         
     def hold(self):
         ''' Binds to the object, preventing its deletion.
@@ -366,61 +427,6 @@ class AppObj:
             
     def _freeze(self):
         ''' Handles the actual freezing **for the object only.** Does 
-        not update or involve the embed.
-        '''
-        pass
-            
-    def sync(self, *args):
-        ''' Checks the current state matches the state at the connected
-        Agent. If this is a dynamic and an update is available, do that.
-        If it's a static and the state mismatches, raise error.
-        '''
-        return self._embed.sync_object(self)
-            
-    def _sync(self, *args):
-        ''' Handles the actual syncing **for the object only.** Does not
-        update or involve the embed.
-        '''
-        pass
-            
-    def update(self, state, _preexisting=False):
-        ''' Updates a mutable object to a new state.
-        
-        May only be called on a dynamic object that was created by the
-        attached Agent.
-        
-        If _preexisting is True, this is an update coming down from a
-        persister, and we will NOT push it upstream.
-        '''
-        if self._deleted:
-            raise ValueError('Object has already been deleted.')
-            
-        if not self.is_dynamic:
-            raise TypeError('Cannot update a static object.')
-            
-        # _preexisting has not been set, so this is a local request. Check if
-        # we actually can update, and then test validity by pushing an update.
-        if not _preexisting:
-            if not self.is_owned:
-                raise TypeError(
-                    'Cannot update an object that was not created by the '
-                    'attached Agent.'
-                )
-            else:
-                self._embed.update_object(self, state)
-                
-        # _preexisting has been set, so we may need to unwrap state before 
-        # using it
-        else:
-            state = self._unwrap_state(state)
-        
-        # Regardless, now we need to update local state.
-        self._state.appendleft(state)
-        for callback in self.callbacks:
-            callback(self)
-            
-    def _update(self, state, _preexisting=False):
-        ''' Handles the actual updating **for the object only.** Does 
         not update or involve the embed.
         '''
         pass
@@ -561,50 +567,18 @@ class AppObj:
                     self.add_callback(callback)
         
     # def collate(self):
-    #     ''' Converts state (and any ancillary information) into a format
-    #     that can be packed by the embed. Mostly here to allow subclasses
-    #     to intelligently extend the AppObj class.
-    #     '''
-    #     return self.state
+        # ''' Converts state (and any ancillary information) into a format
+        # that can be packed by the embed. Mostly here to allow subclasses
+        # to intelligently extend the AppObj class.
+        # '''
+        # return self.state
         
     # def decollate(self, collated):
-    #     ''' Handles any ancillary information required by subclasses of
-    #     AppObj. MUST return the state of the object. Has access to all
-    #     of the AppObj except the author and address.
-    #     '''
-    #     return collated
-        
-    def _unwrap_api_id(self, api_id):
-        ''' Checks to see if api_id has already been defined. If so, 
-        compares between them. If not, sets it.
-        '''
-        try:
-            if self.api_id != api_id:
-                raise RuntimeError('Mismatched api_ids across update.')
-        except AttributeError:
-            self._api_id = api_id
-        
-    def _unwrap_app_token(self, app_token):
-        ''' Checks app token for None. If None, asks dispatch for the 
-        appropriate token. Also assigns _private appropriately.
-        '''
-        try:
-            # Compare to self.app_token FIRST to force attributeerror.
-            if app_token != self.app_token and app_token is not None:
-                raise RuntimeError('Mistmatched app tokens across update.')
-            
-        # There is no existing app token.
-        except AttributeError:
-            # If we have an app_token, we know this is a private object.
-            if app_token is not None:
-                self._app_token = app_token
-                self._private = True
-                
-            # Otherwise, don't set the app token, and look it up after we've
-            # completed the rest of object initialization.
-            else:
-                # self._app_token = self._embed.get_token(self.api_id)
-                self._private = False
+        # ''' Handles any ancillary information required by subclasses of
+        # AppObj. MUST return the state of the object. Has access to all
+        # of the AppObj except the author and address.
+        # '''
+        # return collated
         
 
 class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
@@ -756,14 +730,33 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def update_object(self, obj, state):
         ''' Wrapper for obj.update.
         '''
-        pass
+        # First operate on the object, since it's easier to undo local changes
+        obj._update(state)
+        self._update_object(obj, state)
+        # Todo: add try-catch to revert update after failed upstream push
+        
+        return True
         
     @abc.abstractmethod
     def _update_object(self, obj, state):
         ''' Handles only the updating of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
-        pass
+        # If the state is a link, convert it to a guid and bytes thereof.
+        if isinstance(state, AppObj):
+            state = bytes(state.address)
+        
+        return self._pack_object_def(
+            obj.address,
+            None,
+            state,
+            obj.is_link,
+            None,
+            None,
+            None,
+            None,
+            None
+        )
         
     def sync_object(self, obj):
         ''' Checks for an update to a dynamic object, and if one is 
@@ -1248,7 +1241,16 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         ''' Handles only the updating of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
-        pass
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = super()._update_object(obj, state),
+            request_code = self.REQUEST_CODES['update_object']
+        )
+        
+        if response == b'\x01':
+            return True
+        else:
+            raise RuntimeError('Unknown error while updating object.')
 
     def _sync_object(self, obj):
         ''' Handles only the syncing of an object via the hypergolix
@@ -1286,22 +1288,7 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
     
     
         
-    def update_object(self, obj, state):
-        ''' Updates a dynamic object. May link to a static (or dynamic) 
-        object's address. Must pass either data or link, but not both.
-        
-        Wraps RawObj.update and modifies the dynamic object in place.
-        
-        Could add a way to update the legroom parameter while we're at
-        it. That would need to update the maxlen of both the obj._buffer
-        and the self._historian.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Obj must be an RawObj.'
-            )
-            
-        obj.update(state)
+
         
     def sync_object(self, obj):
         ''' Wraps RawObj.sync.

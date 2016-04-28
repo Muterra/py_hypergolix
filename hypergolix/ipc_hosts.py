@@ -330,6 +330,8 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
                 # This prevents recursive state lookup to non-existing objects
                 dynamic = False,
                 # Really the only thing we need in this entire chain is link.
+                # But, this does prevent us from accidentally creating a new 
+                # upstream/golix object.
                 _preexisting = (link, author),
             )
             
@@ -351,12 +353,45 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         
         return bytes(obj.address)
         
-    def sync_object_wrapper(self, endpoint, request_body):
+    def update_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        return b''
+        (
+            address,
+            author, # Unused and set to None.
+            state, 
+            is_link, 
+            api_id, # Unused and set to None.
+            app_token, # Unused and set to None.
+            private, # Unused and set to None.
+            dynamic, # Unused and set to None.
+            _legroom # Unused and set to None.
+        ) = self._unpack_object_def(request_body)
         
-    def update_object_wrapper(self, endpoint, request_body):
+        if is_link:
+            # Note: this is a really silly workaround as a substitute to 
+            # re-writing a bunch of other code. #technicaldebt
+            # TODO: FIX THIS!
+            link = Guid.from_bytes(state)
+            author = link
+            state = RawObj(
+                dispatch = self.dispatch, 
+                # State is never used.
+                state = bytes(),
+                # This prevents recursive state lookup to non-existing objects
+                dynamic = False,
+                # Really the only thing we need in this entire chain is link.
+                # But, this does prevent us from accidentally creating a new 
+                # upstream/golix object.
+                _preexisting = (link, author),
+            )
+        
+        obj = self.dispatch._objs_by_guid[address]
+        obj.update(state)
+        
+        return b'\x01'
+        
+    def sync_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
         return b''
