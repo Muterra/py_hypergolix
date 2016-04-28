@@ -44,6 +44,7 @@ import msgpack
 import weakref
 import collections
 import asyncio
+import threading
 
 from golix import Guid
 
@@ -162,6 +163,11 @@ class AppObj:
         # These bits should always work, so we don't need to worry about it.
         self._author = author
         self._address = address
+        
+        # Todo: add (python) gc logic such that this is removed when the object
+        # is removed as well. Note that we currently DO do this in delete, but
+        # not on actual python gc.
+        self._embed._objs_by_guid[address] = self
         
     @property
     def author(self):
@@ -328,7 +334,7 @@ class AppObj:
         '''
         # First operate on the object, since it's easier to undo local changes
         self._update(state)
-        self.embed._update_object(self, state)
+        self._embed._update_object(self, state)
         # Todo: add try-catch to revert update after failed upstream push
             
     def _update(self, state):
@@ -375,7 +381,7 @@ class AppObj:
         # Todo: add try-catch to undo local changes after failed upstream share
         # First operate on the object, since it's easier to undo local changes
         self._share(recipient)
-        self.embed._share_object(self, recipient)
+        self._embed._share_object(self, recipient)
             
     def _share(self, recipient):
         ''' Handles the actual sharing **for the object only.** Does not
@@ -436,7 +442,7 @@ class AppObj:
         attempts to access will raise ValueError, but does not (and 
         cannot) remove the object from memory.
         '''
-        self._dispatch.delete_guid(self.address)
+        del self._embed._objs_by_guid[self.address]
         self.clear_callbacks()
         super().__setattr__('_deleted', True)
         super().__setattr__('_is_dynamic', None)
@@ -605,6 +611,10 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
             pass
         
         self.app_token = app_token
+        
+        # Lookup for guid -> object
+        self._objs_by_guid = {}
+        
         super().__init__(*args, **kwargs)
     
     @property
@@ -663,9 +673,6 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
             state = self.get_object(link)
             
         state = (state, api_id, private, dynamic, _legroom)
-            
-        # TODO: add subscription handling for dynamic objects. Note that any
-        # updates will be passed to the embed, not to the object itself.
         
         return AppObj(
             embed = self,
@@ -831,7 +838,41 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         instance(s) accordingly, and serializes a response to the IPC 
         host.
         '''
-        return b''
+        (
+            address,
+            author, # Will be unused and set to None
+            state, 
+            is_link, 
+            api_id, # Will be unused and set to None 
+            app_token, # Will be unused and set to None 
+            private, # Will be unused and set to None 
+            dynamic, # Will be unused and set to None 
+            _legroom # Will be unused and set to None
+        ) = self._unpack_object_def(request_body)
+                
+        if address in self._objs_by_guid:
+            if is_link:
+                link = Guid.from_bytes(state)
+                # Note: this may cause things to freeze, because async
+                state = self.get_object(link)
+            
+            # Well this is a huge hack. But something about the event loop 
+            # itself is fucking up control flow and causing the world to hang
+            # here. May want to create a dedicated thread just for pushing 
+            # updates? Like autoresponder, but autoupdater?
+            worker = threading.Thread(
+                target = self._objs_by_guid[address]._update,
+                daemon = True,
+                args = (state,),
+            )
+            worker.start()
+            
+            # self._ws_loop.call_soon_threadsafe(, state)
+            # self._objs_by_guid[address]._update(state)
+            
+            # python tests/trashtest/trashtest_ipc_hosts.py
+            
+        return b'\x01'
 
     def notify_share_failure_wrapper(self, connection, request_body):
         ''' Deserializes an incoming async share failure notification, 

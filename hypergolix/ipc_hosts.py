@@ -265,8 +265,6 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         # This will return a DispatchObj
         obj = self.dispatch.get_object(guid)
         
-        # Todo: Note: need to add callback for subscriptions, right?
-        
         if obj.app_token is None:
             app_token = bytes(4)
             private = False
@@ -280,6 +278,10 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
             state = obj.state
             
         if obj.is_dynamic:
+            # Note that this will currently duplicate notifications for an  
+            # endpoint that both declares itself as handling the api and also 
+            # gets the object directly.
+            obj.add_callback(endpoint.send_update)
             _legroom = obj._state.maxlen
         else:
             _legroom = None
@@ -441,7 +443,33 @@ class WSEndpoint(_EndpointBase, _ReqResWSConnection):
     def send_update(self, obj):
         ''' Sends an updated object to the emedded client.
         '''
-        pass
+        # Note: currently we're actually sending the whole object update, not
+        # just a notification of update address.
+        # print('Endpoint got send update request.')
+        print(obj.address)
+        
+        response = self.dispatch.send_threadsafe(
+            connection = self,
+            msg = self.dispatch._pack_object_def(
+                obj.address,
+                None,
+                obj.state,
+                obj.is_link,
+                None,
+                None,
+                None,
+                None,
+                None
+            ),
+            request_code = self.dispatch.REQUEST_CODES['send_update'],
+            # Note: for now, just don't worry about failures.
+            expect_reply = False
+        )
+        # print('Update sent and resuming life.')
+        # if response == b'\x01':
+        #     return True
+        # else:
+        #     raise RuntimeError('Unknown error while delivering object update.')
         
     def notify_share_failure(self, obj, recipient):
         ''' Notifies the embedded client of an unsuccessful share.
@@ -457,6 +485,17 @@ class WSEndpoint(_EndpointBase, _ReqResWSConnection):
 class WebsocketsIPC(_IPCBase, WSReqResServer):
     ''' Websockets IPC via localhost. Sets up a server.
     '''
+    REQUEST_CODES = {
+        # Receive/dispatch a new object.
+        'send_object': b'vO',
+        # Receive an update for an existing object.
+        'send_update': b'!O',
+        # Receive an async notification of a sharing failure.
+        'notify_share_failure': b'^F',
+        # Receive an async notification of a sharing success.
+        'notify_share_success': b'^S',
+    }
+    
     def __init__(self, *args, **kwargs):
         req_handlers = {
             # New app tokens are handled during endpoint creation.

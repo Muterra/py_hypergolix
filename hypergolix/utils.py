@@ -806,8 +806,8 @@ class IPCPackerMixIn:
             msgpack.exceptions.UnpackException,
             msgpack.exceptions.UnpackValueError,
         ) as e:
-            # print(repr(e))
-            # traceback.print_tb(e.__traceback__)
+            print(repr(e))
+            traceback.print_tb(e.__traceback__)
             # print(state)
             raise ValueError(
                 'Unable to unpack object definition. Different serialization?'

@@ -560,7 +560,14 @@ class AgentBase:
         
         # Clear out old key material
         if old_tail not in frame_history:
-            self._del_secret(old_tail)
+            # So this should actually be handled via the weakvaluedict -- we
+            # should be automatically clearing out anything that isn't the most
+            # recent key for the binding.
+            if old_tail in self._secrets:
+                warnings.warn(RuntimeWarning(
+                    'Tail secret was inappropriately retained.'
+                ))
+            # self._del_secret(old_tail)
         
         # # Since we're not doing a ratchet right now, just do this every time.
         # if obj.address in self._shared_objects:
@@ -1174,20 +1181,21 @@ class Dispatcher(DispatcherBase):
         '''
         if not isinstance(obj, DispatchObj):
             raise TypeError('May only register DispatchObj instances.')
-        
-        self._objs_by_guid[obj.address] = obj
-        
-        if obj.app_token is not None:
-            self._owner_by_guid[obj.address] = obj.app_token
-        else:
-            self._api_by_guid[obj.address] = obj.api_id
             
-        # Register distribution as an update callback if it's dynamic
-        if obj.is_dynamic:
-            obj.add_callback(self._distribute_to_endpoints)
+        if obj.address not in self._objs_by_guid:
+            self._objs_by_guid[obj.address] = obj
             
-        # Finally, distribute the object to any applicable APIs
-        self._distribute_to_endpoints(obj)
+            if obj.app_token is not None:
+                self._owner_by_guid[obj.address] = obj.app_token
+            else:
+                self._api_by_guid[obj.address] = obj.api_id
+                
+            # Register distribution as an update callback if it's dynamic
+            if obj.is_dynamic:
+                obj.add_callback(self._distribute_to_endpoints)
+                
+            # Finally, distribute the object to any applicable APIs
+            self._distribute_to_endpoints(obj)
     
     def dispatch_share(self, guid):
         ''' Dispatches shares that were not created via handshake.

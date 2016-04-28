@@ -574,6 +574,8 @@ class ReqResWSBase(WSBase):
                 # Instrumentation
                 # print('Token was not in pending requests.')
                 # Note: this should really log the bad token or something.
+                # Note: this will also be called if the request created a 
+                # response, but it wasn't waited for.
                 pass
             
         except:
