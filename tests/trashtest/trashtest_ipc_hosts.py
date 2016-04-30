@@ -53,7 +53,7 @@ from hypergolix.ipc_hosts import WebsocketsIPC
 from hypergolix.embeds import WebsocketsEmbed
 
 
-class WebsocketsHost(WebsocketsIPC, AgentBase, MemoryPersister, Dispatcher):
+class WebsocketsHost(WebsocketsIPC, Dispatcher, AgentBase, MemoryPersister):
     def __init__(self, *args, **kwargs):
         super().__init__(dispatcher=self, dispatch=self, persister=self, *args, **kwargs)
     
@@ -93,7 +93,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             host = 'ws://localhost', 
             port = 4628, 
             threaded = True,
-            debug = True
+            # debug = True
         )
         
         self.app1endpoint = list(self.host.connections.values())[0]
@@ -102,7 +102,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             host = 'ws://localhost', 
             port = 4628, 
             threaded = True,
-            debug = True
+            # debug = True
         )
         
         self.__api_id = bytes(64) + b'1'

@@ -557,7 +557,7 @@ class AppObj:
             self._state = collections.deque(
                 maxlen = self._legroom
             )
-            self._state.append(state)
+            self._state.appendleft(state)
         else:
             self._state = state
             

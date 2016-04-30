@@ -146,7 +146,7 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         '''
         return frozenset(self._apis)
         
-    def notify_object(self, obj):
+    def notify_object(self, guid, state):
         ''' Notifies the endpoint that the object is available. May be
         either a new object, or an updated one.
         
@@ -154,11 +154,11 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         suppress.
         '''
         # if not self._expecting_exchange.locked():
-        if obj.address in self._known_guids:
-            self.send_update(obj)
+        if guid in self._known_guids:
+            self.send_update(guid, state)
         else:
-            self._known_guids.add(obj.address)
-            self.send_object(obj)
+            self._known_guids.add(guid)
+            self.send_object(guid, state)
     
     @abc.abstractmethod
     def send_object(self, obj):
@@ -168,20 +168,20 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         pass
     
     @abc.abstractmethod
-    def send_update(self, obj):
+    def send_update(self, guid, state):
         ''' Sends an updated object to the emedded client. Originates 
         upstream and is not solicited by the client.
         '''
         pass
         
     @abc.abstractmethod
-    def notify_share_failure(self, obj, recipient):
+    def notify_share_failure(self, guid, recipient):
         ''' Notifies the embedded client of an unsuccessful share.
         '''
         pass
         
     @abc.abstractmethod
-    def notify_share_success(self, obj, recipient):
+    def notify_share_success(self, guid, recipient):
         ''' Notifies the embedded client of a successful share.
         '''
         pass
@@ -198,7 +198,7 @@ class _TestEndpoint(_EndpointBase):
         self._assigned_objs.append(obj)
         print('Endpoint ', self.__name, ' incoming: ', obj)
         
-    def send_update(self, obj):
+    def send_update(self, obj, state=None):
         self._assigned_objs.append(obj)
         print('Endpoint ', self.__name, ' updated: ', obj)
         
@@ -262,51 +262,43 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
         guid = Guid.from_bytes(request_body)
-        # This will return a DispatchObj
-        obj = self.dispatch.get_object(guid)
         
-        if obj.app_token is None:
-            app_token = bytes(4)
-            private = False
-        else:
-            app_token = obj.app_token
-            private = True
-        
-        if obj.is_link:
-            state = obj.link_address
-        else:
-            state = obj.state
+        author, state, api_id, app_token, is_dynamic = \
+            self.dispatch.get_object_rewrite(
+                asking_token = endpoint.app_token,
+                guid = guid
+            )
             
-        if obj.is_dynamic:
-            # Note that this will currently duplicate notifications for an  
-            # endpoint that both declares itself as handling the api and also 
-            # gets the object directly.
-            obj.add_callback(endpoint.send_update)
-            _legroom = obj._state.maxlen
+        if app_token != bytes(4):
+            private = True
         else:
-            _legroom = None
+            private = False
+            
+        if isinstance(state, Guid):
+            is_link = True
+            state = bytes(state)
+        else:
+            is_link = False
+            
+        # For now, anyways.
+        # Note: need to add some kind of handling for legroom.
+        _legroom = None
         
         return self._pack_object_def(
-            obj.address,
-            obj.author,
+            guid,
+            author,
             state,
-            obj.is_link,
-            obj.api_id,
+            is_link,
+            api_id,
             app_token,
             private,
-            obj.is_dynamic,
+            is_dynamic,
             _legroom
         )
         
     def new_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        # Create the object upstream
-            # If we're dynamic, subscribe to any updates.
-            # if self.is_dynamic:
-            #     # This feels gross. Also, it's not really un-sub-able
-            #     # Also, it breaks if we use this in AppObj.
-            #     self._embed.persister.subscribe(self.address, self.sync)
         (
             address, # Unused and set to None.
             author, # Unused and set to None.
@@ -320,40 +312,18 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         ) = self._unpack_object_def(request_body)
         
         if is_link:
-            # Note: this is a really silly workaround as a substitute to 
-            # re-writing a bunch of other code. #technicaldebt
-            # TODO: FIX THIS!
-            link = Guid.from_bytes(state)
-            author = link
-            state = RawObj(
-                dispatch = self.dispatch, 
-                # State is never used.
-                state = bytes(),
-                # This prevents recursive state lookup to non-existing objects
-                dynamic = False,
-                # Really the only thing we need in this entire chain is link.
-                # But, this does prevent us from accidentally creating a new 
-                # upstream/golix object.
-                _preexisting = (link, author),
-            )
-            
-        if dynamic:
-            callbacks = (endpoint.send_update,)
-            
-        else:
-            callbacks = None
+            state = Guid.from_bytes(state)
         
-        obj = self.dispatch.new_object(
-            # This is inefficient but, well, whatever
+        address = self.dispatch.new_object_rewrite(
+            asking_token = endpoint.app_token,
             state = state, 
             api_id = api_id, 
             app_token = app_token, 
             dynamic = dynamic,
-            callbacks = callbacks,
             _legroom = _legroom
         )
         
-        return bytes(obj.address)
+        return bytes(address)
         
     def update_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
@@ -371,25 +341,13 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         ) = self._unpack_object_def(request_body)
         
         if is_link:
-            # Note: this is a really silly workaround as a substitute to 
-            # re-writing a bunch of other code. #technicaldebt
-            # TODO: FIX THIS!
-            link = Guid.from_bytes(state)
-            author = link
-            state = RawObj(
-                dispatch = self.dispatch, 
-                # State is never used.
-                state = bytes(),
-                # This prevents recursive state lookup to non-existing objects
-                dynamic = False,
-                # Really the only thing we need in this entire chain is link.
-                # But, this does prevent us from accidentally creating a new 
-                # upstream/golix object.
-                _preexisting = (link, author),
-            )
+            state = Guid.from_bytes(state)
         
-        obj = self.dispatch._objs_by_guid[address]
-        obj.update(state)
+        self.dispatch.update_object_rewrite(
+            asking_token = endpoint.app_token,
+            guid = address,
+            state = state
+        )
         
         return b'\x01'
         
@@ -435,26 +393,32 @@ class _EmbeddedIPC(_IPCBase):
         
         
 class WSEndpoint(_EndpointBase, _ReqResWSConnection):
-    def send_object(self, obj):
+    def send_object(self, guid, state):
         ''' Sends a new object to the emedded client.
         '''
         pass
     
-    def send_update(self, obj):
+    def send_update(self, guid, state):
         ''' Sends an updated object to the emedded client.
         '''
         # Note: currently we're actually sending the whole object update, not
         # just a notification of update address.
         # print('Endpoint got send update request.')
-        print(obj.address)
+        # print(guid)
+        
+        if isinstance(state, Guid):
+            is_link = True
+            state = bytes(state)
+        else:
+            is_link = False
         
         response = self.dispatch.send_threadsafe(
             connection = self,
             msg = self.dispatch._pack_object_def(
-                obj.address,
+                guid,
                 None,
-                obj.state,
-                obj.is_link,
+                state,
+                is_link,
                 None,
                 None,
                 None,
@@ -471,12 +435,12 @@ class WSEndpoint(_EndpointBase, _ReqResWSConnection):
         # else:
         #     raise RuntimeError('Unknown error while delivering object update.')
         
-    def notify_share_failure(self, obj, recipient):
+    def notify_share_failure(self, guid, recipient):
         ''' Notifies the embedded client of an unsuccessful share.
         '''
         pass
         
-    def notify_share_success(self, obj, recipient):
+    def notify_share_success(self, guid, recipient):
         ''' Notifies the embedded client of a successful share.
         '''
         pass
