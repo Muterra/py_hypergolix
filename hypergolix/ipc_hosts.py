@@ -166,7 +166,7 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         self._known_guids.add(guid)
     
     @abc.abstractmethod
-    def send_object(self, obj):
+    def send_object(self, obj, state):
         ''' Sends a new object to the emedded client. This originates 
         upstream and is not solicited by the client.
         '''
@@ -199,7 +199,7 @@ class _TestEndpoint(_EndpointBase):
         self._assigned_objs = []
         self._failed_objs = []
         
-    def send_object(self, obj):
+    def send_object(self, obj, state=None):
         self._assigned_objs.append(obj)
         print('Endpoint ', self.__name, ' incoming: ', obj)
         
@@ -269,7 +269,7 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         guid = Guid.from_bytes(request_body)
         
         author, state, api_id, app_token, is_dynamic = \
-            self.dispatch.get_object_rewrite(
+            self.dispatch.get_object(
                 asking_token = endpoint.app_token,
                 guid = guid
             )
@@ -322,7 +322,7 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         if is_link:
             state = Guid.from_bytes(state)
         
-        address = self.dispatch.new_object_rewrite(
+        address = self.dispatch.new_object(
             asking_token = endpoint.app_token,
             state = state, 
             api_id = api_id, 
@@ -354,7 +354,7 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         if is_link:
             state = Guid.from_bytes(state)
         
-        self.dispatch.update_object_rewrite(
+        self.dispatch.update_object(
             asking_token = endpoint.app_token,
             guid = address,
             state = state

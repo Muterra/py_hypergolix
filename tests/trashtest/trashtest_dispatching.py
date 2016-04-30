@@ -71,7 +71,7 @@ class _TestDispatch(AgentBase, Dispatcher, _TestEmbed):
 # ###############################################
         
         
-class TestAppObj(unittest.TestCase):
+class TestDispatching(unittest.TestCase):
     def setUp(self):
         self.persister = MemoryPersister()
         self.__api_id = bytes(64) + b'1'
@@ -83,8 +83,8 @@ class TestAppObj(unittest.TestCase):
             name = 'Agent1, ep1'
         )
         self.agent1.register_endpoint(self.endpoint1)
-        # This is fucking gross. Oh well, that's why it's a trashtest.
-        self.agent1.app_token = self.endpoint1.app_token
+        # # This is fucking gross. Oh well, that's why it's a trashtest.
+        # self.agent1.app_token = self.endpoint1.app_token
         
         self.agent2 = _TestDispatch(persister=self.persister)
         self.endpoint2 = _TestEndpoint(
@@ -100,7 +100,7 @@ class TestAppObj(unittest.TestCase):
         self.agent2.register_endpoint(self.endpoint2)
         self.agent2.register_endpoint(self.endpoint3)
         # This is fucking gross. See above.
-        self.agent2.app_token = self.endpoint2.app_token
+        # self.agent2.app_token = self.endpoint2.app_token
         
     def test_appobj(self):
         pt0 = b'I am a sexy stagnant beast.'
@@ -109,43 +109,46 @@ class TestAppObj(unittest.TestCase):
         pt3 = b'Listening...'
         pt4 = b'All ears!'
 
-        obj1 = DispatchObj(
-            dispatch = self.agent1,
+        address1 = self.agent1.new_object(
+            asking_token = self.endpoint1.app_token,
             state = pt0,
-            app_token = self.agent1.app_token,
+            app_token = self.endpoint1.app_token,
             api_id = self.__api_id,
             dynamic = False
         )
 
-        obj2 = DispatchObj(
-            dispatch = self.agent1,
+        address2 = self.agent1.new_object(
+            asking_token = self.endpoint1.app_token,
             state = pt1,
             api_id = self.__api_id,
+            app_token = None,
             dynamic = True
         )
         
-        # Manually calling share here to bypass things. Technically this should
-        # be called from the endpoint, but let's just do it like this as a test
-        # fixture.
-        self.agent1.share_object(
-            obj = obj2, 
-            recipient = self.agent2.whoami, 
-            requesting_token = self.agent1.app_token
+        # self.agent1.share_object(
+        #     asking_token = self.endpoint1.app_token,
+        #     guid = address2, 
+        #     recipient = self.agent2.whoami, 
+        # )
+        self.agent1.update_object(
+            asking_token = self.endpoint1.app_token,
+            guid = address2,
+            state = pt2
         )
-        obj2.update(pt2)
-
-        obj3 = DispatchObj(
-            dispatch = self.agent2,
+        
+        address3 = self.agent2.new_object(
+            asking_token = self.endpoint2.app_token,
             state = pt0,
-            app_token = self.agent2.app_token,
+            app_token = self.endpoint2.app_token,
             api_id = self.__api_id,
             dynamic = False
         )
 
-        obj2 = DispatchObj(
-            dispatch = self.agent2,
+        address4 = self.agent2.new_object(
+            asking_token = self.endpoint2.app_token,
             state = pt1,
             api_id = self.__api_id,
+            app_token = None,
             dynamic = True
         )
 

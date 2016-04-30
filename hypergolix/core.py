@@ -80,8 +80,6 @@ from Crypto.Protocol.KDF import HKDF
 # Intra-package dependencies
 from .utils import _JitSetDict
 from .utils import _JitDictDict
-from .utils import RawObj
-from .utils import DispatchObj
 
 from .exceptions import NakError
 from .exceptions import HandshakeError
@@ -100,58 +98,6 @@ from .ipc_hosts import _EndpointBase
 # ###############################################
 # Utilities, etc
 # ###############################################
-
-
-class AgentBootstrap(dict):
-    ''' Threadsafe. Handles all of the stuff needed to actually build an
-    agent and keep consistent state across devices / logins.
-    '''
-    def __init__(self, agent, obj):
-        self._mutlock = threading.Lock()
-        self._agent = agent
-        self._obj = obj
-        self._def = None
-        
-    @classmethod
-    def from_existing(cls, agent, obj):
-        self = cls(agent, obj)
-        self._def = obj.state
-        super().update(msgpack.unpackb(obj.state))
-        
-    def __setitem__(self, key, value):
-        with self._mutlock:
-            super().__setitem__(key, value)
-            self._update_def()
-        
-    def __getitem__(self, key):
-        ''' For now, this is actually just unpacking self._def and 
-        returning the value for that. In the future, when we have some
-        kind of callback mechanism in dynamic objects, we'll probably
-        cache and stuff.
-        '''
-        with self._mutlock:
-            tmp = msgpack.unpackb(self._def)
-            return tmp[key]
-        
-    def __delitem__(self, key):
-        with self._mutlock:
-            super().__delitem__(key)
-            self._update_def()
-        
-    def pop(*args, **kwargs):
-        raise TypeError('AgentBootstrap does not support popping.')
-        
-    def popitem(*args, **kwargs):
-        raise TypeError('AgentBootstrap does not support popping.')
-        
-    def update(*args, **kwargs):
-        with self._mutlock:
-            super().update(*args, **kwargs)
-            self._update_def()
-        
-    def _update_def(self):
-        self._def = msgpack.packb(self)
-        self._agent.update_object(self._obj, self._def)
 
 
 class AgentBase:
@@ -204,7 +150,7 @@ class AgentBase:
         self._dynamic_targets = {}
         # Lookup for pending requests. {<request address>: <target address>}
         self._pending_requests = {}
-        # Lookup for shared objects. {<obj address>: {<recipients>}}
+        # Lookup for shared objects. {<object address>: {<recipients>}}
         self._shared_objects = {}
         
         # # Automatic type checking using max. Can't have smaller than 1.
@@ -291,7 +237,7 @@ class AgentBase:
     def _handle_req_handshake(self, request, source_guid):
         ''' Handles a handshake request after reception.
         '''
-        # Note that get_obj handles committing the secret (etc).
+        # Note that get_object handles committing the secret (etc).
         self._set_secret_pending(
             secret = request.secret, 
             guid = request.target
@@ -473,50 +419,9 @@ class AgentBase:
         self.persister.publish(container.packed)
         return container.guid
         
-    def _do_dynamic(self, state, guid_dynamic=None, history=None, secret=None):
-        ''' Actually generate a dynamic binding.
-        '''
-        # # THIS IS FOR THE REWRITE
-        # if isinstance(state, Guid):
-        #     target = state
-        #     secret = self._get_secret(target)
-        #     container = None
-        # # END FOR THE REWRITE
-            
-        if isinstance(state, RawObj):
-            target = state.address
-            secret = self._get_secret(state.address)
-            container = None
-            
-        else:
-            container, secret = self._make_static(state, secret)
-            target = container.guid
-            
-        dynamic = self._identity.make_bind_dynamic(
-            target = target,
-            guid_dynamic = guid_dynamic,
-            history = history
-        )
-            
-        # Add the secret to the chamber. HOWEVER, associate it with the frame
-        # guid, so that (if we've held it as a static object) it won't be 
-        # garbage collected when we advance past legroom. Simultaneously add
-        # a temporary proxy to it so that it's accessible from the actual 
-        # container's guid.
-        self._set_secret(dynamic.guid, secret)
-        self._set_secret_temporary(target, secret)
-            
-        self.persister.publish(dynamic.packed)
-        if container is not None:
-            self.persister.publish(container.packed)
-            
-        self._dynamic_targets[dynamic.guid_dynamic] = target
-        
-        return dynamic
-        
     def new_dynamic(self, state, _legroom=None):
         ''' Makes a dynamic object. May link to a static (or dynamic) 
-        object's address. state must be either RawObj or bytes-like.
+        object's address. state must be either Guid or bytes-like.
         
         The _legroom argument determines how many frames should be used 
         as history in the dynamic binding. If unused, sources from 
@@ -581,69 +486,143 @@ class AgentBase:
         #     for recipient in self._shared_objects[obj.address]:
         #         self.hand_object(obj, recipient)
         
-    def sync_dynamic(self, obj):
-        ''' Checks self.persister for a new dynamic frame for obj, and 
+    def _do_dynamic(self, state, guid_dynamic=None, history=None, secret=None):
+        ''' Actually generate a dynamic binding.
+        '''
+        if isinstance(state, Guid):
+            target = state
+            secret = self._get_secret(target)
+            container = None
+            
+        else:
+            container, secret = self._make_static(state, secret)
+            target = container.guid
+            
+        dynamic = self._identity.make_bind_dynamic(
+            target = target,
+            guid_dynamic = guid_dynamic,
+            history = history
+        )
+            
+        # Add the secret to the chamber. HOWEVER, associate it with the frame
+        # guid, so that (if we've held it as a static object) it won't be 
+        # garbage collected when we advance past legroom. Simultaneously add
+        # a temporary proxy to it so that it's accessible from the actual 
+        # container's guid.
+        self._set_secret(dynamic.guid, secret)
+        self._set_secret_temporary(target, secret)
+            
+        self.persister.publish(dynamic.packed)
+        if container is not None:
+            self.persister.publish(container.packed)
+            
+        self._dynamic_targets[dynamic.guid_dynamic] = target
+        
+        return dynamic
+        
+    def sync_dynamic(self, guid):
+        ''' Checks self.persister for a new dynamic frame for guid, and 
         if one exists, gets its state and calls an update on obj.
         
         Should probably modify this to also check state vs current.
         '''
-        binder = self._retrieve_contact(obj.author)
-        
+        # Is this doing what I think it's doing?
+        frame_guid = guid
         unpacked_binding = self._identity.unpack_bind_dynamic(
-            self.persister.get(obj.address)
+            self.persister.get(frame_guid)
         )
-        # This bit trusts that the persistence provider is enforcing proper
-        # monotonic state progression for dynamic bindings.
-        last_known_frame = self._historian[obj.address][0]
-        if unpacked_binding.guid == last_known_frame:
-            return False
+        guid = unpacked_binding.guid_dynamic
         
-        # Figure out the new target
-        target = self._identity.receive_bind_dynamic(
-            binder = binder,
-            binding = unpacked_binding
-        )
         
-        secret = self._get_secret(obj.address)
-        offset = unpacked_binding.history.index(last_known_frame)
-        
-        # Count backwards in index (and therefore forward in time) from the 
-        # first new frame to zero (and therefore the current frame).
-        # Note that we're using the previous frame's guid as salt.
-        # This attempts to heal any broken ratchet.
-        for ii in range(offset, -1, -1):
-            secret = self._ratchet_secret(
-                secret = secret,
-                guid = unpacked_binding.history[ii]
+        # First, make sure we're not being asked to update something we 
+        # initiated the update for.
+        if guid not in self._ignore_subs_because_updating:
+            # This bit trusts that the persistence provider is enforcing proper
+            # monotonic state progression for dynamic bindings.
+            last_known_frame = self._historian[guid][0]
+            if unpacked_binding.guid == last_known_frame:
+                return None
+                
+            # Note: this probably (?) depends on our memory persister checking 
+            # author consistency
+            binder = self._retrieve_contact(unpacked_binding.binder)
+            
+            # Figure out the new target
+            target = self._identity.receive_bind_dynamic(
+                binder = binder,
+                binding = unpacked_binding
             )
             
-        # Now assign the secret, persistently to the frame guid and temporarily
-        # to the container guid
-        self._set_secret(unpacked_binding.guid, secret)
-        self._set_secret_temporary(target, secret)
+            secret = self._get_secret(guid)
+            offset = unpacked_binding.history.index(last_known_frame)
+            
+            # Count backwards in index (and therefore forward in time) from the 
+            # first new frame to zero (and therefore the current frame).
+            # Note that we're using the previous frame's guid as salt.
+            # This attempts to heal any broken ratchet.
+            for ii in range(offset, -1, -1):
+                secret = self._ratchet_secret(
+                    secret = secret,
+                    guid = unpacked_binding.history[ii]
+                )
+                
+            # Now assign the secret, persistently to the frame guid and temporarily
+            # to the container guid
+            self._set_secret(unpacked_binding.guid, secret)
+            self._set_secret_temporary(target, secret)
+            
+            # Check to see if we're losing anything from historian while we update
+            # it. Remove those secrets.
+            old_history = set(self._historian[guid])
+            self._historian[guid].appendleft(unpacked_binding.guid)
+            new_history = set(self._historian[guid])
+            expired = old_history - new_history
+            for expired_frame in expired:
+                self._del_secret(expired_frame)
+            
+            return self._fetch_dynamic_state(target)
+            
+        else:
+            return None
         
-        # Check to see if we're losing anything from historian while we update
-        # it. Remove those secrets.
-        old_history = set(self._historian[obj.address])
-        self._historian[obj.address].appendleft(unpacked_binding.guid)
-        new_history = set(self._historian[obj.address])
-        expired = old_history - new_history
-        for expired_frame in expired:
-            self._del_secret(expired_frame)
+    def _fetch_dynamic_state(self, target):
+        ''' Grabs the state of the dynamic target. Will either return a
+        bytes-like object, or a Guid. The latter indicates a linked
+        object.
         
-        # Get our most recent state and update the object.
-        obj.update(
-            state = self._resolve_dynamic_state(target), 
-            _preexisting=True
-        )
-        
-        return True
-        
-    def sync_static(self, obj):
-        ''' Ensures the obj's state matches its associated plaintext. If
-        not, raise.
+        However, can't currently handle using a GIDC as a target.
         '''
-        raise NotImplementedError('Have yet to set up static syncing.')
+        # Unpack the target container and extract the plaintext.
+        # NOTE THAT THIS IS GOING TO CAUSE PROBLEMS if it's a nested 
+        # dynamic binding. Will probably need to make this recursive at 
+        # some point in the future.
+        unpacked = self._identity.unpack_any(
+            self.persister.get(target)
+        )
+        if isinstance(unpacked, GEOC):
+            try:
+                state = self._identity.receive_container(
+                    author = self._retrieve_contact(unpacked.author),
+                    secret = self._get_secret(target),
+                    container = unpacked
+                )
+            except SecurityError:
+                self._abandon_secret(target)
+                raise
+            else:
+                self._commit_secret(target)
+            
+        elif isinstance(unpacked, GOBD):
+            # Simply return the target as the state, since we're linking to it.
+            state = target
+            
+        else:
+            raise RuntimeError(
+                'The dynamic binding has an illegal target and is therefore '
+                'invalid.'
+            )
+            
+        return state
         
     def freeze_dynamic(self, guid_dynamic):
         ''' Creates a static binding for the most current state of a 
@@ -773,62 +752,6 @@ class AgentBase:
             
         return plaintext
         
-    def _resolve_dynamic_state(self, target):
-        ''' Recursively find the state of the dynamic target. Correctly 
-        handles (?) nested dynamic bindings. DOES NOT GUARANTEE that it
-        will return a plaintext -- it may return nested RawObjs instead.
-        
-        However, can't currently handle using a GIDC as a target.
-        '''
-        # Unpack the target container and extract the plaintext.
-        # NOTE THAT THIS IS GOING TO CAUSE PROBLEMS if it's a nested 
-        # dynamic binding. Will probably need to make this recursive at 
-        # some point in the future.
-        unpacked = self._identity.unpack_any(
-            self.persister.get(target)
-        )
-        if isinstance(unpacked, GEOC):
-            try:
-                state = self._identity.receive_container(
-                    author = self._retrieve_contact(unpacked.author),
-                    secret = self._get_secret(target),
-                    container = unpacked
-                )
-            except SecurityError:
-                self._abandon_secret(target)
-                raise
-            else:
-                self._commit_secret(target)
-            
-        elif isinstance(unpacked, GOBD):
-            # Call recursively.
-            nested_target = self._identity.receive_bind_dynamic(
-                binder = self._retrieve_contact(unpacked.author),
-                binding = unpacked
-            )
-            upstream = self._resolve_dynamic_state(nested_target)
-            
-            # # This is for the rewrite
-            # # State is now a Guid.
-            # state = nested_target
-            # # End rewrite
-            
-            state = RawObj(
-                dispatch = self,
-                state = upstream,
-                dynamic = True,
-                _preexisting = True,
-                _legroom = self._legroom
-            )
-            
-        else:
-            raise RuntimeError(
-                'The dynamic binding has an illegal target and is therefore '
-                'invalid.'
-            )
-            
-        return state
-        
     def get_guid(self, guid):
         ''' Gets a new local copy of the object, assuming the Agent has 
         access to it, as identified by guid. Does not automatically 
@@ -873,7 +796,7 @@ class AgentBase:
             )
             
             # Recursively grab the plaintext once we add the secret
-            state = self._resolve_dynamic_state(target)
+            state = self._fetch_dynamic_state(target)
             
             # Add the dynamic guid to historian using our own _legroom param.
             self._historian[guid] = collections.deque(
@@ -883,7 +806,7 @@ class AgentBase:
             
         else:
             raise ValueError(
-                'Guid resolves to an invalid Golix object. get_object must '
+                'Guid resolves to an invalid Golix object. get_guid must '
                 'target either a container (GEOC) or a dynamic binding (GOBD).'
             )
             
@@ -921,104 +844,6 @@ class AgentBase:
             key = ratcheted[:len_key],
             seed = ratcheted[len_key:]
         )
-        
-        
-class AgentAccount:
-    ''' Agent accounts include various utility functions for agent 
-    persistence across multiple devices and/or logins.
-    
-    Must be paired (also classed with) AgentBase and DispatcherBase.
-    Will not work without them.
-    '''
-    def __init__(self, _preexisting=None, *args, **kwargs):
-        '''
-        _preexisting isinstance tuple
-            _preexisting[0] isinstance golix.Guid
-            _preexisting[1] isinstance golix.Secret
-        '''
-        super().__init__(_preexisting=_preexisting, *args, **kwargs)
-        
-        if _preexisting is None:
-            self._bootstrap = AgentBootstrap(
-                agent = self,
-                obj = self._new_bootstrap_container()
-            )
-            # Default for legroom. Currently hard-coded and not overrideable.
-            self._bootstrap['legroom'] = self.DEFAULT_LEGROOM
-            
-        else:
-            # Get bootstrap
-            bootstrap_guid = _preexisting[0]
-            bootstrap_secret = _preexisting[1]
-            self._set_secret_pending(
-                guid = bootstrap_guid,
-                secret = bootstrap_secret
-            )
-            bootstrap_obj = self.get_object(bootstrap_guid)
-            bootstrap = AgentBootstrap.from_existing(
-                obj = bootstrap_obj,
-                agent = self
-            )
-            self._bootstrap = bootstrap
-        
-    def _new_bootstrap_container(self):
-        ''' Creates a new container to use for the bootstrap object.
-        '''
-        padding_size = int.from_bytes(os.urandom(1), byteorder='big')
-        padding = os.urandom(padding_size)
-        return self.new_object(padding, dynamic=True)
-        
-    @property
-    def _legroom(self):
-        ''' Get the legroom from our bootstrap. If it hasn't been 
-        created yet (aka within __init__), return the class default.
-        '''
-        try:
-            return self._bootstrap['legroom']
-        except (AttributeError, KeyError):
-            # Default to the parent implementation
-            return super()._legroom
-        
-    def register(self, password):
-        ''' Save the agent's identity to a GEOC object.
-        
-        THIS NEEDS TO BE A DYNAMIC BINDING SO IT CAN UPDATE THE KEY TO
-        THE BOOTSTRAP OBJECT. Plus, futureproofing. But, we also cannot,
-        under any circumstances, reuse a Secret. So, instead of simply 
-        using the scrypt output directly, we should put it through a
-        secondary hkdf, using the previous frame guid as salt, to ensure
-        a new key, while maintaining updateability and accesibility.
-        '''
-        # Condense everything we need to rebuild self._golix_provider
-        keys = self._golix_provider._serialize()
-        # Store the guid for the dynamic bootstrap object
-        bootstrap = self._bootstrap_binding
-        # Create some random-length, random padding to make it harder to
-        # guess that our end-product GEOC is a saved Agent
-        padding = None
-        # Put it all into a GEOC.
-        # Scrypt the password. Salt against the author GUID, which we know
-        # (when reloading) from the author of the file!
-        # Use 2**14 for t<=100ms, 2**20 for t<=5s
-        combined = scrypt(
-            password = password, 
-            salt = bytes(self._golix_provider.guid),
-            key_len = 48,
-            N = 2**15,
-            r = 8,
-            p = 1
-        )
-        secret = Secret(
-            cipher = 1,
-            key = combined[:32],
-            seed = combined[32:48]
-        )
-        
-    @classmethod
-    def login(cls, password, data, persister, dispatcher):
-        ''' Load an Agent from an identity contained within a GEOC.
-        '''
-        pass
         
         
 class DispatcherBase(metaclass=abc.ABCMeta):
@@ -1072,17 +897,6 @@ class _TestDispatcher(DispatcherBase):
         self._orphan_shares_outgoing = []
         self._orphan_shares_failed = []
         
-    # def initiate_handshake(self, obj, recipient, api_id):
-    #     ''' Creates a handshake for the API_id with recipient.
-        
-    #     msg isinstance dict(like) and must contain a valid api_id
-    #     recipient isinstance Guid
-    #     '''
-    #     handshake = super().initiate_handshake(packed_msg, recipient)
-    #     self._orphan_shares_pending.append(handshake)
-        
-    #     return True
-        
     def dispatch_handshake(self, target):
         ''' Receives the target *object* for a handshake (note: NOT the 
         handshake itself) and dispatches it to the appropriate 
@@ -1091,8 +905,7 @@ class _TestDispatcher(DispatcherBase):
         handshake is a StaticObject or DynamicObject.
         Raises HandshakeError if unsuccessful.
         '''
-        handshake = self.get_object(target)
-        self._orphan_shares_incoming.append(handshake)
+        self._orphan_shares_incoming.append(target)
         
     def dispatch_handshake_ack(self, ack, target):
         ''' Receives a handshake acknowledgement and dispatches it to
@@ -1225,7 +1038,7 @@ class Dispatcher(DispatcherBase):
         
         return state, api_id, app_token
         
-    def get_object_rewrite(self, asking_token, guid, *args, **kwargs):
+    def get_object(self, asking_token, guid, *args, **kwargs):
         ''' Gets an object by guid for a specific endpoint. Currently 
         only works for non-private objects.
         '''
@@ -1239,7 +1052,7 @@ class Dispatcher(DispatcherBase):
         else:
             author, dynamic, wrapped_state = self.get_guid(guid)
             state, api_id, app_token = self._unpack_dispatchable(wrapped_state)
-            self.register_object_rewrite(guid, author, state, api_id, app_token, dynamic)
+            self.register_object(guid, author, state, api_id, app_token, dynamic)
         
         if app_token != bytes(4) and app_token != asking_token:
             raise DispatchError(
@@ -1250,7 +1063,7 @@ class Dispatcher(DispatcherBase):
         
         return author, state, api_id, app_token, dynamic
         
-    def update_object_rewrite(self, asking_token, guid, state):
+    def update_object(self, asking_token, guid, state):
         ''' Initiates an update of an object. Must be tied to a specific
         endpoint, to prevent issuing that endpoint a notification in 
         return.
@@ -1281,29 +1094,46 @@ class Dispatcher(DispatcherBase):
         # Successful, so propagate local
         self._state_by_guid[guid] = state
         # Finally, tell everyone what's up.
-        self._distribute_to_endpoints_rewrite(guid, skip_token=asking_token)
+        self._distribute_to_endpoints(guid, skip_token=asking_token)
         
-    def register_object_rewrite(self, address, author, state, api_id, app_token, dynamic):
+    def register_object(self, address, author, state, api_id, app_token, dynamic):
         ''' Sets all applicable tracking dict entries.
         '''
         self._dynamic_by_guid[address] = dynamic
         self._state_by_guid[address] = state
         self._author_by_guid[address] = author
+        self._token_by_guid[address] = app_token
+        self._api_by_guid[address] = api_id
         
-        if app_token is not None:
-            self._token_by_guid[address] = app_token
-        else:
-            self._token_by_guid[address] = bytes(4)
-            
-        if api_id is not None:
-            self._api_by_guid[address] = api_id
-        else:
-            self._api_by_guid[address] = bytes(65)
-            
         if dynamic:
             self.persister.subscribe(address, self.dispatch_update)
+            
+    def _normalize_api_and_token(self, api_id, app_token):
+        ''' Converts app_token and api_id into appropriate values from 
+        what may or may not be None.
+        '''
+        undefined = (app_token is None and api_id is None)
         
-    def new_object_rewrite(self, asking_token, state, api_id, app_token, dynamic, _legroom=None):
+        if undefined:
+            raise DispatchError(
+                'Cannot leave both app_token and api_id undefined.'
+            )
+            
+        if app_token is None:
+            app_token = bytes(4)
+        else:
+            # Todo: "type" check app_token.
+            pass
+            
+        if api_id is None:
+            # Todo: "type" check api_id.
+            api_id = bytes(65)
+        else:
+            pass
+            
+        return api_id, app_token
+        
+    def new_object(self, asking_token, state, api_id, app_token, dynamic, _legroom=None):
         ''' Creates a new object with the upstream golix provider.
         '''
         # Restore a default legroom.
@@ -1311,7 +1141,7 @@ class Dispatcher(DispatcherBase):
             _legroom = self._legroom
             
         # Make sure api_id & app_token are valid, and then wrap them up for use
-        self._check_dispatch_definition(api_id, app_token)
+        api_id, app_token = self._normalize_api_and_token(api_id, app_token)
         wrapped_state = self._pack_dispatchable(state, api_id, app_token)
             
         if dynamic:
@@ -1328,79 +1158,29 @@ class Dispatcher(DispatcherBase):
             dynamic = False
             address = self.new_static(state=wrapped_state)
             
-        self.register_object_rewrite(address, self.whoami, state, api_id, app_token, dynamic)
+        self.register_object(address, self.whoami, state, api_id, app_token, dynamic)
         # Note: should we add some kind of mechanism to defer passing to other 
         # endpoints until we update the one that actually requested the obj?
-        self._distribute_to_endpoints_rewrite(
+        self._distribute_to_endpoints(
             guid = address, 
             skip_token = asking_token
         )
         
         return address
         
-    def share_object_rewrite(self, guid, recipient, requesting_token):
+    def share_object(self, asking_token, guid, recipient):
         ''' Do the whole super thing, and then record which application
         initiated the request, and who the recipient was.
         '''
         try:
             self._outstanding_shares[guid] = (
-                requesting_token, 
+                asking_token, 
                 recipient
             )
-            super().share_object_rewrite(guid, recipient)
+            super().share_object(guid, recipient)
         except:
             del self._outstanding_shares[guid]
             raise
-            
-    def _check_dispatch_definition(self, api_id, app_token):
-        ''' Ensures proper definitions for api_id and app_token, such as
-        length and type, as well as ensuring at least one is defined.
-        '''
-        if app_token is not None:
-            # Todo: "type" check app_token.
-            pass
-        elif api_id is not None:
-            # Todo: "type" check api_id.
-            pass
-        else:
-            raise ValueError('api_id and app_token cannot both be None.')
-        
-    def register_object(self, obj):
-        ''' Starts tracking an object. Must be DispatchObj.
-        
-        Note that if you don't call register_object during creation, the 
-        object may be garbage collected (by python, not golix) 
-        prematurely.
-        
-        Note that this gets called for all object creations, including
-        from handshakes. There should be no need to call it manually.
-        '''
-        if not isinstance(obj, DispatchObj):
-            raise TypeError('May only register DispatchObj instances.')
-            
-        if obj.address not in self._state_by_guid:
-            # This line can be straight-up deleted at some point.
-            self._objs_by_guid[obj.address] = obj
-            
-            # Forwaaaaard march! (Aka keep this stuff)
-            if isinstance(obj.state, DispatchObj):
-                state = obj.state.address
-            else:
-                state = obj.state
-            
-            self._state_by_guid[obj.address] = state
-            
-            if obj.app_token is not None:
-                self._token_by_guid[obj.address] = obj.app_token
-            else:
-                self._api_by_guid[obj.address] = obj.api_id
-                
-            # Register distribution as an update callback if it's dynamic
-            if obj.is_dynamic:
-                obj.add_callback(self._distribute_to_endpoints)
-                
-            # Finally, distribute the object to any applicable APIs
-            self._distribute_to_endpoints(obj)
     
     def dispatch_share(self, guid):
         ''' Dispatches shares that were not created via handshake.
@@ -1416,7 +1196,7 @@ class Dispatcher(DispatcherBase):
         Raises HandshakeError if unsuccessful.
         '''
         # Go ahead and distribute it to the appropriate endpoints.
-        self._distribute_to_endpoints_rewrite(target)
+        self._distribute_to_endpoints(target)
         
         # Note that unless we raise a HandshakeError RIGHT NOW, we'll be
         # sending an ack to the handshake, just to indicate successful receipt 
@@ -1435,7 +1215,7 @@ class Dispatcher(DispatcherBase):
         del self._outstanding_shares[target]
         # Now notify just the requesting app of the successful share. Note that
         # this will also handle any missing endpoints.
-        self._attempt_contact_endpoint_rewrite(
+        self._attempt_contact_endpoint(
             app_token, 
             'notify_share_success',
             target, 
@@ -1452,46 +1232,12 @@ class Dispatcher(DispatcherBase):
         del self._outstanding_shares[target]
         # Now notify just the requesting app of the failed share. Note that
         # this will also handle any missing endpoints.
-        self._attempt_contact_endpoint_rewrite(
+        self._attempt_contact_endpoint(
             app_token, 
             'notify_share_failure',
             target, 
             recipient = recipient
         )
-                
-    # def _distribute_to_endpoints(self, obj, tokens_to_skip=None):
-    def _distribute_to_endpoints(self, obj, skip_token=None):
-        ''' Passes the object to all endpoints supporting its api via 
-        command.
-        
-        If tokens to skip is defined, they will be skipped.
-        tokens_to_skip isinstance iter(app_tokens)
-        
-        Should suppressing notifications for original creator be handled
-        by the endpoint instead?
-        '''
-        # if tokens_to_skip is None:
-        #     tokens = self._api_ids[obj.api_id]
-        # else:
-        #     tokens = self._api_ids[obj.api_id] - frozenset(tokens_to_skip)
-            
-        # The app token is defined, so contact that endpoint (and only that 
-        # endpoint) directly
-        if obj.app_token is not None:
-            self._attempt_contact_endpoint(obj.app_token, 'notify_object', obj)
-            
-        else:
-            if obj.api_id not in self._api_ids:
-                warnings.warn(HandshakeWarning(
-                    'Agent lacks application to handle app id.'
-                ))
-                self._orphan_shares_incoming.append(obj)
-            else:
-                # for token in tokens:
-                for token in self._api_ids[obj.api_id]:
-                    # It's mildly dangerous to do this -- what if we throw an 
-                    # error in _attempt_contact_endpoint?
-                    self._attempt_contact_endpoint(token, 'notify_object', obj)
                     
     def dispatch_update(self, guid):
         ''' Updates local state tracking and distributes the update to 
@@ -1502,9 +1248,9 @@ class Dispatcher(DispatcherBase):
         # That will return None if no update was found
         if result is not None:
             self._state_by_guid[guid] = result
-            self._distribute_to_endpoints_rewrite(guid)
+            self._distribute_to_endpoints(guid)
                     
-    def _distribute_to_endpoints_rewrite(self, guid, skip_token=None):
+    def _distribute_to_endpoints(self, guid, skip_token=None):
         ''' Passes the object to all endpoints supporting its api via 
         command.
         
@@ -1537,26 +1283,26 @@ class Dispatcher(DispatcherBase):
             warnings.warn(HandshakeWarning(
                 'Agent lacks application to handle app id.'
             ))
-            # self._orphan_shares_incoming.append(obj)
+            # self._orphan_shares_incoming.append(guid)
             
         for token in callsheet:
             # It's mildly dangerous to do this -- what if we throw an 
             # error in _attempt_contact_endpoint?
-            self._attempt_contact_endpoint_rewrite(
+            self._attempt_contact_endpoint(
                 token, 
                 'notify_object', 
                 guid, 
                 state = self._state_by_guid[guid]
             )
                 
-    def _attempt_contact_endpoint_rewrite(self, app_token, command, guid, *args, **kwargs):
+    def _attempt_contact_endpoint(self, app_token, command, guid, *args, **kwargs):
         ''' We have a token defined for the api_id, but we don't know if
         the application is locally installed and running. Try to use it,
         and if we can't, warn and stash the object.
         '''
         if app_token not in self._known_tokens:
             raise DispatchError(
-                'Agent lacks application with matching token. WARNING: obj '
+                'Agent lacks application with matching token. WARNING: object '
                 'may have been discarded as a result!'
             )
         
@@ -1589,47 +1335,6 @@ class Dispatcher(DispatcherBase):
                 raise ValueError('Invalid command.') from e
                 
             do_dispatch(guid, *args, **kwargs)
-                
-    def _attempt_contact_endpoint(self, app_token, command, obj, *args, **kwargs):
-        ''' We have a token defined for the api_id, but we don't know if
-        the application is locally installed and running. Try to use it,
-        and if we can't, warn and stash the object.
-        '''
-        if app_token not in self._known_tokens:
-            raise DispatchError(
-                'Agent lacks application with matching token. WARNING: obj '
-                'may have been discarded as a result!'
-            )
-        
-        elif app_token not in self._active_tokens:
-            warnings.warn(DispatchWarning(
-                'App token currently unavailable.'
-            ))
-            # Add it to the (potentially jit) dict record of waiting objs, so
-            # we can continue later.
-            self._pending_by_token[app_token][obj.address] = (
-                obj, 
-                app_token, 
-                command, 
-                args, 
-                kwargs
-            )
-            
-        else:
-            # This is a quick way of resolving command into the endpoint 
-            # operation.
-            endpoint = self._active_tokens[app_token]
-            
-            try:
-                do_dispatch = {
-                    'notify_object': endpoint.notify_object,
-                    'notify_share_success': endpoint.notify_share_success,
-                    'notify_share_failure': endpoint.notify_share_failure,
-                }[command]
-            except KeyError as e:
-                raise ValueError('Invalid command.') from e
-                
-            do_dispatch(obj, *args, **kwargs)
     
     def register_endpoint(self, endpoint):
         ''' Registers an endpoint and all of its appdefs / APIs. If the
@@ -1685,191 +1390,6 @@ class Dispatcher(DispatcherBase):
         # Todo: something to make sure the token is actually being used?
         self._known_tokens.add(token)
         return token
-        
-    # def new_object(self, state, dynamic=True, _legroom=None):
-    def new_object(self, state, api_id=None, app_token=None, *args, **kwargs):
-        ''' Overrides super() object creation to support DispatchObj
-         instances instead of RawObj instances. Also puts
-        the objects into the internal _objs_by_guid store, so that
-        they aren't GC'd by Python and can therefore be used by end
-        applications.
-        '''
-        obj = DispatchObj(
-            dispatch = self,
-            state = state,
-            api_id = api_id,
-            app_token = app_token,
-            *args, **kwargs
-        )
-        return obj
-        
-    def get_object(self, guid):
-        ''' Overrides super() object getting to
-        support DispatchObj instances instead of RawObj instances.
-        '''
-        author, is_dynamic, state = self.get_guid(guid)
-            
-        obj = DispatchObj(
-            # Todo: make the dispatch more intelligent
-            dispatch = self,
-            state = state,
-            dynamic = is_dynamic,
-            _preexisting = (guid, author)
-        )
-        return obj
-        
-    def share_object(self, obj, recipient, requesting_token):
-        ''' Do the whole super thing, and then record which application
-        initiated the request, and who the recipient was.
-        '''
-        try:
-            self._outstanding_shares[obj.address] = (
-                requesting_token, 
-                obj, 
-                recipient
-            )
-            super().share_object(obj, recipient)
-        except:
-            del self._outstanding_shares[obj.address]
-            raise
-        
-    def _do_dynamic(self, state, guid_dynamic=None, history=None, secret=None):
-        ''' Actually generate a dynamic binding.
-        '''
-        if isinstance(state, Guid):
-            target = state
-            secret = self._get_secret(target)
-            container = None
-            
-        else:
-            container, secret = self._make_static(state, secret)
-            target = container.guid
-            
-        dynamic = self._identity.make_bind_dynamic(
-            target = target,
-            guid_dynamic = guid_dynamic,
-            history = history
-        )
-            
-        # Add the secret to the chamber. HOWEVER, associate it with the frame
-        # guid, so that (if we've held it as a static object) it won't be 
-        # garbage collected when we advance past legroom. Simultaneously add
-        # a temporary proxy to it so that it's accessible from the actual 
-        # container's guid.
-        self._set_secret(dynamic.guid, secret)
-        self._set_secret_temporary(target, secret)
-            
-        self.persister.publish(dynamic.packed)
-        if container is not None:
-            self.persister.publish(container.packed)
-            
-        self._dynamic_targets[dynamic.guid_dynamic] = target
-        
-        return dynamic
-        
-    def sync_dynamic(self, guid):
-        ''' Checks self.persister for a new dynamic frame for obj, and 
-        if one exists, gets its state and calls an update on obj.
-        
-        Should probably modify this to also check state vs current.
-        '''
-        # Is this doing what I think it's doing?
-        frame_guid = guid
-        unpacked_binding = self._identity.unpack_bind_dynamic(
-            self.persister.get(frame_guid)
-        )
-        guid = unpacked_binding.guid_dynamic
-        
-        
-        # First, make sure we're not being asked to update something we 
-        # initiated the update for.
-        if guid not in self._ignore_subs_because_updating:
-            # This bit trusts that the persistence provider is enforcing proper
-            # monotonic state progression for dynamic bindings.
-            last_known_frame = self._historian[guid][0]
-            if unpacked_binding.guid == last_known_frame:
-                return None
-                
-            # Note: this probably (?) depends on our memory persister checking 
-            # author consistency
-            binder = self._retrieve_contact(unpacked_binding.binder)
-            
-            # Figure out the new target
-            target = self._identity.receive_bind_dynamic(
-                binder = binder,
-                binding = unpacked_binding
-            )
-            
-            secret = self._get_secret(guid)
-            offset = unpacked_binding.history.index(last_known_frame)
-            
-            # Count backwards in index (and therefore forward in time) from the 
-            # first new frame to zero (and therefore the current frame).
-            # Note that we're using the previous frame's guid as salt.
-            # This attempts to heal any broken ratchet.
-            for ii in range(offset, -1, -1):
-                secret = self._ratchet_secret(
-                    secret = secret,
-                    guid = unpacked_binding.history[ii]
-                )
-                
-            # Now assign the secret, persistently to the frame guid and temporarily
-            # to the container guid
-            self._set_secret(unpacked_binding.guid, secret)
-            self._set_secret_temporary(target, secret)
-            
-            # Check to see if we're losing anything from historian while we update
-            # it. Remove those secrets.
-            old_history = set(self._historian[guid])
-            self._historian[guid].appendleft(unpacked_binding.guid)
-            new_history = set(self._historian[guid])
-            expired = old_history - new_history
-            for expired_frame in expired:
-                self._del_secret(expired_frame)
-            
-            return self._fetch_dynamic_state(target)
-            
-        else:
-            return None
-        
-    def _fetch_dynamic_state(self, target):
-        ''' Grabs the state of the dynamic target. Will either return a
-        bytes-like object, or a Guid. The latter indicates a linked
-        object.
-        
-        However, can't currently handle using a GIDC as a target.
-        '''
-        # Unpack the target container and extract the plaintext.
-        # NOTE THAT THIS IS GOING TO CAUSE PROBLEMS if it's a nested 
-        # dynamic binding. Will probably need to make this recursive at 
-        # some point in the future.
-        unpacked = self._identity.unpack_any(
-            self.persister.get(target)
-        )
-        if isinstance(unpacked, GEOC):
-            try:
-                state = self._identity.receive_container(
-                    author = self._retrieve_contact(unpacked.author),
-                    secret = self._get_secret(target),
-                    container = unpacked
-                )
-            except SecurityError:
-                self._abandon_secret(target)
-                raise
-            else:
-                self._commit_secret(target)
-            
-        elif isinstance(unpacked, GOBD):
-            # Simply return the target as the state, since we're linking to it.
-            state = target
-            
-        else:
-            raise RuntimeError(
-                'The dynamic binding has an illegal target and is therefore '
-                'invalid.'
-            )
-            
-        return state
         
         
 class EmbeddedMemoryAgent(AgentBase, MemoryPersister, _TestDispatcher):

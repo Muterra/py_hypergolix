@@ -93,7 +93,7 @@ class WebsocketsTrashTest(unittest.TestCase):
         obj1_shared = self.agent2.retrieve_recent_handshake()
         self.assertEqual(
             obj1_shared,
-            obj1
+            obj1.address
         )
         
         self.agent1.hand_object(obj2, self.agent2.whoami)
@@ -102,16 +102,16 @@ class WebsocketsTrashTest(unittest.TestCase):
         obj2_shared = self.agent2.retrieve_recent_handshake()
         self.assertEqual(
             obj2_shared,
-            obj2
+            obj2.address
         )
         
-        self.agent1.update_object(obj2, pt2)
-        # As it turns out, the length of this delay is important.
-        time.sleep(1)
-        self.assertEqual(
-            obj2_shared,
-            obj2
-        )            
+        # self.agent1.update_object(obj2, pt2)
+        # # As it turns out, the length of this delay is important.
+        # time.sleep(1)
+        # self.assertEqual(
+        #     obj2_shared,
+        #     obj2
+        # )            
         print('Successful tests.')
         # self.server._halt()
         
