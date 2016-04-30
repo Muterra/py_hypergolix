@@ -157,8 +157,13 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         if guid in self._known_guids:
             self.send_update(guid, state)
         else:
-            self._known_guids.add(guid)
+            self.register_guid(guid)
             self.send_object(guid, state)
+            
+    def register_guid(self, guid):
+        ''' Pretty simple wrapper to make sure we know about the guid.
+        '''
+        self._known_guids.add(guid)
     
     @abc.abstractmethod
     def send_object(self, obj):
@@ -284,6 +289,9 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         # Note: need to add some kind of handling for legroom.
         _legroom = None
         
+        # Let the endpoint know to remember it
+        endpoint.register_guid(guid)
+        
         return self._pack_object_def(
             guid,
             author,
@@ -322,6 +330,9 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
             dynamic = dynamic,
             _legroom = _legroom
         )
+        
+        # Let the endpoint know to remember it
+        endpoint.register_guid(address)
         
         return bytes(address)
         

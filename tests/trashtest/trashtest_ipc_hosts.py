@@ -105,6 +105,9 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             # debug = True
         )
         
+        endpoints = set(self.host.connections.values())
+        self.app2endpoint = list(endpoints - {self.app1endpoint})[0]
+        
         self.__api_id = bytes(64) + b'1'
         
     def test_client1(self):
