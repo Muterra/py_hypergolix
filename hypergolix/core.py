@@ -1024,6 +1024,18 @@ class Dispatcher(DispatcherBase):
         
         if dynamic:
             self.persister.subscribe(address, self.dispatch_update)
+            
+    def deregister_object(self, address):
+        ''' Removes all applicable tracking, state management, etc.
+        '''
+        if self._dynamic_by_guid[address]:
+            self.persister.unsubscribe(address, self.dispatch_update)
+        
+        del self._dynamic_by_guid[address]
+        del self._state_by_guid[address]
+        del self._author_by_guid[address]
+        del self._token_by_guid[address]
+        del self._api_by_guid[address]
         
     def _pack_dispatchable(self, state, api_id, app_token):
         ''' Packs the object state, its api_id, and its app_token into a
@@ -1169,9 +1181,11 @@ class Dispatcher(DispatcherBase):
         # Try updating golix before local.
         # Temporarily silence updates from persister about the guid we're 
         # in the process of updating
-        self._ignore_subs_because_updating.add(guid)
-        self.update_dynamic(guid, wrapped_state)
-        self._ignore_subs_because_updating.remove(guid)
+        try:
+            self._ignore_subs_because_updating.add(guid)
+            self.update_dynamic(guid, wrapped_state)
+        finally:
+            self._ignore_subs_because_updating.remove(guid)
         # Successful, so propagate local
         self._state_by_guid[guid] = state
         # Finally, tell everyone what's up.
@@ -1253,7 +1267,28 @@ class Dispatcher(DispatcherBase):
         NOTE THAT THIS DELETES ALL COPIES OF THE OBJECT! It will become
         subsequently unavailable to other applications using it.
         '''
-        pass
+        if guid not in self._state_by_guid:
+            raise DispatchError(
+                'Object unknown to dispatch; cannot delete. Call get_object.'
+            )
+            
+        try:
+            self._ignore_subs_because_updating.add(guid)
+            self.delete_guid(guid)
+        finally:
+            self._ignore_subs_because_updating.remove(guid)
+        
+        # Todo: check to see if this actually results in deleting the object
+        # upstream.
+        
+        # There's only a race condition here if the object wasn't actually 
+        # removed upstream.
+        self._distribute_to_endpoints(
+            guid, 
+            skip_token = asking_token, 
+            deleted = True
+        )
+        self.deregister_object(guid)
         
     def discard_object(self, asking_token, guid):
         ''' Removes the object from *only the asking application*. The
@@ -1342,7 +1377,7 @@ class Dispatcher(DispatcherBase):
             self._state_by_guid[guid] = state
             self._distribute_to_endpoints(guid)
                     
-    def _distribute_to_endpoints(self, guid, skip_token=None):
+    def _distribute_to_endpoints(self, guid, skip_token=None, deleted=False):
         ''' Passes the object to all endpoints supporting its api via 
         command.
         
@@ -1378,14 +1413,23 @@ class Dispatcher(DispatcherBase):
             # self._orphan_shares_incoming.append(guid)
             
         for token in callsheet:
-            # It's mildly dangerous to do this -- what if we throw an 
-            # error in _attempt_contact_endpoint?
-            self._attempt_contact_endpoint(
-                token, 
-                'notify_object', 
-                guid, 
-                state = self._state_by_guid[guid]
-            )
+            if deleted:
+                # It's mildly dangerous to do this -- what if we throw an 
+                # error in _attempt_contact_endpoint?
+                self._attempt_contact_endpoint(
+                    token, 
+                    'send_delete', 
+                    guid
+                )
+            else:
+                # It's mildly dangerous to do this -- what if we throw an 
+                # error in _attempt_contact_endpoint?
+                self._attempt_contact_endpoint(
+                    token, 
+                    'notify_object', 
+                    guid, 
+                    state = self._state_by_guid[guid]
+                )
                 
     def _attempt_contact_endpoint(self, app_token, command, guid, *args, **kwargs):
         ''' We have a token defined for the api_id, but we don't know if
@@ -1420,6 +1464,7 @@ class Dispatcher(DispatcherBase):
             try:
                 do_dispatch = {
                     'notify_object': endpoint.notify_object,
+                    'send_delete': endpoint.send_delete,
                     'notify_share_success': endpoint.notify_share_success,
                     'notify_share_failure': endpoint.notify_share_failure,
                 }[command]

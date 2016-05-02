@@ -178,6 +178,17 @@ class TestDispatching(unittest.TestCase):
             asking_token = self.endpoint2.app_token,
             guid = address2
         )
+        
+        self.agent1.delete_object(
+            asking_token = self.endpoint1.app_token,
+            guid = address1
+        )
+        
+        self.assertNotIn(address1, self.agent1._dynamic_by_guid)
+        self.assertNotIn(address1, self.agent1._state_by_guid)
+        self.assertNotIn(address1, self.agent1._author_by_guid)
+        self.assertNotIn(address1, self.agent1._token_by_guid)
+        self.assertNotIn(address1, self.agent1._api_by_guid)
 
         # obj1 = self.agent1.new_object(pt0, dynamic=False)
         # obj2 = self.agent1.new_object(pt1, dynamic=True)
