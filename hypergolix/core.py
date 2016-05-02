@@ -580,7 +580,7 @@ class AgentBase:
             for expired_frame in expired:
                 self._del_secret(expired_frame)
             
-            return self._fetch_dynamic_state(target)
+            return guid, self._fetch_dynamic_state(target)
             
         else:
             return None
@@ -1038,9 +1038,10 @@ class Dispatcher(DispatcherBase):
         
         return state, api_id, app_token
         
-    def get_object(self, asking_token, guid, *args, **kwargs):
-        ''' Gets an object by guid for a specific endpoint. Currently 
-        only works for non-private objects.
+    def _get_object(self, guid):
+        ''' Gets an object, but doesn't do any tracking based on the 
+        requestor. Also doesn't check to see if the object is private or
+        not.
         '''
         if guid in self._state_by_guid:
             state = self._state_by_guid[guid]
@@ -1053,6 +1054,14 @@ class Dispatcher(DispatcherBase):
             author, dynamic, wrapped_state = self.get_guid(guid)
             state, api_id, app_token = self._unpack_dispatchable(wrapped_state)
             self.register_object(guid, author, state, api_id, app_token, dynamic)
+        
+        return author, state, api_id, app_token, dynamic
+        
+    def get_object(self, asking_token, guid, *args, **kwargs):
+        ''' Gets an object by guid for a specific endpoint. Currently 
+        only works for non-private objects.
+        '''
+        author, state, api_id, app_token, dynamic = self._get_object(guid)
         
         if app_token != bytes(4) and app_token != asking_token:
             raise DispatchError(
@@ -1172,12 +1181,23 @@ class Dispatcher(DispatcherBase):
         ''' Do the whole super thing, and then record which application
         initiated the request, and who the recipient was.
         '''
+        # First make sure we actually know the object
+        try:
+            if self._token_by_guid[guid] != bytes(4):
+                raise DispatchError('Cannot share a private object.')
+        except KeyError as e:
+            raise DispatchError('Attempt to share an unknown object.') from e
+        
         try:
             self._outstanding_shares[guid] = (
                 asking_token, 
                 recipient
             )
-            super().share_object(guid, recipient)
+            
+            # Currently, just perform a handshake. In the future, move this 
+            # to a dedicated exchange system.
+            self.hand_guid(guid, recipient)
+            
         except:
             del self._outstanding_shares[guid]
             raise
@@ -1195,8 +1215,16 @@ class Dispatcher(DispatcherBase):
         handshake is a StaticObject or DynamicObject.
         Raises HandshakeError if unsuccessful.
         '''
+        # Well first we need to actually get the object, so it's available to
+        # distribute.
+        author, state, api_id, app_token, dynamic = self._get_object(target)
+        
         # Go ahead and distribute it to the appropriate endpoints.
         self._distribute_to_endpoints(target)
+        
+        # Note: we should add something in here to catch issues if we can't
+        # distribute to endpoints or something, so that the handshake doesn't
+        # get stuck in limbo.
         
         # Note that unless we raise a HandshakeError RIGHT NOW, we'll be
         # sending an ack to the handshake, just to indicate successful receipt 
@@ -1243,11 +1271,14 @@ class Dispatcher(DispatcherBase):
         ''' Updates local state tracking and distributes the update to 
         the endpoints.
         '''
+        # NOTE THAT GUID HERE IS THE FRAME GUID, NOT THE DYNAMIC GUID!
+        # Todo: change that, because holy shit.
         # Okay, now do sync and stuff
         result = self.sync_dynamic(guid)
         # That will return None if no update was found
         if result is not None:
-            self._state_by_guid[guid] = result
+            guid, state = result
+            self._state_by_guid[guid] = state
             self._distribute_to_endpoints(guid)
                     
     def _distribute_to_endpoints(self, guid, skip_token=None):

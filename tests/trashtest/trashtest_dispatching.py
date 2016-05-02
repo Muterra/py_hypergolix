@@ -125,11 +125,24 @@ class TestDispatching(unittest.TestCase):
             dynamic = True
         )
         
-        # self.agent1.share_object(
-        #     asking_token = self.endpoint1.app_token,
-        #     guid = address2, 
-        #     recipient = self.agent2.whoami, 
-        # )
+        self.agent1.share_object(
+            asking_token = self.endpoint1.app_token,
+            guid = address2, 
+            recipient = self.agent2.whoami, 
+        )
+        
+        self.assertIn(address2, self.agent1._dynamic_by_guid)
+        self.assertIn(address2, self.agent1._state_by_guid)
+        self.assertIn(address2, self.agent1._author_by_guid)
+        self.assertIn(address2, self.agent1._token_by_guid)
+        self.assertIn(address2, self.agent1._api_by_guid)
+        
+        self.assertIn(address2, self.agent2._dynamic_by_guid)
+        self.assertIn(address2, self.agent2._state_by_guid)
+        self.assertIn(address2, self.agent2._author_by_guid)
+        self.assertIn(address2, self.agent2._token_by_guid)
+        self.assertIn(address2, self.agent2._api_by_guid)
+        
         self.agent1.update_object(
             asking_token = self.endpoint1.app_token,
             guid = address2,
