@@ -84,8 +84,6 @@ class TestDispatching(unittest.TestCase):
             name = 'Agent1, ep1'
         )
         cls.agent1.register_endpoint(cls.endpoint1)
-        # # This is fucking gross. Oh well, that's why it's a trashtest.
-        # cls.agent1.app_token = cls.endpoint1.app_token
         
         cls.agent2 = _TestDispatch(persister=cls.persister)
         cls.endpoint2 = _TestEndpoint(
@@ -100,10 +98,8 @@ class TestDispatching(unittest.TestCase):
         )
         cls.agent2.register_endpoint(cls.endpoint2)
         cls.agent2.register_endpoint(cls.endpoint3)
-        # This is fucking gross. See above.
-        # cls.agent2.app_token = cls.endpoint2.app_token
         
-    def test_appobj(self):
+    def test_trash(self):
         pt0 = b'I am a sexy stagnant beast.'
         pt1 = b'Hello, world?'
         pt2 = b'Hiyaback!'
@@ -149,6 +145,18 @@ class TestDispatching(unittest.TestCase):
             guid = address2,
             state = pt2
         )
+        
+        frozen2 = self.agent1.freeze_object(
+            asking_token = self.endpoint1.app_token,
+            guid = address2
+        )
+        
+        self.assertIn(address2, self.agent1._dynamic_by_guid)
+        self.assertIn(address2, self.agent1._state_by_guid)
+        self.assertIn(address2, self.agent1._author_by_guid)
+        self.assertIn(address2, self.agent1._token_by_guid)
+        self.assertIn(address2, self.agent1._api_by_guid)
+        self.assertEqual(self.agent1._state_by_guid[frozen2], self.agent1._state_by_guid[address2])
         
         address3 = self.agent2.new_object(
             asking_token = self.endpoint2.app_token,

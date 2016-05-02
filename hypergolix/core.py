@@ -1013,6 +1013,18 @@ class Dispatcher(DispatcherBase):
         # the ones who initiated the update. Simple set of guids.
         self._ignore_subs_because_updating = set()
         
+    def register_object(self, address, author, state, api_id, app_token, dynamic):
+        ''' Sets all applicable tracking dict entries.
+        '''
+        self._dynamic_by_guid[address] = dynamic
+        self._state_by_guid[address] = state
+        self._author_by_guid[address] = author
+        self._token_by_guid[address] = app_token
+        self._api_by_guid[address] = api_id
+        
+        if dynamic:
+            self.persister.subscribe(address, self.dispatch_update)
+        
     def _pack_dispatchable(self, state, api_id, app_token):
         ''' Packs the object state, its api_id, and its app_token into a
         format that can be read by a fellow dispatcher.
@@ -1037,85 +1049,6 @@ class Dispatcher(DispatcherBase):
         state = packed[74:]
         
         return state, api_id, app_token
-        
-    def _get_object(self, guid):
-        ''' Gets an object, but doesn't do any tracking based on the 
-        requestor. Also doesn't check to see if the object is private or
-        not.
-        '''
-        if guid in self._state_by_guid:
-            state = self._state_by_guid[guid]
-            api_id = self._api_by_guid[guid]
-            app_token = self._token_by_guid[guid]
-            author = self._author_by_guid[guid]
-            dynamic = self._dynamic_by_guid[guid]
-            
-        else:
-            author, dynamic, wrapped_state = self.get_guid(guid)
-            state, api_id, app_token = self._unpack_dispatchable(wrapped_state)
-            self.register_object(guid, author, state, api_id, app_token, dynamic)
-        
-        return author, state, api_id, app_token, dynamic
-        
-    def get_object(self, asking_token, guid, *args, **kwargs):
-        ''' Gets an object by guid for a specific endpoint. Currently 
-        only works for non-private objects.
-        '''
-        author, state, api_id, app_token, dynamic = self._get_object(guid)
-        
-        if app_token != bytes(4) and app_token != asking_token:
-            raise DispatchError(
-                'Attempted to load private object from different application.'
-            )
-        
-        self._requestors_by_guid[guid].add(asking_token)
-        
-        return author, state, api_id, app_token, dynamic
-        
-    def update_object(self, asking_token, guid, state):
-        ''' Initiates an update of an object. Must be tied to a specific
-        endpoint, to prevent issuing that endpoint a notification in 
-        return.
-        '''
-        try:
-            if not self._dynamic_by_guid[guid]:
-                raise DispatchError(
-                    'Object is not dynamic. Cannot update.'
-                )
-        except KeyError as e:
-            raise DispatchError(
-                'Object unknown to dispatcher. Call get_object on address to '
-                'sync it before updating.'
-            ) from e
-        
-        
-        # So now we know it's a dynamic object and that we know of it.
-        api_id = self._api_by_guid[guid]
-        app_token = self._token_by_guid[guid]
-        wrapped_state = self._pack_dispatchable(state, api_id, app_token)
-        
-        # Try updating golix before local.
-        # Temporarily silence updates from persister about the guid we're 
-        # in the process of updating
-        self._ignore_subs_because_updating.add(guid)
-        self.update_dynamic(guid, wrapped_state)
-        self._ignore_subs_because_updating.remove(guid)
-        # Successful, so propagate local
-        self._state_by_guid[guid] = state
-        # Finally, tell everyone what's up.
-        self._distribute_to_endpoints(guid, skip_token=asking_token)
-        
-    def register_object(self, address, author, state, api_id, app_token, dynamic):
-        ''' Sets all applicable tracking dict entries.
-        '''
-        self._dynamic_by_guid[address] = dynamic
-        self._state_by_guid[address] = state
-        self._author_by_guid[address] = author
-        self._token_by_guid[address] = app_token
-        self._api_by_guid[address] = api_id
-        
-        if dynamic:
-            self.persister.subscribe(address, self.dispatch_update)
             
     def _normalize_api_and_token(self, api_id, app_token):
         ''' Converts app_token and api_id into appropriate values from 
@@ -1141,6 +1074,40 @@ class Dispatcher(DispatcherBase):
             pass
             
         return api_id, app_token
+        
+    def _get_object(self, guid):
+        ''' Gets an object, but doesn't do any tracking based on the 
+        requestor. Also doesn't check to see if the object is private or
+        not.
+        '''
+        if guid in self._state_by_guid:
+            state = self._state_by_guid[guid]
+            api_id = self._api_by_guid[guid]
+            app_token = self._token_by_guid[guid]
+            author = self._author_by_guid[guid]
+            dynamic = self._dynamic_by_guid[guid]
+            
+        else:
+            author, dynamic, wrapped_state = self.get_guid(guid)
+            state, api_id, app_token = self._unpack_dispatchable(wrapped_state)
+            self.register_object(guid, author, state, api_id, app_token, dynamic)
+        
+        return author, state, api_id, app_token, dynamic
+        
+    def get_object(self, asking_token, guid):
+        ''' Gets an object by guid for a specific endpoint. Currently 
+        only works for non-private objects.
+        '''
+        author, state, api_id, app_token, dynamic = self._get_object(guid)
+        
+        if app_token != bytes(4) and app_token != asking_token:
+            raise DispatchError(
+                'Attempted to load private object from different application.'
+            )
+        
+        self._requestors_by_guid[guid].add(asking_token)
+        
+        return author, state, api_id, app_token, dynamic
         
     def new_object(self, asking_token, state, api_id, app_token, dynamic, _legroom=None):
         ''' Creates a new object with the upstream golix provider.
@@ -1177,6 +1144,39 @@ class Dispatcher(DispatcherBase):
         
         return address
         
+    def update_object(self, asking_token, guid, state):
+        ''' Initiates an update of an object. Must be tied to a specific
+        endpoint, to prevent issuing that endpoint a notification in 
+        return.
+        '''
+        try:
+            if not self._dynamic_by_guid[guid]:
+                raise DispatchError(
+                    'Object is not dynamic. Cannot update.'
+                )
+        except KeyError as e:
+            raise DispatchError(
+                'Object unknown to dispatcher. Call get_object on address to '
+                'sync it before updating.'
+            ) from e
+        
+        
+        # So now we know it's a dynamic object and that we know of it.
+        api_id = self._api_by_guid[guid]
+        app_token = self._token_by_guid[guid]
+        wrapped_state = self._pack_dispatchable(state, api_id, app_token)
+        
+        # Try updating golix before local.
+        # Temporarily silence updates from persister about the guid we're 
+        # in the process of updating
+        self._ignore_subs_because_updating.add(guid)
+        self.update_dynamic(guid, wrapped_state)
+        self._ignore_subs_because_updating.remove(guid)
+        # Successful, so propagate local
+        self._state_by_guid[guid] = state
+        # Finally, tell everyone what's up.
+        self._distribute_to_endpoints(guid, skip_token=asking_token)
+        
     def share_object(self, asking_token, guid, recipient):
         ''' Do the whole super thing, and then record which application
         initiated the request, and who the recipient was.
@@ -1201,6 +1201,62 @@ class Dispatcher(DispatcherBase):
         except:
             del self._outstanding_shares[guid]
             raise
+        
+    def freeze_object(self, asking_token, guid):
+        ''' Converts a dynamic object to a static object, returning the
+        static guid.
+        '''
+        try:
+            if not self._dynamic_by_guid[guid]:
+                raise DispatchError('Cannot freeze a static object.')
+        except KeyError as e:
+            raise DispatchError(
+                'Object unknown to dispatch; cannot freeze. Call get_object.'
+            ) from e
+            
+        author, state, api_id, app_token, dynamic = self._get_object(guid)
+        
+        address = self.freeze_dynamic(
+            guid_dynamic = guid
+        )
+        
+        self.register_object(
+            address, 
+            author, 
+            state, 
+            api_id, 
+            app_token, 
+            dynamic = False
+        )
+        
+        return address
+        
+    def hold_object(self, asking_token, guid):
+        ''' Binds to an address, preventing its deletion. Note that this
+        will publicly identify you as associated with the address and
+        preventing its deletion to any connected persistence providers.
+        '''
+        pass
+        
+    def delete_object(self, asking_token, guid):
+        ''' Debinds an object, attempting to delete it. This operation
+        will succeed if the persistence provider accepts the deletion,
+        but that doesn't necessarily mean the object was removed. A
+        warning may be issued if the object was successfully debound, 
+        but other bindings are preventing its removal.
+        
+        NOTE THAT THIS DELETES ALL COPIES OF THE OBJECT! It will become
+        subsequently unavailable to other applications using it.
+        '''
+        pass
+        
+    def discard_object(self, asking_token, guid):
+        ''' Removes the object from *only the asking application*. The
+        asking_token will no longer receive updates about the object.
+        However, the object itself will persist, and remain available to
+        other applications. This is the preferred way to remove objects.
+        '''
+        pass
     
     def dispatch_share(self, guid):
         ''' Dispatches shares that were not created via handshake.

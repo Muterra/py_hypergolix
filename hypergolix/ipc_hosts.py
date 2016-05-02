@@ -178,6 +178,13 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         upstream and is not solicited by the client.
         '''
         pass
+            
+    @abc.abstractmethod
+    def send_delete(self, guid):
+        ''' Notifies the endpoint that the object has been deleted 
+        upstream.
+        '''
+        pass
         
     @abc.abstractmethod
     def notify_share_failure(self, guid, recipient):
@@ -206,6 +213,12 @@ class _TestEndpoint(_EndpointBase):
     def send_update(self, obj, state=None):
         self._assigned_objs.append(obj)
         print('Endpoint ', self.__name, ' updated: ', obj)
+        
+    def send_delete(self, guid):
+        ''' Notifies the endpoint that the object has been deleted 
+        upstream.
+        '''
+        print('Endpoint ', self.__name, ' received delete: ', obj)
         
     def notify_share_failure(self, obj, recipient):
         self._failed_objs.append(obj)
@@ -445,6 +458,12 @@ class WSEndpoint(_EndpointBase, _ReqResWSConnection):
         #     return True
         # else:
         #     raise RuntimeError('Unknown error while delivering object update.')
+        
+    def send_delete(self, guid):
+        ''' Notifies the endpoint that the object has been deleted 
+        upstream.
+        '''
+        pass
         
     def notify_share_failure(self, guid, recipient):
         ''' Notifies the embedded client of an unsuccessful share.
