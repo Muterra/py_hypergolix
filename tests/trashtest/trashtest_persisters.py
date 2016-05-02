@@ -460,7 +460,7 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         # ----------------------------------------
         # Test remaining subscription methods
         self.server1.list_subs()
-        self.server1.unsubscribe(self.agent1.guid)
+        self.server1.unsubscribe(self.agent1.guid, self.dummy_callback)
         self.server1.disconnect()
         
         # Test listing bindings

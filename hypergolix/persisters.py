@@ -148,9 +148,10 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         pass
     
     @abc.abstractmethod
-    def unsubscribe(self, guid):
+    def unsubscribe(self, guid, callback):
         ''' Unsubscribe. Client must have an existing subscription to 
-        the passed guid at the persistence provider.
+        the passed guid at the persistence provider. Removes only the
+        passed callback.
         
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
@@ -752,19 +753,19 @@ class UnsafeMemoryPersister(_PersisterBase):
             
         return True
         
-    def unsubscribe(self, guid):
+    def unsubscribe(self, guid, callback):
         ''' Unsubscribe. Client must have an existing subscription to 
         the passed guid at the persistence provider.
         
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
-        if guid in self._subscriptions:
-            del self._subscriptions[guid]
-        else:
+        try:
+            self._subscriptions[guid].remove(callback)
+        except KeyError as e:
             raise NakError(
                 'ERR#4: Invalid or unknown target for unsubscription.'
-            )
+            ) from e
             
         return True
         
@@ -1088,7 +1089,7 @@ class LocalhostServer(MemoryPersister):
                     'ERR#4: Invalid or unknown target for unsubscription.'
                 ) from e
                 
-            return struct.pack('>?', self.unsubscribe_wrapped(guid, callback))
+            return struct.pack('>?', self.unsubscribe(guid, callback))
             
         def conn_list_subs(packed):
             ''' Lists all subscriptions for this connection.
@@ -1101,7 +1102,7 @@ class LocalhostServer(MemoryPersister):
             '''
             nonlocal subs
             for sub, callback in subs.items():
-                self.unsubscribe_wrapped(sub, callback)
+                self.unsubscribe(sub, callback)
             subs = {}
             return struct.pack('>?', True)
         
@@ -1153,13 +1154,6 @@ class LocalhostServer(MemoryPersister):
 
             for task in pending:
                 task.cancel()
-                
-    def unsubscribe_wrapped(self, guid, callback):
-        ''' Wraps (actually, overrides) super().unsubscribe behavior to
-        only remove the specified callback from self.
-        '''
-        self._subscriptions[guid].remove(callback)
-        return True
                     
     def _log_exc(self, exc):
         ''' Handles any potential internal exceptions from tasks during
@@ -1660,7 +1654,7 @@ class LocalhostClient(MemoryPersister):
         
         return True
         
-    def unsubscribe(self, guid):
+    def unsubscribe(self, guid, callback):
         ''' Unsubscribe. Client must have an existing subscription to 
         the passed guid at the persistence provider.
         
@@ -1672,7 +1666,7 @@ class LocalhostClient(MemoryPersister):
             req_body = bytes(guid)
         )
         
-        super().unsubscribe(guid)
+        super().unsubscribe(guid, callback)
         
         return True
     
