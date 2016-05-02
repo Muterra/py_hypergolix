@@ -72,35 +72,36 @@ class _TestDispatch(AgentBase, Dispatcher, _TestEmbed):
         
         
 class TestDispatching(unittest.TestCase):
-    def setUp(self):
-        self.persister = MemoryPersister()
-        self.__api_id = bytes(64) + b'1'
+    @classmethod
+    def setUpClass(cls):
+        cls.persister = MemoryPersister()
+        cls.__api_id = bytes(64) + b'1'
         
-        self.agent1 = _TestDispatch(persister=self.persister)
-        self.endpoint1 = _TestEndpoint(
-            dispatch = self.agent1,
-            apis = [self.__api_id],
+        cls.agent1 = _TestDispatch(persister=cls.persister)
+        cls.endpoint1 = _TestEndpoint(
+            dispatch = cls.agent1,
+            apis = [cls.__api_id],
             name = 'Agent1, ep1'
         )
-        self.agent1.register_endpoint(self.endpoint1)
+        cls.agent1.register_endpoint(cls.endpoint1)
         # # This is fucking gross. Oh well, that's why it's a trashtest.
-        # self.agent1.app_token = self.endpoint1.app_token
+        # cls.agent1.app_token = cls.endpoint1.app_token
         
-        self.agent2 = _TestDispatch(persister=self.persister)
-        self.endpoint2 = _TestEndpoint(
-            dispatch = self.agent2,
-            apis = [self.__api_id],
+        cls.agent2 = _TestDispatch(persister=cls.persister)
+        cls.endpoint2 = _TestEndpoint(
+            dispatch = cls.agent2,
+            apis = [cls.__api_id],
             name = 'Agent2, ep1'
         )
-        self.endpoint3 = _TestEndpoint(
-            dispatch = self.agent2,
-            apis = [self.__api_id],
+        cls.endpoint3 = _TestEndpoint(
+            dispatch = cls.agent2,
+            apis = [cls.__api_id],
             name = 'Agent2, ep2'
         )
-        self.agent2.register_endpoint(self.endpoint2)
-        self.agent2.register_endpoint(self.endpoint3)
+        cls.agent2.register_endpoint(cls.endpoint2)
+        cls.agent2.register_endpoint(cls.endpoint3)
         # This is fucking gross. See above.
-        # self.agent2.app_token = self.endpoint2.app_token
+        # cls.agent2.app_token = cls.endpoint2.app_token
         
     def test_appobj(self):
         pt0 = b'I am a sexy stagnant beast.'

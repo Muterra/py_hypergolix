@@ -62,16 +62,17 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         self.assertIn(guid, self.server1._store)
         warnings.warn('Notification success!', category=_SubscriptionNotifier)
     
-    def setUp(self):
-        self.server1 = MemoryPersister()
+    @classmethod
+    def setUpClass(cls):
+        cls.server1 = MemoryPersister()
     
-        self.agent1 = FirstParty()
-        self.agent2 = FirstParty()
-        self.agent3 = FirstParty()
+        cls.agent1 = FirstParty()
+        cls.agent2 = FirstParty()
+        cls.agent3 = FirstParty()
     
-        self.reader1 = self.agent1.second_party
-        self.reader2 = self.agent2.second_party
-        self.reader3 = self.agent3.second_party
+        cls.reader1 = cls.agent1.second_party
+        cls.reader2 = cls.agent2.second_party
+        cls.reader3 = cls.agent3.second_party
         
     def test_trash(self):
         # ---------------------------------------

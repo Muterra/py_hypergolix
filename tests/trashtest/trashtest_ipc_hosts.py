@@ -81,34 +81,35 @@ class WebsocketsHost(WebsocketsIPC, Dispatcher, AgentBase, MemoryPersister):
         
         
 class WebsocketsIPCTrashTest(unittest.TestCase):
-    def setUp(self):
-        self.host = WebsocketsHost(
+    @classmethod
+    def setUpClass(cls):
+        cls.host = WebsocketsHost(
             host = 'localhost',
             port = 4628,
             threaded = True,
             # debug = True
         )
         
-        self.app1 = WebsocketsEmbed(
+        cls.app1 = WebsocketsEmbed(
             host = 'ws://localhost', 
             port = 4628, 
             threaded = True,
             # debug = True
         )
         
-        self.app1endpoint = list(self.host.connections.values())[0]
+        cls.app1endpoint = list(cls.host.connections.values())[0]
         
-        self.app2 = WebsocketsEmbed(
+        cls.app2 = WebsocketsEmbed(
             host = 'ws://localhost', 
             port = 4628, 
             threaded = True,
             # debug = True
         )
         
-        endpoints = set(self.host.connections.values())
-        self.app2endpoint = list(endpoints - {self.app1endpoint})[0]
+        endpoints = set(cls.host.connections.values())
+        cls.app2endpoint = list(endpoints - {cls.app1endpoint})[0]
         
-        self.__api_id = bytes(64) + b'1'
+        cls.__api_id = bytes(64) + b'1'
         
     def test_client1(self):
         pt0 = b'I am a sexy stagnant beast.'
@@ -170,9 +171,10 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         #     warnings.simplefilter('ignore')
         #     IPython.embed()
     
-    def tearDown(self):
-        self.app1.halt()
-        self.host.halt()
+    @classmethod
+    def tearDownClass(cls):
+        cls.app1.halt()
+        cls.host.halt()
         time.sleep(1)
 
 if __name__ == "__main__":

@@ -341,15 +341,16 @@ class ReqResTestClient(WSReqResClient):
         
         
 class ReqResWSTrashTest(unittest.TestCase):
-    def setUp(self):
-        self.server = ReqResTestServer(
+    @classmethod
+    def setUpClass(cls):
+        cls.server = ReqResTestServer(
             host = 'localhost',
             port = 9318,
             threaded = True,
             # debug = True
         )
         
-        self.client1 = ReqResTestClient(
+        cls.client1 = ReqResTestClient(
             host = 'ws://localhost', 
             port = 9318, 
             name = 'OneTrueMorty',
@@ -357,7 +358,7 @@ class ReqResWSTrashTest(unittest.TestCase):
             # debug = True
         )
         
-        self.client2 = ReqResTestClient(
+        cls.client2 = ReqResTestClient(
             host = 'ws://localhost', 
             port = 9318, 
             name = 'HammerMorty',
@@ -410,11 +411,11 @@ class ReqResWSTrashTest(unittest.TestCase):
         #     warnings.simplefilter('ignore')
         #     IPython.embed()
         
-    
-    def tearDown(self):
-        self.client1.halt()
-        self.client2.halt()
-        self.server.halt()
+    @classmethod
+    def tearDownClass(cls):
+        cls.client1.halt()
+        cls.client2.halt()
+        cls.server.halt()
         # time.sleep(5)
 
 if __name__ == "__main__":

@@ -65,17 +65,18 @@ class _TestAgent(AgentBase, LocalhostClient, _TestEmbed, _TestDispatcher):
         
         
 class WebsocketsTrashTest(unittest.TestCase):
-    def setUp(self):
-        self.server = LocalhostServer(port=5926)
-        self.server_thread = threading.Thread(
-            target = self.server.run,
+    @classmethod
+    def setUpClass(cls):
+        cls.server = LocalhostServer(port=5926)
+        cls.server_thread = threading.Thread(
+            target = cls.server.run,
             daemon = True,
             name = 'server_thread'
         )
-        self.server_thread.start()
+        cls.server_thread.start()
         
-        self.agent1 = _TestAgent(port=5926)
-        self.agent2 = _TestAgent(port=5926)
+        cls.agent1 = _TestAgent(port=5926)
+        cls.agent2 = _TestAgent(port=5926)
         
     def test_comms(self):
         pt0 = b'I am a sexy stagnant beast.'

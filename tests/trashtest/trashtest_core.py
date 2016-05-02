@@ -142,16 +142,17 @@ class ObjectTrashtest(unittest.TestCase):
         
         
 class AgentTrashTest(unittest.TestCase):
-    def setUp(self):
-        self.persister = MemoryPersister()
-        self.agent1 = _TestAgent_SharedPersistence(
-            persister = self.persister
+    @classmethod
+    def setUpClass(cls):
+        cls.persister = MemoryPersister()
+        cls.agent1 = _TestAgent_SharedPersistence(
+            persister = cls.persister
         )
-        self.agent2 = _TestAgent_SharedPersistence(
-            persister = self.persister
+        cls.agent2 = _TestAgent_SharedPersistence(
+            persister = cls.persister
         )
-        self.dispatcher1 = self.agent1
-        self.dispatcher2 = self.agent2
+        cls.dispatcher1 = cls.agent1
+        cls.dispatcher2 = cls.agent2
         
     def test_alone(self):
         pt1 = b'Hello, world?'
@@ -256,9 +257,10 @@ class AgentTrashTest(unittest.TestCase):
         
         
 class ClientTrashTest(unittest.TestCase):
-    def setUp(self):
-        self.agent1 = _TestClient()
-        self.agent2 = _TestClient()
+    @classmethod
+    def setUpClass(cls):
+        cls.agent1 = _TestClient()
+        cls.agent2 = _TestClient()
         
     def test_alone(self):
         pt1 = b'Hello, world?'
