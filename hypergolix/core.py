@@ -979,28 +979,20 @@ class Dispatcher(DispatcherBase):
         # Lookup for handshake guid -> app_token, recipient
         self._outstanding_shares = {}
         
-        # PENDING DELETE
-        # Lookup for guid -> object
-        self._objs_by_guid = {}
-        # END PENDING DELETE
-        
         # Lookup for guid -> token (meaningful for app-private objs only)
         self._token_by_guid = {}
         # Lookup for guid -> api_id
         self._api_by_guid = {}
         # Lookup for guid -> state (either bytes-like or Guid)
         self._state_by_guid = {}
-        # Lookup for guid -> tokens that specifically requested the guid
-        self._requestors_by_guid = _JitSetDict()
         # Lookup for guid -> author
         self._author_by_guid = {}
         # Lookup for guid -> dynamic
         self._dynamic_by_guid = {}
         
-        # PENDING DELETE
-        # Lookup for guid -> {token: update function}
-        self._updaters_by_guid = {}
-        # END PENDING DELETE
+        # Lookup for guid -> tokens that specifically requested the guid
+        self._requestors_by_guid = _JitSetDict()
+        self._discarders_by_guid = _JitSetDict()
         
         self._orphan_shares_incoming = []
         self._orphan_shares_outgoing_success = []
@@ -1016,6 +1008,9 @@ class Dispatcher(DispatcherBase):
     def register_object(self, address, author, state, api_id, app_token, dynamic):
         ''' Sets all applicable tracking dict entries.
         '''
+        # This is redundant with new_object, but oh well.
+        api_id, app_token = self._normalize_api_and_token(api_id, app_token)
+        
         self._dynamic_by_guid[address] = dynamic
         self._state_by_guid[address] = state
         self._author_by_guid[address] = author
@@ -1036,6 +1031,8 @@ class Dispatcher(DispatcherBase):
         del self._author_by_guid[address]
         del self._token_by_guid[address]
         del self._api_by_guid[address]
+        
+        # Todo: what about requestors_by_guid and discarders_by_guid?
         
     def _pack_dispatchable(self, state, api_id, app_token):
         ''' Packs the object state, its api_id, and its app_token into a
@@ -1118,6 +1115,7 @@ class Dispatcher(DispatcherBase):
             )
         
         self._requestors_by_guid[guid].add(asking_token)
+        self._discarders_by_guid[guid].discard(asking_token)
         
         return author, state, api_id, app_token, dynamic
         
@@ -1296,7 +1294,30 @@ class Dispatcher(DispatcherBase):
         However, the object itself will persist, and remain available to
         other applications. This is the preferred way to remove objects.
         '''
-        pass
+        # This is sorta an accidental check that we're actually tracking the
+        # object. Could make it explicit I suppose.
+        api_id = self._api_by_guid[guid]
+        
+        # Completely discard/deregister anything we don't care about anymore.
+        interested_tokens = set()
+        
+        print(self._api_ids[api_id])
+        
+        if self._token_by_guid[guid] == bytes(4):
+            interested_tokens.update(self._api_ids[api_id])
+        else:
+            interested_tokens.add(self._token_by_guid[guid])
+            
+        interested_tokens.update(self._requestors_by_guid[guid])
+        interested_tokens.difference_update(self._discarders_by_guid[guid])
+        interested_tokens.discard(asking_token)
+        
+        # Now perform actual updates
+        if len(interested_tokens) == 0:
+            self.deregister_object(guid)
+        else:
+            self._requestors_by_guid[guid].discard(asking_token)
+            self._discarders_by_guid[guid].add(asking_token)
     
     def dispatch_share(self, guid):
         ''' Dispatches shares that were not created via handshake.
@@ -1403,8 +1424,10 @@ class Dispatcher(DispatcherBase):
         # Now add anyone explicitly tracking that object
         callsheet.update(self._requestors_by_guid[guid])
         
-        # And finally, remove the skip token if present
+        # And finally, remove the skip token if present, as well as any apps
+        # that have discarded the object
         callsheet.discard(skip_token)
+        callsheet.difference_update(self._discarders_by_guid[guid])
             
         if len(callsheet) == 0:
             warnings.warn(HandshakeWarning(

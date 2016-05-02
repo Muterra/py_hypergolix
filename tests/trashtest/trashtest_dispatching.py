@@ -189,6 +189,31 @@ class TestDispatching(unittest.TestCase):
         self.assertNotIn(address1, self.agent1._author_by_guid)
         self.assertNotIn(address1, self.agent1._token_by_guid)
         self.assertNotIn(address1, self.agent1._api_by_guid)
+        
+        self.agent1.discard_object(
+            asking_token = self.endpoint1.app_token,
+            guid = address2
+        )
+        
+        # Agent1 has only one endpoint following this object so it should be
+        # completely deregistered
+        self.assertNotIn(address2, self.agent1._dynamic_by_guid)
+        self.assertNotIn(address2, self.agent1._state_by_guid)
+        self.assertNotIn(address2, self.agent1._author_by_guid)
+        self.assertNotIn(address2, self.agent1._token_by_guid)
+        self.assertNotIn(address2, self.agent1._api_by_guid)
+        
+        self.agent2.discard_object(
+            asking_token = self.endpoint2.app_token,
+            guid = address2
+        )
+        
+        # Agent2 has two endpoints following this object so it should persist
+        self.assertIn(address2, self.agent2._dynamic_by_guid)
+        self.assertIn(address2, self.agent2._state_by_guid)
+        self.assertIn(address2, self.agent2._author_by_guid)
+        self.assertIn(address2, self.agent2._token_by_guid)
+        self.assertIn(address2, self.agent2._api_by_guid)
 
         # obj1 = self.agent1.new_object(pt0, dynamic=False)
         # obj2 = self.agent1.new_object(pt1, dynamic=True)
