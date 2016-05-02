@@ -173,6 +173,11 @@ class TestDispatching(unittest.TestCase):
             app_token = None,
             dynamic = True
         )
+        
+        self.agent2.hold_object(
+            asking_token = self.endpoint2.app_token,
+            guid = address2
+        )
 
         # obj1 = self.agent1.new_object(pt0, dynamic=False)
         # obj2 = self.agent1.new_object(pt1, dynamic=True)

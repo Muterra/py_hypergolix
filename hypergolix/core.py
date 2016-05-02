@@ -1236,7 +1236,12 @@ class Dispatcher(DispatcherBase):
         will publicly identify you as associated with the address and
         preventing its deletion to any connected persistence providers.
         '''
-        pass
+        if guid not in self._state_by_guid:
+            raise DispatchError(
+                'Object unknown to dispatch; cannot hold. Call get_object.'
+            )
+            
+        self.hold_guid(guid)
         
     def delete_object(self, asking_token, guid):
         ''' Debinds an object, attempting to delete it. This operation
