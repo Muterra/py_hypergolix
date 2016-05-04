@@ -46,6 +46,8 @@ import collections
 import asyncio
 import threading
 
+from weakref import WeakValueDictionary
+
 from golix import Guid
 
 # Inter-package dependencies
@@ -101,6 +103,7 @@ class AppObj:
     '''
     # This should define *only* ADDITIONAL slots.
     __slots__ = [
+        '__weakref__',
         '_embed',
         '_is_dynamic',
         '_callbacks',
@@ -436,6 +439,18 @@ class AppObj:
         not update or involve the embed.
         '''
         pass
+        
+    def discard(self):
+        ''' Tells the hypergolix service that the application is done 
+        with the object, but does not directly delete it. No more 
+        updates will be received.
+        '''
+        pass
+        
+    def _discard(self):
+        ''' Performs AppObj actions necessary to discard.
+        '''
+        pass
             
     def delete(self):
         ''' Tells any persisters to delete. Clears local state. Future
@@ -613,7 +628,7 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         self.app_token = app_token
         
         # Lookup for guid -> object
-        self._objs_by_guid = {}
+        self._objs_by_guid = WeakValueDictionary()
         
         super().__init__(*args, **kwargs)
     
@@ -781,7 +796,10 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def share_object(self, obj, recipient):
         ''' Shares an object with someone else.
         '''
-        pass
+        # Todo: add try-catch to undo local changes after failed upstream share
+        # First operate on the object, since it's easier to undo local changes
+        obj._share(recipient)
+        self._share_object(obj, recipient)
         
     @abc.abstractmethod
     def _share_object(self, obj, recipient):
@@ -873,6 +891,12 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
             # python tests/trashtest/trashtest_ipc_hosts.py
             
         return b'\x01'
+        
+    def delete_object_wrapper(self, connection, request_body):
+        ''' Deserializes an incoming object deletion, and applies it to
+        the object.
+        '''
+        return b''
 
     def notify_share_failure_wrapper(self, connection, request_body):
         ''' Deserializes an incoming async share failure notification, 
@@ -1085,25 +1109,27 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         # # Get new app token
         # b'+T': None,
         # # Register existing app token
-        # b'@T': None,
+        # b'$T': None,
         # Register an API
-        'register_api': b'@A',
+        'register_api': b'$A',
         # Whoami?
         'whoami': b'?I',
         # Get object
-        'get_object': b'<O',
+        'get_object': b'>O',
         # New object
-        'new_object': b'>O',
+        'new_object': b'+O',
         # Sync object
         'sync_object': b'~O',
         # Update object
         'update_object': b'!O',
         # Share object
-        'share_object': b'^O',
+        'share_object': b'@O',
         # Freeze object
         'freeze_object': b'*O',
         # Hold object
         'hold_object': b'#O',
+        # Discard an object
+        'discard_object': b'-O',
         # Delete object
         'delete_object': b'XO',
     }
@@ -1112,9 +1138,11 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         # Note that these are only for unsolicited contact from the server.
         req_handlers = {
             # Receive/dispatch a new object.
-            b'vO': self.deliver_object_wrapper,
+            b'+O': self.deliver_object_wrapper,
             # Receive an update for an existing object.
             b'!O': self.update_object_wrapper,
+            # Receive a delete command.
+            b'XO': self.delete_object_wrapper,
             # Receive an async notification of a sharing failure.
             b'^F': self.notify_share_failure_wrapper,
             # Receive an async notification of a sharing success.
@@ -1145,7 +1173,7 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             request_code = b'+T'
         else:
             app_token = self.app_token
-            request_code = b'@T'
+            request_code = b'$T'
         
         msg = self._pack_request(
             version = self._version, 
@@ -1303,7 +1331,16 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         ''' Handles only the sharing of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
-        pass
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = bytes(obj.address) + bytes(recipient),
+            request_code = self.REQUEST_CODES['share_object']
+        )
+        
+        if response == b'\x01':
+            return True
+        else:
+            raise RuntimeError('Unknown error while updating object.')
 
     def _freeze_object(self, obj):
         ''' Handles only the freezing of an object via the hypergolix
@@ -1322,73 +1359,3 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         service. Does not manage anything to do with the AppObj itself.
         '''
         pass
-    
-    
-    
-    
-    
-    
-        
-
-        
-    def sync_object(self, obj):
-        ''' Wraps RawObj.sync.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError('Must pass RawObj or subclass to sync_object.')
-            
-        return obj.sync()
-        
-    def hand_object(self, obj, recipient):
-        ''' DEPRECATED.
-        
-        Initiates a handshake request with the recipient to share 
-        the object.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Obj must be a RawObj or similar.'
-            )
-    
-        # This is, shall we say, suboptimal, for dynamic objects.
-        # frame_guid = self._historian[obj.address][0]
-        # target = self._dynamic_targets[obj.address]
-        target = obj.address
-        self.hand_guid(target, recipient)
-        
-    def share_object(self, obj, recipient):
-        ''' Currently, this is just calling hand_object. In the future,
-        this will have a devoted key exchange subprotocol.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Only RawObj may be shared.'
-            )
-        return self.hand_guid(obj.address, recipient)
-        
-    def freeze_object(self, obj):
-        ''' Wraps RawObj.freeze. Note: does not currently traverse 
-        nested dynamic bindings.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Only RawObj may be frozen.'
-            )
-        return obj.freeze()
-        
-    def hold_object(self, obj):
-        ''' Wraps RawObj.hold.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError('Only RawObj may be held by hold_object.')
-        obj.hold()
-        
-    def delete_object(self, obj):
-        ''' Wraps RawObj.delete. 
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Obj must be RawObj or similar.'
-            )
-            
-        obj.delete()

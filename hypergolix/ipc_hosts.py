@@ -383,7 +383,14 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def share_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        return b''
+        guid = Guid.from_bytes(request_body[0:65])
+        recipient = Guid.from_bytes(request_body[65:130])
+        self.dispatch.share_object(
+            asking_token = endpoint.app_token,
+            guid = guid,
+            recipient = recipient
+        )
+        return b'\x01'
         
     def freeze_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
@@ -391,6 +398,11 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         return b''
         
     def hold_object_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        '''
+        return b''
+        
+    def discard_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
         return b''
@@ -481,9 +493,11 @@ class WebsocketsIPC(_IPCBase, WSReqResServer):
     '''
     REQUEST_CODES = {
         # Receive/dispatch a new object.
-        'send_object': b'vO',
+        'send_object': b'+O',
         # Receive an update for an existing object.
         'send_update': b'!O',
+        # Receive an update that an object has been deleted.
+        'send_delete': b'XO',
         # Receive an async notification of a sharing failure.
         'notify_share_failure': b'^F',
         # Receive an async notification of a sharing success.
@@ -496,25 +510,27 @@ class WebsocketsIPC(_IPCBase, WSReqResServer):
             # # Get new app token
             # b'+T': self.new_token_wrapper,
             # # Register existing app token
-            # b'@T': self,
+            # b'$T': self,
             # Register an API
-            b'@A': self.add_api_wrapper,
+            b'$A': self.add_api_wrapper,
             # Whoami?
             b'?I': self.whoami_wrapper,
             # Get object
-            b'<O': self.get_object_wrapper,
+            b'>O': self.get_object_wrapper,
             # New object
-            b'>O': self.new_object_wrapper,
+            b'+O': self.new_object_wrapper,
             # Sync object
             b'~O': self.sync_object_wrapper,
             # Update object
             b'!O': self.update_object_wrapper,
             # Share object
-            b'^O': self.share_object_wrapper,
+            b'@O': self.share_object_wrapper,
             # Freeze object
             b'*O': self.freeze_object_wrapper,
             # Hold object
             b'#O': self.hold_object_wrapper,
+            # Discard object
+            b'-O': self.discard_object_wrapper,
             # Delete object
             b'XO': self.delete_object_wrapper,
         }
@@ -553,7 +569,7 @@ class WebsocketsIPC(_IPCBase, WSReqResServer):
             if req_code == b'+T':
                 app_token = self.dispatch.new_token()
             # Existing app registering existing token.
-            elif req_code == b'@T':
+            elif req_code == b'$T':
                 app_token = body[0:4]
             else:
                 raise ValueError('Improper handshake command.')

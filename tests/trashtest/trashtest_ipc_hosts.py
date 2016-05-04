@@ -53,9 +53,9 @@ from hypergolix.ipc_hosts import WebsocketsIPC
 from hypergolix.embeds import WebsocketsEmbed
 
 
-class WebsocketsHost(WebsocketsIPC, Dispatcher, AgentBase, MemoryPersister):
-    def __init__(self, *args, **kwargs):
-        super().__init__(dispatcher=self, dispatch=self, persister=self, *args, **kwargs)
+class WebsocketsHost(WebsocketsIPC, Dispatcher, AgentBase):
+    def __init__(self, persister, *args, **kwargs):
+        super().__init__(dispatcher=self, dispatch=self, persister=persister, *args, **kwargs)
     
     
 # class WebsocketsApp(WSReqResClient):
@@ -83,9 +83,20 @@ class WebsocketsHost(WebsocketsIPC, Dispatcher, AgentBase, MemoryPersister):
 class WebsocketsIPCTrashTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.host = WebsocketsHost(
+        cls.persister = MemoryPersister()
+        
+        cls.alice = WebsocketsHost(
+            persister = cls.persister,
             host = 'localhost',
             port = 4628,
+            threaded = True,
+            # debug = True
+        )
+        
+        cls.bob = WebsocketsHost(
+            persister = cls.persister,
+            host = 'localhost',
+            port = 4629,
             threaded = True,
             # debug = True
         )
@@ -97,7 +108,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             # debug = True
         )
         
-        cls.app1endpoint = list(cls.host.connections.values())[0]
+        cls.app1endpoint = list(cls.alice.connections.values())[0]
         
         cls.app2 = WebsocketsEmbed(
             host = 'ws://localhost', 
@@ -106,7 +117,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             # debug = True
         )
         
-        endpoints = set(cls.host.connections.values())
+        endpoints = set(cls.alice.connections.values())
         cls.app2endpoint = list(endpoints - {cls.app1endpoint})[0]
         
         cls.__api_id = bytes(64) + b'1'
@@ -136,31 +147,34 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             api_id = self.__api_id,
             dynamic = False
         )
-        self.assertIn(obj1.address, self.host._store)
+        self.assertIn(obj1.address, self.persister._store)
         
         obj2 = self.app1.new_object(
             state = pt1,
             api_id = self.__api_id,
             dynamic = True
         )
-        self.assertIn(obj2.address, self.host._store)
+        self.assertIn(obj2.address, self.persister._store)
         
-        shared1 = self.app2.get_object(obj1.address)
-        self.assertEqual(obj1, shared1)
+        joint1 = self.app2.get_object(obj1.address)
+        self.assertEqual(obj1, joint1)
         
-        shared2 = self.app2.get_object(obj2.address)
-        self.assertEqual(obj2, shared2)
+        joint2 = self.app2.get_object(obj2.address)
+        self.assertEqual(obj2, joint2)
         
         obj3 = self.app1.new_object(
             state = pt1,
             api_id = self.__api_id,
             dynamic = True
         )
-        self.assertIn(obj3.address, self.host._store)
+        self.assertIn(obj3.address, self.persister._store)
         
         self.app1.update_object(obj3, pt2)
-        shared3 = self.app2.get_object(obj3.address)
-        self.assertEqual(obj3, shared3)
+        joint3 = self.app2.get_object(obj3.address)
+        self.assertEqual(obj3, joint3)
+        
+        self.app1.share_object(obj3, self.bob.whoami)
+        self.assertIn(obj3.address, self.bob._orphan_shares_incoming)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
@@ -174,7 +188,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.app1.halt()
-        cls.host.halt()
+        cls.alice.halt()
         time.sleep(1)
 
 if __name__ == "__main__":

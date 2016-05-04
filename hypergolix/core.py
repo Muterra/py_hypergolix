@@ -994,7 +994,7 @@ class Dispatcher(DispatcherBase):
         self._requestors_by_guid = _JitSetDict()
         self._discarders_by_guid = _JitSetDict()
         
-        self._orphan_shares_incoming = []
+        self._orphan_shares_incoming = set()
         self._orphan_shares_outgoing_success = []
         self._orphan_shares_outgoing_failed = []
         
@@ -1301,8 +1301,6 @@ class Dispatcher(DispatcherBase):
         # Completely discard/deregister anything we don't care about anymore.
         interested_tokens = set()
         
-        print(self._api_ids[api_id])
-        
         if self._token_by_guid[guid] == bytes(4):
             interested_tokens.update(self._api_ids[api_id])
         else:
@@ -1433,7 +1431,7 @@ class Dispatcher(DispatcherBase):
             warnings.warn(HandshakeWarning(
                 'Agent lacks application to handle app id.'
             ))
-            # self._orphan_shares_incoming.append(guid)
+            self._orphan_shares_incoming.add(guid)
             
         for token in callsheet:
             if deleted:
