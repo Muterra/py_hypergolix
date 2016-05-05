@@ -107,7 +107,7 @@ class AppObj:
         '_embed',
         '_is_dynamic',
         '_callbacks',
-        '_deleted',
+        '_inoperative',
         '_author',
         '_address',
         '_state',
@@ -135,7 +135,7 @@ class AppObj:
         '''
         # This needs to be done first so we have access to object creation
         self._init_embed(embed)
-        self._deleted = False
+        self._inoperative = False
         
         # _preexisting was set, so we're loading an existing object.
         # "Trust" anything using _preexisting to have passed a correct value
@@ -251,7 +251,7 @@ class AppObj:
         
     @property
     def state(self):
-        if self._deleted:
+        if self._inoperative:
             raise ValueError('Object has already been deleted.')
         elif self.is_dynamic:
             if self.is_link:
@@ -344,7 +344,7 @@ class AppObj:
         ''' Handles the actual updating **for the object only.** Does 
         not update or involve the embed.
         '''
-        if self._deleted:
+        if self._inoperative:
             raise ValueError('Object has already been deleted.')
             
         if not self.is_dynamic:
@@ -452,7 +452,10 @@ class AppObj:
     def _discard(self):
         ''' Performs AppObj actions necessary to discard.
         '''
-        pass
+        self.clear_callbacks()
+        super().__setattr__('_inoperative', True)
+        super().__setattr__('_is_dynamic', None)
+        super().__setattr__('_author', None)
             
     def delete(self):
         ''' Tells any persisters to delete. Clears local state. Future
@@ -466,12 +469,8 @@ class AppObj:
         ''' Handles the actual deleting **for the object only.** Does 
         not update or involve the embed.
         '''
-        self.clear_callbacks()
-        super().__setattr__('_deleted', True)
-        super().__setattr__('_is_dynamic', None)
-        super().__setattr__('_author', None)
+        self._discard()
         super().__setattr__('_address', None)
-        super().__setattr__('_dispatch', None)
     
     # This might be a little excessive, but I guess it's nice to have a
     # little extra protection against updates?
@@ -1408,7 +1407,17 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         ''' Handles only the discarding of an object via the hypergolix
         service.
         '''
-        pass
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = bytes(obj.address),
+            request_code = self.REQUEST_CODES['discard_object']
+        )
+        
+        if response != b'\x01':
+            raise RuntimeError('Unknown error while updating object.')
+        
+        del self._objs_by_guid[obj.address]
+        return True
 
     def _delete_object(self, obj):
         ''' Handles only the deleting of an object via the hypergolix

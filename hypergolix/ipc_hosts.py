@@ -415,7 +415,12 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def discard_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        return b''
+        guid = Guid.from_bytes(request_body)
+        self.dispatch.discard_object(
+            asking_token = endpoint.app_token,
+            guid = guid,
+        )
+        return b'\x01'
         
     def delete_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.

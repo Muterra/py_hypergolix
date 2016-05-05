@@ -138,9 +138,9 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         print('whoami', whoami)
         
         # Test registering an api_id
-        api_id = bytes(65)
-        self.app1.register_api(api_id)
-        self.assertIn(api_id, self.app1endpoint.apis)
+        self.app1.register_api(self.__api_id)
+        self.app2.register_api(self.__api_id)
+        self.assertIn(self.__api_id, self.app1endpoint.apis)
         
         obj1 = self.app1.new_object(
             state = pt0,
@@ -181,6 +181,9 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         
         self.app2.hold_object(joint3)
         self.assertIn(obj3.address, self.alice._holdings)
+        
+        self.app2.discard_object(joint3)
+        self.assertIn(self.app2endpoint.app_token, self.alice._discarders_by_guid[obj3.address])
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
