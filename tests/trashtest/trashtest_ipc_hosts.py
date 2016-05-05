@@ -180,6 +180,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         self.assertEqual(frozen3.state, obj3.state)
         
         self.app2.hold_object(joint3)
+        self.assertIn(obj3.address, self.alice._holdings)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
