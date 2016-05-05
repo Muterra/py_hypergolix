@@ -176,6 +176,9 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         self.app1.share_object(obj3, self.bob.whoami)
         self.assertIn(obj3.address, self.bob._orphan_shares_incoming)
         
+        frozen3 = self.app1.freeze_object(obj3)
+        self.assertEqual(frozen3.state, obj3.state)
+        
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
             

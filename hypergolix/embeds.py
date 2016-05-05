@@ -370,7 +370,8 @@ class AppObj:
         Agent. If this is a dynamic and an update is available, do that.
         If it's a static and the state mismatches, raise error.
         '''
-        return self._embed.sync_object(self)
+        self._embed._sync_object(self)
+        self._sync()
             
     def _sync(self, *args):
         ''' Handles the actual syncing **for the object only.** Does not
@@ -426,19 +427,18 @@ class AppObj:
         Note: does not currently traverse nested dynamic bindings, and
         will probably error out if you attempt to freeze one.
         '''
-        if self.is_dynamic:
-            return self._embed.freeze_object(self)
-        else:
-            raise TypeError(
-                'Static objects cannot be frozen. If attempting to save them, '
-                'call hold instead.'
-            )
+        self._freeze()
+        return self._embed._freeze_object(self)
             
     def _freeze(self):
         ''' Handles the actual freezing **for the object only.** Does 
         not update or involve the embed.
         '''
-        pass
+        if not self.is_dynamic:
+            raise TypeError(
+                'Static objects cannot be frozen. If attempting to save them, '
+                'call hold instead.'
+            )
         
     def discard(self):
         ''' Tells the hypergolix service that the application is done 
@@ -784,7 +784,8 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         ''' Checks for an update to a dynamic object, and if one is 
         available, performs an update.
         '''
-        pass
+        obj._sync_object()
+        self._sync_object(obj)
         
     @abc.abstractmethod
     def _sync_object(self, obj):
@@ -811,7 +812,8 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def freeze_object(self, obj):
         ''' Converts a dynamic object to a static object.
         '''
-        pass
+        obj._freeze()
+        return self._freeze_object(obj)
         
     @abc.abstractmethod
     def _freeze_object(self, obj):
@@ -1325,7 +1327,18 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         ''' Handles only the syncing of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
-        pass
+        raise NotImplementedError(
+            'Manual object syncing is not yet supported. Approximate it with '
+            'get_object?'
+        )
+        if obj.is_dynamic:
+            pass
+        else:
+            other = self._get_object(obj.address)
+            if other.state != obj.state:
+                raise RuntimeError(
+                    'Local object state appears to be corrupted.'
+                )
 
     def _share_object(self, obj, recipient):
         ''' Handles only the sharing of an object via the hypergolix
@@ -1346,7 +1359,17 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         ''' Handles only the freezing of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
-        pass
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = bytes(obj.address),
+            request_code = self.REQUEST_CODES['freeze_object']
+        )
+        address = Guid.from_bytes(response)
+        return AppObj(
+            embed = self,
+            _preexisting = (address, obj.author),
+            state = (obj.state, obj.api_id, obj.private, False, None)
+        )
 
     def _hold_object(self, obj):
         ''' Handles only the holding of an object via the hypergolix
