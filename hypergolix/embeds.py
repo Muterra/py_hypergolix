@@ -404,17 +404,6 @@ class AppObj:
         else:
             return True
         
-    def hold(self):
-        ''' Binds to the object, preventing its deletion.
-        '''
-        return self._embed.hold_object(self)
-            
-    def _hold(self):
-        ''' Handles the actual holding **for the object only.** Does not
-        update or involve the embed.
-        '''
-        pass
-        
     def freeze(self):
         ''' Creates a static snapshot of the dynamic object. Returns a 
         new static RawObj instance. Does NOT modify the existing object.
@@ -440,12 +429,25 @@ class AppObj:
                 'call hold instead.'
             )
         
+    def hold(self):
+        ''' Binds to the object, preventing its deletion.
+        '''
+        self._hold()
+        self._embed.hold_object(self)
+            
+    def _hold(self):
+        ''' Handles the actual holding **for the object only.** Does not
+        update or involve the embed.
+        '''
+        pass
+        
     def discard(self):
         ''' Tells the hypergolix service that the application is done 
         with the object, but does not directly delete it. No more 
         updates will be received.
         '''
-        pass
+        self._discard()
+        self._embed._discard_object(self)
         
     def _discard(self):
         ''' Performs AppObj actions necessary to discard.
@@ -457,19 +459,19 @@ class AppObj:
         attempts to access will raise ValueError, but does not (and 
         cannot) remove the object from memory.
         '''
-        del self._embed._objs_by_guid[self.address]
+        self._delete()
+        self._embed._delete_object(self)
+            
+    def _delete(self):
+        ''' Handles the actual deleting **for the object only.** Does 
+        not update or involve the embed.
+        '''
         self.clear_callbacks()
         super().__setattr__('_deleted', True)
         super().__setattr__('_is_dynamic', None)
         super().__setattr__('_author', None)
         super().__setattr__('_address', None)
         super().__setattr__('_dispatch', None)
-            
-    def _delete(self):
-        ''' Handles the actual deleting **for the object only.** Does 
-        not update or involve the embed.
-        '''
-        pass
     
     # This might be a little excessive, but I guess it's nice to have a
     # little extra protection against updates?
@@ -825,7 +827,8 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def hold_object(self, obj):
         ''' Binds an object, preventing its deletion.
         '''
-        pass
+        obj._hold()
+        self._hold_object(obj)
         
     @abc.abstractmethod
     def _hold_object(self, obj):
@@ -834,11 +837,26 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         '''
         pass
         
+    def discard_object(self, obj):
+        ''' Attempts to delete an object. May not succeed, if another 
+        Agent has bound to it.
+        '''
+        obj._discard()
+        self._discard_object(obj)
+        
+    @abc.abstractmethod
+    def _discard_object(self, obj):
+        ''' Handles only the discarding of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+        
     def delete_object(self, obj):
         ''' Attempts to delete an object. May not succeed, if another 
         Agent has bound to it.
         '''
-        pass
+        obj._delete()
+        self._delete_object(obj)
         
     @abc.abstractmethod
     def _delete_object(self, obj):
@@ -1374,6 +1392,21 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
     def _hold_object(self, obj):
         ''' Handles only the holding of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
+        '''
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = bytes(obj.address),
+            request_code = self.REQUEST_CODES['hold_object']
+        )
+        
+        if response == b'\x01':
+            return True
+        else:
+            raise RuntimeError('Unknown error while updating object.')
+        
+    def _discard_object(self, obj):
+        ''' Handles only the discarding of an object via the hypergolix
+        service.
         '''
         pass
 

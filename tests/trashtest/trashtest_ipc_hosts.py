@@ -179,6 +179,8 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         frozen3 = self.app1.freeze_object(obj3)
         self.assertEqual(frozen3.state, obj3.state)
         
+        self.app2.hold_object(joint3)
+        
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
             
