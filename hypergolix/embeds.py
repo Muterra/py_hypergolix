@@ -95,7 +95,7 @@ class AppObj:
     per application. As such, they should probably be aware of their 
     endpoints.
     
-    Note: TODO: Add some kind of automatic garbage collection mechanism
+    Note: Todo: Add some kind of automatic garbage collection mechanism
     such that, when gc'd because, for example, it is only defined within
     the scope of an AppObj state (as when linking between dynamic 
     objects), we don't continue to get updates for an object that we no
@@ -107,7 +107,7 @@ class AppObj:
         '_embed',
         '_is_dynamic',
         '_callbacks',
-        '_inoperative',
+        '_inoperable',
         '_author',
         '_address',
         '_state',
@@ -135,7 +135,7 @@ class AppObj:
         '''
         # This needs to be done first so we have access to object creation
         self._init_embed(embed)
-        self._inoperative = False
+        self._inoperable = False
         
         # _preexisting was set, so we're loading an existing object.
         # "Trust" anything using _preexisting to have passed a correct value
@@ -251,7 +251,7 @@ class AppObj:
         
     @property
     def state(self):
-        if self._inoperative:
+        if self._inoperable:
             raise ValueError('Object has already been deleted.')
         elif self.is_dynamic:
             if self.is_link:
@@ -344,7 +344,7 @@ class AppObj:
         ''' Handles the actual updating **for the object only.** Does 
         not update or involve the embed.
         '''
-        if self._inoperative:
+        if self._inoperable:
             raise ValueError('Object has already been deleted.')
             
         if not self.is_dynamic:
@@ -453,7 +453,7 @@ class AppObj:
         ''' Performs AppObj actions necessary to discard.
         '''
         self.clear_callbacks()
-        super().__setattr__('_inoperative', True)
+        super().__setattr__('_inoperable', True)
         super().__setattr__('_is_dynamic', None)
         super().__setattr__('_author', None)
             
@@ -470,7 +470,8 @@ class AppObj:
         not update or involve the embed.
         '''
         self._discard()
-        super().__setattr__('_address', None)
+        # This creates big problems down the road.
+        # super().__setattr__('_embed', None)
     
     # This might be a little excessive, but I guess it's nice to have a
     # little extra protection against updates?
@@ -915,7 +916,9 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         ''' Deserializes an incoming object deletion, and applies it to
         the object.
         '''
-        return b''
+        guid = Guid.from_bytes(request_body)
+        self._objs_by_guid[guid]._delete()
+        return b'\x01'
 
     def notify_share_failure_wrapper(self, connection, request_body):
         ''' Deserializes an incoming async share failure notification, 
@@ -1423,4 +1426,18 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         ''' Handles only the deleting of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
-        pass
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = bytes(obj.address),
+            request_code = self.REQUEST_CODES['delete_object']
+        )
+        
+        if response != b'\x01':
+            raise RuntimeError('Unknown error while updating object.')
+        
+        try:
+            del self._objs_by_guid[obj.address]
+        except KeyError:
+            pass
+        
+        return True

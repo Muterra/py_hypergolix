@@ -425,7 +425,12 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def delete_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        return b''
+        guid = Guid.from_bytes(request_body)
+        self.dispatch.delete_object(
+            asking_token = endpoint.app_token,
+            guid = guid,
+        )
+        return b'\x01'
         
         
 class _EmbeddedIPC(_IPCBase):
@@ -490,7 +495,21 @@ class WSEndpoint(_EndpointBase, _ReqResWSConnection):
         ''' Notifies the endpoint that the object has been deleted 
         upstream.
         '''
-        pass
+        if not isinstance(guid, Guid):
+            raise TypeError('guid must be type Guid or similar.')
+        
+        response = self.dispatch.send_threadsafe(
+            connection = self,
+            msg = bytes(guid),
+            request_code = self.dispatch.REQUEST_CODES['send_delete'],
+            # Note: for now, just don't worry about failures.
+            expect_reply = False
+        )
+        # print('Update sent and resuming life.')
+        # if response == b'\x01':
+        #     return True
+        # else:
+        #     raise RuntimeError('Unknown error while delivering object update.')
         
     def notify_share_failure(self, guid, recipient):
         ''' Notifies the embedded client of an unsuccessful share.

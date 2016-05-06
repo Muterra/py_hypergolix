@@ -1432,24 +1432,24 @@ class Dispatcher(DispatcherBase):
                 'Agent lacks application to handle app id.'
             ))
             self._orphan_shares_incoming.add(guid)
-            
-        for token in callsheet:
-            if deleted:
-                # It's mildly dangerous to do this -- what if we throw an 
-                # error in _attempt_contact_endpoint?
-                self._attempt_contact_endpoint(
-                    token, 
-                    'send_delete', 
-                    guid
-                )
-            else:
-                # It's mildly dangerous to do this -- what if we throw an 
-                # error in _attempt_contact_endpoint?
-                self._attempt_contact_endpoint(
-                    token, 
-                    'notify_object', 
-                    guid, 
-                    state = self._state_by_guid[guid]
+        else:
+            for token in callsheet:
+                if deleted:
+                    # It's mildly dangerous to do this -- what if we throw an 
+                    # error in _attempt_contact_endpoint?
+                    self._attempt_contact_endpoint(
+                        token, 
+                        'send_delete', 
+                        guid
+                    )
+                else:
+                    # It's mildly dangerous to do this -- what if we throw an 
+                    # error in _attempt_contact_endpoint?
+                    self._attempt_contact_endpoint(
+                        token, 
+                        'notify_object', 
+                        guid, 
+                        state = self._state_by_guid[guid]
                 )
                 
     def _attempt_contact_endpoint(self, app_token, command, guid, *args, **kwargs):
