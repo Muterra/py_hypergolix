@@ -48,7 +48,7 @@ import threading
 
 from weakref import WeakValueDictionary
 
-from golix import Guid
+from golix import Ghid
 
 # Inter-package dependencies
 # from .utils import RawObj
@@ -170,17 +170,17 @@ class AppObj:
         # Todo: add (python) gc logic such that this is removed when the object
         # is removed as well. Note that we currently DO do this in delete, but
         # not on actual python gc.
-        self._embed._objs_by_guid[address] = self
+        self._embed._objs_by_ghid[address] = self
         
     @property
     def author(self):
-        ''' The guid address of the agent that created the object.
+        ''' The ghid address of the agent that created the object.
         '''
         return self._author
         
     @property
     def address(self):
-        ''' The guid address of the object itself.
+        ''' The ghid address of the object itself.
         '''
         return self._address
             
@@ -629,8 +629,8 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         
         self.app_token = app_token
         
-        # Lookup for guid -> object
-        self._objs_by_guid = WeakValueDictionary()
+        # Lookup for ghid -> object
+        self._objs_by_ghid = WeakValueDictionary()
         
         super().__init__(*args, **kwargs)
     
@@ -665,11 +665,11 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         '''
         pass
         
-    def get_object(self, guid):
+    def get_object(self, ghid):
         ''' Loads an object into local memory from the hypergolix 
         service.
         '''
-        response = self._get_object(guid)
+        response = self._get_object(ghid)
         (
             address,
             author,
@@ -686,7 +686,7 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
             app_token = None
             
         if is_link:
-            link = Guid.from_bytes(state)
+            link = Ghid.from_bytes(state)
             state = self.get_object(link)
             
         state = (state, api_id, private, dynamic, _legroom)
@@ -698,7 +698,7 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         )
         
     @abc.abstractmethod
-    def _get_object(self, guid):
+    def _get_object(self, ghid):
         ''' Gets the serialized version of the object from the 
         hypergolix service.
         '''
@@ -766,7 +766,7 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         ''' Handles only the updating of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
-        # If the state is a link, convert it to a guid and bytes thereof.
+        # If the state is a link, convert it to a ghid and bytes thereof.
         if isinstance(state, AppObj):
             state = bytes(state.address)
         
@@ -888,9 +888,9 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
             _legroom # Will be unused and set to None
         ) = self._unpack_object_def(request_body)
                 
-        if address in self._objs_by_guid:
+        if address in self._objs_by_ghid:
             if is_link:
-                link = Guid.from_bytes(state)
+                link = Ghid.from_bytes(state)
                 # Note: this may cause things to freeze, because async
                 state = self.get_object(link)
             
@@ -899,14 +899,14 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
             # here. May want to create a dedicated thread just for pushing 
             # updates? Like autoresponder, but autoupdater?
             worker = threading.Thread(
-                target = self._objs_by_guid[address]._update,
+                target = self._objs_by_ghid[address]._update,
                 daemon = True,
                 args = (state,),
             )
             worker.start()
             
             # self._ws_loop.call_soon_threadsafe(, state)
-            # self._objs_by_guid[address]._update(state)
+            # self._objs_by_ghid[address]._update(state)
             
             # python tests/trashtest/trashtest_ipc_hosts.py
             
@@ -916,8 +916,8 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         ''' Deserializes an incoming object deletion, and applies it to
         the object.
         '''
-        guid = Guid.from_bytes(request_body)
-        self._objs_by_guid[guid]._delete()
+        ghid = Ghid.from_bytes(request_body)
+        self._objs_by_ghid[ghid]._delete()
         return b'\x01'
 
     def notify_share_failure_wrapper(self, connection, request_body):
@@ -941,17 +941,17 @@ class _TestEmbed(_EmbedBase):
         '''
         pass
     
-    def get_object(self, guid):
-        ''' Wraps RawObj.__init__  and get_guid for preexisting objects.
+    def get_object(self, ghid):
+        ''' Wraps RawObj.__init__  and get_ghid for preexisting objects.
         '''
-        author, is_dynamic, state = self.get_guid(guid)
+        author, is_dynamic, state = self.get_ghid(ghid)
             
         return RawObj(
             # Todo: make the dispatch more intelligent
             dispatch = self,
             state = state,
             dynamic = is_dynamic,
-            _preexisting = (guid, author)
+            _preexisting = (ghid, author)
         )
         
     def new_object(self, state, dynamic=True, _legroom=None):
@@ -1002,10 +1002,10 @@ class _TestEmbed(_EmbedBase):
             )
     
         # This is, shall we say, suboptimal, for dynamic objects.
-        # frame_guid = self._historian[obj.address][0]
+        # frame_ghid = self._historian[obj.address][0]
         # target = self._dynamic_targets[obj.address]
         target = obj.address
-        self.hand_guid(target, recipient)
+        self.hand_ghid(target, recipient)
         
     def share_object(self, obj, recipient):
         ''' Currently, this is just calling hand_object. In the future,
@@ -1015,7 +1015,7 @@ class _TestEmbed(_EmbedBase):
             raise TypeError(
                 'Only RawObj may be shared.'
             )
-        return self.hand_guid(obj.address, recipient)
+        return self.hand_ghid(obj.address, recipient)
         
     def freeze_object(self, obj):
         ''' Wraps RawObj.freeze. Note: does not currently traverse 
@@ -1075,7 +1075,7 @@ class _TestEmbed(_EmbedBase):
         '''
         pass
         
-    def _get_object(self, guid):
+    def _get_object(self, ghid):
         ''' Loads an object into local memory from the hypergolix 
         service.
         '''
@@ -1231,12 +1231,12 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
     def whoami(self):
         ''' Inherited from Agent.
         '''
-        raw_guid = self.send_threadsafe(
+        raw_ghid = self.send_threadsafe(
             connection = self.connection,
             msg = b'',
             request_code = self.REQUEST_CODES['whoami']
         )
-        return Guid.from_bytes(raw_guid)
+        return Ghid.from_bytes(raw_ghid)
         
     def register_api(self, api_id):
         ''' Registers an API ID with the hypergolix service for this 
@@ -1294,7 +1294,7 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             traceback.print_tb(exc.__traceback__)
         return repr(exc)
         
-    def _get_object(self, guid):
+    def _get_object(self, ghid):
         ''' Loads an object into local memory from the hypergolix 
         service.
         '''
@@ -1302,7 +1302,7 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         # actual object.
         return self.send_threadsafe(
             connection = self.connection,
-            msg = bytes(guid),
+            msg = bytes(ghid),
             request_code = self.REQUEST_CODES['get_object']
         )
         
@@ -1322,7 +1322,7 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             request_code = self.REQUEST_CODES['new_object']
         )
         
-        address = Guid.from_bytes(response)
+        address = Ghid.from_bytes(response)
             
         # Note that the upstream ipc_host will automatically send us updates.
             
@@ -1384,7 +1384,7 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             msg = bytes(obj.address),
             request_code = self.REQUEST_CODES['freeze_object']
         )
-        address = Guid.from_bytes(response)
+        address = Ghid.from_bytes(response)
         return AppObj(
             embed = self,
             _preexisting = (address, obj.author),
@@ -1419,7 +1419,7 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         if response != b'\x01':
             raise RuntimeError('Unknown error while updating object.')
         
-        del self._objs_by_guid[obj.address]
+        del self._objs_by_ghid[obj.address]
         return True
 
     def _delete_object(self, obj):
@@ -1436,7 +1436,7 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             raise RuntimeError('Unknown error while updating object.')
         
         try:
-            del self._objs_by_guid[obj.address]
+            del self._objs_by_ghid[obj.address]
         except KeyError:
             pass
         

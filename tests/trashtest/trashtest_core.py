@@ -54,10 +54,10 @@ from hypergolix.embeds import _TestEmbed
 # from hypergolix.embeds import _EmbedBase
 
 # This is a semi-normal import
-from golix.utils import _dummy_guid
+from golix.utils import _dummy_ghid
 
 # These are abnormal imports
-from golix import Guid
+from golix import Ghid
 from golix import ThirdParty
 from golix import SecondParty
 from golix import FirstParty
@@ -70,18 +70,24 @@ from golix import FirstParty
 class _TestClient(AgentBase, MemoryPersister, _TestEmbed, _TestDispatcher):
     def __init__(self):
         super().__init__(persister=self, dispatcher=self)
+        
+    def _discard_object(*args, **kwargs):
+        pass
 
 
 class _TestAgent_SharedPersistence(AgentBase, _TestEmbed, _TestDispatcher):
     def __init__(self, *args, **kwargs):
         super().__init__(dispatcher=self, *args, **kwargs)
         
-    def subscribe(self, guid, callback):
+    def subscribe(self, ghid, callback):
         ''' We're not testing this right now but we need to suppress 
         warnings about it for EmbedBase. Pass everything straight to the
         persister.
         '''
-        self.persister.subscribe(guid, callback)
+        self.persister.subscribe(ghid, callback)
+        
+    def _discard_object(*args, **kwargs):
+        pass
 
     
 class ObjectTrashtest(unittest.TestCase):
@@ -92,13 +98,13 @@ class ObjectTrashtest(unittest.TestCase):
         dummy_state = b'0'
         
         stat1 = StaticObject(
-            address = _dummy_guid,
-            author = _dummy_guid,
+            address = _dummy_ghid,
+            author = _dummy_ghid,
             state = dummy_state,
         )
         dyn1 = DynamicObject(
-            address = _dummy_guid,
-            author = _dummy_guid,
+            address = _dummy_ghid,
+            author = _dummy_ghid,
             _buffer = collections.deque([dummy_state], maxlen=7),
         )
         
@@ -109,20 +115,20 @@ class ObjectTrashtest(unittest.TestCase):
         with self.assertRaises(AttributeError, 
             msg='Failed to prevent public attr assignment in static obj.'):
                 stat1.state = 5
-                stat1.author = _dummy_guid
-                stat1.address = _dummy_guid
+                stat1.author = _dummy_ghid
+                stat1.address = _dummy_ghid
         
         with self.assertRaises(AttributeError, 
             msg='Failed to prevent public attr assignment in dynamic obj.'):
                 stat1.state = 5
-                stat1.author = _dummy_guid
-                stat1.address = _dummy_guid
-                stat1.buffer = [_dummy_guid]
+                stat1.author = _dummy_ghid
+                stat1.address = _dummy_ghid
+                stat1.buffer = [_dummy_ghid]
                 
-        self.assertEqual(stat1.author, _dummy_guid)
-        self.assertEqual(dyn1.author, _dummy_guid)
-        self.assertEqual(stat1.address, _dummy_guid)
-        self.assertEqual(dyn1.address, _dummy_guid)
+        self.assertEqual(stat1.author, _dummy_ghid)
+        self.assertEqual(dyn1.author, _dummy_ghid)
+        self.assertEqual(stat1.address, _dummy_ghid)
+        self.assertEqual(dyn1.address, _dummy_ghid)
         self.assertEqual(stat1.state, dummy_state)
         self.assertEqual(dyn1.state, dummy_state)
         self.assertEqual(dyn1.buffer, (dummy_state,))

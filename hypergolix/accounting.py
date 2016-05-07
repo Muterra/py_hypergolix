@@ -48,7 +48,7 @@ import warnings
 
 from golix import FirstParty
 from golix import SecondParty
-from golix import Guid
+from golix import Ghid
 from golix import Secret
 from golix import SecurityError
 
@@ -99,7 +99,7 @@ class AgentAccount:
     def __init__(self, _preexisting=None, *args, **kwargs):
         '''
         _preexisting isinstance tuple
-            _preexisting[0] isinstance golix.Guid
+            _preexisting[0] isinstance golix.Ghid
             _preexisting[1] isinstance golix.Secret
         '''
         super().__init__(_preexisting=_preexisting, *args, **kwargs)
@@ -114,13 +114,13 @@ class AgentAccount:
             
         else:
             # Get bootstrap
-            bootstrap_guid = _preexisting[0]
+            bootstrap_ghid = _preexisting[0]
             bootstrap_secret = _preexisting[1]
             self._set_secret_pending(
-                guid = bootstrap_guid,
+                ghid = bootstrap_ghid,
                 secret = bootstrap_secret
             )
-            bootstrap_obj = self.get_object(bootstrap_guid)
+            bootstrap_obj = self.get_object(bootstrap_ghid)
             bootstrap = AgentBootstrap.from_existing(
                 obj = bootstrap_obj,
                 agent = self
@@ -152,23 +152,23 @@ class AgentAccount:
         THE BOOTSTRAP OBJECT. Plus, futureproofing. But, we also cannot,
         under any circumstances, reuse a Secret. So, instead of simply 
         using the scrypt output directly, we should put it through a
-        secondary hkdf, using the previous frame guid as salt, to ensure
+        secondary hkdf, using the previous frame ghid as salt, to ensure
         a new key, while maintaining updateability and accesibility.
         '''
         # Condense everything we need to rebuild self._golix_provider
         keys = self._golix_provider._serialize()
-        # Store the guid for the dynamic bootstrap object
+        # Store the ghid for the dynamic bootstrap object
         bootstrap = self._bootstrap_binding
         # Create some random-length, random padding to make it harder to
         # guess that our end-product GEOC is a saved Agent
         padding = None
         # Put it all into a GEOC.
-        # Scrypt the password. Salt against the author GUID, which we know
+        # Scrypt the password. Salt against the author GHID, which we know
         # (when reloading) from the author of the file!
         # Use 2**14 for t<=100ms, 2**20 for t<=5s
         combined = scrypt(
             password = password, 
-            salt = bytes(self._golix_provider.guid),
+            salt = bytes(self._golix_provider.ghid),
             key_len = 48,
             N = 2**15,
             r = 8,

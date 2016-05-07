@@ -84,7 +84,7 @@ class UnboundContainerError(NakError):
     
 class DoesNotExistError(NakError):
     ''' This NakError is raised when a persistence provider has received
-    a request for a guid that does not exist in its object store.
+    a request for a ghid that does not exist in its object store.
     '''
     pass
     

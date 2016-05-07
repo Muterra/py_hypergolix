@@ -37,7 +37,7 @@ import weakref
 import msgpack
 import traceback
 
-from golix import Guid
+from golix import Ghid
 
 # Utils may only import from .exceptions or .bases (except the latter doesn't 
 # yet exist)
@@ -125,24 +125,24 @@ class RawObj:
         self._set_callbacks(callbacks)
         
     def _make_golix(self, state, dynamic):
-        ''' Creates an object based on dynamic. Returns the guid for a
-        static object, and the dynamic guid for a dynamic object.
+        ''' Creates an object based on dynamic. Returns the ghid for a
+        static object, and the dynamic ghid for a dynamic object.
         '''
         if dynamic:
             if isinstance(state, RawObj):
-                guid = self._dispatch.new_dynamic(
+                ghid = self._dispatch.new_dynamic(
                     state = state
                 )
             else:
-                guid = self._dispatch.new_dynamic(
+                ghid = self._dispatch.new_dynamic(
                     state = self._wrap_state(state)
                 )
         else:
-            guid = self._dispatch.new_static(
+            ghid = self._dispatch.new_static(
                 state = self._wrap_state(state)
             )
             
-        return guid
+        return ghid
         
     def _init_state(self, state, _legroom):
         ''' Makes the first state commit for the object, regardless of
@@ -235,13 +235,13 @@ class RawObj:
         
     @property
     def author(self):
-        ''' The guid address of the agent that created the object.
+        ''' The ghid address of the agent that created the object.
         '''
         return self._author
         
     @property
     def address(self):
-        ''' The guid address of the object itself.
+        ''' The ghid address of the object itself.
         '''
         return self._address
         
@@ -348,7 +348,7 @@ class RawObj:
         attempts to access will raise ValueError, but does not (and 
         cannot) remove the object from memory.
         '''
-        self._dispatch.delete_guid(self.address)
+        self._dispatch.delete_ghid(self.address)
         self.clear_callbacks()
         super().__setattr__('_deleted', True)
         super().__setattr__('_is_dynamic', None)
@@ -412,7 +412,7 @@ class RawObj:
     def share(self, recipient):
         ''' Shares the object with someone else.
         
-        recipient isinstance Guid
+        recipient isinstance Ghid
         '''
         self._dispatch.share_object(
             obj = self,
@@ -422,7 +422,7 @@ class RawObj:
     def hold(self):
         ''' Binds to the object, preventing its deletion.
         '''
-        self._dispatch.hold_guid(
+        self._dispatch.hold_ghid(
             obj = self
         )
         
@@ -439,8 +439,8 @@ class RawObj:
         will probably error out if you attempt to freeze one.
         '''
         if self.is_dynamic:
-            guid = self._dispatch.freeze_dynamic(
-                guid_dynamic = self.address
+            ghid = self._dispatch.freeze_dynamic(
+                ghid_dynamic = self.address
             )
         else:
             raise TypeError(
@@ -456,7 +456,7 @@ class RawObj:
             dispatch = self._dispatch,
             state = self.state,
             dynamic = False,
-            _preexisting = (guid, self.author)
+            _preexisting = (ghid, self.author)
         )
             
     def sync(self, *args):
@@ -814,10 +814,10 @@ class IPCPackerMixIn:
             ) from e
             
         if unpacked_msg['address'] is not None:
-            unpacked_msg['address'] = Guid.from_bytes(unpacked_msg['address'])
+            unpacked_msg['address'] = Ghid.from_bytes(unpacked_msg['address'])
             
         if unpacked_msg['author'] is not None:
-            unpacked_msg['author'] = Guid.from_bytes(unpacked_msg['author'])
+            unpacked_msg['author'] = Ghid.from_bytes(unpacked_msg['author'])
             
         # We may have already set the attributes.
         # Wrap this in a try/catch in case we've have.
@@ -849,7 +849,7 @@ class _ObjectBase:
     
     Objects provide a simple interface to the arbitrary binary data 
     contained within Golix containers. They track both the plaintext, 
-    and the associated GUID. They do NOT expose the secret key material
+    and the associated GHID. They do NOT expose the secret key material
     of the container.
     
     From the perspective of an external method, *all* Objects should be 
@@ -863,7 +863,7 @@ class _ObjectBase:
     _REPROS = ['author', 'address']
     
     def __init__(self, author, address):
-        ''' Creates a new object. Address is the dynamic guid. State is
+        ''' Creates a new object. Address is the dynamic ghid. State is
         the initial state.
         '''
         self._author = author

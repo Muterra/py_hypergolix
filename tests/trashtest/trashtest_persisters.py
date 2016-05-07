@@ -43,7 +43,7 @@ from hypergolix.exceptions import NakError
 from hypergolix.exceptions import PersistenceWarning
 
 # These are abnormal imports
-from golix import Guid
+from golix import Ghid
 from golix import ThirdParty
 from golix import SecondParty
 from golix import FirstParty
@@ -58,8 +58,8 @@ class _SubscriptionNotifier(RuntimeWarning):
 
     
 class MemoryPersisterTrashtest(unittest.TestCase):
-    def dummy_callback(self, guid):
-        self.assertIn(guid, self.server1._store)
+    def dummy_callback(self, ghid):
+        self.assertIn(ghid, self.server1._store)
         warnings.warn('Notification success!', category=_SubscriptionNotifier)
     
     @classmethod
@@ -83,8 +83,8 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         self.server1.publish(midc1)
         self.server1.publish(midc2)
         
-        self.assertIn(self.reader1.guid, self.server1._store)
-        self.assertIn(self.reader2.guid, self.server1._store)
+        self.assertIn(self.reader1.ghid, self.server1._store)
+        self.assertIn(self.reader2.ghid, self.server1._store)
         # Don't publish the third, we want to test refusal
         
         # ---------------------------------------
@@ -128,72 +128,72 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         
         # Make some bindings for known IDs
         bind1_1 = self.agent1.make_bind_static(
-            target = cont1_1.guid
+            target = cont1_1.ghid
         )
         bind1_2 = self.agent1.make_bind_static(
-            target = cont1_2.guid
+            target = cont1_2.ghid
         )
         
         bind2_1 = self.agent2.make_bind_static(
-            target = cont2_1.guid
+            target = cont2_1.ghid
         )
         bind2_2 = self.agent2.make_bind_static(
-            target = cont2_2.guid
+            target = cont2_2.ghid
         )
         
         # Make some bindings for the unknown ID
         bind3_1 = self.agent3.make_bind_static(
-            target = cont3_1.guid
+            target = cont3_1.ghid
         )
         bind3_2 = self.agent3.make_bind_static(
-            target = cont3_2.guid
+            target = cont3_2.ghid
         )
         
         # Make some debindings 
         debind1_1 = self.agent1.make_debind(
-            target = bind1_1.guid
+            target = bind1_1.ghid
         )
         debind1_2 = self.agent1.make_debind(
-            target = bind1_2.guid
+            target = bind1_2.ghid
         )
         
         # Make some debindings 
         debind2_1 = self.agent2.make_debind(
-            target = bind2_1.guid
+            target = bind2_1.ghid
         )
         debind2_2 = self.agent2.make_debind(
-            target = bind2_2.guid
+            target = bind2_2.ghid
         )
         
         # And make some author-inconsistent debindings
         debind2_1_bad = self.agent1.make_debind(
-            target = bind2_1.guid
+            target = bind2_1.ghid
         )
         debind2_2_bad = self.agent1.make_debind(
-            target = bind2_2.guid
+            target = bind2_2.ghid
         )
         
         # And then make some debindings for the debindings
         dedebind2_1 = self.agent2.make_debind(
-            target = debind2_1.guid
+            target = debind2_1.ghid
         )
         dedebind2_2 = self.agent2.make_debind(
-            target = debind2_2.guid
+            target = debind2_2.ghid
         )
         
         # And then make some debindings for the debindings for the...
         dededebind2_1 = self.agent2.make_debind(
-            target = dedebind2_1.guid
+            target = dedebind2_1.ghid
         )
         dededebind2_2 = self.agent2.make_debind(
-            target = dedebind2_2.guid
+            target = dedebind2_2.ghid
         )
         
         # Make requests between known IDs
         handshake1_1 = self.agent1.make_request(
             recipient = self.reader2,
             request = self.agent1.make_handshake(
-                                                target = cont1_1.guid,
+                                                target = cont1_1.ghid,
                                                 secret = secret1_1
                                                 )
         )
@@ -201,7 +201,7 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         handshake2_1 = self.agent2.make_request(
             recipient = self.reader1,
             request = self.agent2.make_handshake(
-                                                target = cont2_1.guid,
+                                                target = cont2_1.ghid,
                                                 secret = secret2_1
                                                 )
         )
@@ -210,56 +210,56 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         handshake3_1 = self.agent1.make_request(
             recipient = self.reader3,
             request = self.agent1.make_handshake(
-                                                target = cont1_1.guid,
+                                                target = cont1_1.ghid,
                                                 secret = secret1_1
                                                 )
         )
         
         # Make some debindings for those requests
         degloveshake1_1 = self.agent2.make_debind(
-            target = handshake1_1.guid
+            target = handshake1_1.ghid
         )
         degloveshake2_1 = self.agent1.make_debind(
-            target = handshake2_1.guid
+            target = handshake2_1.ghid
         )
         
         # Make some dynamic bindings!
         dyn1_1a = self.agent1.make_bind_dynamic(
-            target = cont1_1.guid
+            target = cont1_1.ghid
         )
         dyn1_1b = self.agent1.make_bind_dynamic(
-            target = cont1_2.guid,
-            guid_dynamic = dyn1_1a.guid_dynamic,
-            history = [dyn1_1a.guid]
+            target = cont1_2.ghid,
+            ghid_dynamic = dyn1_1a.ghid_dynamic,
+            history = [dyn1_1a.ghid]
         )
         
         dyn2_1a = self.agent2.make_bind_dynamic(
-            target = cont2_1.guid
+            target = cont2_1.ghid
         )
         dyn2_1b = self.agent2.make_bind_dynamic(
-            target = cont2_2.guid,
-            guid_dynamic = dyn2_1a.guid_dynamic,
-            history = [dyn2_1a.guid]
+            target = cont2_2.ghid,
+            ghid_dynamic = dyn2_1a.ghid_dynamic,
+            history = [dyn2_1a.ghid]
         )
         
         # And make some fraudulent ones
         dynF_1b = self.agent1.make_bind_dynamic(
-            target = cont1_2.guid,
-            guid_dynamic = dyn2_1a.guid_dynamic,
-            history = [dyn2_1a.guid]
+            target = cont1_2.ghid,
+            ghid_dynamic = dyn2_1a.ghid_dynamic,
+            history = [dyn2_1a.ghid]
         )
         dynF_2b = self.agent2.make_bind_dynamic(
-            target = cont2_2.guid,
-            guid_dynamic = dyn1_1a.guid_dynamic,
-            history = [dyn1_1a.guid]
+            target = cont2_2.ghid,
+            ghid_dynamic = dyn1_1a.ghid_dynamic,
+            history = [dyn1_1a.ghid]
         )
         
         # Make some debindings 
         dyndebind1_1 = self.agent1.make_debind(
-            target = dyn1_1b.guid_dynamic
+            target = dyn1_1b.ghid_dynamic
         )
         dyndebind2_1 = self.agent2.make_debind(
-            target = dyn2_1b.guid_dynamic
+            target = dyn2_1b.ghid_dynamic
         )
         
         # ---------------------------------------
@@ -298,9 +298,9 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         with self.assertRaises(NakError, msg='Server allowed binding replay.'):
             self.server1.publish(bind2_2.packed)
             
-        self.assertIn(debind2_1.guid, self.server1._store)
-        self.assertNotIn(bind2_1.guid, self.server1._store)
-        self.assertNotIn(cont2_1.guid, self.server1._store)
+        self.assertIn(debind2_1.ghid, self.server1._store)
+        self.assertNotIn(bind2_1.ghid, self.server1._store)
+        self.assertNotIn(cont2_1.ghid, self.server1._store)
         
         # ---------------------------------------
         # Publish debindings for those debindings and then rebind them
@@ -311,23 +311,23 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         with self.assertRaises(NakError, msg='Server allowed debinding replay.'):
             self.server1.publish(debind2_2.packed)
             
-        self.assertNotIn(debind2_1.guid, self.server1._targets_debind)
-        self.assertNotIn(debind2_2.guid, self.server1._targets_debind)
-        self.assertNotIn(bind2_1.guid, self.server1._debindings)
-        self.assertNotIn(bind2_2.guid, self.server1._debindings)
+        self.assertNotIn(debind2_1.ghid, self.server1._targets_debind)
+        self.assertNotIn(debind2_2.ghid, self.server1._targets_debind)
+        self.assertNotIn(bind2_1.ghid, self.server1._debindings)
+        self.assertNotIn(bind2_2.ghid, self.server1._debindings)
             
-        self.assertIn(dedebind2_1.guid, self.server1._store)
-        self.assertNotIn(debind2_1.guid, self.server1._store)
-        self.assertNotIn(bind2_1.guid, self.server1._store)
-        self.assertNotIn(cont2_1.guid, self.server1._store)
+        self.assertIn(dedebind2_1.ghid, self.server1._store)
+        self.assertNotIn(debind2_1.ghid, self.server1._store)
+        self.assertNotIn(bind2_1.ghid, self.server1._store)
+        self.assertNotIn(cont2_1.ghid, self.server1._store)
         
         self.server1.publish(bind2_1.packed)
         self.server1.publish(bind2_2.packed)
         self.server1.publish(cont2_1.packed)
         self.server1.publish(cont2_2.packed)
         
-        self.assertIn(bind2_1.guid, self.server1._store)
-        self.assertIn(cont2_1.guid, self.server1._store)
+        self.assertIn(bind2_1.ghid, self.server1._store)
+        self.assertIn(cont2_1.ghid, self.server1._store)
         
         # ---------------------------------------
         # Publish debindings for those debindings' debindings (... fer srlsy?) 
@@ -339,22 +339,22 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         with self.assertRaises(NakError, msg='Server allowed dedebinding replay.'):
             self.server1.publish(dedebind2_2.packed)
             
-        self.assertNotIn(dedebind2_1.guid, self.server1._targets_debind)
-        self.assertNotIn(dedebind2_2.guid, self.server1._targets_debind)
-        self.assertNotIn(debind2_1.guid, self.server1._debindings)
-        self.assertNotIn(debind2_2.guid, self.server1._debindings)
+        self.assertNotIn(dedebind2_1.ghid, self.server1._targets_debind)
+        self.assertNotIn(dedebind2_2.ghid, self.server1._targets_debind)
+        self.assertNotIn(debind2_1.ghid, self.server1._debindings)
+        self.assertNotIn(debind2_2.ghid, self.server1._debindings)
         
         self.server1.publish(debind2_1.packed)
         self.server1.publish(debind2_2.packed)
         
-        self.assertIn(debind2_1.guid, self.server1._store)
-        self.assertIn(debind2_2.guid, self.server1._store)
+        self.assertIn(debind2_1.ghid, self.server1._store)
+        self.assertIn(debind2_2.ghid, self.server1._store)
         
         # ---------------------------------------
         # Subscribe to requests.
         
-        self.server1.subscribe(self.agent1.guid, self.dummy_callback)
-        self.server1.subscribe(self.agent2.guid, self.dummy_callback)
+        self.server1.subscribe(self.agent1.ghid, self.dummy_callback)
+        self.server1.subscribe(self.agent2.ghid, self.dummy_callback)
         
         # ---------------------------------------
         # Publish requests.
@@ -365,42 +365,42 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         with self.assertRaises(NakError, msg='Server allowed unknown recipient.'):
             self.server1.publish(handshake3_1.packed)
             
-        self.assertIn(handshake1_1.guid, self.server1._store)
-        self.assertIn(handshake2_1.guid, self.server1._store)
+        self.assertIn(handshake1_1.ghid, self.server1._store)
+        self.assertIn(handshake2_1.ghid, self.server1._store)
         
         # ---------------------------------------
         # Debind those requests.
         self.server1.publish(degloveshake1_1.packed)
         self.server1.publish(degloveshake2_1.packed)
             
-        self.assertNotIn(handshake1_1.guid, self.server1._store)
-        self.assertNotIn(handshake2_1.guid, self.server1._store)
+        self.assertNotIn(handshake1_1.ghid, self.server1._store)
+        self.assertNotIn(handshake2_1.ghid, self.server1._store)
         
         with self.assertRaises(NakError, msg='Server allowed request replay.'):
             self.server1.publish(handshake1_1.packed)
         with self.assertRaises(NakError, msg='Server allowed request replay.'):
             self.server1.publish(handshake2_1.packed)
             
-        self.assertNotIn(handshake1_1.guid, self.server1._store)
-        self.assertNotIn(handshake2_1.guid, self.server1._store)
+        self.assertNotIn(handshake1_1.ghid, self.server1._store)
+        self.assertNotIn(handshake2_1.ghid, self.server1._store)
         
         # ---------------------------------------
         # Test some dynamic bindings.
         # First make sure the container is actually not there.
-        self.assertNotIn(cont2_1.guid, self.server1._store)
-        self.assertNotIn(cont2_2.guid, self.server1._store)
+        self.assertNotIn(cont2_1.ghid, self.server1._store)
+        self.assertNotIn(cont2_2.ghid, self.server1._store)
         # Now let's see what happens if we upload stuff
         self.server1.publish(dyn1_1a.packed)
         self.server1.publish(dyn2_1a.packed)
         self.server1.publish(cont2_1.packed)
-        self.assertIn(dyn1_1a.guid, self.server1._store)
-        self.assertIn(dyn2_1a.guid, self.server1._store)
-        self.assertIn(cont2_1.guid, self.server1._store)
+        self.assertIn(dyn1_1a.ghid, self.server1._store)
+        self.assertIn(dyn2_1a.ghid, self.server1._store)
+        self.assertIn(cont2_1.ghid, self.server1._store)
         # And make sure that the container is retained if we remove the static
         self.server1.publish(debind1_1.packed)
-        self.assertNotIn(bind1_1.guid, self.server1._store)
-        self.assertIn(cont1_1.guid, self.server1._store)
-        self.assertIn(cont2_1.guid, self.server1._store)
+        self.assertNotIn(bind1_1.ghid, self.server1._store)
+        self.assertIn(cont1_1.ghid, self.server1._store)
+        self.assertIn(cont2_1.ghid, self.server1._store)
         # Now let's try some fraudulent updates
         with self.assertRaises(NakError, msg='Server allowed fraudulent dynamic.'):
             self.server1.publish(dynF_1b.packed)
@@ -408,8 +408,8 @@ class MemoryPersisterTrashtest(unittest.TestCase):
             self.server1.publish(dynF_2b.packed)
             
         # Subscribe to updates before actually sending the real ones.
-        self.server1.subscribe(dyn1_1a.guid_dynamic, self.dummy_callback)
-        self.server1.subscribe(dyn2_1a.guid_dynamic, self.dummy_callback)
+        self.server1.subscribe(dyn1_1a.ghid_dynamic, self.dummy_callback)
+        self.server1.subscribe(dyn2_1a.ghid_dynamic, self.dummy_callback)
             
         # Now the real updates.
         # Since we already have an object for this binding, it should immediately
@@ -422,12 +422,12 @@ class MemoryPersisterTrashtest(unittest.TestCase):
             self.server1.publish(dyn2_1b.packed)
             self.server1.publish(cont2_2.packed)
         # And now test that containers were actually GC'd
-        self.assertNotIn(cont1_1.guid, self.server1._store)
-        self.assertNotIn(cont2_1.guid, self.server1._store)
+        self.assertNotIn(cont1_1.ghid, self.server1._store)
+        self.assertNotIn(cont2_1.ghid, self.server1._store)
         # And that the previous frame (but not its references) were as well
-        self.assertIn(dyn1_1b.guid, self.server1._store)
-        self.assertIn(dyn2_1b.guid, self.server1._store)
-        self.assertIn(cont2_2.guid, self.server1._store)
+        self.assertIn(dyn1_1b.ghid, self.server1._store)
+        self.assertIn(dyn2_1b.ghid, self.server1._store)
+        self.assertIn(cont2_2.ghid, self.server1._store)
         
         # Make sure we cannot replay old frames.
         with self.assertRaises(NakError, msg='Server allowed dyn frame replay.'):
@@ -445,32 +445,32 @@ class MemoryPersisterTrashtest(unittest.TestCase):
         with self.assertRaises(NakError, msg='Server allowed debound dyn replay.'):
             self.server1.publish(dyn2_1a.packed)
         # And check their state.
-        self.assertIn(dyndebind1_1.guid, self.server1._store)
-        self.assertIn(dyndebind2_1.guid, self.server1._store)
+        self.assertIn(dyndebind1_1.ghid, self.server1._store)
+        self.assertIn(dyndebind2_1.ghid, self.server1._store)
         
-        self.assertNotIn(dyn1_1a.guid_dynamic, self.server1._store)
-        self.assertNotIn(dyn2_1a.guid_dynamic, self.server1._store)
-        self.assertNotIn(dyn1_1a.guid, self.server1._store)
-        self.assertNotIn(dyn1_1b.guid, self.server1._store)
-        self.assertNotIn(dyn2_1a.guid, self.server1._store)
-        self.assertNotIn(dyn2_1b.guid, self.server1._store)
-        self.assertIn(cont1_2.guid, self.server1._store)
-        self.assertNotIn(cont2_2.guid, self.server1._store)
+        self.assertNotIn(dyn1_1a.ghid_dynamic, self.server1._store)
+        self.assertNotIn(dyn2_1a.ghid_dynamic, self.server1._store)
+        self.assertNotIn(dyn1_1a.ghid, self.server1._store)
+        self.assertNotIn(dyn1_1b.ghid, self.server1._store)
+        self.assertNotIn(dyn2_1a.ghid, self.server1._store)
+        self.assertNotIn(dyn2_1b.ghid, self.server1._store)
+        self.assertIn(cont1_2.ghid, self.server1._store)
+        self.assertNotIn(cont2_2.ghid, self.server1._store)
         
         # ----------------------------------------
         # Test remaining subscription methods
         self.server1.list_subs()
-        self.server1.unsubscribe(self.agent1.guid, self.dummy_callback)
+        self.server1.unsubscribe(self.agent1.ghid, self.dummy_callback)
         self.server1.disconnect()
         
         # Test listing bindings
-        holdings_cont1_2 = self.server1.list_bindings(cont1_2.guid)
-        self.assertEqual(holdings_cont1_2, [bind1_2.guid])
+        holdings_cont1_2 = self.server1.list_bindings(cont1_2.ghid)
+        self.assertEqual(holdings_cont1_2, [bind1_2.ghid])
         
         # Test querying debindings
-        debindings_cont1_1 = self.server1.query_debinding(bind1_1.guid)
-        self.assertEqual(debindings_cont1_1, debind1_1.guid)
-        debindings_cont1_2 = self.server1.query_debinding(bind1_2.guid)
+        debindings_cont1_1 = self.server1.query_debinding(bind1_1.ghid)
+        self.assertEqual(debindings_cont1_1, debind1_1.ghid)
+        debindings_cont1_2 = self.server1.query_debinding(bind1_2.ghid)
         self.assertFalse(debindings_cont1_2)
         
         # --------------------------------------------------------------------

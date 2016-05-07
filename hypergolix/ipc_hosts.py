@@ -43,7 +43,7 @@ import warnings
 import weakref
 import threading
 
-from golix import Guid
+from golix import Ghid
 
 
 
@@ -107,7 +107,7 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         
         self._dispatch = weakref.proxy(dispatch)
         self._expecting_exchange = threading.Lock()
-        self._known_guids = set()
+        self._known_ghids = set()
         
         if app_token is None:
             app_token = self.dispatch.new_token()
@@ -146,7 +146,7 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         '''
         return frozenset(self._apis)
         
-    def notify_object(self, guid, state):
+    def notify_object(self, ghid, state):
         ''' Notifies the endpoint that the object is available. May be
         either a new object, or an updated one.
         
@@ -154,16 +154,16 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         suppress.
         '''
         # if not self._expecting_exchange.locked():
-        if guid in self._known_guids:
-            self.send_update(guid, state)
+        if ghid in self._known_ghids:
+            self.send_update(ghid, state)
         else:
-            self.register_guid(guid)
-            self.send_object(guid, state)
+            self.register_ghid(ghid)
+            self.send_object(ghid, state)
             
-    def register_guid(self, guid):
-        ''' Pretty simple wrapper to make sure we know about the guid.
+    def register_ghid(self, ghid):
+        ''' Pretty simple wrapper to make sure we know about the ghid.
         '''
-        self._known_guids.add(guid)
+        self._known_ghids.add(ghid)
     
     @abc.abstractmethod
     def send_object(self, obj, state):
@@ -173,27 +173,27 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         pass
     
     @abc.abstractmethod
-    def send_update(self, guid, state):
+    def send_update(self, ghid, state):
         ''' Sends an updated object to the emedded client. Originates 
         upstream and is not solicited by the client.
         '''
         pass
             
     @abc.abstractmethod
-    def send_delete(self, guid):
+    def send_delete(self, ghid):
         ''' Notifies the endpoint that the object has been deleted 
         upstream.
         '''
         pass
         
     @abc.abstractmethod
-    def notify_share_failure(self, guid, recipient):
+    def notify_share_failure(self, ghid, recipient):
         ''' Notifies the embedded client of an unsuccessful share.
         '''
         pass
         
     @abc.abstractmethod
-    def notify_share_success(self, guid, recipient):
+    def notify_share_success(self, ghid, recipient):
         ''' Notifies the embedded client of a successful share.
         '''
         pass
@@ -214,7 +214,7 @@ class _TestEndpoint(_EndpointBase):
         self._assigned_objs.append(obj)
         print('Endpoint ', self.__name, ' updated: ', obj)
         
-    def send_delete(self, guid):
+    def send_delete(self, ghid):
         ''' Notifies the endpoint that the object has been deleted 
         upstream.
         '''
@@ -273,18 +273,18 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def whoami_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        guid = self.dispatch.whoami
-        return bytes(guid)
+        ghid = self.dispatch.whoami
+        return bytes(ghid)
         
     def get_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        guid = Guid.from_bytes(request_body)
+        ghid = Ghid.from_bytes(request_body)
         
         author, state, api_id, app_token, is_dynamic = \
             self.dispatch.get_object(
                 asking_token = endpoint.app_token,
-                guid = guid
+                ghid = ghid
             )
             
         if app_token != bytes(4):
@@ -292,7 +292,7 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         else:
             private = False
             
-        if isinstance(state, Guid):
+        if isinstance(state, Ghid):
             is_link = True
             state = bytes(state)
         else:
@@ -303,10 +303,10 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         _legroom = None
         
         # Let the endpoint know to remember it
-        endpoint.register_guid(guid)
+        endpoint.register_ghid(ghid)
         
         return self._pack_object_def(
-            guid,
+            ghid,
             author,
             state,
             is_link,
@@ -333,7 +333,7 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         ) = self._unpack_object_def(request_body)
         
         if is_link:
-            state = Guid.from_bytes(state)
+            state = Ghid.from_bytes(state)
         
         address = self.dispatch.new_object(
             asking_token = endpoint.app_token,
@@ -345,7 +345,7 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         )
         
         # Let the endpoint know to remember it
-        endpoint.register_guid(address)
+        endpoint.register_ghid(address)
         
         return bytes(address)
         
@@ -365,11 +365,11 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         ) = self._unpack_object_def(request_body)
         
         if is_link:
-            state = Guid.from_bytes(state)
+            state = Ghid.from_bytes(state)
         
         self.dispatch.update_object(
             asking_token = endpoint.app_token,
-            guid = address,
+            ghid = address,
             state = state
         )
         
@@ -383,11 +383,11 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def share_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        guid = Guid.from_bytes(request_body[0:65])
-        recipient = Guid.from_bytes(request_body[65:130])
+        ghid = Ghid.from_bytes(request_body[0:65])
+        recipient = Ghid.from_bytes(request_body[65:130])
         self.dispatch.share_object(
             asking_token = endpoint.app_token,
-            guid = guid,
+            ghid = ghid,
             recipient = recipient
         )
         return b'\x01'
@@ -395,40 +395,40 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def freeze_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        guid = Guid.from_bytes(request_body)
+        ghid = Ghid.from_bytes(request_body)
         address = self.dispatch.freeze_object(
             asking_token = endpoint.app_token,
-            guid = guid,
+            ghid = ghid,
         )
         return bytes(address)
         
     def hold_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        guid = Guid.from_bytes(request_body)
+        ghid = Ghid.from_bytes(request_body)
         self.dispatch.hold_object(
             asking_token = endpoint.app_token,
-            guid = guid,
+            ghid = ghid,
         )
         return b'\x01'
         
     def discard_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        guid = Guid.from_bytes(request_body)
+        ghid = Ghid.from_bytes(request_body)
         self.dispatch.discard_object(
             asking_token = endpoint.app_token,
-            guid = guid,
+            ghid = ghid,
         )
         return b'\x01'
         
     def delete_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         '''
-        guid = Guid.from_bytes(request_body)
+        ghid = Ghid.from_bytes(request_body)
         self.dispatch.delete_object(
             asking_token = endpoint.app_token,
-            guid = guid,
+            ghid = ghid,
         )
         return b'\x01'
         
@@ -449,20 +449,20 @@ class _EmbeddedIPC(_IPCBase):
         
         
 class WSEndpoint(_EndpointBase, _ReqResWSConnection):
-    def send_object(self, guid, state):
+    def send_object(self, ghid, state):
         ''' Sends a new object to the emedded client.
         '''
         pass
     
-    def send_update(self, guid, state):
+    def send_update(self, ghid, state):
         ''' Sends an updated object to the emedded client.
         '''
         # Note: currently we're actually sending the whole object update, not
         # just a notification of update address.
         # print('Endpoint got send update request.')
-        # print(guid)
+        # print(ghid)
         
-        if isinstance(state, Guid):
+        if isinstance(state, Ghid):
             is_link = True
             state = bytes(state)
         else:
@@ -471,7 +471,7 @@ class WSEndpoint(_EndpointBase, _ReqResWSConnection):
         response = self.dispatch.send_threadsafe(
             connection = self,
             msg = self.dispatch._pack_object_def(
-                guid,
+                ghid,
                 None,
                 state,
                 is_link,
@@ -491,16 +491,16 @@ class WSEndpoint(_EndpointBase, _ReqResWSConnection):
         # else:
         #     raise RuntimeError('Unknown error while delivering object update.')
         
-    def send_delete(self, guid):
+    def send_delete(self, ghid):
         ''' Notifies the endpoint that the object has been deleted 
         upstream.
         '''
-        if not isinstance(guid, Guid):
-            raise TypeError('guid must be type Guid or similar.')
+        if not isinstance(ghid, Ghid):
+            raise TypeError('ghid must be type Ghid or similar.')
         
         response = self.dispatch.send_threadsafe(
             connection = self,
-            msg = bytes(guid),
+            msg = bytes(ghid),
             request_code = self.dispatch.REQUEST_CODES['send_delete'],
             # Note: for now, just don't worry about failures.
             expect_reply = False
@@ -511,12 +511,12 @@ class WSEndpoint(_EndpointBase, _ReqResWSConnection):
         # else:
         #     raise RuntimeError('Unknown error while delivering object update.')
         
-    def notify_share_failure(self, guid, recipient):
+    def notify_share_failure(self, ghid, recipient):
         ''' Notifies the embedded client of an unsuccessful share.
         '''
         pass
         
-    def notify_share_success(self, guid, recipient):
+    def notify_share_success(self, ghid, recipient):
         ''' Notifies the embedded client of a successful share.
         '''
         pass

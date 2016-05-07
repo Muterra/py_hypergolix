@@ -40,7 +40,7 @@ import collections
 import threading
 import time
 
-from golix import Guid
+from golix import Ghid
 
 from hypergolix import AgentBase
 
@@ -64,6 +64,9 @@ from hypergolix.ipc_hosts import _TestEndpoint
 class _TestDispatch(AgentBase, Dispatcher, _TestEmbed):
     def __init__(self, *args, **kwargs):
         super().__init__(dispatcher=self, *args, **kwargs)
+        
+    def _discard_object(*args, **kwargs):
+        pass
 
 
 # ###############################################
@@ -124,39 +127,39 @@ class TestDispatching(unittest.TestCase):
         
         self.agent1.share_object(
             asking_token = self.endpoint1.app_token,
-            guid = address2, 
+            ghid = address2, 
             recipient = self.agent2.whoami, 
         )
         
-        self.assertIn(address2, self.agent1._dynamic_by_guid)
-        self.assertIn(address2, self.agent1._state_by_guid)
-        self.assertIn(address2, self.agent1._author_by_guid)
-        self.assertIn(address2, self.agent1._token_by_guid)
-        self.assertIn(address2, self.agent1._api_by_guid)
+        self.assertIn(address2, self.agent1._dynamic_by_ghid)
+        self.assertIn(address2, self.agent1._state_by_ghid)
+        self.assertIn(address2, self.agent1._author_by_ghid)
+        self.assertIn(address2, self.agent1._token_by_ghid)
+        self.assertIn(address2, self.agent1._api_by_ghid)
         
-        self.assertIn(address2, self.agent2._dynamic_by_guid)
-        self.assertIn(address2, self.agent2._state_by_guid)
-        self.assertIn(address2, self.agent2._author_by_guid)
-        self.assertIn(address2, self.agent2._token_by_guid)
-        self.assertIn(address2, self.agent2._api_by_guid)
+        self.assertIn(address2, self.agent2._dynamic_by_ghid)
+        self.assertIn(address2, self.agent2._state_by_ghid)
+        self.assertIn(address2, self.agent2._author_by_ghid)
+        self.assertIn(address2, self.agent2._token_by_ghid)
+        self.assertIn(address2, self.agent2._api_by_ghid)
         
         self.agent1.update_object(
             asking_token = self.endpoint1.app_token,
-            guid = address2,
+            ghid = address2,
             state = pt2
         )
         
         frozen2 = self.agent1.freeze_object(
             asking_token = self.endpoint1.app_token,
-            guid = address2
+            ghid = address2
         )
         
-        self.assertIn(address2, self.agent1._dynamic_by_guid)
-        self.assertIn(address2, self.agent1._state_by_guid)
-        self.assertIn(address2, self.agent1._author_by_guid)
-        self.assertIn(address2, self.agent1._token_by_guid)
-        self.assertIn(address2, self.agent1._api_by_guid)
-        self.assertEqual(self.agent1._state_by_guid[frozen2], self.agent1._state_by_guid[address2])
+        self.assertIn(address2, self.agent1._dynamic_by_ghid)
+        self.assertIn(address2, self.agent1._state_by_ghid)
+        self.assertIn(address2, self.agent1._author_by_ghid)
+        self.assertIn(address2, self.agent1._token_by_ghid)
+        self.assertIn(address2, self.agent1._api_by_ghid)
+        self.assertEqual(self.agent1._state_by_ghid[frozen2], self.agent1._state_by_ghid[address2])
         
         address3 = self.agent2.new_object(
             asking_token = self.endpoint2.app_token,
@@ -176,44 +179,44 @@ class TestDispatching(unittest.TestCase):
         
         self.agent2.hold_object(
             asking_token = self.endpoint2.app_token,
-            guid = address2
+            ghid = address2
         )
         
         self.agent1.delete_object(
             asking_token = self.endpoint1.app_token,
-            guid = address1
+            ghid = address1
         )
         
-        self.assertNotIn(address1, self.agent1._dynamic_by_guid)
-        self.assertNotIn(address1, self.agent1._state_by_guid)
-        self.assertNotIn(address1, self.agent1._author_by_guid)
-        self.assertNotIn(address1, self.agent1._token_by_guid)
-        self.assertNotIn(address1, self.agent1._api_by_guid)
+        self.assertNotIn(address1, self.agent1._dynamic_by_ghid)
+        self.assertNotIn(address1, self.agent1._state_by_ghid)
+        self.assertNotIn(address1, self.agent1._author_by_ghid)
+        self.assertNotIn(address1, self.agent1._token_by_ghid)
+        self.assertNotIn(address1, self.agent1._api_by_ghid)
         
         self.agent1.discard_object(
             asking_token = self.endpoint1.app_token,
-            guid = address2
+            ghid = address2
         )
         
         # Agent1 has only one endpoint following this object so it should be
         # completely deregistered
-        self.assertNotIn(address2, self.agent1._dynamic_by_guid)
-        self.assertNotIn(address2, self.agent1._state_by_guid)
-        self.assertNotIn(address2, self.agent1._author_by_guid)
-        self.assertNotIn(address2, self.agent1._token_by_guid)
-        self.assertNotIn(address2, self.agent1._api_by_guid)
+        self.assertNotIn(address2, self.agent1._dynamic_by_ghid)
+        self.assertNotIn(address2, self.agent1._state_by_ghid)
+        self.assertNotIn(address2, self.agent1._author_by_ghid)
+        self.assertNotIn(address2, self.agent1._token_by_ghid)
+        self.assertNotIn(address2, self.agent1._api_by_ghid)
         
         self.agent2.discard_object(
             asking_token = self.endpoint2.app_token,
-            guid = address2
+            ghid = address2
         )
         
         # Agent2 has two endpoints following this object so it should persist
-        self.assertIn(address2, self.agent2._dynamic_by_guid)
-        self.assertIn(address2, self.agent2._state_by_guid)
-        self.assertIn(address2, self.agent2._author_by_guid)
-        self.assertIn(address2, self.agent2._token_by_guid)
-        self.assertIn(address2, self.agent2._api_by_guid)
+        self.assertIn(address2, self.agent2._dynamic_by_ghid)
+        self.assertIn(address2, self.agent2._state_by_ghid)
+        self.assertIn(address2, self.agent2._author_by_ghid)
+        self.assertIn(address2, self.agent2._token_by_ghid)
+        self.assertIn(address2, self.agent2._api_by_ghid)
 
         # obj1 = self.agent1.new_object(pt0, dynamic=False)
         # obj2 = self.agent1.new_object(pt1, dynamic=True)

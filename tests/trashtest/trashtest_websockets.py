@@ -40,7 +40,7 @@ import collections
 import threading
 import time
 
-from golix import Guid
+from golix import Ghid
 
 from hypergolix import AgentBase
 
@@ -57,6 +57,9 @@ from hypergolix.embeds import _TestEmbed
 class _TestAgent(AgentBase, LocalhostClient, _TestEmbed, _TestDispatcher):
     def __init__(self, *args, **kwargs):
         super().__init__(persister=self, dispatcher=self, *args, **kwargs)
+        
+    def _discard_object(*args, **kwargs):
+        pass
 
 
 # ###############################################

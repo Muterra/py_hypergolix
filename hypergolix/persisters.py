@@ -64,12 +64,12 @@ from websockets.exceptions import ConnectionClosed
 
 from golix import ThirdParty
 from golix import SecondParty
-from golix import Guid
+from golix import Ghid
 from golix import Secret
 from golix import ParseError
 from golix import SecurityError
 
-from golix.utils import generate_guidlist_parser
+from golix.utils import generate_ghidlist_parser
 
 from golix._getlow import GIDC
 from golix._getlow import GEOC
@@ -119,9 +119,9 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         pass
     
     @abc.abstractmethod
-    def get(self, guid):
+    def get(self, ghid):
         ''' Requests an object from the persistence provider, identified
-        by its guid.
+        by its ghid.
         
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
@@ -129,18 +129,18 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         pass
     
     @abc.abstractmethod
-    def subscribe(self, guid, callback):
+    def subscribe(self, ghid, callback):
         ''' Request that the persistence provider update the client on
-        any changes to the object addressed by guid. Must target either:
+        any changes to the object addressed by ghid. Must target either:
         
-        1. Dynamic guid
-        2. Author identity guid
+        1. Dynamic ghid
+        2. Author identity ghid
         
         Upon successful subscription, the persistence provider will 
         publish to client either of the above:
         
         1. New frames to a dynamic binding
-        2. Asymmetric requests with the indicated GUID as a recipient
+        2. Asymmetric requests with the indicated GHID as a recipient
         
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
@@ -148,9 +148,9 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         pass
     
     @abc.abstractmethod
-    def unsubscribe(self, guid, callback):
+    def unsubscribe(self, ghid, callback):
         ''' Unsubscribe. Client must have an existing subscription to 
-        the passed guid at the persistence provider. Removes only the
+        the passed ghid at the persistence provider. Removes only the
         passed callback.
         
         ACK/success is represented by a return True
@@ -160,40 +160,40 @@ class _PersisterBase(metaclass=abc.ABCMeta):
     
     @abc.abstractmethod
     def list_subs(self):
-        ''' List all currently subscribed guids for the connected 
+        ''' List all currently subscribed ghids for the connected 
         client.
         
-        ACK/success is represented by returning a list of guids.
+        ACK/success is represented by returning a list of ghids.
         NAK/failure is represented by raise NakError
         '''
         pass
     
     @abc.abstractmethod
-    def list_bindings(self, guid):
+    def list_bindings(self, ghid):
         ''' Request a list of identities currently binding to the passed
-        guid.
+        ghid.
         
-        ACK/success is represented by returning a list of guids.
+        ACK/success is represented by returning a list of ghids.
         NAK/failure is represented by raise NakError
         '''
         pass
     
     @abc.abstractmethod
-    def query_debinding(self, guid):
-        ''' Request a the address of any debindings of guid, if they
+    def query_debinding(self, ghid):
+        ''' Request a the address of any debindings of ghid, if they
         exist.
         
         ACK/success is represented by returning:
-            1. The debinding GUID if it exists
+            1. The debinding GHID if it exists
             2. None if it does not exist
         NAK/failure is represented by raise NakError
         '''
         pass
         
     @abc.abstractmethod
-    def query(self, guid):
+    def query(self, ghid):
         ''' Checks the persistence provider for the existence of the
-        passed guid.
+        passed ghid.
         
         ACK/success is represented by returning:
             True if it exists
@@ -218,46 +218,46 @@ class _PersisterBase(metaclass=abc.ABCMeta):
 class UnsafeMemoryPersister(_PersisterBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Lookup for GIDC authors, {<Guid>: <secondparty>}
+        # Lookup for GIDC authors, {<Ghid>: <secondparty>}
         self._id_bases = {}
-        # Lookup for dynamic author proxies, {<Guid>: <secondparty>}
+        # Lookup for dynamic author proxies, {<Ghid>: <secondparty>}
         self._id_proxies = {}
-        # Lookup for all valid authors, {<Guid>: <secondparty>}
+        # Lookup for all valid authors, {<Ghid>: <secondparty>}
         self._secondparties = _DeepDeleteChainMap(
             self._id_bases,
             self._id_proxies
         )
-        # All objects. {<Guid>: <packed object>}
-        # Includes proxy reference from dynamic guids.
+        # All objects. {<Ghid>: <packed object>}
+        # Includes proxy reference from dynamic ghids.
         self._store = {}
-        # Dynamic states. {<Dynamic Guid>: tuple(<current history>)}
+        # Dynamic states. {<Dynamic Ghid>: tuple(<current history>)}
         # self._dynamic_states = {}
         
         # Forward lookup for static bindings, 
         # {
-        #   <binding Guid>: (<binder Guid>, tuple(<bound Guid>))
+        #   <binding Ghid>: (<binder Ghid>, tuple(<bound Ghid>))
         # }
         self._targets_static = {}
         
         # Forward lookup for dynamic bindings, 
         # {
-        #   <dynamic guid>: (<binder guid>, tuple(<current history>))
+        #   <dynamic ghid>: (<binder ghid>, tuple(<current history>))
         # }
         self._targets_dynamic = {}
         
         # Forward lookup for debindings, 
         # {
-        #   <debinding Guid>: (<debinder Guid>, tuple(<debound Guid>))
+        #   <debinding Ghid>: (<debinder Ghid>, tuple(<debound Ghid>))
         # }
         self._targets_debind = {}
         
         # Forward lookup for asymmetric requests
         # {
-        #   <garq Guid>: (<recipient Guid>,)
+        #   <garq Ghid>: (<recipient Ghid>,)
         # }
         self._requests = {}
         
-        # Forward lookup for targeted objects. Note that a guid can only be one 
+        # Forward lookup for targeted objects. Note that a ghid can only be one 
         # thing, so a chainmap is appropriate.
         self._targets = _DeepDeleteChainMap(
             self._targets_static,
@@ -273,11 +273,11 @@ class UnsafeMemoryPersister(_PersisterBase):
             self._requests
         ) 
         
-        # Reverse lookup for bindings, {<bound Guid>: {<bound by Guid>}}
+        # Reverse lookup for bindings, {<bound Ghid>: {<bound by Ghid>}}
         self._bindings_static = {}
-        # Reverse lookup for dynamic bindings {<bound Guid>: {<bound by Guid>}}
+        # Reverse lookup for dynamic bindings {<bound Ghid>: {<bound by Ghid>}}
         self._bindings_dynamic = {}
-        # Reverse lookup for implicit bindings {<bound Guid>: {<bound Guid>}}
+        # Reverse lookup for implicit bindings {<bound Ghid>: {<bound Ghid>}}
         self._bindings_implicit = {}
         # Reverse lookup for any valid bindings
         self._bindings = _WeldedSetDeepChainMap(
@@ -285,7 +285,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             self._bindings_dynamic,
             self._bindings_implicit
         )
-        # Reverse lookup for debindings, {<debound Guid>: {<debound by Guid>}}
+        # Reverse lookup for debindings, {<debound Ghid>: {<debound by Ghid>}}
         self._debindings = {}
         # Reverse lookup for everything, same format as other bindings
         self._reverse_references = _WeldedSetDeepChainMap(
@@ -295,15 +295,15 @@ class UnsafeMemoryPersister(_PersisterBase):
             self._debindings
         )
         
-        # Lookup for subscriptions, {<subscribed Guid>: [callbacks]}
+        # Lookup for subscriptions, {<subscribed Ghid>: [callbacks]}
         self._subscriptions = {}
         # Parallel lookup for any subscription notifications that are blocking
-        # on an updated target. {<pending target>: <sub guid, notify guid>}
+        # on an updated target. {<pending target>: <sub ghid, notify ghid>}
         self._pending_notifications = {}
         
     def publish(self, unpacked):
         ''' Handles publishing for an unpacked object. DOES NOT perform
-        guid verification. ONLY USE THIS IF YOU CREATED THE UNPACKED 
+        ghid verification. ONLY USE THIS IF YOU CREATED THE UNPACKED 
         OBJECT YOURSELF, or have already performed your own unpacking 
         step. However, will still perform signature verification.
         '''
@@ -352,14 +352,14 @@ class UnsafeMemoryPersister(_PersisterBase):
         ''' Does whatever is needed to preprocess a GIDC.
         '''
         # Note that GIDC do not require verification beyond unpacking.
-        author = gidc.guid
+        author = gidc.ghid
         
         if author not in self._id_bases:
             secondparty = SecondParty.from_identity(gidc)
             self._id_bases[author] = secondparty
             
         # It doesn't matter if we already have it, it must be the same.
-        self._store[gidc.guid] = gidc
+        self._store[gidc.ghid] = gidc
             
     def _dispatch_geoc(self, geoc):
         ''' Does whatever is needed to preprocess a GEOC.
@@ -369,22 +369,22 @@ class UnsafeMemoryPersister(_PersisterBase):
             obj = geoc
         )
             
-        if geoc.guid not in self._bindings:
+        if geoc.ghid not in self._bindings:
             raise UnboundContainerError(
                 'ERR#2: Attempt to upload unbound GEOC; object immediately '
                 'garbage collected.'
             )
             
         # It doesn't matter if we already have it, it must be the same.
-        self._store[geoc.guid] = geoc
+        self._store[geoc.ghid] = geoc
         
         # Update any pending notifications and then clean up.
-        if geoc.guid in self._pending_notifications:
+        if geoc.ghid in self._pending_notifications:
             self._check_for_subs(
-                subscription_guid = self._pending_notifications[geoc.guid][0],
-                notification_guid = self._pending_notifications[geoc.guid][1]
+                subscription_ghid = self._pending_notifications[geoc.ghid][0],
+                notification_ghid = self._pending_notifications[geoc.ghid][1]
             )
-            del self._pending_notifications[geoc.guid]
+            del self._pending_notifications[geoc.ghid]
             
     def _dispatch_gobs(self, gobs):
         ''' Does whatever is needed to preprocess a GOBS.
@@ -394,7 +394,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             obj = gobs
         )
         
-        if gobs.guid in self._debindings:
+        if gobs.ghid in self._debindings:
             raise NakError(
                 'ERR#3: Attempt to upload a binding for which a debinding '
                 'already exists. Remove the debinding first.'
@@ -406,22 +406,22 @@ class UnsafeMemoryPersister(_PersisterBase):
         # Check to see if someone has already uploaded an illegal binding for 
         # this static binding (due to the race condition in target inspection).
         # If so, force garbage collection.
-        self._check_illegal_binding(gobs.guid)
+        self._check_illegal_binding(gobs.ghid)
         
         # Update the state of local bindings
         # Assuming this is an atomic change, we'll always need to do
         # both of these, or neither.
         if gobs.target in self._bindings_static:
-            self._bindings_static[gobs.target].add(gobs.guid)
+            self._bindings_static[gobs.target].add(gobs.ghid)
         else:
-            self._bindings_static[gobs.target] = { gobs.guid }
-        # These must, by definition, be identical for any repeated guid, so 
+            self._bindings_static[gobs.target] = { gobs.ghid }
+        # These must, by definition, be identical for any repeated ghid, so 
         # it doesn't much matter if we already have them.
-        self._targets_static[gobs.guid] = gobs.binder, (gobs.target,)
-        self._bindings_implicit[gobs.guid] = { gobs.guid }
+        self._targets_static[gobs.ghid] = gobs.binder, (gobs.target,)
+        self._bindings_implicit[gobs.ghid] = { gobs.ghid }
             
         # It doesn't matter if we already have it, it must be the same.
-        self._store[gobs.guid] = gobs
+        self._store[gobs.ghid] = gobs
             
     def _dispatch_gobd(self, gobd):
         ''' Does whatever is needed to preprocess a GOBD.
@@ -431,7 +431,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             obj = gobd
         )
         
-        if gobd.guid_dynamic in self._debindings:
+        if gobd.ghid_dynamic in self._debindings:
             raise NakError(
                 'ERR#3: Attempt to upload a binding for which a debinding '
                 'already exists. Remove the debinding first.'
@@ -442,50 +442,50 @@ class UnsafeMemoryPersister(_PersisterBase):
         
         # This needs to be done before updating local bindings, since it does
         # some verification.
-        if gobd.guid_dynamic in self._targets_dynamic:
+        if gobd.ghid_dynamic in self._targets_dynamic:
             self._dispatch_updated_dynamic(gobd)
         else:
             self._dispatch_new_dynamic(gobd)
             
         # Status check: we now know we have a legal binding, and that
-        # self._targets_dynamic[guid_dynamic] exists, and that any existing
+        # self._targets_dynamic[ghid_dynamic] exists, and that any existing
         # **targets** have been removed and GC'd.
         
-        old_history = set(self._targets_dynamic[gobd.guid_dynamic][1])
+        old_history = set(self._targets_dynamic[gobd.ghid_dynamic][1])
         new_history = set(gobd.history)
         
         # Remove implicit bindings for any expired frames and call GC_check on
         # them.
         # Might want to make this suppress persistence warnings.
         for expired in old_history - new_history:
-            # Remove any explicit bindings from the dynamic guid to the frames
-            self._bindings_dynamic[expired].remove(gobd.guid_dynamic)
+            # Remove any explicit bindings from the dynamic ghid to the frames
+            self._bindings_dynamic[expired].remove(gobd.ghid_dynamic)
             self._gc_check(expired)
             
         # Update the state of target bindings
         if gobd.target in self._bindings_dynamic:
-            self._bindings_dynamic[gobd.target].add(gobd.guid_dynamic)
+            self._bindings_dynamic[gobd.target].add(gobd.ghid_dynamic)
         else:
-            self._bindings_dynamic[gobd.target] = { gobd.guid_dynamic }
+            self._bindings_dynamic[gobd.target] = { gobd.ghid_dynamic }
         
         # Create a new state.
-        self._targets_dynamic[gobd.guid_dynamic] = (
+        self._targets_dynamic[gobd.ghid_dynamic] = (
             gobd.binder,
-            (gobd.guid,) + tuple(gobd.history) + (gobd.target,)
+            (gobd.ghid,) + tuple(gobd.history) + (gobd.target,)
         )
-        self._bindings_dynamic[gobd.guid] = { gobd.guid_dynamic }
+        self._bindings_dynamic[gobd.ghid] = { gobd.ghid_dynamic }
             
         # It doesn't matter if we already have it, it must be the same.
-        self._store[gobd.guid] = gobd
+        self._store[gobd.ghid] = gobd
         # Overwrite any existing value, or create a new one.
-        self._store[gobd.guid_dynamic] = gobd
+        self._store[gobd.ghid_dynamic] = gobd
         
         # Update any subscribers (if they exist) that an updated frame has 
         # been issued. May need to delay until target is uploaded (race cond)
         self._check_for_subs(
-            subscription_guid = gobd.guid_dynamic,
-            notification_guid = gobd.guid,
-            target_guid = gobd.target
+            subscription_ghid = gobd.ghid_dynamic,
+            notification_ghid = gobd.ghid,
+            target_ghid = gobd.target
         )
         
     def _dispatch_new_dynamic(self, gobd):
@@ -508,9 +508,9 @@ class UnsafeMemoryPersister(_PersisterBase):
                 'history as the first frame in a persistence provider.'
             )
             
-        # self._dynamic_states[gobd.guid_dynamic] = collections.deque()
-        self._targets_dynamic[gobd.guid_dynamic] = (None, tuple())
-        self._bindings_implicit[gobd.guid_dynamic] = { gobd.guid_dynamic }
+        # self._dynamic_states[gobd.ghid_dynamic] = collections.deque()
+        self._targets_dynamic[gobd.ghid_dynamic] = (None, tuple())
+        self._bindings_implicit[gobd.ghid_dynamic] = { gobd.ghid_dynamic }
         
     def _dispatch_updated_dynamic(self, gobd):
         ''' Performs validation for a dynamic binding from which the 
@@ -519,7 +519,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         expired frames.
         '''
         # Verify consistency of binding author
-        if gobd.binder != self._targets_dynamic[gobd.guid_dynamic][0]:
+        if gobd.binder != self._targets_dynamic[gobd.ghid_dynamic][0]:
             raise NakError(
                 'ERR#5: Dynamic binding author is inconsistent with an '
                 'existing dynamic binding at the same address.'
@@ -527,7 +527,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             
         
         # Verify history contains existing most recent frame
-        if self._targets_dynamic[gobd.guid_dynamic][1][0] not in gobd.history:
+        if self._targets_dynamic[gobd.ghid_dynamic][1][0] not in gobd.history:
             raise NakError(
                 'ERR#7: Illegal dynamic frame. Attempted to upload a new '
                 'dynamic frame, but its history did not contain the most '
@@ -538,11 +538,11 @@ class UnsafeMemoryPersister(_PersisterBase):
         # in the dispatch_gobd method.
         # # Release hold on previous target. WARNING: currently this means that
         # # updating dynamic bindings is a non-atomic change.
-        # old_frame = self._targets_dynamic[gobd.guid_dynamic][1][0]
+        # old_frame = self._targets_dynamic[gobd.ghid_dynamic][1][0]
         # old_target = self._store[old_frame].target
         # # This should always be true, unless something was forcibly GC'd
         # if old_target in self._bindings_dynamic:
-        #     self._bindings_dynamic[old_target].remove(gobd.guid_dynamic)
+        #     self._bindings_dynamic[old_target].remove(gobd.ghid_dynamic)
         #     self._gc_check(old_target)
             
     def _dispatch_gdxx(self, gdxx):
@@ -555,7 +555,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             obj = gdxx
         )
         
-        if gdxx.guid in self._debindings:
+        if gdxx.ghid in self._debindings:
             raise NakError(
                 'ERR#3: Attempt to upload a debinding for which a debinding '
                 'already exists. Remove the debinding first.'
@@ -579,21 +579,21 @@ class UnsafeMemoryPersister(_PersisterBase):
         # will result.
             
         # Must be added to the store before updating subscribers.
-        self._store[gdxx.guid] = gdxx
+        self._store[gdxx.ghid] = gdxx
             
         # Update any subscribers (if they exist) that a GDXX has been issued.
         # Must be called before removing bindings, or the subscription record
         # will be removed.
         self._check_for_subs(
-            subscription_guid = gdxx.target,
-            notification_guid = gdxx.guid
+            subscription_ghid = gdxx.target,
+            notification_ghid = gdxx.ghid
         )
             
         # Debindings can only target one thing, so it doesn't much matter if it
         # already exists (we've already checked for replays)
-        self._debindings[gdxx.target] = { gdxx.guid }
-        self._targets_debind[gdxx.guid] = gdxx.debinder, (gdxx.target,)
-        self._bindings_implicit[gdxx.guid] = { gdxx.guid }
+        self._debindings[gdxx.target] = { gdxx.ghid }
+        self._targets_debind[gdxx.ghid] = gdxx.debinder, (gdxx.target,)
+        self._bindings_implicit[gdxx.ghid] = { gdxx.ghid }
         
         # Targets will always have an implicit binding. Remove it.
         del self._bindings_implicit[gdxx.target]
@@ -619,7 +619,7 @@ class UnsafeMemoryPersister(_PersisterBase):
                     'ERR#1: Unknown author / recipient.'
                 ) from e
             
-        if garq.guid in self._debindings:
+        if garq.ghid in self._debindings:
             raise NakError(
                 'ERR#3: Attempt to upload a request for which a debinding '
                 'already exists. Remove the debinding first.'
@@ -628,37 +628,37 @@ class UnsafeMemoryPersister(_PersisterBase):
         # Check to see if someone has already uploaded an illegal binding for 
         # this request (due to the race condition in target inspection).
         # If so, force garbage collection.
-        self._check_illegal_binding(garq.guid)
+        self._check_illegal_binding(garq.ghid)
             
         # Update persister state information
-        self._requests[garq.guid] = (garq.recipient,)
-        self._bindings_implicit[garq.guid] = { garq.guid }
+        self._requests[garq.ghid] = (garq.recipient,)
+        self._bindings_implicit[garq.ghid] = { garq.ghid }
             
         # It doesn't matter if we already have it, it must be the same.
-        self._store[garq.guid] = garq
+        self._store[garq.ghid] = garq
         
         # Call the subscribers after adding, in case they request it.
         # Also in case they error out.
         self._check_for_subs(
-            subscription_guid = garq.recipient,
-            notification_guid = garq.guid
+            subscription_ghid = garq.recipient,
+            notification_ghid = garq.ghid
         )
                 
-    def _check_for_subs(self, subscription_guid, notification_guid, target_guid=None):
+    def _check_for_subs(self, subscription_ghid, notification_ghid, target_ghid=None):
         ''' Check for subscriptions, and update them if any exist.
         '''
-        if subscription_guid in self._subscriptions:
+        if subscription_ghid in self._subscriptions:
             # If the target isn't defined, or if it exists, clear to update
-            if not target_guid or self.query(target_guid):
-                for callback in self._subscriptions[subscription_guid]:
-                    callback(notification_guid)
+            if not target_ghid or self.query(target_ghid):
+                for callback in self._subscriptions[subscription_ghid]:
+                    callback(notification_ghid)
             # Otherwise it's defined and missing; wait until we get the target.
             else:
-                self._pending_notifications[target_guid] = \
-                    subscription_guid, notification_guid
+                self._pending_notifications[target_ghid] = \
+                    subscription_ghid, notification_ghid
                 
-    def _check_illegal_binding(self, guid):
-        ''' Checks for an existing binding for guid. If it exists,
+    def _check_illegal_binding(self, ghid):
+        ''' Checks for an existing binding for ghid. If it exists,
         removes the binding, and forces its garbage collection. Used to
         overcome race condition inherent to binding.
         
@@ -666,9 +666,9 @@ class UnsafeMemoryPersister(_PersisterBase):
         '''
         # Make sure not to check implicit bindings, or dynamic bindings will
         # show up as illegal if/when we statically bind them
-        if guid in self._bindings_static or guid in self._bindings_dynamic:
-            illegal_binding = self._bindings[guid]
-            del self._bindings[guid]
+        if ghid in self._bindings_static or ghid in self._bindings_dynamic:
+            illegal_binding = self._bindings[ghid]
+            del self._bindings[ghid]
             self._gc_execute(illegal_binding)
 
     def _check_illegal_gobs_target(self, gobs):
@@ -708,7 +708,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         '''
         return True
         
-    def get(self, guid):
+    def get(self, ghid):
         ''' Returns an unpacked Golix object. Only use this if you 100%
         trust the PersistenceProvider to perform all public verification
         of objects.
@@ -717,22 +717,22 @@ class UnsafeMemoryPersister(_PersisterBase):
         NAK/failure is represented by raise NakError
         '''
         try:
-            return self._store[guid]
+            return self._store[ghid]
         except KeyError as e:
-            raise DoesNotExistError('ERR#6: Guid not found in store.') from e
+            raise DoesNotExistError('ERR#6: Ghid not found in store.') from e
         
-    def subscribe(self, guid, callback):
+    def subscribe(self, ghid, callback):
         ''' Request that the persistence provider update the client on
-        any changes to the object addressed by guid. Must target either:
+        any changes to the object addressed by ghid. Must target either:
         
-        1. Dynamic guid
-        2. Author identity guid
+        1. Dynamic ghid
+        2. Author identity ghid
         
         Upon successful subscription, the persistence provider will 
         publish to client either of the above:
         
         1. New frames to a dynamic binding
-        2. Asymmetric requests with the indicated GUID as a recipient
+        2. Asymmetric requests with the indicated GHID as a recipient
         
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
@@ -740,28 +740,28 @@ class UnsafeMemoryPersister(_PersisterBase):
         if not callable(callback):
             raise TypeError('callback must be callable.')
             
-        if (guid not in self._targets_dynamic and 
-            guid not in self._secondparties):
+        if (ghid not in self._targets_dynamic and 
+            ghid not in self._secondparties):
                 raise NakError(
                     'ERR#4: Invalid or unknown target for subscription.'
                 )
                 
-        if guid in self._subscriptions:
-            self._subscriptions[guid].add(callback)
+        if ghid in self._subscriptions:
+            self._subscriptions[ghid].add(callback)
         else:
-            self._subscriptions[guid] = { callback }
+            self._subscriptions[ghid] = { callback }
             
         return True
         
-    def unsubscribe(self, guid, callback):
+    def unsubscribe(self, ghid, callback):
         ''' Unsubscribe. Client must have an existing subscription to 
-        the passed guid at the persistence provider.
+        the passed ghid at the persistence provider.
         
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
         try:
-            self._subscriptions[guid].remove(callback)
+            self._subscriptions[ghid].remove(callback)
         except KeyError as e:
             raise NakError(
                 'ERR#4: Invalid or unknown target for unsubscription.'
@@ -770,59 +770,59 @@ class UnsafeMemoryPersister(_PersisterBase):
         return True
         
     def list_subs(self):
-        ''' List all currently subscribed guids for the connected 
+        ''' List all currently subscribed ghids for the connected 
         client.
         
-        ACK/success is represented by returning a list of guids.
+        ACK/success is represented by returning a list of ghids.
         NAK/failure is represented by raise NakError
         '''
         return tuple(self._subscriptions)
     
-    def list_bindings(self, guid):
+    def list_bindings(self, ghid):
         ''' Request a list of identities currently binding to the passed
-        guid.
+        ghid.
         
         NOTE: does not currently satisfy condition 3 in the spec (aka,
         it is not currently preferentially listing the author binding 
         first).
         
-        ACK/success is represented by returning a list of guids.
+        ACK/success is represented by returning a list of ghids.
         NAK/failure is represented by raise NakError
         '''
         result = []
         # Bindings can only be static XOR dynamic, so we need not worry about
         # set intersections. But note that the lookup dicts contain sets as 
         # keys, so we need to extend, not append.
-        if guid in self._bindings_static:
-            result.extend(self._bindings_static[guid])
-        if guid in self._bindings_dynamic:
-            result.extend(self._bindings_dynamic[guid])
+        if ghid in self._bindings_static:
+            result.extend(self._bindings_static[ghid])
+        if ghid in self._bindings_dynamic:
+            result.extend(self._bindings_dynamic[ghid])
         return result
         
-    def query_debinding(self, guid):
-        ''' Request a the address of any debindings of guid, if they
+    def query_debinding(self, ghid):
+        ''' Request a the address of any debindings of ghid, if they
         exist.
         
         ACK/success is represented by returning:
-            1. The debinding GUID if it exists
+            1. The debinding GHID if it exists
             2. False if it does not exist
         NAK/failure is represented by raise NakError
         '''
-        if guid in self._debindings:
-            return tuple(self._debindings[guid])[0]
+        if ghid in self._debindings:
+            return tuple(self._debindings[ghid])[0]
         else:
             return False
             
-    def query(self, guid):
+    def query(self, ghid):
         ''' Checks the persistence provider for the existence of the
-        passed guid.
+        passed ghid.
         
         ACK/success is represented by returning:
             True if it exists
             False otherwise
         NAK/failure is represented by raise NakError
         '''
-        if guid in self._store:
+        if ghid in self._store:
             return True
         else:
             return False
@@ -845,67 +845,67 @@ class UnsafeMemoryPersister(_PersisterBase):
         '''
         pass
         
-    def _gc_check(self, guid):
+    def _gc_check(self, ghid):
         ''' Checks for, and if needed, performs, garbage collection. 
-        Only checks the passed guid.
+        Only checks the passed ghid.
         '''
         # Case 1: not even in the store. Gitouttahere.
-        if guid not in self._store:
+        if ghid not in self._store:
             return
             
-        # Case 2: guid is an identity (GIDC). Basically never delete those.
-        elif guid in self._id_bases:
+        # Case 2: ghid is an identity (GIDC). Basically never delete those.
+        elif ghid in self._id_bases:
             return
         
         # Case 3: Still bound?
-        elif guid in self._bindings:
+        elif ghid in self._bindings:
             # Case 3a: still bound; something else is blocking. Warn.
-            if len(self._bindings[guid]) > 0:
+            if len(self._bindings[ghid]) > 0:
                 warnings.warn(
-                    message = str(guid) + ' has outstanding bindings.',
+                    message = str(ghid) + ' has outstanding bindings.',
                     category = PersistenceWarning
                 )
             # Case 3b: the binding length is zero; unbound; also remove.
             # This currently only happens when updating dynamic bindings.
             else:
-                del self._bindings[guid]
-                self._gc_execute(guid)
+                del self._bindings[ghid]
+                self._gc_execute(ghid)
         # The resource is unbound. Perform GC.
         else:
-            self._gc_execute(guid)
+            self._gc_execute(ghid)
                 
-    def _gc_execute(self, guid):
-        ''' Performs garbage collection on guid.
+    def _gc_execute(self, ghid):
+        ''' Performs garbage collection on ghid.
         '''
         # This means it's a binding or debinding
-        if guid in self._targets:
+        if ghid in self._targets:
             # Clean up the reverse lookup, then remove any empty sets
-            for target in self._targets[guid][1]:
-                self._reverse_references[target].remove(guid)
+            for target in self._targets[ghid][1]:
+                self._reverse_references[target].remove(ghid)
                 self._reverse_references.remove_empty(target)
                 # Perform recursive garbage collection check on the target
                 self._gc_check(target)
             
             # Clean up the forward lookup
-            del self._targets[guid]
+            del self._targets[ghid]
         # It cannot be both a _target and a _request
-        elif guid in self._requests:
-            del self._requests[guid]
+        elif ghid in self._requests:
+            del self._requests[ghid]
             
         # Clean up any subscriptions.
-        if guid in self._subscriptions:
-            del self._subscriptions[guid]
+        if ghid in self._subscriptions:
+            del self._subscriptions[ghid]
             
         # Warn of state problems if still in bindings.
-        if guid in self._bindings:
+        if ghid in self._bindings:
             warnings.warn(
-                message = str(guid) + ' has conflicted state. It was removed '
+                message = str(ghid) + ' has conflicted state. It was removed '
                         'through forced garbage collection, but it still has '
                         'outstanding bindings.'
             )
             
         # And finally, clean up the store.
-        del self._store[guid]
+        del self._store[ghid]
         
 
 class MemoryPersister(UnsafeMemoryPersister):
@@ -929,14 +929,14 @@ class MemoryPersister(UnsafeMemoryPersister):
         
         return super().publish(obj)
         
-    def get(self, guid):
+    def get(self, ghid):
         ''' Requests an object from the persistence provider, identified
-        by its guid.
+        by its ghid.
         
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
         '''
-        return super().get(guid).packed
+        return super().get(ghid).packed
         
 
 class DiskPersister(_PersisterBase):
@@ -1030,7 +1030,7 @@ class LocalhostServer(MemoryPersister):
     def _update_handler(self, websocket, exchange_lock, sub_queue):
         ''' Handles updates through a queue into sending out.
         '''
-        # This will grab the notification guid from the queue.
+        # This will grab the notification ghid from the queue.
         update = yield from sub_queue.get()
         
         # Immediately acquire the exchange lock when update yields.
@@ -1065,36 +1065,36 @@ class LocalhostServer(MemoryPersister):
         def sub_handler(packed):
             ''' Handles subscriptions for this connection.
             '''
-            guid = Guid.from_bytes(packed)
+            ghid = Ghid.from_bytes(packed)
             
-            def callback(notification_guid, sub_queue=sub_queue):
-                self._loop.create_task(sub_queue.put(notification_guid))
+            def callback(notification_ghid, sub_queue=sub_queue):
+                self._loop.create_task(sub_queue.put(notification_ghid))
                 
-            self.subscribe(guid, callback)
-            subs[guid] = callback
+            self.subscribe(ghid, callback)
+            subs[ghid] = callback
             return True
         
         def unsub_handler(packed):
             ''' Handles unsubscriptions for this connection. Courtesy of
             self.unsubscribe, will NakError if not currently subscribed
-            to the passed guid.
+            to the passed ghid.
             '''
-            guid = Guid.from_bytes(packed)
+            ghid = Ghid.from_bytes(packed)
             
             try:
-                callback = subs[guid]
-                del subs[guid]
+                callback = subs[ghid]
+                del subs[ghid]
             except KeyError as e:
                 raise NakError(
                     'ERR#4: Invalid or unknown target for unsubscription.'
                 ) from e
                 
-            return struct.pack('>?', self.unsubscribe(guid, callback))
+            return struct.pack('>?', self.unsubscribe(ghid, callback))
             
         def conn_list_subs(packed):
             ''' Lists all subscriptions for this connection.
             '''
-            parser = generate_guidlist_parser()
+            parser = generate_ghidlist_parser()
             return parser.pack(list(subs))
         
         def conn_disconnect(packed):
@@ -1121,8 +1121,8 @@ class LocalhostServer(MemoryPersister):
             b'XX': conn_disconnect
         }
         
-        # return super().subscribe(guid, callback)
-        # return super().unsubscribe(guid)
+        # return super().subscribe(ghid, callback)
+        # return super().unsubscribe(ghid)
         # return super().list_subs()
         # return super().disconnect()
         
@@ -1246,38 +1246,38 @@ class LocalhostServer(MemoryPersister):
     
     def get_wrapped(self, packed):
         ''' Requests an object from the persistence provider, identified
-        by its guid.
+        by its ghid.
         
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
         '''
-        guid = Guid.from_bytes(packed)
-        return self.get(guid)
+        ghid = Ghid.from_bytes(packed)
+        return self.get(ghid)
     
     def list_bindings_wrapped(self, packed):
         ''' Request a list of identities currently binding to the passed
-        guid.
+        ghid.
         
-        ACK/success is represented by returning a list of guids.
+        ACK/success is represented by returning a list of ghids.
         NAK/failure is represented by raise NakError
         '''
-        guid = Guid.from_bytes(packed)
-        guidlist = self.list_bindings(guid)
-        parser = generate_guidlist_parser()
-        return parser.pack(guidlist)
+        ghid = Ghid.from_bytes(packed)
+        ghidlist = self.list_bindings(ghid)
+        parser = generate_ghidlist_parser()
+        return parser.pack(ghidlist)
     
     def query_debinding_wrapped(self, packed):
-        ''' Request a the address of any debindings of guid, if they
+        ''' Request a the address of any debindings of ghid, if they
         exist.
         
         ACK/success is represented by returning:
-            1. The debinding GUID if it exists
+            1. The debinding GHID if it exists
             2. None if it does not exist
         NAK/failure is represented by raise NakError
         '''
-        guid = Guid.from_bytes(packed)
+        ghid = Ghid.from_bytes(packed)
         
-        result = self.query_debinding(guid)
+        result = self.query_debinding(ghid)
         
         if not result:
             result = struct.pack('>?', False)
@@ -1290,8 +1290,8 @@ class LocalhostServer(MemoryPersister):
         ''' Proxies standard query behavior so we don't get internal
         errors from overriding it.
         '''
-        guid = Guid.from_bytes(packed)
-        status = self.query(guid)
+        ghid = Ghid.from_bytes(packed)
+        status = self.query(ghid)
         return struct.pack('>?', status)
 
 class LocalhostClient(MemoryPersister):
@@ -1493,13 +1493,13 @@ class LocalhostClient(MemoryPersister):
             
         elif header == self.NOTIFIER_CODE:
             print('Subscription update: ', bytes(body))
-            # Note that in this case, body is the guid we want.
-            guid = Guid.from_bytes(body)
+            # Note that in this case, body is the ghid we want.
+            ghid = Ghid.from_bytes(body)
             
             # I'm not 100% sure why I haven't gotten this working, buuuut...
             # # If it's a dynamic target, bypass the normal get method so that
             # # we don't short-circuit on our own object. See note in self.get.
-            # if guid in self._targets_dynamic:
+            # if ghid in self._targets_dynamic:
             #     print('Found in dynamic.')
             #     thread_target = self._pull_from_remote
             # else:
@@ -1513,18 +1513,18 @@ class LocalhostClient(MemoryPersister):
             # thread to handle it then.
             t = threading.Thread(
                 target = thread_target,
-                args = (guid,),
+                args = (ghid,),
                 daemon = True
             )
             t.start()
             
             # Use put_nowait so that the scheduler doesn't immediately run
             # callbacks on the queue, causing us to reenter the exchange lock
-            # yield from self._get_queue.put(guid)
+            # yield from self._get_queue.put(ghid)
             # print('Exiting subscription update.')
             # # Note that we cannot call this directly, since we'll block on the
             # # exchange lock.
-            # call = functools.partial(self.get, guid)
+            # call = functools.partial(self.get, ghid)
             # self._ws_loop.call_soon(call)
             
         else:
@@ -1585,9 +1585,9 @@ class LocalhostClient(MemoryPersister):
         super().ping()
         return True
     
-    def get(self, guid):
+    def get(self, ghid):
         ''' Requests an object from the persistence provider, identified
-        by its guid. In this case, caches all retrieved objects locally.
+        by its ghid. In this case, caches all retrieved objects locally.
         
         ACK/success is represented by returning the object
         NAK/failure is represented by raise NakError
@@ -1597,22 +1597,22 @@ class LocalhostClient(MemoryPersister):
             # Note that this will cause issues if we're looking for a dynamic
             # binding that we already have, but has been updated upstream;
             # we'll immediately short-circuit to the cached one.
-            result = super().get(guid)
+            result = super().get(ghid)
             
         # We don't have it in our local cache; check the persistence server.
         except DoesNotExistError:
             # print('Trying to get from server.')
-            result = self._pull_from_remote(guid)
+            result = self._pull_from_remote(ghid)
             
         return result
         
-    def _pull_from_remote(self, guid):
-        ''' Handles everything needed to get a guid from the websockets
+    def _pull_from_remote(self, ghid):
+        ''' Handles everything needed to get a ghid from the websockets
         persistence server.
         '''
         result = self._requestor(
             req_type = 'get',
-            req_body = bytes(guid)
+            req_body = bytes(ghid)
         )
         
         try:
@@ -1622,108 +1622,108 @@ class LocalhostClient(MemoryPersister):
         # We don't have a binding for it locally, so get the most convenient
         # from the persistence server.
         except UnboundContainerError:
-            binding_list = self.list_bindings(guid)
+            binding_list = self.list_bindings(ghid)
             binding = self.get(binding_list[0])
             super().publish(binding)
             super().publish(result)
             
         return result
     
-    def subscribe(self, guid, callback):
+    def subscribe(self, ghid, callback):
         ''' Request that the persistence provider update the client on
-        any changes to the object addressed by guid. Must target either:
+        any changes to the object addressed by ghid. Must target either:
         
-        1. Dynamic guid
-        2. Author identity guid
+        1. Dynamic ghid
+        2. Author identity ghid
         
         Upon successful subscription, the persistence provider will 
         publish to client either of the above:
         
         1. New frames to a dynamic binding
-        2. Asymmetric requests with the indicated GUID as a recipient
+        2. Asymmetric requests with the indicated GHID as a recipient
         
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
         result = self._requestor(
             req_type = 'subscribe',
-            req_body = bytes(guid)
+            req_body = bytes(ghid)
         )
         
-        super().subscribe(guid, callback)
+        super().subscribe(ghid, callback)
         
         return True
         
-    def unsubscribe(self, guid, callback):
+    def unsubscribe(self, ghid, callback):
         ''' Unsubscribe. Client must have an existing subscription to 
-        the passed guid at the persistence provider.
+        the passed ghid at the persistence provider.
         
         ACK/success is represented by a return True
         NAK/failure is represented by raise NakError
         '''
         result =  self._requestor(
             req_type = 'unsubscribe',
-            req_body = bytes(guid)
+            req_body = bytes(ghid)
         )
         
-        super().unsubscribe(guid, callback)
+        super().unsubscribe(ghid, callback)
         
         return True
     
     def list_subs(self):
-        ''' List all currently subscribed guids for the connected 
+        ''' List all currently subscribed ghids for the connected 
         client.
         
-        ACK/success is represented by returning a list of guids.
+        ACK/success is represented by returning a list of ghids.
         NAK/failure is represented by raise NakError
         '''
         # Ignore super() entirely? Currently we are.
-        guidlist = self._requestor(
+        ghidlist = self._requestor(
             req_type = 'list_subs',
             req_body = b''
         )
-        parser = generate_guidlist_parser()
-        return parser.unpack(guidlist)
+        parser = generate_ghidlist_parser()
+        return parser.unpack(ghidlist)
     
-    def list_bindings(self, guid):
+    def list_bindings(self, ghid):
         ''' Request a list of identities currently binding to the passed
-        guid.
+        ghid.
         
-        ACK/success is represented by returning a list of guids.
+        ACK/success is represented by returning a list of ghids.
         NAK/failure is represented by raise NakError
         '''
         # Ignore super() / local entirely? Currently we are.
-        packed_guidlist = self._requestor(
+        packed_ghidlist = self._requestor(
             req_type = 'list_bindings',
-            req_body = bytes(guid)
+            req_body = bytes(ghid)
         )
-        parser = generate_guidlist_parser()
-        guidlist = parser.unpack(packed_guidlist)
-        return guidlist
+        parser = generate_ghidlist_parser()
+        ghidlist = parser.unpack(packed_ghidlist)
+        return ghidlist
     
-    def query_debinding(self, guid):
-        ''' Request a the address of any debindings of guid, if they
+    def query_debinding(self, ghid):
+        ''' Request a the address of any debindings of ghid, if they
         exist.
         
         ACK/success is represented by returning:
-            1. The debinding GUID if it exists
+            1. The debinding GHID if it exists
             2. None if it does not exist
         NAK/failure is represented by raise NakError
         '''
         # Ignore super() entirely? Currently we are.
-        packed_guid = self._requestor(
+        packed_ghid = self._requestor(
             req_type = 'query_debindings',
-            req_body = bytes(guid)
+            req_body = bytes(ghid)
         )
-        if packed_guid == struct.pack('>?', False):
+        if packed_ghid == struct.pack('>?', False):
             result = False
         else:
-            result = Guid.from_bytes(packed_guid)
+            result = Ghid.from_bytes(packed_ghid)
         return result
         
-    def query(self, guid):
+    def query(self, ghid):
         ''' Checks the persistence provider for the existence of the
-        passed guid.
+        passed ghid.
         
         ACK/success is represented by returning:
             True if it exists
@@ -1732,10 +1732,10 @@ class LocalhostClient(MemoryPersister):
         '''
         packed_result = self._requestor(
             req_type = 'query',
-            req_body = bytes(guid)
+            req_body = bytes(ghid)
         )
         remote_exists = struct.unpack('>?', packed_result)[0]
-        local_exists = super().query(guid)
+        local_exists = super().query(ghid)
         return remote_exists or local_exists
     
     def disconnect(self):

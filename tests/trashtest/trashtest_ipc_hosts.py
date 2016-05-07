@@ -183,10 +183,10 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         self.assertIn(obj3.address, self.alice._holdings)
         
         self.app2.discard_object(joint3)
-        self.assertIn(self.app2endpoint.app_token, self.alice._discarders_by_guid[obj3.address])
+        self.assertIn(self.app2endpoint.app_token, self.alice._discarders_by_ghid[obj3.address])
         self.assertTrue(joint3._inoperable)
         
-        # self.assertIn(obj1.address, self.alice._state_by_guid)
+        # self.assertIn(obj1.address, self.alice._state_by_ghid)
         
         self.app1.delete_object(obj1)
         self.assertNotIn(obj1.address, self.persister._store)
