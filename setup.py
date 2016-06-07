@@ -39,15 +39,19 @@ from os import path
 
 here = path.abspath(path.dirname(__file__))
 
-long_description = '''Hypergolix is a python Golix client and browser. It 
-containerizes identity, allowing for trivial creation, deployment, and use
-of social applications.'''
-# If we're installing, don't bother building the long_description
-# Ewwww, this is dirty.
-if sys.argv[1] == 'sdist':
-    # Get the long description from the README file
-    import pypandoc
-    long_description = pypandoc.convert('README.md', 'rst')
+long_description = '''Hypergolix is a python Golix service. It makes encrypted 
+IoT development effortless through self-authenticating cryptographic entities.'''
+# # If we're installing, don't bother building the long_description
+# # Ewwww, this is dirty.
+# if sys.argv[1] == 'sdist':
+#     with open('README.md', 'r') as f:
+#         s_readme = f.read()
+        
+#     # Get the long description from the README file
+#     import pypandoc
+#     long_description = pypandoc.convert(s_readme, 'rst', format='md')
+#     with open('README.rst', 'w') as f:
+#         f.write(long_description)
 
 setup(
     name='hypergolix',
@@ -95,7 +99,7 @@ setup(
     ],
 
     # What does your project relate to?
-    keywords='golix, encryption, security, privacy, private, identity, sharing',
+    keywords='hypergolix, IoT, internet of things, golix, encryption, security, privacy, private, identity, sharing',
 
     # You can just specify the packages manually here if your project is
     # simple. Or you can use find_packages().
@@ -109,7 +113,11 @@ setup(
     # your project is installed. For an analysis of "install_requires" vs pip's
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
-    install_requires=[],
+    install_requires=[
+        'golix>=0.1.0',
+        'websockets>=3.1',
+        'msgpack-python>=0.4.7',
+    ],
 
     # List additional groups of dependencies here (e.g. development
     # dependencies). You can install these using the following syntax,

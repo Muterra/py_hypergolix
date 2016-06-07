@@ -1,8 +1,8 @@
+![Hypergolix logo](/assets/hypergolix-logo.png)
+
 # hypergolix
 
-Hypergolix is a "full client" for the Golix protocol. That doesn't mean anything yet, so think of it as "docker for digital identities". If you're creating any internet-enabled application, Hypergolix is an alternative to rolling your own account management system. It is designed to give the person/program operating the client full, end-to-end cryptographic control over information sharing and retention.
-
-It does not require application-level cryptographic code, and is available via IPC on the local machine (specifically through pipes, and potentially through localhost in the future).
+Hypergolix is a local background service that makes IoT development effortless. It uses the [Golix protocol](https://github.com/Muterra/doc-golix) to provide all data with strong, end-to-end encryption. It automatically handles account management, encryption, and security for you. Once logged in, Hypergolix is available to applications via IPC. Secret key material is entirely handled within Hypergolix; encrypted content creation, retention, sharing, and synchronization are all handled through the serveice. Hypergolix accelerates secure application development, especially for embedded and connected devices, without compromising sociability.
 
 # Todo (no particular order)
 
