@@ -1392,9 +1392,23 @@ class Dispatcher(DispatcherBase):
         result = self.sync_dynamic(ghid)
         # That will return None if no update was found
         if result is not None:
-            ghid, state = result
-            self._state_by_ghid[ghid] = state
-            self._distribute_to_endpoints(ghid)
+            ghid_dynamic, state = result
+            
+            # if ghid2 != ghid:
+            #     raise RuntimeError(
+            #         'Error while unpacking incoming update: mismatched ghids'
+            #     )
+            
+            state, api_id, app_token = self._unpack_dispatchable(state)
+            
+            # Explicitly catch empty API_ID to avoid problems with private objs
+            if api_id != bytes(65) and api_id != self._api_by_ghid[ghid_dynamic]:
+                raise RuntimeError(
+                    'Error while unpacking incoming update: mismatched api_ids'
+                )
+            
+            self._state_by_ghid[ghid_dynamic] = state
+            self._distribute_to_endpoints(ghid_dynamic)
                     
     def _distribute_to_endpoints(self, ghid, skip_token=None, deleted=False):
         ''' Passes the object to all endpoints supporting its api via 

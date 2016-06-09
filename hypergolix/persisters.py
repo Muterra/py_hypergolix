@@ -978,8 +978,9 @@ class LocalhostServer(MemoryPersister):
     Note that subscriptions are connection-specific. If a connection 
     dies, so do its subscriptions.
     '''
-    def __init__(self, port, *args, **kwargs):
+    def __init__(self, port, host='localhost', *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._ws_host = host
         self._ws_port = port
         self._admin_lock = asyncio.Lock()
         self._shutdown = False
@@ -1207,7 +1208,7 @@ class LocalhostServer(MemoryPersister):
             asyncio.set_event_loop(self._loop)
         
         port = int(self._ws_port)
-        server_task = websockets.serve(self._ws_handler, 'localhost', port)
+        server_task = websockets.serve(self._ws_handler, self._ws_host, port)
         self._intrrptng_cow = asyncio.ensure_future(
             self.catch_interrupt(), 
             loop=self._loop
@@ -1326,9 +1327,9 @@ class LocalhostClient(MemoryPersister):
         'disconnect':       b'XX',
     }
     
-    def __init__(self, port, *args, **kwargs):
+    def __init__(self, port, host='localhost', *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._ws_loc = 'ws://localhost:' + str(port) + '/'
+        self._ws_loc = 'ws://' + host + ':' + str(port) + '/'
         
         # Set up an event loop and some admin objects
         self._ws_loop = asyncio.new_event_loop()
@@ -1618,6 +1619,11 @@ class LocalhostClient(MemoryPersister):
         try:
             # print('Re-publishing to local cache.')
             super().publish(result)
+            
+        # This is a total hack. Would be much better to properly suppress 
+        # returning a recursive update
+        except NakError:
+            pass
             
         # We don't have a binding for it locally, so get the most convenient
         # from the persistence server.

@@ -335,6 +335,12 @@ class AppObj:
         If _preexisting is True, this is an update coming down from a
         persister, and we will NOT push it upstream.
         '''
+        if not self.is_owned:
+            raise TypeError(
+                'Cannot update an object that was not created by the '
+                'attached Agent.'
+            )
+            
         # First operate on the object, since it's easier to undo local changes
         self._update(state)
         self._embed._update_object(self, state)
@@ -349,12 +355,6 @@ class AppObj:
             
         if not self.is_dynamic:
             raise TypeError('Cannot update a static object.')
-            
-        if not self.is_owned:
-            raise TypeError(
-                'Cannot update an object that was not created by the '
-                'attached Agent.'
-            )
             
         # Update local state.
         self._state.appendleft(state)
@@ -632,6 +632,9 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         # Lookup for ghid -> object
         self._objs_by_ghid = WeakValueDictionary()
         
+        # Track registered callbacks for new objects
+        self._object_handlers = {}
+        
         super().__init__(*args, **kwargs)
     
     @property
@@ -754,6 +757,12 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
     def update_object(self, obj, state):
         ''' Wrapper for obj.update.
         '''
+        if not obj.is_owned:
+            raise TypeError(
+                'Cannot update an object that was not created by the '
+                'attached Agent.'
+            )
+            
         # First operate on the object, since it's easier to undo local changes
         obj._update(state)
         self._update_object(obj, state)
@@ -869,7 +878,44 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         ''' Deserializes an incoming object delivery, dispatches it to
         the application, and serializes a response to the IPC host.
         '''
-        return b''
+        (
+            address,
+            author,
+            state, 
+            is_link, 
+            api_id,
+            app_token, # Will be unused and set to None 
+            private, # Will be unused and set to None 
+            dynamic,
+            _legroom # Will be unused and set to None
+        ) = self._unpack_object_def(request_body)
+        
+        # Resolve any links
+        if is_link:
+            link = Ghid.from_bytes(state)
+            # Note: this may cause things to freeze, because async
+            state = self.get_object(link)
+            
+        # Okay, now let's create an object for it
+        obj = AppObj(
+            embed = self,
+            state = (state, api_id, False, dynamic, None),
+            _preexisting = (address, author)
+        )
+            
+        # Well this is a huge hack. But something about the event loop 
+        # itself is fucking up control flow and causing the world to hang
+        # here. May want to create a dedicated thread just for pushing 
+        # updates? Like autoresponder, but autoupdater?
+        worker = threading.Thread(
+            target = self._object_handlers[api_id],
+            daemon = True,
+            args = (obj,),
+        )
+        worker.start()
+        
+        # Successful delivery. Return true
+        return b'\x01'
 
     def update_object_wrapper(self, connection, request_body):
         ''' Deserializes an incoming object update, updates the AppObj
@@ -936,10 +982,13 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         
         
 class _TestEmbed(_EmbedBase):
-    def register_api(self, *args, **kwargs):
+    def register_api(self, api_id, object_handler=None):
         ''' Just here to silence errors from ABC.
         '''
-        pass
+        if object_handler is None:
+            object_handler = lambda *args, **kwargs: None
+            
+        self._object_handlers[api_id] = object_handler
     
     def get_object(self, ghid):
         ''' Wraps RawObj.__init__  and get_ghid for preexisting objects.
@@ -1238,12 +1287,20 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
         )
         return Ghid.from_bytes(raw_ghid)
         
-    def register_api(self, api_id):
+    def register_api(self, api_id, object_handler=None):
         ''' Registers an API ID with the hypergolix service for this 
         application.
+        
+        Note that object handlers must be threadsafe.
         '''
         if len(api_id) != 65:
             raise ValueError('Invalid API ID.')
+        
+        if object_handler is None:
+            object_handler = lambda *args, **kwargs: None
+            
+        if not callable(object_handler):
+            raise TypeError('object_handler must be callable')
         
         response = self.send_threadsafe(
             connection = self.connection,
@@ -1251,10 +1308,11 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             request_code = self.REQUEST_CODES['register_api']
         )
         if response == b'\x01':
+            self._object_handlers[api_id] = object_handler
             return True
         else:
             raise RuntimeError('Unknown error while registering API.')
-        
+            
     @asyncio.coroutine
     def handle_producer_exc(self, connection, exc):
         ''' Handles the exception (if any) created by the producer task.

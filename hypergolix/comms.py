@@ -223,7 +223,7 @@ class WSBase(metaclass=abc.ABCMeta):
             
     @property
     def _ws_loc(self):
-        return self._ws_host + ':' + str(self._ws_port) + '/'
+        return 'ws://' + self._ws_host + ':' + str(self._ws_port) + '/'
             
     @abc.abstractmethod
     def ws_run(self):

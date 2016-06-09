@@ -78,6 +78,11 @@ class WebsocketsHost(WebsocketsIPC, Dispatcher, AgentBase):
 # ###############################################
 # Testing
 # ###############################################
+
+
+def _objhandler(obj):
+    print('INCOMING UNSOLICITED OBJECT!')
+    print(obj)
         
         
 class WebsocketsIPCTrashTest(unittest.TestCase):
@@ -102,7 +107,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         )
         
         cls.app1 = WebsocketsEmbed(
-            host = 'ws://localhost', 
+            host = 'localhost', 
             port = 4628, 
             threaded = True,
             # debug = True
@@ -111,7 +116,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         cls.app1endpoint = list(cls.alice.connections.values())[0]
         
         cls.app2 = WebsocketsEmbed(
-            host = 'ws://localhost', 
+            host = 'localhost', 
             port = 4628, 
             threaded = True,
             # debug = True
@@ -138,8 +143,8 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         print('whoami', whoami)
         
         # Test registering an api_id
-        self.app1.register_api(self.__api_id)
-        self.app2.register_api(self.__api_id)
+        self.app1.register_api(self.__api_id, _objhandler)
+        self.app2.register_api(self.__api_id, _objhandler)
         self.assertIn(self.__api_id, self.app1endpoint.apis)
         
         obj1 = self.app1.new_object(

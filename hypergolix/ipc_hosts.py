@@ -449,10 +449,42 @@ class _EmbeddedIPC(_IPCBase):
         
         
 class WSEndpoint(_EndpointBase, _ReqResWSConnection):
+    # def send_object(self, ghid, state):
+    #     ''' Sends a new object to the emedded client.
+    #     '''
+    #     pass
+        
     def send_object(self, ghid, state):
         ''' Sends a new object to the emedded client.
         '''
-        pass
+        if isinstance(state, Ghid):
+            is_link = True
+            state = bytes(state)
+        else:
+            is_link = False
+            
+        author = self.dispatch._author_by_ghid[ghid]
+        dynamic = self.dispatch._dynamic_by_ghid[ghid]
+        api_id = self.dispatch._api_by_ghid[ghid]
+        
+        # TODO: fix this leaky abstraction
+        response = self.dispatch.send_threadsafe(
+            connection = self,
+            msg = self.dispatch._pack_object_def(
+                ghid,
+                author,
+                state,
+                is_link,
+                api_id,
+                None,
+                None,
+                dynamic,
+                None
+            ),
+            request_code = self.dispatch.REQUEST_CODES['send_object'],
+            # Note: for now, just don't worry about failures.
+            expect_reply = False
+        )
     
     def send_update(self, ghid, state):
         ''' Sends an updated object to the emedded client.

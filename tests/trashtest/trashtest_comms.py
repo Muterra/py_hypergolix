@@ -351,7 +351,7 @@ class ReqResWSTrashTest(unittest.TestCase):
         )
         
         cls.client1 = ReqResTestClient(
-            host = 'ws://localhost', 
+            host = 'localhost', 
             port = 9318, 
             name = 'OneTrueMorty',
             threaded = True,
@@ -359,7 +359,7 @@ class ReqResWSTrashTest(unittest.TestCase):
         )
         
         cls.client2 = ReqResTestClient(
-            host = 'ws://localhost', 
+            host = 'localhost', 
             port = 9318, 
             name = 'HammerMorty',
             threaded = True,
