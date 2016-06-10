@@ -30,19 +30,19 @@ hypergolix: A python Golix client.
 ------------------------------------------------------
 
 NakError status code conventions:
-ERR#X: Internal error.
-ERR#N: Does not appear to be a Golix object.
-ERR#0: Failed to verify.
-ERR#1: Unknown author or recipient.
-ERR#2: Unbound GEOC; immediately garbage collected
-ERR#3: Existing debinding for address; (de)binding rejected.
-ERR#4: Invalid or unknown target.
-ERR#5: Inconsistent author.
-ERR#6: Object does not exist at persistence provider.
-ERR#7: Attempt to upload illegal frame for dynamic binding. Indicates 
-       uploading a new dynamic binding without the root binding, or that
-       the uploaded frame does not contain any existing frames in its 
-       history.
+-----
+0x0001: Does not appear to be a Golix object.
+0x0002: Failed to verify.
+0x0003: Unknown author or recipient.
+0x0004: Unbound GEOC; immediately garbage collected
+0x0005: Existing debinding for address; (de)binding rejected.
+0x0006: Invalid or unknown target.
+0x0007: Inconsistent author.
+0x0008: Object does not exist at persistence provider.
+0x0009: Attempt to upload illegal frame for dynamic binding. Indicates 
+        uploading a new dynamic binding without the root binding, or that
+        the uploaded frame does not contain any existing frames in its 
+        history.
 '''
 
 # Control * imports.
@@ -57,10 +57,19 @@ import collections
 import warnings
 import functools
 import struct
+import weakref
 
 import asyncio
 import websockets
 from websockets.exceptions import ConnectionClosed
+    
+# Not sure if these are being used
+import time
+import random
+import string
+import threading
+import traceback
+# End unsure block
 
 from golix import ThirdParty
 from golix import SecondParty
@@ -83,18 +92,36 @@ from .exceptions import NakError
 from .exceptions import UnboundContainerError
 from .exceptions import DoesNotExistError
 from .exceptions import PersistenceWarning
+from .exceptions import RequestError
 
 from .utils import _DeepDeleteChainMap
 from .utils import _WeldedSetDeepChainMap
 from .utils import _block_on_result
+from .utils import _JitSetDict
+
+from .comms import WSReqResServer
+from .comms import WSReqResClient
+from .comms import _ReqResWSConnection
+
+
+ERROR_CODES = {
+    b'\xFF\xFF': NakError,
+    b'\x00\x04': UnboundContainerError,
+    b'\x00\x08': DoesNotExistError,
+}
 
 
 class _PersisterBase(metaclass=abc.ABCMeta):
     ''' Base class for persistence providers.
     '''
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *args, **kwargs):
+        ''' Note: if this starts to do anything that links need to 
+        include (ie WSPersister), you'll need to change them to call
+        super().
+        '''
         self._golix_provider = ThirdParty()
+        
+        super().__init__(*args, **kwargs)
     
     @abc.abstractmethod
     def publish(self, packed):
@@ -179,7 +206,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         pass
     
     @abc.abstractmethod
-    def query_debinding(self, ghid):
+    def list_debinding(self, ghid):
         ''' Request a the address of any debindings of ghid, if they
         exist.
         
@@ -321,7 +348,7 @@ class UnsafeMemoryPersister(_PersisterBase):
                     dispatch(unpacked)
                     break
         else:
-            raise NakError('ERR#N: Does not appear to be a Golix object.')
+            raise NakError('0x0001: Does not appear to be a Golix object.')
         
         return True
         
@@ -334,7 +361,7 @@ class UnsafeMemoryPersister(_PersisterBase):
                 self.get(assignee)
             except NakError as e:
                 raise NakError(
-                    'ERR#1: Unknown author / recipient.'
+                    '0x0003: Unknown author / recipient.'
                 ) from e
     
         try:
@@ -345,7 +372,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             )
         except SecurityError as e:
             raise NakError(
-                'ERR#0: Failed to verify GEOC.'
+                '0x0002: Failed to verify GEOC.'
             ) from e
             
     def _dispatch_gidc(self, gidc):
@@ -371,7 +398,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             
         if geoc.ghid not in self._bindings:
             raise UnboundContainerError(
-                'ERR#2: Attempt to upload unbound GEOC; object immediately '
+                '0x0004: Attempt to upload unbound GEOC; object immediately '
                 'garbage collected.'
             )
             
@@ -396,7 +423,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         
         if gobs.ghid in self._debindings:
             raise NakError(
-                'ERR#3: Attempt to upload a binding for which a debinding '
+                '0x0005: Attempt to upload a binding for which a debinding '
                 'already exists. Remove the debinding first.'
             )
             
@@ -433,7 +460,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         
         if gobd.ghid_dynamic in self._debindings:
             raise NakError(
-                'ERR#3: Attempt to upload a binding for which a debinding '
+                '0x0005: Attempt to upload a binding for which a debinding '
                 'already exists. Remove the debinding first.'
             )
             
@@ -504,7 +531,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         # sure that it has no history.
         if gobd.history:
             raise NakError(
-                'ERR#7: Illegal dynamic frame. Cannot upload a frame with '
+                '0x0009: Illegal dynamic frame. Cannot upload a frame with '
                 'history as the first frame in a persistence provider.'
             )
             
@@ -521,7 +548,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         # Verify consistency of binding author
         if gobd.binder != self._targets_dynamic[gobd.ghid_dynamic][0]:
             raise NakError(
-                'ERR#5: Dynamic binding author is inconsistent with an '
+                '0x0007: Dynamic binding author is inconsistent with an '
                 'existing dynamic binding at the same address.'
             )
             
@@ -529,7 +556,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         # Verify history contains existing most recent frame
         if self._targets_dynamic[gobd.ghid_dynamic][1][0] not in gobd.history:
             raise NakError(
-                'ERR#7: Illegal dynamic frame. Attempted to upload a new '
+                '0x0009: Illegal dynamic frame. Attempted to upload a new '
                 'dynamic frame, but its history did not contain the most '
                 'recent frame.'
             )
@@ -557,13 +584,13 @@ class UnsafeMemoryPersister(_PersisterBase):
         
         if gdxx.ghid in self._debindings:
             raise NakError(
-                'ERR#3: Attempt to upload a debinding for which a debinding '
+                '0x0005: Attempt to upload a debinding for which a debinding '
                 'already exists. Remove the debinding first.'
             )
             
         if gdxx.target not in self._forward_references:
             raise NakError(
-                'ERR#4: Invalid target for debinding. Debindings must target '
+                '0x0006: Invalid target for debinding. Debindings must target '
                 'static/dynamic bindings, debindings, or asymmetric requests. '
                 'This may indicate the target does not exist in local storage.'
             )
@@ -571,7 +598,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         # Check debinder is consistent with other (de)bindings in the chain
         if gdxx.debinder != self._forward_references[gdxx.target][0]:
             raise NakError(
-                'ERR#5: Debinding author is inconsistent with the resource '
+                '0x0007: Debinding author is inconsistent with the resource '
                 'being debound.'
             )
             
@@ -616,12 +643,12 @@ class UnsafeMemoryPersister(_PersisterBase):
                 self.get(garq.recipient)
             except NakError as e:
                 raise NakError(
-                    'ERR#1: Unknown author / recipient.'
+                    '0x0003: Unknown author / recipient.'
                 ) from e
             
         if garq.ghid in self._debindings:
             raise NakError(
-                'ERR#3: Attempt to upload a request for which a debinding '
+                '0x0005: Attempt to upload a request for which a debinding '
                 'already exists. Remove the debinding first.'
             )
         
@@ -681,7 +708,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             gobs.target in self._requests or
             gobs.target in self._id_bases):
                 raise NakError(
-                    'ERR#4: Attempt to bind to an invalid target.'
+                    '0x0006: Attempt to bind to an invalid target.'
                 )
                 
         return True
@@ -695,7 +722,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             gobd.target in self._requests or
             gobd.target in self._id_bases):
                 raise NakError(
-                    'ERR#4: Attempt to bind to an invalid target.'
+                    '0x0006: Attempt to bind to an invalid target.'
                 )
                 
         return True
@@ -719,7 +746,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         try:
             return self._store[ghid]
         except KeyError as e:
-            raise DoesNotExistError('ERR#6: Ghid not found in store.') from e
+            raise DoesNotExistError('0x0008: Ghid not found in store.') from e
         
     def subscribe(self, ghid, callback):
         ''' Request that the persistence provider update the client on
@@ -743,7 +770,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         if (ghid not in self._targets_dynamic and 
             ghid not in self._secondparties):
                 raise NakError(
-                    'ERR#4: Invalid or unknown target for subscription.'
+                    '0x0006: Invalid or unknown target for subscription.'
                 )
                 
         if ghid in self._subscriptions:
@@ -757,17 +784,25 @@ class UnsafeMemoryPersister(_PersisterBase):
         ''' Unsubscribe. Client must have an existing subscription to 
         the passed ghid at the persistence provider.
         
-        ACK/success is represented by a return True
+        ACK/success is represented by: 
+            return True if subscription existed
+            return False is subscription did not exist
         NAK/failure is represented by raise NakError
         '''
         try:
+            if callback not in self._subscriptions[ghid]:
+                raise RuntimeError('Callback not registered for ghid.')
+                
             self._subscriptions[ghid].remove(callback)
+                
+            if len(self._subscriptions[ghid]) == 0:
+                del self._subscriptions[ghid]
+                
         except KeyError as e:
-            raise NakError(
-                'ERR#4: Invalid or unknown target for unsubscription.'
-            ) from e
+            return False
             
-        return True
+        else:
+            return True
         
     def list_subs(self):
         ''' List all currently subscribed ghids for the connected 
@@ -799,7 +834,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             result.extend(self._bindings_dynamic[ghid])
         return result
         
-    def query_debinding(self, ghid):
+    def list_debinding(self, ghid):
         ''' Request a the address of any debindings of ghid, if they
         exist.
         
@@ -924,7 +959,7 @@ class MemoryPersister(UnsafeMemoryPersister):
             obj = self._golix_provider.unpack_object(packed)
         except ParseError as e:
             print(repr(e))
-            raise NakError('ERR#N: Does not appear to be a Golix object.') from e
+            raise NakError('0x0001: Does not appear to be a Golix object.') from e
         # We are now guaranteed a Golix object.
         
         return super().publish(obj)
@@ -948,13 +983,624 @@ class ProxyPersister(_PersisterBase):
     proxy.
     '''
     pass
-    
+
+
+class _PersisterBridgeConnection(_ReqResWSConnection):
+    def __init__(self, transport, *args, **kwargs):
+        # Copying like this seems dangerous, but I think it should be okay.
+        if isinstance(transport, weakref.ProxyTypes):
+            self._transport = transport
+        else:
+            self._transport = weakref.proxy(transport)
+            
+        self._subscriptions = {}
         
-import time
-import random
-import string
-import threading
-import traceback
+        super().__init__(*args, **kwargs)
+    
+    @abc.abstractmethod
+    def send_subs_update(self, subscribed_ghid, notification_ghid):
+        ''' Sends a subscription update to the connected client.
+        '''
+        pass
+
+
+class _PersisterBridgeBase:
+    ''' Serialization mixins for persister bridges.
+    '''
+    def __init__(self, persister, *args, **kwargs):
+        # Copying like this seems dangerous, but I think it should be okay.
+        if isinstance(persister, weakref.ProxyTypes):
+            self._persister = persister
+        else:
+            self._persister = weakref.proxy(persister)
+            
+        super().__init__(*args, **kwargs)
+            
+    def new_connection(self, *args, **kwargs):
+        ''' Merge the connection and endpoint to the same thing.
+        '''
+        return _PersisterBridgeConnection(
+            transport = self, 
+            *args, **kwargs
+        )
+            
+    def ping_wrapper(self, connection, request_body):
+        ''' Deserializes a ping request; forwards it to the persister.
+        '''
+        try:
+            if self._persister.ping():
+                return b'\x01'
+            else:
+                return b'\x00'
+        
+        except Exception as exc:
+            print('Error while receiving ping.')
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+            # return b'\x00'
+            raise exc
+            
+    def publish_wrapper(self, connection, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        self._persister.publish(request_body)
+        return b'\x01'
+            
+    def get_wrapper(self, connection, request_body):
+        ''' Deserializes a get request; forwards it to the persister.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        return self._persister.get(ghid)
+            
+    def subscribe_wrapper(self, connection, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        
+        def updater(notification_ghid, subscribed_ghid=ghid, 
+        call=connection.send_subs_update):
+            call(subscribed_ghid, notification_ghid)
+        
+        self._persister.subscribe(ghid, updater)
+        connection._subscriptions[ghid] = updater
+        return b'\x01'
+            
+    def unsubscribe_wrapper(self, connection, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        callback = connection._subscriptions[ghid]
+        unsubbed = self._persister.unsubscribe(ghid, callback)
+        del connection._subscriptions[ghid]
+        if unsubbed:
+            return b'\x01'
+        else:
+            return b'\x00'
+            
+    def list_subs_wrapper(self, connection, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        ghidlist = list(connection._subscriptions)
+        parser = generate_ghidlist_parser()
+        return parser.pack(ghidlist)
+            
+    def list_bindings_wrapper(self, connection, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        ghidlist = self._persister.list_bindings(ghid)
+        parser = generate_ghidlist_parser()
+        return parser.pack(ghidlist)
+            
+    def list_debinding_wrapper(self, connection, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        result = self._persister.list_debinding(ghid)
+        
+        if not result:
+            result = b'\x00'
+        else:
+            result = bytes(result)
+        
+        return result
+            
+    def query_wrapper(self, connection, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        status = self._persister.query(ghid)
+        if status:
+            return b'\x01'
+        else:
+            return b'\x00'
+            
+    def disconnect_wrapper(self, connection, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        # print('----- Attempting disconnect...')
+        # print('Persister has', len(self._persister._subscriptions), 'subscriptions')
+        # print('Connection has', len(connection._subscriptions), 'subscriptions')
+        for sub_ghid, sub_callback in connection._subscriptions.items():
+            # print('    ', bytes(sub_ghid))
+            # print('    ', sub_callback)
+            # print('    ', self._persister._subscriptions)
+            # print('')
+            self._persister.unsubscribe(sub_ghid, sub_callback)
+        connection._subscriptions.clear()
+        return b'\x01'
+
+
+class _WSBridgeConnection(_PersisterBridgeConnection):
+    def send_subs_update(self, subscribed_ghid, notification_ghid):
+        ''' Send the connection its subscription update.
+        '''
+        # TODO: fix this leaky abstraction
+        response = self._transport.send_threadsafe(
+            connection = self,
+            msg = bytes(subscribed_ghid) + bytes(notification_ghid),
+            request_code = self._transport.REQUEST_CODES['send_subs_update'],
+            # Note: for now, just don't worry about failures.
+            expect_reply = False
+        )
+        
+            
+class _WSBridgeBase(_PersisterBridgeBase):
+    def new_connection(self, *args, **kwargs):
+        ''' Merge the connection and endpoint to the same thing.
+        '''
+        return _WSBridgeConnection(
+            transport = self, 
+            *args, **kwargs
+        )
+        
+    @asyncio.coroutine
+    def handle_producer_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the producer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            # print(repr(exc))
+            # traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_listener_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            # print(repr(exc))
+            # traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_autoresponder_exc(self, exc, token):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None and not isinstance(exc, NakError):
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+        return repr(exc)
+    
+
+class WSPersisterBridge(_WSBridgeBase, WSReqResServer):
+    ''' Websockets request/response bridge to a persister, server half.
+    '''
+    REQUEST_CODES = {
+        # Receive an update for an existing object.
+        'send_subs_update': b'!!',
+    }
+    
+    def __init__(self, *args, **kwargs):
+        req_handlers = {
+            # ping 
+            b'??': self.ping_wrapper,
+            # publish 
+            b'PB': self.publish_wrapper,
+            # get  
+            b'GT': self.get_wrapper,
+            # subscribe 
+            b'+S': self.subscribe_wrapper,
+            # unsubscribe 
+            b'xS': self.unsubscribe_wrapper,
+            # list subs 
+            b'LS': self.list_subs_wrapper,
+            # list binds 
+            b'LB': self.list_bindings_wrapper,
+            # list debindings
+            b'LD': self.list_debinding_wrapper,
+            # query (existence) 
+            b'QE': self.query_wrapper,
+            # disconnect 
+            b'XX': self.disconnect_wrapper,
+        }
+        
+        super().__init__(
+            req_handlers = req_handlers,
+            success_code = b'AK',
+            failure_code = b'NK',
+            error_lookup = ERROR_CODES,
+            # 48 bits = 1% collisions at 2.4 e 10^6 connections
+            birthday_bits = 48,
+            *args, **kwargs
+        )
+        
+    @asyncio.coroutine
+    def init_connection(self, websocket, path):
+        ''' Initializes the connection with the client, creating an 
+        endpoint/connection object, and registering it with dispatch.
+        '''
+        connection = yield from super().init_connection(
+            websocket = websocket, 
+            path = path
+        )
+            
+        print('Connection established with client', str(connection.connid))
+        return connection
+
+
+class WSPersister(_PersisterBase, WSReqResClient):
+    ''' Websockets request/response persister (the client half).
+    '''
+            
+    REQUEST_CODES = {
+        # ping 
+        'ping': b'??',
+        # publish 
+        'publish': b'PB',
+        # get  
+        'get': b'GT',
+        # subscribe 
+        'subscribe': b'+S',
+        # unsubscribe 
+        'unsubscribe': b'xS',
+        # list subs 
+        'list_subs': b'LS',
+        # list binds 
+        'list_bindings': b'LB',
+        # list debindings
+        'list_debinding': b'LD',
+        # query (existence) 
+        'query': b'QE',
+        # disconnect 
+        'disconnect': b'XX',
+    }
+    
+    def __init__(self, *args, **kwargs):
+        # Note that these are only for unsolicited contact from the server.
+        req_handlers = {
+            # Receive/dispatch a new object.
+            b'!!': self.deliver_update_wrapper,
+        }
+        
+        self._subscriptions = _JitSetDict()
+        
+        super().__init__(
+            req_handlers = req_handlers,
+            success_code = b'AK',
+            failure_code = b'NK',
+            error_lookup = ERROR_CODES,
+            *args, **kwargs
+        )
+        
+    @asyncio.coroutine
+    def init_connection(self, websocket, path):
+        ''' Initializes the connection with the client, creating an 
+        endpoint/connection object, and registering it with dispatch.
+        '''
+        connection = yield from super().init_connection(
+            websocket = websocket, 
+            path = path
+        )
+            
+        print('Connection established with persistence server.')
+        return connection
+        
+    def deliver_update_wrapper(self, connection, response_body):
+        ''' Handles update pings.
+        '''
+        # print('-------')
+        # print('Receiving delivered subscription update.')
+        # print('Sent ghid:', response_body)
+        # print('All subscription keys: ')
+        # for key in self._subscriptions:
+        #     print('    ', str(bytes(key)))
+        time.sleep(.01)
+        # Shit, I have a race condition somewhere.
+        subscribed_ghid = Ghid.from_bytes(response_body[0:65])
+        notification_ghid = Ghid.from_bytes(response_body[65:130])
+        
+        for callback in self._subscriptions[subscribed_ghid]:
+            callback(notification_ghid)
+            
+        # def run_callbacks(subscribed_ghid=subscribed_ghid, notification_ghid=notification_ghid):
+        #     for callback in self._subscriptions[subscribed_ghid]:
+        #         callback(notification_ghid)
+                
+        # # Well this is a huge hack. But something about the event loop 
+        # # itself is fucking up control flow and causing the world to hang
+        # # here. May want to create a dedicated thread just for pushing 
+        # # updates? Like autoresponder, but autoupdater?
+        # worker = threading.Thread(
+        #     target = run_callbacks,
+        #     daemon = True,
+        # )
+        # worker.start()
+        
+        return b'\x01'
+    
+    def ping(self):
+        ''' Queries the persistence provider for availability.
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = b'',
+            request_code = self.REQUEST_CODES['ping']
+        )
+        
+        if response == b'\x01':
+            return True
+        else:
+            return False
+    
+    def publish(self, packed):
+        ''' Submits a packed object to the persister.
+        
+        Note that this is going to (unfortunately) result in packing + 
+        unpacking the object twice for ex. a MemoryPersister. At some 
+        point, that should be fixed -- maybe through ex. publish_unsafe?
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = packed,
+            request_code = self.REQUEST_CODES['publish']
+        )
+        
+        if response == b'\x01':
+            return True
+        else:
+            raise RuntimeError('Unknown response code while publishing object.')
+    
+    def get(self, ghid):
+        ''' Requests an object from the persistence provider, identified
+        by its ghid.
+        
+        ACK/success is represented by returning the object
+        NAK/failure is represented by raise NakError
+        '''
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = bytes(ghid),
+            request_code = self.REQUEST_CODES['get']
+        )
+            
+        return response
+    
+    def subscribe(self, ghid, callback):
+        ''' Request that the persistence provider update the client on
+        any changes to the object addressed by ghid. Must target either:
+        
+        1. Dynamic ghid
+        2. Author identity ghid
+        
+        Upon successful subscription, the persistence provider will 
+        publish to client either of the above:
+        
+        1. New frames to a dynamic binding
+        2. Asymmetric requests with the indicated GHID as a recipient
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        if ghid not in self._subscriptions:
+            response = self.send_threadsafe(
+                connection = self.connection,
+                msg = bytes(ghid),
+                request_code = self.REQUEST_CODES['subscribe']
+            )
+            
+            if response != b'\x01':
+                raise RuntimeError('Unknown response code while subscribing.')
+                
+        self._subscriptions[ghid].add(callback)
+        return True
+    
+    def unsubscribe(self, ghid, callback):
+        ''' Unsubscribe. Client must have an existing subscription to 
+        the passed ghid at the persistence provider. Removes only the
+        passed callback.
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        if ghid not in self._subscriptions:
+            raise ValueError('Not currently subscribed to ghid.')
+            
+        self._subscriptions[ghid].discard(callback)
+        
+        if len(self._subscriptions[ghid]) == 0:
+            del self._subscriptions[ghid]
+            
+            response = self.send_threadsafe(
+                connection = self.connection,
+                msg = bytes(ghid),
+                request_code = self.REQUEST_CODES['unsubscribe']
+            )
+        
+            if response == b'\x01':
+                # There was a subscription, and it was successfully removed.
+                pass
+            elif response == b'\x00':
+                # This means there was no subscription to remove.
+                pass
+            else:
+                raise RuntimeError(
+                    'Unknown response code while unsubscribing from address. ' 
+                    'The persister might still send updates, but the callback '
+                    'has been removed.'
+                )
+                
+        return True
+    
+    def list_subs(self):
+        ''' List all currently subscribed ghids for the connected 
+        client.
+        
+        ACK/success is represented by returning a list of ghids.
+        NAK/failure is represented by raise NakError
+        '''
+        # This would probably be a good time to reconcile states between the
+        # persistence provider and our local set of subs!
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = b'',
+            request_code = self.REQUEST_CODES['list_subs']
+        )
+        
+        parser = generate_ghidlist_parser()
+        return parser.unpack(response)
+    
+    def list_bindings(self, ghid):
+        ''' Request a list of identities currently binding to the passed
+        ghid.
+        
+        ACK/success is represented by returning a list of ghids.
+        NAK/failure is represented by raise NakError
+        '''
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = bytes(ghid),
+            request_code = self.REQUEST_CODES['list_bindings']
+        )
+        
+        parser = generate_ghidlist_parser()
+        return parser.unpack(response)
+    
+    def list_debinding(self, ghid):
+        ''' Request a the address of any debindings of ghid, if they
+        exist.
+        
+        ACK/success is represented by returning:
+            1. The debinding GHID if it exists
+            2. None if it does not exist
+        NAK/failure is represented by raise NakError
+        '''
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = bytes(ghid),
+            request_code = self.REQUEST_CODES['list_debinding']
+        )
+        
+        if response == b'\x00':
+            return None
+        else:
+            return Ghid.from_bytes(response)
+        
+    def query(self, ghid):
+        ''' Checks the persistence provider for the existence of the
+        passed ghid.
+        
+        ACK/success is represented by returning:
+            True if it exists
+            False otherwise
+        NAK/failure is represented by raise NakError
+        '''
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = bytes(ghid),
+            request_code = self.REQUEST_CODES['query']
+        )
+        
+        if response == b'\x00':
+            return False
+        else:
+            return True
+    
+    def disconnect(self):
+        ''' Terminates all subscriptions and requests. Not required for
+        a disconnect, but highly recommended, and prevents an window of
+        attack for address spoofers. Note that such an attack would only
+        leak metadata.
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        response = self.send_threadsafe(
+            connection = self.connection,
+            msg = b'',
+            request_code = self.REQUEST_CODES['disconnect']
+        )
+        
+        if response == b'\x01':
+            self._subscriptions.clear()
+            return True
+        else:
+            raise RuntimeError('Unknown status code during disconnection.')
+        
+    @asyncio.coroutine
+    def handle_producer_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the producer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            # print(repr(exc))
+            # traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_listener_exc(self, connection, exc):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None:
+            # print(repr(exc))
+            # traceback.print_tb(exc.__traceback__)
+            raise exc
+        
+    @asyncio.coroutine
+    def handle_autoresponder_exc(self, exc, token):
+        ''' Handles the exception (if any) created by the consumer task.
+        
+        exc is either:
+        1. the exception, if it was raised
+        2. None, if no exception was encountered
+        '''
+        if exc is not None and not isinstance(exc, NakError):
+            print(repr(exc))
+            traceback.print_tb(exc.__traceback__)
+        return repr(exc)
+    
     
 class LocalhostServer(MemoryPersister):
     ''' Accepts connections over localhost using websockets.
@@ -1087,7 +1733,7 @@ class LocalhostServer(MemoryPersister):
                 del subs[ghid]
             except KeyError as e:
                 raise NakError(
-                    'ERR#4: Invalid or unknown target for unsubscription.'
+                    '0x0006: Invalid or unknown target for unsubscription.'
                 ) from e
                 
             return struct.pack('>?', self.unsubscribe(ghid, callback))
@@ -1117,7 +1763,7 @@ class LocalhostServer(MemoryPersister):
             b'xS': unsub_handler,
             b'LS': conn_list_subs,
             b'LB': self.list_bindings_wrapped,
-            b'QD': self.query_debinding_wrapped,
+            b'QD': self.list_debinding_wrapped,
             b'QE': self.query_wrapped,
             b'XX': conn_disconnect
         }
@@ -1267,7 +1913,7 @@ class LocalhostServer(MemoryPersister):
         parser = generate_ghidlist_parser()
         return parser.pack(ghidlist)
     
-    def query_debinding_wrapped(self, packed):
+    def list_debinding_wrapped(self, packed):
         ''' Request a the address of any debindings of ghid, if they
         exist.
         
@@ -1278,7 +1924,7 @@ class LocalhostServer(MemoryPersister):
         '''
         ghid = Ghid.from_bytes(packed)
         
-        result = self.query_debinding(ghid)
+        result = self.list_debinding(ghid)
         
         if not result:
             result = struct.pack('>?', False)
@@ -1294,6 +1940,7 @@ class LocalhostServer(MemoryPersister):
         ghid = Ghid.from_bytes(packed)
         status = self.query(ghid)
         return struct.pack('>?', status)
+
 
 class LocalhostClient(MemoryPersister):
     ''' Creates connections over localhost using websockets.
@@ -1322,7 +1969,7 @@ class LocalhostClient(MemoryPersister):
         'unsubscribe':      b'xS',
         'list_subs':        b'LS',
         'list_bindings':    b'LB',
-        'query_debindings': b'QD',
+        'list_debinding': b'QD',
         'query':            b'QE',
         'disconnect':       b'XX',
     }
@@ -1479,7 +2126,7 @@ class LocalhostClient(MemoryPersister):
             raise response
         elif isinstance(response, Exception):
             # Note: This would be a good place to log the internal error.
-            raise NakError('ERR#X: Internal error.')
+            raise NakError('Internal server error.')
         else:
             return response
         
@@ -1540,7 +2187,7 @@ class LocalhostClient(MemoryPersister):
         '''
         # This prevents us from accidentally blocking ourselves later on
         if not self._ws_loop.is_running():
-            raise NakError('ERR#X: Internal error.')
+            raise NakError('Internal server error.')
         
         framed = self.REQUEST_CODES[req_type] + req_body
         
@@ -1707,7 +2354,7 @@ class LocalhostClient(MemoryPersister):
         ghidlist = parser.unpack(packed_ghidlist)
         return ghidlist
     
-    def query_debinding(self, ghid):
+    def list_debinding(self, ghid):
         ''' Request a the address of any debindings of ghid, if they
         exist.
         
@@ -1718,7 +2365,7 @@ class LocalhostClient(MemoryPersister):
         '''
         # Ignore super() entirely? Currently we are.
         packed_ghid = self._requestor(
-            req_type = 'query_debindings',
+            req_type = 'list_debinding',
             req_body = bytes(ghid)
         )
         if packed_ghid == struct.pack('>?', False):

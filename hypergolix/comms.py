@@ -110,6 +110,8 @@ class WSBase(metaclass=abc.ABCMeta):
         self._ws_port = port
         self._ws_host = host
         
+        self._debug = debug
+        
         if threaded:
             self._ws_loop = asyncio.new_event_loop()
             self._ws_loop.set_debug(debug)
@@ -499,7 +501,7 @@ class ReqResWSBase(WSBase):
         '''
         token = their_token.to_bytes(length=2, byteorder='big', signed=False)
         try:
-            code = self.error_lookup[exc]
+            code = self.error_lookup[type(exc)]
             body = str(exc).encode('utf-8')
         except KeyError:
             code = b'\x00\x00'
@@ -720,8 +722,9 @@ class ReqResWSBase(WSBase):
                     
             except Exception as e:
                 # Instrumentation
-                print(repr(e))
-                traceback.print_tb(e.__traceback__)
+                if self._debug:
+                    print(repr(e))
+                    traceback.print_tb(e.__traceback__)
                 
                 response = self.pack_failure(their_token, e)
                 response_code = self._failure_code
@@ -766,7 +769,7 @@ class ReqResWSBase(WSBase):
 class WSBasicServer(WSBase):
     ''' Generic websockets server.
     '''
-    def __init__(self, threaded, *args, **kwargs):
+    def __init__(self, threaded, birthday_bits=40, *args, **kwargs):
         ''' 
         Note: birthdays must be > 1000, or it will be ignored, and will
         default to a 40-bit space.
@@ -774,7 +777,7 @@ class WSBasicServer(WSBase):
         # When creating new connection ids,
         # Select a pseudorandom number from approx 40-bit space. Should have 1%
         # collision probability at 150k connections and 25% at 800k
-        self._birthdays = 2 ** 40
+        self._birthdays = 2 ** birthday_bits
         self._connections = {}
         self._ctr = threading.Event()
         
