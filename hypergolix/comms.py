@@ -411,7 +411,7 @@ class ReqResWSBase(WSBase):
     '''
     # def __init__(self, req_handlers, failure_code, *args, **kwargs):
     def __init__(self, req_handlers, success_code, failure_code, 
-    error_lookup=None, *args, **kwargs):
+    error_lookup=None, autoresponders=3, *args, **kwargs):
         # Use the default executor.
         self._receipt_executor = None
         
@@ -442,11 +442,15 @@ class ReqResWSBase(WSBase):
         # Call a loose LBYL type check on all handlers.
         self._check_handlers()
         
-        # This will need to be more than just a thread at some point.
-        self._autoresponder_thread = threading.Thread(
-            target = self.autoresponder,
-            daemon = True
-        )
+        # Single autoresponder threads have a habit of recursively hanging
+        self._autoresponder_threads = []
+        for __ in range(autoresponders):
+            self._autoresponder_threads.append(
+                threading.Thread(
+                    target = self.autoresponder,
+                    daemon = True
+                )
+            )
         
         # This needs to be called last, otherwise we set up the event loop too
         # early.
@@ -733,6 +737,10 @@ class ReqResWSBase(WSBase):
             # execute) send out the response.
             # Instrumentation
             # print('Ready to send reply.')
+            
+            if self._debug:
+                print('SUCCESS', req_code, 'FROM', connection.connid, body[:10])
+            
             self.send_threadsafe(
                 connection = connection, 
                 msg = response, 
@@ -763,7 +771,8 @@ class ReqResWSBase(WSBase):
         ''' In addition to super, start the autoresponder.
         '''
         super().ws_run()
-        self._autoresponder_thread.start()
+        for t in self._autoresponder_threads:
+            t.start()
         
         
 class WSBasicServer(WSBase):
@@ -868,14 +877,14 @@ class WSBasicServer(WSBase):
         # Do this once the loop starts up
         # self._ws_loop.call_soon(self._ctr.set)
         self._ctr.set()
-        print('Flag set.')
+        # print('Flag set.')
         # self._ws_loop.run_forever()
         # Go johnny go!
         # print('------Server not yet open?')
         # server = self._ws_loop.run_until_complete(self._ws_future)
         # print('------Waiting for server close.')
         self._ws_loop.run_until_complete(self._server.wait_closed())
-        print('Done running forever.')
+        # print('Done running forever.')
         
         # Close down the loop. It should have stopped on its own.
         # self._ws_loop.stop()

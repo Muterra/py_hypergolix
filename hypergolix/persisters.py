@@ -995,6 +995,8 @@ class _PersisterBridgeConnection(_ReqResWSConnection):
             
         self._subscriptions = {}
         
+        self._processing = threading.Event()
+        
         super().__init__(*args, **kwargs)
     
     @abc.abstractmethod
@@ -1044,7 +1046,9 @@ class _PersisterBridgeBase:
         ''' Deserializes a publish request and forwards it to the 
         persister.
         '''
+        connection._processing.set()
         self._persister.publish(request_body)
+        connection._processing.clear()
         return b'\x01'
             
     def get_wrapper(self, connection, request_body):
@@ -1143,14 +1147,16 @@ class _WSBridgeConnection(_PersisterBridgeConnection):
     def send_subs_update(self, subscribed_ghid, notification_ghid):
         ''' Send the connection its subscription update.
         '''
-        # TODO: fix this leaky abstraction
-        response = self._transport.send_threadsafe(
-            connection = self,
-            msg = bytes(subscribed_ghid) + bytes(notification_ghid),
-            request_code = self._transport.REQUEST_CODES['send_subs_update'],
-            # Note: for now, just don't worry about failures.
-            expect_reply = False
-        )
+        # TODO: fix this other leaky abstraction
+        if not self._processing.is_set():
+            # TODO: fix this leaky abstraction
+            response = self._transport.send_threadsafe(
+                connection = self,
+                msg = bytes(subscribed_ghid) + bytes(notification_ghid),
+                request_code = self._transport.REQUEST_CODES['send_subs_update'],
+                # Note: for now, just don't worry about failures.
+                expect_reply = False
+            )
         
             
 class _WSBridgeBase(_PersisterBridgeBase):
