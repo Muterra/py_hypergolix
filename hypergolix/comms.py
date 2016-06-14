@@ -411,7 +411,7 @@ class ReqResWSBase(WSBase):
     '''
     # def __init__(self, req_handlers, failure_code, *args, **kwargs):
     def __init__(self, req_handlers, success_code, failure_code, 
-    error_lookup=None, autoresponders=3, *args, **kwargs):
+    error_lookup=None, autoresponders=4, *args, **kwargs):
         # Use the default executor.
         self._receipt_executor = None
         
