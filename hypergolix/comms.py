@@ -546,8 +546,11 @@ class ReqResWSBase(WSBase):
         try:
             token, response = self.unpack_success(msg)
             self._wake_sender(connection, token, response)
-        except:
-            pass
+        except Exception as exc:
+            if self._debug:
+                print('Exception while handling successful request.')
+                print(repr(e))
+                traceback.print_tb(e.__traceback__)
         
     def _handle_failure(self, connection, msg):
         ''' Unpacks and then handles any unsuccessful request. (For now 
@@ -556,8 +559,11 @@ class ReqResWSBase(WSBase):
         try:
             token, exc = self.unpack_failure(msg)
             self._wake_sender(connection, token, exc)
-        except:
-            pass
+        except Exception as exc:
+            if self._debug:
+                print('Exception while handling unsuccessful request.')
+                print(repr(e))
+                traceback.print_tb(e.__traceback__)
         
     def _wake_sender(self, connection, token, response):
         ''' Attempts to deliver a response to the token at connection.
@@ -584,9 +590,15 @@ class ReqResWSBase(WSBase):
                 # response, but it wasn't waited for.
                 pass
             
-        except:
-            # Use a default of None
+        except Exception as exc:
+            # Pop anything we just added, using a default of None to suppress
+            # keyerrors
             connection.pending_responses.pop(token, None)
+            
+            if self._debug:
+                print('Exception while handling unsuccessful request.')
+                print(repr(e))
+                traceback.print_tb(e.__traceback__)
         
     def _check_request_code(self, request_code):
         # Raise now if req_code unknown; we won't be able to handle a response
@@ -937,6 +949,7 @@ class WSBasicClient(WSBase):
         try:
             yield from self._ws_connect(self._websocket)
         except ConnectionClosed as e:
+            # TODO: umm, something with this.
             pass
         
         return True

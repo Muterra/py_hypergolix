@@ -1,8 +1,8 @@
-![Hypergolix logo](/assets/hypergolix-logo.png)
-
-# hypergolix
+[![Hypergolix logo](/assets/hypergolix-logo.png)](https://www.hypergolix.com)
 
 Hypergolix is a local background service that makes IoT development effortless. It uses the [Golix protocol](https://github.com/Muterra/doc-golix) to provide all data with strong, end-to-end encryption. It automatically handles account management, encryption, and security for you. Once logged in, Hypergolix is available to applications via IPC. Secret key material is entirely handled within Hypergolix; encrypted content creation, retention, sharing, and synchronization are all handled through the serveice. Hypergolix accelerates secure application development, especially for embedded and connected devices, without compromising sociability.
+
+**Hypergolix requires ```python >= 3.5.1```.**
 
 # Todo (no particular order)
 

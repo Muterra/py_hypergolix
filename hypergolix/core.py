@@ -150,6 +150,8 @@ class AgentBase:
         self._dynamic_targets = {}
         # Lookup for pending requests. {<request address>: <target address>}
         self._pending_requests = {}
+        
+        # DEPRECATED AND UNUSED?
         # Lookup for shared objects. {<object address>: {<recipients>}}
         self._shared_objects = {}
         
