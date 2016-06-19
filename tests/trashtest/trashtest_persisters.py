@@ -38,6 +38,7 @@ import unittest
 import warnings
 import time
 import threading
+import logging
 
 # These are normal imports
 from hypergolix.persisters import MemoryPersister

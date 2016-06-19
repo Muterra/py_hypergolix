@@ -39,6 +39,7 @@ import warnings
 import collections
 import threading
 import time
+import logging
 
 from golix import Ghid
 

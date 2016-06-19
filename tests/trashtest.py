@@ -32,13 +32,43 @@ hypergolix: A python Golix client.
 ------------------------------------------------------
 
 '''
-
+import argparse
+import logging
 import unittest
-from trashtest import *
+import sys
 
 # ###############################################
 # Testing
 # ###############################################
                 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Hypergolix trashtest.')
+    parser.add_argument(
+        '--traceur', 
+        action = 'store_true',
+        help = 'Enable thorough analysis, including stack tracing. '
+                'Implies debug.'
+    )
+    parser.add_argument(
+        '--debug', 
+        action = 'store_true',
+        help = 'Up the logging level.'
+    )
+    parser.add_argument('unittest_args', nargs='*')
+
+    args = parser.parse_args()
+    
+    # Override the module-level logger definition to root
+    logger = logging.getLogger()
+    # For now, log to console
+    log_handler = logging.StreamHandler()
+    if args.debug or args.traceur:
+        log_handler.setLevel(logging.DEBUG)
+    else:
+        log_handler.setLevel(logging.WARNING)
+    logger.addHandler(log_handler)
+    
+    # Dammit unittest using argparse
+    sys.argv[1:] = args.unittest_args
+    from trashtest import *
     unittest.main()

@@ -48,3 +48,9 @@ from . import ipc_hosts
 from . import utils
 from . import exceptions
 from . import service
+
+# Logging shenanigans
+import logging
+# Py2.7+, but this is Py3.5.1+
+from logging import NullHandler
+logging.getLogger(__name__).addHandler(NullHandler())

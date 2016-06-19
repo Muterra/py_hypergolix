@@ -42,6 +42,7 @@ import time
 import asyncio
 import random
 import traceback
+import logging
 
 from hypergolix.comms import WSBasicServer
 from hypergolix.comms import WSBasicClient
@@ -419,4 +420,5 @@ class ReqResWSTrashTest(unittest.TestCase):
         # time.sleep(5)
 
 if __name__ == "__main__":
+    
     unittest.main()

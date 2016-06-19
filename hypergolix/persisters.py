@@ -104,6 +104,20 @@ from .comms import WSReqResClient
 from .comms import _ReqResWSConnection
 
 
+# ###############################################
+# Logging boilerplate
+# ###############################################
+
+
+import logging
+logger = logging.getLogger(__name__)
+
+
+# ###############################################
+# Library
+# ###############################################
+
+
 ERROR_CODES = {
     b'\xFF\xFF': NakError,
     b'\x00\x04': UnboundContainerError,
@@ -348,6 +362,7 @@ class UnsafeMemoryPersister(_PersisterBase):
                     dispatch(unpacked)
                     break
         else:
+            logger.debug('0x0001: Does not appear to be a Golix object.')
             raise NakError('0x0001: Does not appear to be a Golix object.')
         
         return True
@@ -360,6 +375,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             try:
                 self.get(assignee)
             except NakError as e:
+                logger.info('0x0003: Unknown author / recipient.')
                 raise NakError(
                     '0x0003: Unknown author / recipient.'
                 ) from e
@@ -371,6 +387,7 @@ class UnsafeMemoryPersister(_PersisterBase):
                 obj = obj
             )
         except SecurityError as e:
+            logger.warning('0x0002: Failed to verify GEOC.')
             raise NakError(
                 '0x0002: Failed to verify GEOC.'
             ) from e
@@ -397,6 +414,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         )
             
         if geoc.ghid not in self._bindings:
+            logger.debug('0x0004: Unbound container')
             raise UnboundContainerError(
                 '0x0004: Attempt to upload unbound GEOC; object immediately '
                 'garbage collected.'
@@ -422,6 +440,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         )
         
         if gobs.ghid in self._debindings:
+            logger.warning('0x0005: Already debound')
             raise NakError(
                 '0x0005: Attempt to upload a binding for which a debinding '
                 'already exists. Remove the debinding first.'
@@ -459,6 +478,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         )
         
         if gobd.ghid_dynamic in self._debindings:
+            logger.warning('0x0005: Already debound')
             raise NakError(
                 '0x0005: Attempt to upload a binding for which a debinding '
                 'already exists. Remove the debinding first.'
@@ -530,6 +550,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         # hash address when unpacking new bindings, so we only need to make
         # sure that it has no history.
         if gobd.history:
+            logger.info('0x0009: Zeroth frame has history.')
             raise NakError(
                 '0x0009: Illegal dynamic frame. Cannot upload a frame with '
                 'history as the first frame in a persistence provider.'
@@ -547,6 +568,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         '''
         # Verify consistency of binding author
         if gobd.binder != self._targets_dynamic[gobd.ghid_dynamic][0]:
+            logger.warning('0x0007: Inconsistent dynamic author.')
             raise NakError(
                 '0x0007: Dynamic binding author is inconsistent with an '
                 'existing dynamic binding at the same address.'
@@ -555,6 +577,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         
         # Verify history contains existing most recent frame
         if self._targets_dynamic[gobd.ghid_dynamic][1][0] not in gobd.history:
+            logger.warning('0x0009: Existing frame not in history.')
             raise NakError(
                 '0x0009: Illegal dynamic frame. Attempted to upload a new '
                 'dynamic frame, but its history did not contain the most '
@@ -583,12 +606,14 @@ class UnsafeMemoryPersister(_PersisterBase):
         )
         
         if gdxx.ghid in self._debindings:
+            logger.warning('0x0005: Already debound')
             raise NakError(
                 '0x0005: Attempt to upload a debinding for which a debinding '
                 'already exists. Remove the debinding first.'
             )
             
         if gdxx.target not in self._forward_references:
+            logger.info('0x0006: Invalid target')
             raise NakError(
                 '0x0006: Invalid target for debinding. Debindings must target '
                 'static/dynamic bindings, debindings, or asymmetric requests. '
@@ -597,6 +622,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             
         # Check debinder is consistent with other (de)bindings in the chain
         if gdxx.debinder != self._forward_references[gdxx.target][0]:
+            logger.warning('0x0007: Inconsistent debinder')
             raise NakError(
                 '0x0007: Debinding author is inconsistent with the resource '
                 'being debound.'
@@ -642,11 +668,13 @@ class UnsafeMemoryPersister(_PersisterBase):
             try:
                 self.get(garq.recipient)
             except NakError as e:
+                logger.info('0x0003: Unknown author / recipient.')
                 raise NakError(
                     '0x0003: Unknown author / recipient.'
                 ) from e
             
         if garq.ghid in self._debindings:
+            logger.warning('0x0005: Already debound')
             raise NakError(
                 '0x0005: Attempt to upload a request for which a debinding '
                 'already exists. Remove the debinding first.'
@@ -707,6 +735,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             gobs.target in self._targets_debind or
             gobs.target in self._requests or
             gobs.target in self._id_bases):
+                logger.info('0x0006: Invalid static binding target.')
                 raise NakError(
                     '0x0006: Attempt to bind to an invalid target.'
                 )
@@ -721,6 +750,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         if (gobd.target in self._targets_static or
             gobd.target in self._requests or
             gobd.target in self._id_bases):
+                logger.info('0x0006: Invalid dynamic binding target.')
                 raise NakError(
                     '0x0006: Attempt to bind to an invalid target.'
                 )
@@ -746,6 +776,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         try:
             return self._store[ghid]
         except KeyError as e:
+            logger.debug('0x0008: Ghid not found in store.')
             raise DoesNotExistError('0x0008: Ghid not found in store.') from e
         
     def subscribe(self, ghid, callback):
@@ -769,6 +800,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             
         if (ghid not in self._targets_dynamic and 
             ghid not in self._secondparties):
+                logger.debug('0x0006: Invalid or unknown subscription target.')
                 raise NakError(
                     '0x0006: Invalid or unknown target for subscription.'
                 )
@@ -957,9 +989,10 @@ class MemoryPersister(UnsafeMemoryPersister):
         # This will raise if improperly formatted.
         try:
             obj = self._golix_provider.unpack_object(packed)
-        except ParseError as e:
-            print(repr(e))
-            raise NakError('0x0001: Does not appear to be a Golix object.') from e
+        except ParseError as exc:
+            msg = (repr(exc) + '\n').join(traceback.format_tb(exc.__traceback__))
+            logger.debug(msg)
+            raise NakError('0x0001: Does not appear to be a Golix object.') from exc
         # We are now guaranteed a Golix object.
         
         return super().publish(obj)
@@ -1036,9 +1069,10 @@ class _PersisterBridgeBase:
                 return b'\x00'
         
         except Exception as exc:
-            print('Error while receiving ping.')
-            print(repr(exc))
-            traceback.print_tb(exc.__traceback__)
+            msg = ('Error while receiving ping.\n' + repr(exc) + '\n').join(
+                traceback.format_tb(exc.__traceback__)
+            )
+            logger.error(msg)
             # return b'\x00'
             raise exc
             
@@ -1130,14 +1164,7 @@ class _PersisterBridgeBase:
         ''' Deserializes a publish request and forwards it to the 
         persister.
         '''
-        # print('----- Attempting disconnect...')
-        # print('Persister has', len(self._persister._subscriptions), 'subscriptions')
-        # print('Connection has', len(connection._subscriptions), 'subscriptions')
         for sub_ghid, sub_callback in connection._subscriptions.items():
-            # print('    ', bytes(sub_ghid))
-            # print('    ', sub_callback)
-            # print('    ', self._persister._subscriptions)
-            # print('')
             self._persister.unsubscribe(sub_ghid, sub_callback)
         connection._subscriptions.clear()
         return b'\x01'
@@ -1177,8 +1204,10 @@ class _WSBridgeBase(_PersisterBridgeBase):
         2. None, if no exception was encountered
         '''
         if exc is not None:
-            # print(repr(exc))
-            # traceback.print_tb(exc.__traceback__)
+            msg = ('Error in producer.\n' + repr(exc) + '\n').join(
+                traceback.format_tb(exc.__traceback__)
+            )
+            logger.warning(msg)
             raise exc
         
     @asyncio.coroutine
@@ -1190,8 +1219,10 @@ class _WSBridgeBase(_PersisterBridgeBase):
         2. None, if no exception was encountered
         '''
         if exc is not None:
-            # print(repr(exc))
-            # traceback.print_tb(exc.__traceback__)
+            msg = ('Error in listener.\n' + repr(exc) + '\n').join(
+                traceback.format_tb(exc.__traceback__)
+            )
+            logger.warning(msg)
             raise exc
         
     @asyncio.coroutine
@@ -1203,9 +1234,11 @@ class _WSBridgeBase(_PersisterBridgeBase):
         2. None, if no exception was encountered
         '''
         if exc is not None and not isinstance(exc, NakError):
-            print(repr(exc))
-            traceback.print_tb(exc.__traceback__)
-        return repr(exc)
+            msg = ('Error in autoresponder.\n' + repr(exc) + '\n').join(
+                traceback.format_tb(exc.__traceback__)
+            )
+            logger.warning(msg)
+        return repr(exc).encode()
     
 
 class WSPersisterBridge(_WSBridgeBase, WSReqResServer):
@@ -1260,7 +1293,7 @@ class WSPersisterBridge(_WSBridgeBase, WSReqResServer):
             path = path
         )
             
-        print('Connection established with client', str(connection.connid))
+        logger.info('Connection established with client', str(connection.connid))
         return connection
 
 
@@ -1318,18 +1351,12 @@ class WSPersister(_PersisterBase, WSReqResClient):
             path = path
         )
             
-        print('Connection established with persistence server.')
+        logger.info('Connection established with persistence server.')
         return connection
         
     def deliver_update_wrapper(self, connection, response_body):
         ''' Handles update pings.
         '''
-        # print('-------')
-        # print('Receiving delivered subscription update.')
-        # print('Sent ghid:', response_body)
-        # print('All subscription keys: ')
-        # for key in self._subscriptions:
-        #     print('    ', str(bytes(key)))
         time.sleep(.01)
         # Shit, I have a race condition somewhere.
         subscribed_ghid = Ghid.from_bytes(response_body[0:65])
@@ -1577,8 +1604,10 @@ class WSPersister(_PersisterBase, WSReqResClient):
         2. None, if no exception was encountered
         '''
         if exc is not None:
-            # print(repr(exc))
-            # traceback.print_tb(exc.__traceback__)
+            msg = ('Error in producer.\n' + repr(exc) + '\n').join(
+                traceback.format_tb(exc.__traceback__)
+            )
+            logger.warning(msg)
             raise exc
         
     @asyncio.coroutine
@@ -1590,8 +1619,10 @@ class WSPersister(_PersisterBase, WSReqResClient):
         2. None, if no exception was encountered
         '''
         if exc is not None:
-            # print(repr(exc))
-            # traceback.print_tb(exc.__traceback__)
+            msg = ('Error in listener.\n' + repr(exc) + '\n').join(
+                traceback.format_tb(exc.__traceback__)
+            )
+            logger.warning(msg)
             raise exc
         
     @asyncio.coroutine
@@ -1603,9 +1634,11 @@ class WSPersister(_PersisterBase, WSReqResClient):
         2. None, if no exception was encountered
         '''
         if exc is not None and not isinstance(exc, NakError):
-            print(repr(exc))
-            traceback.print_tb(exc.__traceback__)
-        return repr(exc)
+            msg = ('Error in autoresponder.\n' + repr(exc) + '\n').join(
+                traceback.format_tb(exc.__traceback__)
+            )
+            logger.warning(msg)
+        return repr(exc).encode()
     
     
 class LocalhostServer(MemoryPersister):
@@ -1645,7 +1678,7 @@ class LocalhostServer(MemoryPersister):
         rcv = yield from websocket.recv()
             
         # Acquire the exchange lock so we can guarantee an orderly response
-        # print('Getting exchange lock for request.')
+        logger.debug('Getting exchange lock for request.')
         yield from exchange_lock
         try:
             framed = memoryview(rcv)
@@ -1655,10 +1688,8 @@ class LocalhostServer(MemoryPersister):
             # This will automatically dispatch the request based on the
             # two-byte header
             response_preheader = dispatch_lookup[header](body)
-            # print('-----------------------------------------------')
-            print('Successful ', header, ' ', bytes(body[:4]))
+            logger.info('Successful ', header, ' ', bytes(body[:4]))
             response = self._frame_response(response_preheader)
-            # print(bytes(body))
                 
         except Exception as e:
             # We should log the exception, but exceptions here should never
@@ -1669,15 +1700,12 @@ class LocalhostServer(MemoryPersister):
                 preheader = response_preheader, 
                 body = response_body
             )
-            print('Failed to dispatch ', header, ' ', bytes(body[:4]))
-            # print(rcv)
-            # print(repr(e))
-            # traceback.print_tb(e.__traceback__)
+            logger.warning('Failed to dispatch ', header, ' ', bytes(body[:4]))
             
         finally:
             yield from websocket.send(response)
             exchange_lock.release()
-        # print('Released exchange lock for request.')
+            logger.debug('Exchange lock released.')
             
     @asyncio.coroutine
     def _update_handler(self, websocket, exchange_lock, sub_queue):
@@ -1687,20 +1715,16 @@ class LocalhostServer(MemoryPersister):
         update = yield from sub_queue.get()
         
         # Immediately acquire the exchange lock when update yields.
-        # print('Getting exchange lock for update.')
         yield from exchange_lock
         try:
-            # print('Preparing to send sub update.')
             msg_preheader = b'!!'
             msg_body = bytes(update)
             msg = msg_preheader + msg_body
             yield from websocket.send(msg)
             # Note: should this expect a response?
-            # print('Sub update sent.')
             
         finally:
             exchange_lock.release()
-        # print('Released exchange lock for update.')
     
     @asyncio.coroutine
     def _ws_handler(self, websocket, path):

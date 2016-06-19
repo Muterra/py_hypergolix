@@ -37,6 +37,7 @@ import IPython
 import unittest
 import warnings
 import collections
+import logging
 
 # These are normal imports
 from hypergolix.persisters import MemoryPersister

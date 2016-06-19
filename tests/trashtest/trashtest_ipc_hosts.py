@@ -42,6 +42,7 @@ import time
 import asyncio
 import random
 import traceback
+import logging
 
 from hypergolix.core import AgentBase
 from hypergolix.core import Dispatcher
