@@ -47,6 +47,8 @@ from .exceptions import RequestFinished
 from .exceptions import RequestUnknown
 
 from .utils import _BijectDict
+from .utils import run_coroutine_loopsafe
+from .utils import await_sync_future
 
 
 class _WSConnection:
@@ -577,11 +579,17 @@ class ReqResWSBase(WSBase):
             # that mutates the dict, it could be.
             if token in connection.pending_requests:
                 connection.pending_responses[token] = response
-                # Instrumentation
-                # print('Setting flag.')
-                connection.pending_requests[token].set()
-                # Instrumentation
-                # print('Flag set.')
+                
+                # If the sender is waiting synchronously, set directly
+                waiter = connection.pending_requests[token]
+                if isinstance(waiter, threading.Event):
+                    waiter.set()
+                # If the sender is waiting asynchronously, use its loop
+                else:
+                    # Todo: think about removing this access to 'private' _loop
+                    loop = waiter._loop
+                    loop.call_soon_threadsafe(waiter.set)
+                    
             else:
                 # Instrumentation
                 # print('Token was not in pending requests.')
@@ -610,8 +618,8 @@ class ReqResWSBase(WSBase):
         # code is of length 2.
         
     def send_threadsafe(self, connection, msg, request_code, expect_reply=True):
-        ''' The only way to actually use a req/res server! Well, for now
-        anyways.
+        ''' Called from a different thread to initiate a request and, if 
+        expect_reply=True, thread-blockingly wait for a response.
         '''
         # # Make sure we "speak" the req code.
         # self._check_request_code(request_code)
@@ -649,8 +657,54 @@ class ReqResWSBase(WSBase):
             
         finally:
             # We still need to remove the response token regardless; gen_token 
-            # sets it to None to avoid a race condition.
-            del connection.pending_requests[token]
+            # sets it to None to avoid a race condition. But we should probably
+            # wrap it in pop w/ default=None just in case.
+            connection.pending_requests.pop(token, None)
+        
+        return response
+        
+    async def send_loopsafe(self, connection, msg, request_code, expect_reply=True):
+        ''' Called from a different event loop to initiate a request 
+        and, if expect_reply=True, async-blockingly wait for a response.
+        '''
+        
+        version = self._version
+        # Get a token and pack the message.
+        token = connection._gen_req_token()
+        try:
+            packed_msg = self._pack_request(version, token, request_code, msg)
+            
+            # Create an event to signal response waiting and then put the outgoing
+            # in the send queue
+            if expect_reply:
+                connection.pending_requests[token] = asyncio.Event()
+                
+            # Instrumentation
+            # print('Sending the request.')
+            await run_coroutine_loopsafe(
+                coro = self.send(connection, packed_msg), 
+                target_loop = connection._ws_loop
+            )
+            
+            # Now wait for the response and then cleanup
+            if expect_reply:
+                await connection.pending_requests[token].wait()
+                response = connection.pending_responses[token]
+                del connection.pending_responses[token]
+                
+                # If the response was, in fact, an exception, raise it.
+                if isinstance(response, Exception):
+                    raise response
+                    
+            else:
+                response = None
+                version = None
+            
+        finally:
+            # We still need to remove the response token regardless; gen_token 
+            # sets it to None to avoid a race condition. But we should probably
+            # wrap it in pop w/ default=None just in case.
+            connection.pending_requests.pop(token, None)
         
         return response
                        

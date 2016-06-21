@@ -36,6 +36,9 @@ import abc
 import weakref
 import msgpack
 import traceback
+import asyncio
+
+from concurrent.futures import CancelledError
 
 from golix import Ghid
 
@@ -1267,6 +1270,70 @@ class _BijectDict:
         return key in self._fwd or key in self._rev
         
         
+
+
+
+
+        
+async def run_coroutine_loopsafe(coro, target_loop):
+    ''' Threadsafe, asyncsafe (ie non-loop-blocking) call to run a coro 
+    in a different event loop and return the result. Wrap in an asyncio
+    future (or await it) to access the result.
+    
+    Resolves the event loop for the current thread by calling 
+    asyncio.get_event_loop(). Because of internal use of await, CANNOT
+    be called explicitly from a third loop.
+    '''
+    # This returns a concurrent.futures.Future, so we need to wait for it, but
+    # we cannot block our event loop, soooo...
+    thread_future = asyncio.run_coroutine_threadsafe(coro, target_loop)
+    return (await await_sync_future(thread_future))
+            
+async def await_sync_future(fut):
+    ''' Threadsafe, asyncsafe (ie non-loop-blocking) call to wait for a
+    concurrent.Futures to finish, and then access the result.
+    
+    Must be awaited from the current 'context', ie event loop / thread.
+    '''
+    # Create an event on our source loop.
+    source_loop = asyncio.get_event_loop()
+    source_event = asyncio.Event(loop=source_loop)
+    
+    try:
+        # This will also be called if the fut is cancelled.
+        fut.add_done_callback(
+            source_loop.call_soon_threadsafe(source_event.set)
+        )
+        
+        # Now we wait for the callback to run, and then handle the result.
+        await source_event.wait()
+    
+    # Propagate any cancellation to the other event loop. Since the above await
+    # call is the only point we pass execution control back to the loop, from
+    # here on out we will never receive a CancelledError.
+    except CancelledError:
+        fut.cancel()
+        raise
+        
+    else:
+        # I don't know if/why this would ever be called (shutdown maybe?)
+        if fut.cancelled():
+            raise CancelledError()
+        # Propagate any exception
+        elif fut.exception():
+            raise fut.exception()
+        # Success!
+        else:
+            return fut.result()
+        
+    
+            
+            
+        
+
+
+
+
         
         
 # import sys
