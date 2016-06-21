@@ -106,13 +106,18 @@ class _WSConnection:
 class WSBase(metaclass=abc.ABCMeta):
     ''' Common stuff for websockets clients and servers.
     '''
-    def __init__(self, threaded, host, port, debug=False, *args, **kwargs):
+    def __init__(self, threaded, host, port, debug=False, connection_class=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
         self._ws_port = port
         self._ws_host = host
         
         self._debug = debug
+        
+        if connection_class is None:
+            self._conn_factory = _WSConnection
+        else:
+            self._conn_factory = connection_class
         
         if threaded:
             self._ws_loop = asyncio.new_event_loop()
@@ -143,7 +148,7 @@ class WSBase(metaclass=abc.ABCMeta):
         ''' Wrapper for creating a new connection. Mostly here to make
         subclasses simpler.
         '''
-        return _WSConnection(*args, **kwargs)
+        return self._conn_factory(*args, **kwargs)
         
     @asyncio.coroutine
     def _await_receive(self, connection, msg):
@@ -456,12 +461,7 @@ class ReqResWSBase(WSBase):
         
         # This needs to be called last, otherwise we set up the event loop too
         # early.
-        super().__init__(*args, **kwargs)
-        
-    def new_connection(self, *args, **kwargs):
-        ''' Override default implementation to return a ReqRes conn.
-        '''
-        return _ReqResWSConnection(*args, **kwargs)
+        super().__init__(connection_class=_ReqResWSConnection, *args, **kwargs)
         
     def _check_handlers(self):
         ''' Does duck/type checking for setting request/response codes.
