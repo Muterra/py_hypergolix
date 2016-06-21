@@ -47,8 +47,10 @@ from .exceptions import RequestFinished
 from .exceptions import RequestUnknown
 
 from .utils import _BijectDict
+from .utils import LooperTrooper
 from .utils import run_coroutine_loopsafe
 from .utils import await_sync_future
+from .utils import call_coroutine_threadsafe
 
 
 class _WSConnection:
@@ -75,21 +77,6 @@ class _WSConnection:
         '''
         yield from self.websocket.close()
         
-    def send_threadsafe(self, msg):
-        ''' Threadsafe wrapper to add things to the outgoing queue.
-        '''
-        sender = asyncio.run_coroutine_threadsafe(
-            coro = self.send(msg),
-            loop = self._ws_loop
-        )
-        
-        # Block on completion of coroutine and then raise any created exception
-        exc = sender.exception()
-        if exc:
-            raise exc
-            
-        return True
-        
     @asyncio.coroutine
     def send(self, msg):
         ''' NON THREADSAFE wrapper to add things to the outgoing queue.
@@ -102,48 +89,78 @@ class _WSConnection:
         '''
         return (yield from self.outgoing_q.get())
         
+        
+class _ReqResWSConnection(_WSConnection):
+    ''' A request/response websockets connection.
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        # Lookup for request token -> event
+        self.pending_requests = {}
+        # Lookup for request token -> response
+        self.pending_responses = {}
+        
+        self._req_lock = threading.Lock()
+        
+    def _gen_req_token(self):
+        ''' Gets a new (well, currently unused) request token. Sets it
+        in pending_requests to prevent race conditions.
+        '''
+        with self._req_lock:
+            token = self._gen_unused_token()
+            # Do this just so we can release the lock ASAP
+            self.pending_requests[token] = None
+            
+        return token
+            
+    def _gen_unused_token(self):
+        ''' Recursive search for unused token. THIS IS NOT THREADSAFE
+        NOR ASYNC SAFE! Must be called from within parent lock.
+        '''
+        # Get a random-ish (no need for CSRNG) 16-bit token
+        token = random.getrandbits(16)
+        if token in self.pending_requests:
+            token = self._get_unused_token()
+        return token
+        
+    def send_threadsafe(self, msg):
+        ''' Threadsafe send.
+        '''
+        return call_coroutine_threadsafe(
+            coro = self.send(msg),
+            loop = self._ws_loop
+        )
+        
+    async def send_loopsafe(self, msg):
+        ''' Loopsafe send.
+        '''
+        return run_coroutine_loopsafe(
+            coro = self.send(msg),
+            target_loop = self._ws_loop
+        )
+        
 
-class WSBase(metaclass=abc.ABCMeta):
+class WSBase(LooperTrooper):
     ''' Common stuff for websockets clients and servers.
     '''
     def __init__(self, threaded, host, port, debug=False, connection_class=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
+        # These are just here as a reminder that they are used later on
+        self.incoming_q = None
+        
         self._ws_port = port
         self._ws_host = host
-        
-        self._debug = debug
         
         if connection_class is None:
             self._conn_factory = _WSConnection
         else:
             self._conn_factory = connection_class
-        
-        if threaded:
-            self._ws_loop = asyncio.new_event_loop()
-            self._ws_loop.set_debug(debug)
-            self.incoming_q = asyncio.Queue(loop=self._ws_loop)
-            # Set up a shutdown event
-            self._init_shutdown = asyncio.Event(loop=self._ws_loop)
-            # Set up a (daemon) thread for the websockets process
-            self._ws_thread = threading.Thread(
-                target = self.ws_run,
-                # This may result in errors during closing.
-                daemon = True
-                # This isn't currently stable enough to close properly.
-                # daemon = False
-            )
-            self._ws_thread.start()
             
-        else:
-            self._ws_loop = asyncio.get_event_loop()
-            self._ws_loop.set_debug(debug)
-            self.incoming_q = asyncio.Queue(loop=self._ws_loop)
-            # Set up a shutdown event
-            self._init_shutdown = asyncio.Event(loop=self._ws_loop)
-            # Declare the thread as nothing.
-            self._ws_thread = None
-            
+    async def loop_init(self):
+        self.incoming_q = asyncio.Queue()
+    
     def new_connection(self, *args, **kwargs):
         ''' Wrapper for creating a new connection. Mostly here to make
         subclasses simpler.
@@ -233,19 +250,6 @@ class WSBase(metaclass=abc.ABCMeta):
     @property
     def _ws_loc(self):
         return 'ws://' + self._ws_host + ':' + str(self._ws_port) + '/'
-            
-    @abc.abstractmethod
-    def ws_run(self):
-        ''' Threaded stuff and things. MUST be called via super().
-        '''
-        if self._ws_thread is not None:
-            asyncio.set_event_loop(self._ws_loop)
-        
-    def halt(self):
-        ''' Sets the shutdown flag, killing the connection and client.
-        '''
-        self._ws_loop.call_soon_threadsafe(self._init_shutdown.set)
-        # self._ws_loop.call_soon_threadsafe(self._ws_loop.stop)
         
     @asyncio.coroutine
     def _ws_connect(self, websocket, path=None):
@@ -262,10 +266,10 @@ class WSBase(metaclass=abc.ABCMeta):
         connection.cts.set()
         
         try:
-            while not self._init_shutdown.is_set():
+            while not self._shutdown_flag.is_set():
                 listener = asyncio.ensure_future(websocket.recv())
                 producer = asyncio.ensure_future(connection._await_send())
-                interrupter = asyncio.ensure_future(self._init_shutdown.wait())
+                interrupter = asyncio.ensure_future(self._shutdown_flag.wait())
                 
                 finished, pending = yield from asyncio.wait(
                     fs = [producer, listener, interrupter],
@@ -312,18 +316,6 @@ class WSBase(metaclass=abc.ABCMeta):
             yield from connection.close()
             print('Connection closed.')
             print('Stopping loop.')
-        
-    @asyncio.coroutine
-    def catch_interrupt(self):
-        ''' Workaround for Windows not passing signals well for doing
-        interrupts.
-        
-        Standard websockets stuff.
-        
-        Deprecated? Currently unused anyways.
-        '''
-        while not self._shutdown:
-            yield from asyncio.sleep(5)
             
     @asyncio.coroutine
     def _conn_cleanup(self):
@@ -364,41 +356,6 @@ class WSBase(metaclass=abc.ABCMeta):
         2. None, if no exception was encountered
         '''
         pass
-        
-        
-class _ReqResWSConnection(_WSConnection):
-    ''' A request/response websockets connection.
-    '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-        # Lookup for request token -> event
-        self.pending_requests = {}
-        # Lookup for request token -> response
-        self.pending_responses = {}
-        
-        self._req_lock = threading.Lock()
-        
-    def _gen_req_token(self):
-        ''' Gets a new (well, currently unused) request token. Sets it
-        in pending_requests to prevent race conditions.
-        '''
-        with self._req_lock:
-            token = self._gen_unused_token()
-            # Do this just so we can release the lock ASAP
-            self.pending_requests[token] = None
-            
-        return token
-            
-    def _gen_unused_token(self):
-        ''' Recursive search for unused token. THIS IS NOT THREADSAFE
-        NOR ASYNC SAFE! Must be called from within parent lock.
-        '''
-        # Get a random-ish (no need for CSRNG) 16-bit token
-        token = random.getrandbits(16)
-        if token in self.pending_requests:
-            token = self._get_unused_token()
-        return token
         
         
 class ReqResWSBase(WSBase):
@@ -755,7 +712,7 @@ class ReqResWSBase(WSBase):
         should also auto-stop when shutdown flag set. However, may hang
         while waiting to exit from loop.
         '''
-        while not self._init_shutdown.is_set():
+        while not self._shutdown_flag.is_set():
             connection, msg = self.receive_blocking()
             
             # instrumentation

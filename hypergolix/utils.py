@@ -37,6 +37,7 @@ import weakref
 import msgpack
 import traceback
 import asyncio
+import warnings
 
 from concurrent.futures import CancelledError
 
@@ -1273,21 +1274,7 @@ class _BijectDict:
 
 
 
-
-        
-async def run_coroutine_loopsafe(coro, target_loop):
-    ''' Threadsafe, asyncsafe (ie non-loop-blocking) call to run a coro 
-    in a different event loop and return the result. Wrap in an asyncio
-    future (or await it) to access the result.
-    
-    Resolves the event loop for the current thread by calling 
-    asyncio.get_event_loop(). Because of internal use of await, CANNOT
-    be called explicitly from a third loop.
-    '''
-    # This returns a concurrent.futures.Future, so we need to wait for it, but
-    # we cannot block our event loop, soooo...
-    thread_future = asyncio.run_coroutine_threadsafe(coro, target_loop)
-    return (await await_sync_future(thread_future))
+            
             
 async def await_sync_future(fut):
     ''' Threadsafe, asyncsafe (ie non-loop-blocking) call to wait for a
@@ -1325,10 +1312,178 @@ async def await_sync_future(fut):
         # Success!
         else:
             return fut.result()
+
         
+async def run_coroutine_loopsafe(coro, target_loop):
+    ''' Threadsafe, asyncsafe (ie non-loop-blocking) call to run a coro 
+    in a different event loop and return the result. Wrap in an asyncio
+    future (or await it) to access the result.
     
+    Resolves the event loop for the current thread by calling 
+    asyncio.get_event_loop(). Because of internal use of await, CANNOT
+    be called explicitly from a third loop.
+    '''
+    # This returns a concurrent.futures.Future, so we need to wait for it, but
+    # we cannot block our event loop, soooo...
+    thread_future = asyncio.run_coroutine_threadsafe(coro, target_loop)
+    return (await await_sync_future(thread_future))
             
             
+def call_coroutine_threadsafe(coro, loop):
+    ''' Wrapper on asyncio.run_coroutine_threadsafe that makes a coro
+    behave as if it were called synchronously. In other words, instead
+    of returning a future, it raises the exception or returns the coro's
+    result.
+    
+    Leaving loop as default None will result in asyncio inferring the 
+    loop from the default from the current context (aka usually thread).
+    '''
+    fut = asyncio.run_coroutine_threadsafe(
+        coro = coro,
+        loop = loop
+    )
+    
+    # Block on completion of coroutine and then raise any created exception
+    exc = fut.exception()
+    if exc:
+        raise exc
+        
+    return fut.result()
+    
+    
+class LooperTrooper(metaclass=abc.ABCMeta):
+    ''' Basically, the Arduino of event loops.
+    Requires subclasses to define an async loop_init function and a 
+    loop_run function. Loop_run is handled within a "while running" 
+    construct.
+    
+    Optionally, async def loop_stop may be defined for cleanup.
+    
+    LooperTrooper handles threading, graceful loop exiting, etc.
+    
+    if threaded evaluates to False, must call LooperTrooper().start() to
+    get the ball rolling.
+    
+    *args and **kwargs are passed to the required async def loop_init.
+    '''
+    def __init__(self, threaded, thread_name=None, debug=False, *args, **kwargs):
+        self._shutdown_flag = None
+        self._debug = debug
+        
+        if threaded:
+            self._loop = asyncio.new_event_loop()
+            # Set up a thread for the loop
+            self._thread = threading.Thread(
+                target = self.start,
+                args = args,
+                kwargs = kwargs,
+                # This may result in errors during closing.
+                daemon = True,
+                # This isn't currently stable enough to close properly.
+                # daemon = False
+                name = thread_name
+            )
+            self._thread.start()
+            
+        else:
+            self._loop = asyncio.get_event_loop()
+            # Declare the thread as nothing.
+            self._thread = None
+        
+    @abc.abstractmethod
+    async def loop_init(self, *args, **kwargs):
+        ''' This will be passed any *args and **kwargs from self.start,
+        either through __init__ if threaded is True, or when calling 
+        self.start directly.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    async def loop_run(self):
+        pass
+        
+    async def loop_stop(self):
+        pass
+        
+    def start(self, *args, **kwargs):
+        ''' Handles everything needed to start the loop within the 
+        current context/thread/whatever. May be extended, but MUST be 
+        called via super().
+        '''
+        self._loop.set_debug(self._debug)
+        
+        if self._thread is not None:
+            asyncio.set_event_loop(self._loop)
+        
+        # Set up a shutdown event and then start the task
+        self._shutdown_flag = asyncio.Event()
+        self._loop.run_until_complete(self._execute_looper(*args, **kwargs))
+        
+        # Finally, close the loop.
+        # self._loop.stop()
+        self._loop.close()
+        
+    def halt(self):
+        warnings.warn(DeprecationWarning(
+            'Halt is deprecated. Use stop() or stop_threadsafe().'
+        ))
+        if self._thread is not None:
+            self.stop_threadsafe()
+        else:
+            self.stop()
+        
+    def stop(self):
+        ''' Stops the loop INTERNALLY.
+        '''
+        self._shutdown_flag.set()
+    
+    def stop_threadsafe(self):
+        ''' Stops the loop EXTERNALLY.
+        '''
+        self._loop.call_soon_threadsafe(self._shutdown_flag.set)
+        
+    async def catch_interrupt(self):
+        ''' Workaround for Windows not passing signals well for doing
+        interrupts.
+        
+        Standard websockets stuff.
+        
+        Deprecated? Currently unused anyways.
+        '''
+        while not self._shutdown_flag:
+            await asyncio.sleep(5)
+            
+    async def _execute_looper(self, *args, **kwargs):
+        ''' Called by start(), and actually manages control flow for 
+        everything.
+        '''
+        await self.loop_init(*args, **kwargs)
+        
+        try:
+            while not self._shutdown_flag.is_set():
+                task = asyncio.ensure_future(self.loop_run())
+                interrupt = asyncio.ensure_future(self._shutdown_flag.wait())
+                
+                finished, pending = await asyncio.wait(
+                    fs = [task, interrupt],
+                    return_when = asyncio.FIRST_COMPLETED
+                )
+                
+                # We have exactly two tasks, so no need to iterate on them.
+                # Note that these are both sets.
+                finished = finished.pop()
+                pending = pending.pop()
+                
+                # Cancel the other task
+                pending.cancel()
+                
+                # Raise any exception, ignore result, rinse, repeat
+                if finished.exception():
+                    raise finished.exception()
+            
+        finally:
+            await self.loop_stop()
+        
         
 
 
