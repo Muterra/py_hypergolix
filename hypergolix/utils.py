@@ -1469,20 +1469,26 @@ class LooperTrooper(metaclass=abc.ABCMeta):
                     return_when = asyncio.FIRST_COMPLETED
                 )
                 
-                # We have exactly two tasks, so no need to iterate on them.
-                # Note that these are both sets.
-                finished = finished.pop()
-                pending = pending.pop()
-                
-                # Cancel the other task
-                pending.cancel()
-                
-                # Raise any exception, ignore result, rinse, repeat
-                if finished.exception():
-                    raise finished.exception()
+                # Note that we need to check both of these, or we have a race
+                # condition where both may actually be done at the same time.
+                if task in finished:
+                    # Raise any exception, ignore result, rinse, repeat
+                    self._raise_if_exc(task)
+                else:
+                    task.cancel()
+                    
+                if interrupt in finished:
+                    self._raise_if_exc(interrupt)
+                else:
+                    interrupt.cancel()
             
         finally:
             await self.loop_stop()
+            
+    @staticmethod
+    def _raise_if_exc(fut):
+        if fut.exception():
+            raise fut.exception()
         
         
 
