@@ -101,7 +101,7 @@ from .utils import _JitSetDict
 
 from .comms import WSReqResServer
 from .comms import WSReqResClient
-from .comms import _ReqResWSConnection
+from .comms import _AutoreConnection
 
 
 # ###############################################
@@ -1018,7 +1018,7 @@ class ProxyPersister(_PersisterBase):
     pass
 
 
-class _PersisterBridgeConnection(_ReqResWSConnection):
+class _PersisterBridgeConnection(_AutoreConnection):
     def __init__(self, transport, *args, **kwargs):
         # Copying like this seems dangerous, but I think it should be okay.
         if isinstance(transport, weakref.ProxyTypes):

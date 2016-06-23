@@ -36,13 +36,6 @@ hypergolix: A python Golix client.
 import IPython
 import unittest
 import warnings
-import collections
-import threading
-import time
-import asyncio
-import random
-import traceback
-import logging
 
 from hypergolix.utils import LooperTrooper
 
@@ -83,7 +76,7 @@ class LooperTrooperTest(unittest.TestCase):
         self.assertEqual(looper._counter, 0)
         
     def test_otherthreads(self):
-        for __ in range(10):
+        for __ in range(25):
             looper = LooperFixture(threaded=True)
             looper._thread.join(timeout=10)
             self.assertTrue(looper._sum >= 5050)

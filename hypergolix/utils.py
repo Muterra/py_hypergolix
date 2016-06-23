@@ -1367,8 +1367,10 @@ class LooperTrooper(metaclass=abc.ABCMeta):
     *args and **kwargs are passed to the required async def loop_init.
     '''
     def __init__(self, threaded, thread_name=None, debug=False, *args, **kwargs):
-        self._shutdown_flag = None
+        self._shutdown_init_flag = None
+        self._shutdown_complete_flag = threading.Event()
         self._debug = debug
+        self._death_timeout = 1
         
         if threaded:
             self._loop = asyncio.new_event_loop()
@@ -1378,9 +1380,9 @@ class LooperTrooper(metaclass=abc.ABCMeta):
                 args = args,
                 kwargs = kwargs,
                 # This may result in errors during closing.
-                daemon = True,
+                # daemon = True,
                 # This isn't currently stable enough to close properly.
-                # daemon = False
+                daemon = False,
                 name = thread_name
             )
             self._thread.start()
@@ -1390,7 +1392,6 @@ class LooperTrooper(metaclass=abc.ABCMeta):
             # Declare the thread as nothing.
             self._thread = None
         
-    @abc.abstractmethod
     async def loop_init(self, *args, **kwargs):
         ''' This will be passed any *args and **kwargs from self.start,
         either through __init__ if threaded is True, or when calling 
@@ -1410,18 +1411,23 @@ class LooperTrooper(metaclass=abc.ABCMeta):
         current context/thread/whatever. May be extended, but MUST be 
         called via super().
         '''
-        self._loop.set_debug(self._debug)
-        
-        if self._thread is not None:
-            asyncio.set_event_loop(self._loop)
-        
-        # Set up a shutdown event and then start the task
-        self._shutdown_flag = asyncio.Event()
-        self._loop.run_until_complete(self._execute_looper(*args, **kwargs))
-        
-        # Finally, close the loop.
-        # self._loop.stop()
-        self._loop.close()
+        try:
+            self._loop.set_debug(self._debug)
+            
+            if self._thread is not None:
+                asyncio.set_event_loop(self._loop)
+            
+            # Set up a shutdown event and then start the task
+            self._shutdown_init_flag = asyncio.Event()
+            self._looper_future = asyncio.ensure_future(
+                self._execute_looper(*args, **kwargs)
+            )
+            self._loop.run_until_complete(self._looper_future)
+            
+        finally:
+            self._loop.close()
+            # stop_threadsafe could be waiting on this.
+            self._shutdown_complete_flag.set()
         
     def halt(self):
         warnings.warn(DeprecationWarning(
@@ -1435,12 +1441,13 @@ class LooperTrooper(metaclass=abc.ABCMeta):
     def stop(self):
         ''' Stops the loop INTERNALLY.
         '''
-        self._shutdown_flag.set()
+        self._shutdown_init_flag.set()
     
     def stop_threadsafe(self):
         ''' Stops the loop EXTERNALLY.
         '''
-        self._loop.call_soon_threadsafe(self._shutdown_flag.set)
+        self._loop.call_soon_threadsafe(self._shutdown_init_flag.set)
+        self._shutdown_complete_flag.wait()
         
     async def catch_interrupt(self):
         ''' Workaround for Windows not passing signals well for doing
@@ -1450,7 +1457,7 @@ class LooperTrooper(metaclass=abc.ABCMeta):
         
         Deprecated? Currently unused anyways.
         '''
-        while not self._shutdown_flag:
+        while not self._shutdown_init_flag.is_set():
             await asyncio.sleep(5)
             
     async def _execute_looper(self, *args, **kwargs):
@@ -1460,30 +1467,54 @@ class LooperTrooper(metaclass=abc.ABCMeta):
         await self.loop_init(*args, **kwargs)
         
         try:
-            while not self._shutdown_flag.is_set():
-                task = asyncio.ensure_future(self.loop_run())
-                interrupt = asyncio.ensure_future(self._shutdown_flag.wait())
+            while not self._shutdown_init_flag.is_set():
+                await self._step_looper()
                 
-                finished, pending = await asyncio.wait(
-                    fs = [task, interrupt],
-                    return_when = asyncio.FIRST_COMPLETED
-                )
-                
-                # Note that we need to check both of these, or we have a race
-                # condition where both may actually be done at the same time.
-                if task in finished:
-                    # Raise any exception, ignore result, rinse, repeat
-                    self._raise_if_exc(task)
-                else:
-                    task.cancel()
-                    
-                if interrupt in finished:
-                    self._raise_if_exc(interrupt)
-                else:
-                    interrupt.cancel()
+        except CancelledError:
+            pass
             
         finally:
-            await self.loop_stop()
+            # Prevent cancellation of the loop stop.
+            await asyncio.shield(self.loop_stop())
+            await self._kill_tasks()
+            
+    async def _step_looper(self):
+        ''' Execute a single step of _execute_looper.
+        '''
+        task = asyncio.ensure_future(self.loop_run())
+        interrupt = asyncio.ensure_future(self._shutdown_init_flag.wait())
+        
+        finished, pending = await asyncio.wait(
+            fs = [task, interrupt],
+            return_when = asyncio.FIRST_COMPLETED
+        )
+        
+        # Note that we need to check both of these, or we have a race
+        # condition where both may actually be done at the same time.
+        if task in finished:
+            # Raise any exception, ignore result, rinse, repeat
+            self._raise_if_exc(task)
+        else:
+            task.cancel()
+            
+        if interrupt in finished:
+            self._raise_if_exc(interrupt)
+        else:
+            interrupt.cancel()
+            
+    async def _kill_tasks(self):
+        ''' Kill all remaining tasks. Call during shutdown. Will log any
+        and all remaining tasks.
+        '''
+        all_tasks = asyncio.Task.all_tasks()
+        
+        for task in all_tasks:
+            if task is not self._looper_future:
+                logging.info('Task remains while closing loop: ' + repr(task))
+                task.cancel()
+        
+        if len(all_tasks) > 0:
+            await asyncio.wait(all_tasks, timeout=self._death_timeout)
             
     @staticmethod
     def _raise_if_exc(fut):

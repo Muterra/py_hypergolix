@@ -77,7 +77,7 @@ from .utils import IPCPackerMixIn
 from .utils import RawObj
 
 from .comms import WSReqResServer
-from .comms import _ReqResWSConnection
+from .comms import _AutoreConnection
 
 
 class _EndpointBase(metaclass=abc.ABCMeta):
@@ -448,7 +448,7 @@ class _EmbeddedIPC(_IPCBase):
         pass
         
         
-class WSEndpoint(_EndpointBase, _ReqResWSConnection):
+class WSEndpoint(_EndpointBase, _AutoreConnection):
     # def send_object(self, ghid, state):
     #     ''' Sends a new object to the emedded client.
     #     '''
