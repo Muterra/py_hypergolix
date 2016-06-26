@@ -75,42 +75,48 @@ from .exceptions import IPCError
 
 from .utils import IPCPackerMixIn
 from .utils import RawObj
+from .utils import call_coroutine_threadafe
 
-from .comms import WSReqResServer
-from .comms import _AutoreConnection
+from .comms import _WSConnection
+from .comms import _AutoresponderSession
+from .comms import WSBasicServer
+from .comms import Autoresponder
+from .comms import Autocomms
 
 
-class _EndpointBase(metaclass=abc.ABCMeta):
-    ''' Base class for an endpoint. Defines everything needed by the 
-    Integration to communicate with an individual application.
+# ###############################################
+# Logging boilerplate
+# ###############################################
+
+
+import logging
+logger = logging.getLogger(__name__)
+
+
+class IPCHostEndpoint(metaclass=abc.ABCMeta):
+    ''' An application endpoints, as used by IPC hosts. Must only be 
+    created from within an event loop!
     
     ENDPOINTS HAVE A 1:1 CORRELATION WITH APPLICATION TOKENS. A token
     denotes a singular application, and one endpoint is used for one
     application.
     
-    Note: endpoints have all the necessary information to wrap objects
-    in the messagepack definition of their api_id, etc.
-    
-    Note on messagepack optimization: in the future, can change pack and
-    unpack to look specifically (and only) at the relevant keys. Check
-    out read_map_header.
-    
-    Alternatively, might just treat the whole appdata portion as a 
-    nested binary file, and unpack that separately.
+    TODO: move object methods into the IPC host. Also a note about them:
+    since they're only ever called by the dispatch, which doesn't know 
+    about the endpoint until it has been successfully registered, we 
+    don't need to check for the app token.
     '''
-    def __init__(self, dispatch, app_token=None, apis=None, *args, **kwargs):
+    def __init__(self, ipc, dispatch, app_token=None, apis=None, *args, **kwargs):
         ''' Creates an endpoint for the specified agent that handles the
         associated apis. Apis is an iterable of api_ids. If token is not
         specified, generates a new one from dispatch.
         '''
-        super().__init__(*args, **kwargs)
+        self._ctx = asyncio.Event()
         
         self._dispatch = weakref.proxy(dispatch)
+        self._ipc = weakref.proxy(ipc)
         self._expecting_exchange = threading.Lock()
         self._known_ghids = set()
-        
-        if app_token is None:
-            app_token = self.dispatch.new_token()
             
         self._token = app_token
         self._apis = set()
@@ -118,6 +124,8 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         if apis is not None:
             for api in apis:
                 self.add_api(api)
+                
+        super().__init__(*args, **kwargs)
             
     def add_api(self, api_id):
         ''' This adds an api_id to the endpoint. Probably not strictly
@@ -164,121 +172,271 @@ class _EndpointBase(metaclass=abc.ABCMeta):
         ''' Pretty simple wrapper to make sure we know about the ghid.
         '''
         self._known_ghids.add(ghid)
-    
-    @abc.abstractmethod
-    def send_object(self, obj, state):
-        ''' Sends a new object to the emedded client. This originates 
-        upstream and is not solicited by the client.
+        
+    def send_object_threadsafe(self, ghid, state):
+        return call_coroutine_threadsafe(
+            coro = self.send_object(ghid, state),
+            loop = self.ipc._loop
+        )
+        
+    async def send_object(self, ghid, state):
+        ''' Sends a new object to the emedded client.
         '''
-        pass
-    
-    @abc.abstractmethod
-    def send_update(self, ghid, state):
-        ''' Sends an updated object to the emedded client. Originates 
-        upstream and is not solicited by the client.
-        '''
-        pass
+        if isinstance(state, Ghid):
+            is_link = True
+            state = bytes(state)
+        else:
+            is_link = False
             
-    @abc.abstractmethod
-    def send_delete(self, ghid):
+        author = self.dispatch._author_by_ghid[ghid]
+        dynamic = self.dispatch._dynamic_by_ghid[ghid]
+        api_id = self.dispatch._api_by_ghid[ghid]
+        
+        response = await self.ipc.send(
+            session = self,
+            msg = self.ipc._pack_object_def(
+                ghid,
+                author,
+                state,
+                is_link,
+                api_id,
+                None,
+                None,
+                dynamic,
+                None
+            ),
+            request_code = self.ipc.REQUEST_CODES['send_object'],
+            # Note: for now, just don't worry about failures.
+            # Todo: expect reply, and enclose within try/catch to prevent apps
+            # from crashing the service.
+            expect_reply = False
+        )
+    
+    def send_update_threadsafe(self, ghid, state):
+        return call_coroutine_threadsafe(
+            coro = self.send_update(ghid, state),
+            loop = self.ipc._loop
+        )
+    
+    async def send_update(self, ghid, state):
+        ''' Sends an updated object to the emedded client.
+        '''
+        # Note: currently we're actually sending the whole object update, not
+        # just a notification of update address.
+        # print('Endpoint got send update request.')
+        # print(ghid)
+        
+        if isinstance(state, Ghid):
+            is_link = True
+            state = bytes(state)
+        else:
+            is_link = False
+        
+        response = await self.ipc.send(
+            session = self,
+            msg = self.ipc._pack_object_def(
+                ghid,
+                None,
+                state,
+                is_link,
+                None,
+                None,
+                None,
+                None,
+                None
+            ),
+            request_code = self.ipc.REQUEST_CODES['send_update'],
+            # Note: for now, just don't worry about failures. See previous note
+            expect_reply = False
+        )
+        # print('Update sent and resuming life.')
+        # if response == b'\x01':
+        #     return True
+        # else:
+        #     raise RuntimeError('Unknown error while delivering object update.')
+    
+    def send_delete_threadsafe(self, ghid, state):
+        return call_coroutine_threadsafe(
+            coro = self.send_delete(ghid),
+            loop = self.ipc._loop
+        )
+        
+    async def send_delete(self, ghid):
         ''' Notifies the endpoint that the object has been deleted 
         upstream.
         '''
-        pass
+        if not isinstance(ghid, Ghid):
+            raise TypeError('ghid must be type Ghid or similar.')
         
-    @abc.abstractmethod
-    def notify_share_failure(self, ghid, recipient):
+        response = await self.ipc.send(
+            session = self,
+            msg = bytes(ghid),
+            request_code = self.ipc.REQUEST_CODES['send_delete'],
+            # Note: for now, just don't worry about failures.
+            expect_reply = False
+        )
+        # print('Update sent and resuming life.')
+        # if response == b'\x01':
+        #     return True
+        # else:
+        #     raise RuntimeError('Unknown error while delivering object update.')
+    
+    def notify_share_failure_threadsafe(self, ghid, recipient):
+        return call_coroutine_threadsafe(
+            coro = self.notify_share_failure(ghid, state),
+            loop = self.ipc._loop
+        )
+        
+    async def notify_share_failure(self, ghid, recipient):
         ''' Notifies the embedded client of an unsuccessful share.
         '''
         pass
+    
+    def notify_share_success_threadsafe(self, ghid, recipient):
+        return call_coroutine_threadsafe(
+            coro = self.notify_share_success(ghid, state),
+            loop = self.ipc._loop
+        )
         
-    @abc.abstractmethod
-    def notify_share_success(self, ghid, recipient):
+    async def notify_share_success(self, ghid, recipient):
         ''' Notifies the embedded client of a successful share.
         '''
         pass
-        
-        
-class _TestEndpoint(_EndpointBase):
-    def __init__(self, name, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.__name = name
-        self._assigned_objs = []
-        self._failed_objs = []
-        
-    def send_object(self, obj, state=None):
-        self._assigned_objs.append(obj)
-        print('Endpoint ', self.__name, ' incoming: ', obj)
-        
-    def send_update(self, obj, state=None):
-        self._assigned_objs.append(obj)
-        print('Endpoint ', self.__name, ' updated: ', obj)
-        
-    def send_delete(self, ghid):
-        ''' Notifies the endpoint that the object has been deleted 
-        upstream.
-        '''
-        print('Endpoint ', self.__name, ' received delete: ', obj)
-        
-    def notify_share_failure(self, obj, recipient):
-        self._failed_objs.append(obj)
-        print('Endpoint ', self.__name, ' failed: ', obj)
-        
-    def notify_share_success(self, obj, recipient):
-        self._assigned_objs.append(obj)
-        print('Endpoint ', self.__name, ' success: ', obj)
 
 
-class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
-    ''' Base class for an IPC mechanism. Note that an _IPCBase cannot 
-    exist without also being an agent. They are separated to allow 
-    mixing-and-matching agent/persister/IPC configurations.
-    
-    Could subclass _EndpointBase to ensure that we can use self as an 
-    endpoint for incoming messages. To prevent spoofing risks, anything
-    we'd accept this way MUST be append-only with a very limited scope.
-    Or, we could just handle all of our operations directly with the 
-    agent bootstrap object. Yeah, let's do that instead.
+class IPCHost(IPCPackerMixIn, metaclass=abc.ABCMeta):
+    ''' Reusable base class for Hypergolix IPC hosts. Subclasses 
+    Autoresponder. Combine with a server in an AutoComms to establish 
+    IPC over that transport.
     '''
+    REQUEST_CODES = {
+        # Receive/dispatch a new object.
+        'send_object': b'+O',
+        # Receive an update for an existing object.
+        'send_update': b'!O',
+        # Receive an update that an object has been deleted.
+        'send_delete': b'XO',
+        # Receive an async notification of a sharing failure.
+        'notify_share_failure': b'^F',
+        # Receive an async notification of a sharing success.
+        'notify_share_success': b'^S',
+    }
+    
     def __init__(self, dispatch, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         # Don't weakref.proxy, since dispatchers never contact the ipcbase,
         # just the endpoints.
         self._dispatch = dispatch
+        
+        req_handlers = {
+            # New app tokens are handled during endpoint creation.
+            # # Get new app token
+            b'+T': self.new_token_wrapper,
+            # # Register existing app token
+            b'$T': self.set_token_wrapper,
+            # Register an API
+            b'$A': self.add_api_wrapper,
+            # Whoami?
+            b'?I': self.whoami_wrapper,
+            # Get object
+            b'>O': self.get_object_wrapper,
+            # New object
+            b'+O': self.new_object_wrapper,
+            # Sync object
+            b'~O': self.sync_object_wrapper,
+            # Update object
+            b'!O': self.update_object_wrapper,
+            # Share object
+            b'@O': self.share_object_wrapper,
+            # Freeze object
+            b'*O': self.freeze_object_wrapper,
+            # Hold object
+            b'#O': self.hold_object_wrapper,
+            # Discard object
+            b'-O': self.discard_object_wrapper,
+            # Delete object
+            b'XO': self.delete_object_wrapper,
+        }
+        
+        super().__init__(
+            req_handlers = req_handlers,
+            success_code = b'AK',
+            failure_code = b'NK',
+            *args, **kwargs
+        )
+            
+    def session_factory(self):
+        ''' Added for easier subclassing. Returns the session class.
+        '''
+        logger.debug('Session endpoint created, but not yet initialized.')
+        return IPCHostEndpoint(
+            dispatch = self.dispatch,
+            ipc = self,
+            # app_token = app_token,
+            # apis = apis,
+        )
+        
+    async def init_endpoint(self, endpoint):
+        ''' Waits for the endpoint to be ready for use, then registers
+        it with dispatch.
+        '''
+        await endpoint._ctx.wait()
+        self.dispatch.register_endpoint(endpoint)
+        logger.debug('Session completely registered.')
         
     @property
     def dispatch(self):
         ''' Sorta superfluous right now.
         '''
         return self._dispatch
+    
+    async def set_token_wrapper(self, endpoint, request_body):
+        ''' Ignore body, get new token from dispatch, and proceed.
         
-    # @abc.abstractmethod
-    # def new_endpoint(self):
-    #     ''' Creates a new endpoint for the IPC system. Endpoints must
-    #     be unique. Uniqueness must be enforced by subclasses of the
-    #     _IPCBase class.
-        
-    #     Returns an Endpoint object.
-    #     '''
-    #     pass
-        
-    def add_api_wrapper(self, endpoint, request_body):
-        ''' Wraps self.dispatch.new_token into a bytes return.
+        Obviously doesn't require an existing app token.
         '''
+        app_token = request_body[0:4]
+        endpoint.app_token = app_token
+        endpoint._ctx.set()
+        return b''
+    
+    async def new_token_wrapper(self, endpoint, request_body):
+        ''' Ignore body, get new token from dispatch, and proceed.
+        
+        Obviously doesn't require an existing app token.
+        '''
+        app_token = self.dispatch.new_token()
+        endpoint.app_token = app_token
+        endpoint._ctx.set()
+        return app_token
+        
+    async def add_api_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        
+        Requires existing app token.
+        '''
+        if not endpoint.app_token:
+            raise IPCError('Must register app token prior to adding APIs.')
         if len(request_body) != 65:
             raise ValueError('Invalid API ID format.')
         endpoint.add_api(request_body)
         return b'\x01'
         
-    def whoami_wrapper(self, endpoint, request_body):
-        ''' Wraps self.dispatch.new_token into a bytes return.
+    async def whoami_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.whoami into a bytes return.
+        
+        Does not require an existing app token.
         '''
         ghid = self.dispatch.whoami
         return bytes(ghid)
         
-    def get_object_wrapper(self, endpoint, request_body):
-        ''' Wraps self.dispatch.new_token into a bytes return.
+    async def get_object_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.get_object into a bytes return.
+        
+        Requires an existing app token.
         '''
+        if not endpoint.app_token:
+            raise IPCError('Must register app token prior to getting objects.')
+            
         ghid = Ghid.from_bytes(request_body)
         
         author, state, api_id, app_token, is_dynamic = \
@@ -317,9 +475,16 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
             _legroom
         )
         
-    def new_object_wrapper(self, endpoint, request_body):
-        ''' Wraps self.dispatch.new_token into a bytes return.
+    async def new_object_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_object into a bytes return.
+        
+        Requires an existing app token.
         '''
+        if not endpoint.app_token:
+            raise IPCError(
+                'Must register app token prior to making new objects.'
+            )
+        
         (
             address, # Unused and set to None.
             author, # Unused and set to None.
@@ -349,9 +514,16 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         
         return bytes(address)
         
-    def update_object_wrapper(self, endpoint, request_body):
+    async def update_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
+        
+        Requires existing app token.
         '''
+        if not endpoint.app_token:
+            raise IPCError(
+                'Must register app token prior to updating objects.'
+            )
+            
         (
             address,
             author, # Unused and set to None.
@@ -375,14 +547,27 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         
         return b'\x01'
         
-    def sync_object_wrapper(self, endpoint, request_body):
-        ''' Wraps self.dispatch.new_token into a bytes return.
+    async def sync_object_wrapper(self, endpoint, request_body):
+        ''' Requires existing app token. Currently unimplimented.
         '''
-        return b''
+        if not endpoint.app_token:
+            raise IPCError(
+                'Must register app token prior to syncing objects.'
+            )
+            
+        # return b''
+        raise NotImplementedError('Manual syncing not yet supported.')
         
-    def share_object_wrapper(self, endpoint, request_body):
-        ''' Wraps self.dispatch.new_token into a bytes return.
+    async def share_object_wrapper(self, endpoint, request_body):
+        ''' Wraps object sharing.
+        
+        Requires existing app token.
         '''
+        if not endpoint.app_token:
+            raise IPCError(
+                'Must register app token prior to sharing objects.'
+            )
+            
         ghid = Ghid.from_bytes(request_body[0:65])
         recipient = Ghid.from_bytes(request_body[65:130])
         self.dispatch.share_object(
@@ -392,9 +577,16 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         )
         return b'\x01'
         
-    def freeze_object_wrapper(self, endpoint, request_body):
-        ''' Wraps self.dispatch.new_token into a bytes return.
+    async def freeze_object_wrapper(self, endpoint, request_body):
+        ''' Wraps object freezing into a packed format.
+        
+        Requires an app token.
         '''
+        if not endpoint.app_token:
+            raise IPCError(
+                'Must register app token prior to freezing objects.'
+            )
+            
         ghid = Ghid.from_bytes(request_body)
         address = self.dispatch.freeze_object(
             asking_token = endpoint.app_token,
@@ -402,9 +594,16 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         )
         return bytes(address)
         
-    def hold_object_wrapper(self, endpoint, request_body):
-        ''' Wraps self.dispatch.new_token into a bytes return.
+    async def hold_object_wrapper(self, endpoint, request_body):
+        ''' Wraps object holding into a packed format.
+        
+        Requires an app token.
         '''
+        if not endpoint.app_token:
+            raise IPCError(
+                'Must register app token prior to holding objects.'
+            )
+            
         ghid = Ghid.from_bytes(request_body)
         self.dispatch.hold_object(
             asking_token = endpoint.app_token,
@@ -412,9 +611,16 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         )
         return b'\x01'
         
-    def discard_object_wrapper(self, endpoint, request_body):
-        ''' Wraps self.dispatch.new_token into a bytes return.
+    async def discard_object_wrapper(self, endpoint, request_body):
+        ''' Wraps object discarding into a packable format.
+        
+        Requires an app token.
         '''
+        if not endpoint.app_token:
+            raise IPCError(
+                'Must register app token prior to discarding objects.'
+            )
+            
         ghid = Ghid.from_bytes(request_body)
         self.dispatch.discard_object(
             asking_token = endpoint.app_token,
@@ -422,9 +628,16 @@ class _IPCBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         )
         return b'\x01'
         
-    def delete_object_wrapper(self, endpoint, request_body):
-        ''' Wraps self.dispatch.new_token into a bytes return.
+    async def delete_object_wrapper(self, endpoint, request_body):
+        ''' Wraps object deletion with a packable format.
+        
+        Requires an app token.
         '''
+        if not endpoint.app_token:
+            raise IPCError(
+                'Must register app token prior to updating objects.'
+            )
+            
         ghid = Ghid.from_bytes(request_body)
         self.dispatch.delete_object(
             asking_token = endpoint.app_token,
@@ -446,115 +659,39 @@ class _EmbeddedIPC(_IPCBase):
         Returns an Endpoint object.
         '''
         pass
-        
-        
-class WSEndpoint(_EndpointBase, _AutoreConnection):
-    # def send_object(self, ghid, state):
-    #     ''' Sends a new object to the emedded client.
-    #     '''
-    #     pass
-        
-    def send_object(self, ghid, state):
-        ''' Sends a new object to the emedded client.
-        '''
-        if isinstance(state, Ghid):
-            is_link = True
-            state = bytes(state)
-        else:
-            is_link = False
-            
-        author = self.dispatch._author_by_ghid[ghid]
-        dynamic = self.dispatch._dynamic_by_ghid[ghid]
-        api_id = self.dispatch._api_by_ghid[ghid]
-        
-        # TODO: fix this leaky abstraction
-        response = self.dispatch.send_threadsafe(
-            connection = self,
-            msg = self.dispatch._pack_object_def(
-                ghid,
-                author,
-                state,
-                is_link,
-                api_id,
-                None,
-                None,
-                dynamic,
-                None
-            ),
-            request_code = self.dispatch.REQUEST_CODES['send_object'],
-            # Note: for now, just don't worry about failures.
-            expect_reply = False
-        )
     
-    def send_update(self, ghid, state):
-        ''' Sends an updated object to the emedded client.
-        '''
-        # Note: currently we're actually sending the whole object update, not
-        # just a notification of update address.
-        # print('Endpoint got send update request.')
-        # print(ghid)
+    
+class PipeIPC(_IPCBase):
+    pass
+           
+           
+
         
-        if isinstance(state, Ghid):
-            is_link = True
-            state = bytes(state)
-        else:
-            is_link = False
-        
-        response = self.dispatch.send_threadsafe(
-            connection = self,
-            msg = self.dispatch._pack_object_def(
-                ghid,
-                None,
-                state,
-                is_link,
-                None,
-                None,
-                None,
-                None,
-                None
-            ),
-            request_code = self.dispatch.REQUEST_CODES['send_update'],
-            # Note: for now, just don't worry about failures.
-            expect_reply = False
-        )
-        # print('Update sent and resuming life.')
-        # if response == b'\x01':
-        #     return True
-        # else:
-        #     raise RuntimeError('Unknown error while delivering object update.')
-        
-    def send_delete(self, ghid):
-        ''' Notifies the endpoint that the object has been deleted 
-        upstream.
-        '''
-        if not isinstance(ghid, Ghid):
-            raise TypeError('ghid must be type Ghid or similar.')
-        
-        response = self.dispatch.send_threadsafe(
-            connection = self,
-            msg = bytes(ghid),
-            request_code = self.dispatch.REQUEST_CODES['send_delete'],
-            # Note: for now, just don't worry about failures.
-            expect_reply = False
-        )
-        # print('Update sent and resuming life.')
-        # if response == b'\x01':
-        #     return True
-        # else:
-        #     raise RuntimeError('Unknown error while delivering object update.')
-        
-    def notify_share_failure(self, ghid, recipient):
-        ''' Notifies the embedded client of an unsuccessful share.
-        '''
+
+
+
+
+
+
+
+
+
+
+
+
+class WSAutoServer:
+    def __init__(self, host, port, req_handlers, success_code, failure_code, 
+    error_lookup=None, birthday_bits=40, debug=False, aengel=True, 
+    connection_class=None, *args, **kwargs):
         pass
-        
-    def notify_share_success(self, ghid, recipient):
-        ''' Notifies the embedded client of a successful share.
-        '''
+class WSAutoClient:
+    def __init__(self, host, port, req_handlers, success_code, failure_code, 
+    error_lookup=None, debug=False, aengel=True, connection_class=None, 
+    *args, **kwargs):
         pass
     
     
-class WebsocketsIPC(_IPCBase, WSReqResServer):
+class WebsocketsIPC(_IPCBase, WSAutoServer):
     ''' Websockets IPC via localhost. Sets up a server.
     '''
     REQUEST_CODES = {
@@ -605,27 +742,23 @@ class WebsocketsIPC(_IPCBase, WSReqResServer):
             req_handlers = req_handlers,
             success_code = b'AK',
             failure_code = b'NK',
+            connection_class = connection_class,
             # Note: can also add error_lookup = {b'er': RuntimeError}
             *args, **kwargs
         )
         
-    def new_connection(self, app_token=None, apis=None, *args, **kwargs):
-        ''' Merge the connection and endpoint to the same thing.
+    @property
+    def connection_factory(self):
+        ''' Proxy for connection factory to allow saner subclassing.
         '''
-        return WSEndpoint(
-            dispatch = self.dispatch, 
-            app_token=None, 
-            apis=None, 
-            *args, **kwargs
-        )
+        return WSEndpoint
         
-    @asyncio.coroutine
-    def init_connection(self, websocket, path):
+    async def new_connection(self, websocket, path, *args, **kwargs):
         ''' Initializes the connection with the client, creating an 
         endpoint/connection object, and registering it with dispatch.
         '''
         # First command on the wire MUST be registering the application.
-        msg = yield from websocket.recv()
+        msg = await websocket.recv()
         # This insulates us from unpacking problems during the except bit
         req_token = 0
         try:
@@ -640,10 +773,11 @@ class WebsocketsIPC(_IPCBase, WSReqResServer):
             else:
                 raise ValueError('Improper handshake command.')
             
-            connection = yield from super().init_connection(
+            connection = await super().new_connection(
                 websocket = websocket, 
                 path = path, 
-                app_token = app_token
+                app_token = app_token,
+                *args, **kwargs
             )
             self.dispatch.register_endpoint(connection)
             
@@ -659,7 +793,7 @@ class WebsocketsIPC(_IPCBase, WSReqResServer):
                     exc = e
                 )
             )
-            yield from websocket.send(reply)
+            await websocket.send(reply)
             raise
             
         # Nothing went wrong, so notify the app and continue.
@@ -674,7 +808,7 @@ class WebsocketsIPC(_IPCBase, WSReqResServer):
                     data = app_token
                 )
             )
-            yield from websocket.send(reply)
+            await websocket.send(reply)
             
         print('Connection established with embedded client', str(app_token))
         return connection
@@ -717,7 +851,3 @@ class WebsocketsIPC(_IPCBase, WSReqResServer):
             print(repr(exc))
             traceback.print_tb(exc.__traceback__)
         return repr(exc)
-    
-    
-class PipeIPC(_IPCBase):
-    pass

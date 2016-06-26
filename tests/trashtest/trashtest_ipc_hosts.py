@@ -95,33 +95,37 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             persister = cls.persister,
             host = 'localhost',
             port = 4628,
-            threaded = True,
-            # debug = True
+            debug = True
         )
+        
+        time.sleep(.5)
         
         cls.bob = WebsocketsHost(
             persister = cls.persister,
             host = 'localhost',
             port = 4629,
-            threaded = True,
-            # debug = True
+            debug = True
         )
+        
+        time.sleep(.5)
         
         cls.app1 = WebsocketsEmbed(
             host = 'localhost', 
             port = 4628, 
-            threaded = True,
-            # debug = True
+            debug = True
         )
+        
+        time.sleep(.5)
         
         cls.app1endpoint = list(cls.alice.connections.values())[0]
         
         cls.app2 = WebsocketsEmbed(
             host = 'localhost', 
             port = 4628, 
-            threaded = True,
             # debug = True
         )
+        
+        time.sleep(.5)
         
         endpoints = set(cls.alice.connections.values())
         cls.app2endpoint = list(endpoints - {cls.app1endpoint})[0]
@@ -209,9 +213,8 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
     
     @classmethod
     def tearDownClass(cls):
-        cls.app1.halt()
-        cls.alice.halt()
         time.sleep(1)
 
 if __name__ == "__main__":
+    logging.basicConfig(filename='ipchosts.log',level=logging.DEBUG)
     unittest.main()

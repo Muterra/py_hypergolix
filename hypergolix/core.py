@@ -1500,10 +1500,10 @@ class Dispatcher(DispatcherBase):
             
             try:
                 do_dispatch = {
-                    'notify_object': endpoint.notify_object,
-                    'send_delete': endpoint.send_delete,
-                    'notify_share_success': endpoint.notify_share_success,
-                    'notify_share_failure': endpoint.notify_share_failure,
+                    'notify_object': endpoint.notify_object_threadsafe,
+                    'send_delete': endpoint.send_delete_threadsafe,
+                    'notify_share_success': endpoint.notify_share_success_threadsafe,
+                    'notify_share_failure': endpoint.notify_share_failure_threadsafe,
                 }[command]
             except KeyError as e:
                 raise ValueError('Invalid command.') from e

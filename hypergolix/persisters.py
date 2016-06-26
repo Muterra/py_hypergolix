@@ -99,9 +99,9 @@ from .utils import _WeldedSetDeepChainMap
 from .utils import _block_on_result
 from .utils import _JitSetDict
 
-from .comms import WSReqResServer
-from .comms import WSReqResClient
-from .comms import _AutoreConnection
+from .comms import WSAutoServer
+from .comms import WSAutoClient
+from .comms import _WSConnection
 
 
 # ###############################################
@@ -1018,7 +1018,7 @@ class ProxyPersister(_PersisterBase):
     pass
 
 
-class _PersisterBridgeConnection(_AutoreConnection):
+class _PersisterBridgeConnection(_WSConnection):
     def __init__(self, transport, *args, **kwargs):
         # Copying like this seems dangerous, but I think it should be okay.
         if isinstance(transport, weakref.ProxyTypes):
@@ -1050,16 +1050,14 @@ class _PersisterBridgeBase:
             self._persister = weakref.proxy(persister)
             
         super().__init__(*args, **kwargs)
-            
-    def new_connection(self, *args, **kwargs):
-        ''' Merge the connection and endpoint to the same thing.
+        
+    @property
+    def connection_factory(self):
+        ''' Proxy for connection factory to allow saner subclassing.
         '''
-        return _PersisterBridgeConnection(
-            transport = self, 
-            *args, **kwargs
-        )
+        return _PersisterBridgeConnection
             
-    def ping_wrapper(self, connection, request_body):
+    async def ping_wrapper(self, connection, request_body):
         ''' Deserializes a ping request; forwards it to the persister.
         '''
         try:
@@ -1076,7 +1074,7 @@ class _PersisterBridgeBase:
             # return b'\x00'
             raise exc
             
-    def publish_wrapper(self, connection, request_body):
+    async def publish_wrapper(self, connection, request_body):
         ''' Deserializes a publish request and forwards it to the 
         persister.
         '''
@@ -1085,13 +1083,13 @@ class _PersisterBridgeBase:
         connection._processing.clear()
         return b'\x01'
             
-    def get_wrapper(self, connection, request_body):
+    async def get_wrapper(self, connection, request_body):
         ''' Deserializes a get request; forwards it to the persister.
         '''
         ghid = Ghid.from_bytes(request_body)
         return self._persister.get(ghid)
             
-    def subscribe_wrapper(self, connection, request_body):
+    async def subscribe_wrapper(self, connection, request_body):
         ''' Deserializes a publish request and forwards it to the 
         persister.
         '''
@@ -1105,7 +1103,7 @@ class _PersisterBridgeBase:
         connection._subscriptions[ghid] = updater
         return b'\x01'
             
-    def unsubscribe_wrapper(self, connection, request_body):
+    async def unsubscribe_wrapper(self, connection, request_body):
         ''' Deserializes a publish request and forwards it to the 
         persister.
         '''
@@ -1118,7 +1116,7 @@ class _PersisterBridgeBase:
         else:
             return b'\x00'
             
-    def list_subs_wrapper(self, connection, request_body):
+    async def list_subs_wrapper(self, connection, request_body):
         ''' Deserializes a publish request and forwards it to the 
         persister.
         '''
@@ -1126,7 +1124,7 @@ class _PersisterBridgeBase:
         parser = generate_ghidlist_parser()
         return parser.pack(ghidlist)
             
-    def list_bindings_wrapper(self, connection, request_body):
+    async def list_bindings_wrapper(self, connection, request_body):
         ''' Deserializes a publish request and forwards it to the 
         persister.
         '''
@@ -1135,7 +1133,7 @@ class _PersisterBridgeBase:
         parser = generate_ghidlist_parser()
         return parser.pack(ghidlist)
             
-    def list_debinding_wrapper(self, connection, request_body):
+    async def list_debinding_wrapper(self, connection, request_body):
         ''' Deserializes a publish request and forwards it to the 
         persister.
         '''
@@ -1149,7 +1147,7 @@ class _PersisterBridgeBase:
         
         return result
             
-    def query_wrapper(self, connection, request_body):
+    async def query_wrapper(self, connection, request_body):
         ''' Deserializes a publish request and forwards it to the 
         persister.
         '''
@@ -1160,7 +1158,7 @@ class _PersisterBridgeBase:
         else:
             return b'\x00'
             
-    def disconnect_wrapper(self, connection, request_body):
+    async def disconnect_wrapper(self, connection, request_body):
         ''' Deserializes a publish request and forwards it to the 
         persister.
         '''
@@ -1187,13 +1185,24 @@ class _WSBridgeConnection(_PersisterBridgeConnection):
         
             
 class _WSBridgeBase(_PersisterBridgeBase):
-    def new_connection(self, *args, **kwargs):
+    # FILE POINTER LEFT HERE
+    # Problem 1: need to run most things in executor, or all of the 
+    # threadsafe calls will fail. Alternatively, change them to either
+    # loopsafe (if appropriate) or async.
+    
+    # Problem 2: how to pass arguments to new connections? Was the argument
+    # thing actually the best idea?
+        
+    @property
+    def connection_factory(self):
+        ''' Proxy for connection factory to allow saner subclassing.
+        '''
+        return _WSBridgeConnection
+            
+    async def new_connection(self, *args, **kwargs):
         ''' Merge the connection and endpoint to the same thing.
         '''
-        return _WSBridgeConnection(
-            transport = self, 
-            *args, **kwargs
-        )
+        return (await super().new_connection(transport=self, *args, **kwargs))
         
     @asyncio.coroutine
     def handle_producer_exc(self, connection, exc):
@@ -1241,7 +1250,7 @@ class _WSBridgeBase(_PersisterBridgeBase):
         return repr(exc).encode()
     
 
-class WSPersisterBridge(_WSBridgeBase, WSReqResServer):
+class WSPersisterBridge(_WSBridgeBase, WSAutoServer):
     ''' Websockets request/response bridge to a persister, server half.
     '''
     REQUEST_CODES = {
@@ -1297,7 +1306,7 @@ class WSPersisterBridge(_WSBridgeBase, WSReqResServer):
         return connection
 
 
-class WSPersister(_PersisterBase, WSReqResClient):
+class WSPersister(_PersisterBase, WSAutoClient):
     ''' Websockets request/response persister (the client half).
     '''
             

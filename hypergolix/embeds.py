@@ -54,7 +54,7 @@ from golix import Ghid
 # from .utils import RawObj
 # from .utils import AppObj
 
-from .comms import WSReqResClient
+from .comms import WSAutoClient
 
 from .exceptions import IPCError
 
@@ -874,7 +874,7 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         '''
         pass
         
-    def deliver_object_wrapper(self, connection, request_body):
+    async def deliver_object_wrapper(self, connection, request_body):
         ''' Deserializes an incoming object delivery, dispatches it to
         the application, and serializes a response to the IPC host.
         '''
@@ -917,7 +917,7 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         # Successful delivery. Return true
         return b'\x01'
 
-    def update_object_wrapper(self, connection, request_body):
+    async def update_object_wrapper(self, connection, request_body):
         ''' Deserializes an incoming object update, updates the AppObj
         instance(s) accordingly, and serializes a response to the IPC 
         host.
@@ -958,7 +958,7 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
             
         return b'\x01'
         
-    def delete_object_wrapper(self, connection, request_body):
+    async def delete_object_wrapper(self, connection, request_body):
         ''' Deserializes an incoming object deletion, and applies it to
         the object.
         '''
@@ -966,14 +966,14 @@ class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
         self._objs_by_ghid[ghid]._delete()
         return b'\x01'
 
-    def notify_share_failure_wrapper(self, connection, request_body):
+    async def notify_share_failure_wrapper(self, connection, request_body):
         ''' Deserializes an incoming async share failure notification, 
         dispatches that to the app, and serializes a response to the IPC 
         host.
         '''
         return b''
 
-    def notify_share_success_wrapper(self, connection, request_body):
+    async def notify_share_success_wrapper(self, connection, request_body):
         ''' Deserializes an incoming async share failure notification, 
         dispatches that to the app, and serializes a response to the IPC 
         host.
@@ -1175,7 +1175,7 @@ class _TestEmbed(_EmbedBase):
         pass
         
         
-class WebsocketsEmbed(_EmbedBase, WSReqResClient):
+class WebsocketsEmbed(_EmbedBase, WSAutoClient):
     REQUEST_CODES = {
         # # Get new app token
         # b'+T': None,
@@ -1228,14 +1228,11 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             *args, **kwargs
         )
         
-    @asyncio.coroutine
-    def init_connection(self, websocket, path):
-        ''' Initializes the connection with the client, creating an 
-        endpoint/connection object, and registering it with dispatch.
+    async def new_connection(self, websocket, path, *args, **kwargs):
+        ''' Wrap super() to add initial app token registration process.
         '''
-        connection = yield from super().init_connection(
-            websocket = websocket, 
-            path = path
+        connection = await super().new_connection(
+            websocket, path, dispatch=self, *args, **kwargs
         )
         
         # First command on the wire MUST be us registering the application.
@@ -1253,8 +1250,8 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
             body = app_token
         )
         
-        yield from websocket.send(msg)
-        reply = yield from websocket.recv()
+        await websocket.send(msg)
+        reply = await websocket.recv()
         
         version, resp_token, resp_code, resp_body = self._unpack_request(reply)
         
@@ -1273,7 +1270,7 @@ class WebsocketsEmbed(_EmbedBase, WSReqResClient):
                 'handshake.'
             )
             
-        print('Connection established with IPC server.')
+        logger.info('Connection established with IPC server.')
         return connection
     
     @property

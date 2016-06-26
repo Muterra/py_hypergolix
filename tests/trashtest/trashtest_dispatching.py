@@ -42,24 +42,18 @@ import time
 import logging
 
 from golix import Ghid
-
 from hypergolix import AgentBase
 
-# from hypergolix.persisters import LocalhostClient
-# from hypergolix.persisters import LocalhostServer
 from hypergolix.persisters import MemoryPersister
-
 from hypergolix.core import Dispatcher
-
 from hypergolix.utils import DispatchObj
-# from hypergolix.utils import AppObj
-# from hypergolix.utils import RawObj
-
 from hypergolix.embeds import _TestEmbed
+from hypergolix.ipc_hosts import _EndpointBase
 
-from hypergolix.ipc_hosts import _TestEndpoint
 
-# from hypergolix.ipc_hosts import _EmbeddedIPC
+# ###############################################
+# Fixtures
+# ###############################################
 
 
 class _TestDispatch(AgentBase, Dispatcher, _TestEmbed):
@@ -68,6 +62,36 @@ class _TestDispatch(AgentBase, Dispatcher, _TestEmbed):
         
     def _discard_object(*args, **kwargs):
         pass
+
+
+class _TestEndpoint(_EndpointBase):
+    def __init__(self, name, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.__name = name
+        self._assigned_objs = []
+        self._failed_objs = []
+        
+    def send_object(self, obj, state=None):
+        self._assigned_objs.append(obj)
+        print('Endpoint ', self.__name, ' incoming: ', obj)
+        
+    def send_update(self, obj, state=None):
+        self._assigned_objs.append(obj)
+        print('Endpoint ', self.__name, ' updated: ', obj)
+        
+    def send_delete(self, ghid):
+        ''' Notifies the endpoint that the object has been deleted 
+        upstream.
+        '''
+        print('Endpoint ', self.__name, ' received delete: ', obj)
+        
+    def notify_share_failure(self, obj, recipient):
+        self._failed_objs.append(obj)
+        print('Endpoint ', self.__name, ' failed: ', obj)
+        
+    def notify_share_success(self, obj, recipient):
+        self._assigned_objs.append(obj)
+        print('Endpoint ', self.__name, ' success: ', obj)
 
 
 # ###############################################

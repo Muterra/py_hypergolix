@@ -39,6 +39,7 @@ import collections.abc
 import collections
 import traceback
 import functools
+import weakref
 
 # Note: this is used exclusively for connection ID generation in _Websocketeer
 import random
@@ -91,68 +92,26 @@ class _WSConnection:
         await self.websocket.send(msg)
         
     async def send_loopsafe(self, msg):
-        ''' Threadsafe wrapper to send a message from a different event
-        loop.
+        ''' Loopsafe send.
         '''
         await run_coroutine_loopsafe(
-            coro = self.send(msg), 
+            coro = self.send(msg),
             target_loop = self._loop
         )
-        
-    def send_threadsafe(self, msg):
-        ''' Threadsafe wrapper to send a message. Must be called 
-        synchronously.
-        '''
-        return call_coroutine_threadsafe(self.send(msg))
-        
-        
-class _AutoreConnection(_WSConnection):
-    ''' A request/response websockets connection.
-    '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-        # Lookup for request token -> queue(maxsize=1)
-        self.pending_responses = {}
-        
-        self._req_lock = threading.Lock()
-        
-    def _gen_req_token(self):
-        ''' Gets a new (well, currently unused) request token. Sets it
-        in pending_responses to prevent race conditions.
-        '''
-        with self._req_lock:
-            token = self._gen_unused_token()
-            # Do this just so we can release the lock ASAP
-            self.pending_responses[token] = None
-            
-        return token
-            
-    def _gen_unused_token(self):
-        ''' Recursive search for unused token. THIS IS NOT THREADSAFE
-        NOR ASYNC SAFE! Must be called from within parent lock.
-        '''
-        # Get a random-ish (no need for CSRNG) 16-bit token
-        token = random.getrandbits(16)
-        if token in self.pending_responses:
-            token = self._get_unused_token()
-        return token
         
     def send_threadsafe(self, msg):
         ''' Threadsafe send.
         '''
-        return call_coroutine_threadsafe(
+        call_coroutine_threadsafe(
             coro = self.send(msg),
             loop = self._loop
         )
         
-    async def send_loopsafe(self, msg):
-        ''' Loopsafe send.
+    def __hash__(self):
+        ''' Just use connid.
+        This way, we can use connections as lookup objects.
         '''
-        return run_coroutine_loopsafe(
-            coro = self.send(msg),
-            target_loop = self._loop
-        )
+        return self.connid
         
 
 class ConnectorBase(LooperTrooper):
@@ -161,7 +120,7 @@ class ConnectorBase(LooperTrooper):
     Todo: refactor websockets stuff into a mix-in so that this class can
     be used for different transports.
     '''
-    def __init__(self, host, port, receiver, connection_class=None, *args, **kwargs):
+    def __init__(self, host, port, receiver, *args, **kwargs):
         ''' Yeah, the usual.
         host -> str: hostname for the server
         port -> int: port for the server
@@ -173,23 +132,25 @@ class ConnectorBase(LooperTrooper):
         self._ws_port = port
         self._ws_host = host
         self._receiver = receiver
-        
-        if connection_class is None:
-            self._conn_factory = _WSConnection
-        else:
-            self._conn_factory = connection_class
             
         super().__init__(*args, **kwargs)
             
     @property
     def _ws_loc(self):
         return 'ws://' + self._ws_host + ':' + str(self._ws_port) + '/'
+        
+    @property
+    def connection_factory(self):
+        ''' Proxy for connection factory to allow saner subclassing.
+        '''
+        return _WSConnection
     
     async def new_connection(self, websocket, path, *args, **kwargs):
         ''' Wrapper for creating a new connection. Mostly here to make
         subclasses simpler.
         '''
-        return self._conn_factory(
+        logger.debug('New connection: ' + str(args) + ' ' + str(kwargs))
+        return self.connection_factory(
             loop = self._loop,
             websocket = websocket, 
             path = path, 
@@ -354,15 +315,45 @@ class WSBasicClient(ConnectorBase):
         ''' Threadsafe wrapper to send a message. Must be called 
         synchronously.
         '''
-        return call_coroutine_threadsafe(
+        call_coroutine_threadsafe(
             coro = self.send(msg), 
             loop = self._loop
         )
         
         
+class _AutoresponderSession:
+    ''' A request/response websockets connection.
+    MUST ONLY BE CREATED INSIDE AN EVENT LOOP.
+    '''
+    def __init__(self):
+        # Lookup for request token -> queue(maxsize=1)
+        self.pending_responses = {}
+        self._req_lock = asyncio.Lock()
+        
+    async def _gen_req_token(self):
+        ''' Gets a new (well, currently unused) request token. Sets it
+        in pending_responses to prevent race conditions.
+        '''
+        async with self._req_lock:
+            token = self._gen_unused_token()
+            # Do this just so we can release the lock ASAP
+            self.pending_responses[token] = None
+            
+        return token
+            
+    def _gen_unused_token(self):
+        ''' Recursive search for unused token. THIS IS NOT THREADSAFE
+        NOR ASYNC SAFE! Must be called from within parent lock.
+        '''
+        # Get a random-ish (no need for CSRNG) 16-bit token
+        token = random.getrandbits(16)
+        if token in self.pending_responses:
+            token = self._get_unused_token()
+        return token
+        
+        
 class Autoresponder(LooperTrooper):
-    ''' Automated Request-Response system built on an event loop. Must
-    be used with AutoreConnection.
+    ''' Automated Request-Response system built on an event loop.
     
     each req_handler will be passed connection, token, body.
     
@@ -407,6 +398,13 @@ class Autoresponder(LooperTrooper):
         
         # Call a loose LBYL type check on all handlers.
         self._check_handlers()
+        
+        # Lookup connection -> session
+        # Use a weak key dictionary for automatic cleanup when the connections
+        # have no more strong references.
+        self._session_lookup = weakref.WeakKeyDictionary()
+        self._connection_lookup = weakref.WeakKeyDictionary()
+        self._session_lock = None
         
         # This needs to be called last, otherwise we set up the event loop too
         # early.
@@ -547,6 +545,7 @@ class Autoresponder(LooperTrooper):
         to dynamically add them or something silly.
         '''
         self._dumblock = asyncio.Event()
+        self._session_lock = asyncio.Lock()
                 
     async def loop_run(self):
         ''' Will be run ad infinitum until shutdown. Aka, will do 
@@ -570,7 +569,7 @@ class Autoresponder(LooperTrooper):
             target_loop = self._loop,
         )
         
-    async def spawn_handler(connection, msg):
+    async def spawn_handler(self, connection, msg):
         ''' Creates a task to handle the message from the connection.
         '''
         # We can track these later. For now, just create them, and hope it all
@@ -589,11 +588,11 @@ class Autoresponder(LooperTrooper):
             exc = fut.exception()
             logger.warning(
                 ('Unhandled exception while autoresponding! ' +
-                repr(exc) + '\n'
-                ).join(traceback.format_tb(exc.__traceback__))
+                repr(exc) + '\n') + 
+                ''.join(traceback.format_tb(exc.__traceback__))
             )
         
-    async def autoresponder(connection, msg):
+    async def autoresponder(self, connection, msg):
         ''' Actually manages responding to or receiving messages from
         connections.
         
@@ -610,28 +609,29 @@ class Autoresponder(LooperTrooper):
         # potentially endless loop of bugged-out sending garbage.
         
         version, their_token, req_code, body = self._unpack_request(msg)
+        session = self._session_lookup[connection]
 
         if req_code == self._success_code:
             token, response = self.unpack_success(body)
-            await self._wake_sender(connection, token, response)
+            await self._wake_sender(session, token, response)
             
         elif req_code == self._failure_code:
             token, response = self.unpack_failure(body)
-            await self._wake_sender(connection, token, response)
+            await self._wake_sender(session, token, response)
             
         else:
-            await self._handle_request()
+            await self._handle_request(session, req_code, their_token, body)
         
-    async def _handle_request(self, connection, req_code, their_token, body):
+    async def _handle_request(self, session, req_code, their_token, body):
         ''' Handles a request, as opposed to a "success" or "failure" 
         response.
         '''
         try:
-            res_handler = self._get_recv_handler(req_code, msg)
+            res_handler = self._get_recv_handler(req_code, body)
             # Note: we should probably wrap the res_handler into something
             # that tolerates no return value (probably by wrapping None 
             # into b'')
-            response_msg = await res_handler(connection, body)
+            response_msg = await res_handler(session, body)
             response = self.pack_success(
                 their_token = their_token, 
                 data = response_msg,
@@ -641,7 +641,7 @@ class Autoresponder(LooperTrooper):
         except Exception as exc:
             # Instrumentation
             logger.info(
-                'Exception while autoresponding to request: \n'.join(
+                'Exception while autoresponding to request: \n' + ''.join(
                 traceback.format_exc())
             )
             response = self.pack_failure(their_token, exc)
@@ -651,18 +651,62 @@ class Autoresponder(LooperTrooper):
         
         else:
             logger.debug(
-                'SUCCESS', req_code, 'FROM', connection.connid, body[:10]
+                'SUCCESS ' + str(req_code) + 
+                ' FROM SESSION ' + hex(id(session)) + ' ' + 
+                str(body[:10])
             )
         
         finally:
             await self.send(
-                connection = connection,
+                session = session,
                 msg = response,
                 request_code = response_code,
                 await_reply = False
             )
+            
+    def session_factory(self):
+        ''' Added for easier subclassing. Returns a session object.
+        '''
+        return _AutoresponderSession()
         
-    async def send(self, connection, msg, request_code, await_reply=True):
+    @property
+    def any_session(self):
+        ''' Returns an arbitrary session.
+        
+        Mostly useful for Autoresponders that have only one session 
+        (for example, any client in a client/server setup).
+        '''
+        # Connection lookup maps session -> connection.
+        # First treat keys like an iterable
+        # Then grab the "first" of those and return it.
+        return next(iter(self._connection_lookup))
+        
+    async def _generate_session_loopsafe(self, connection):
+        ''' Loopsafe wrapper for generating sessions.
+        '''
+        await run_coroutine_loopsafe(
+            self._generate_session(connection),
+            target_loop = self._loop
+        )
+            
+    async def _generate_session(self, connection):
+        ''' Gets the session for the passed connection, or creates one
+        if none exists.
+        
+        Might be nice to figure out a way to bypass the lock on lookup,
+        and only use it for setting.
+        '''
+        async with self._session_lock:
+            try:
+                session = self._session_lookup[connection]
+            except KeyError:
+                session = self.session_factory()
+                self._session_lookup[connection] = session
+                self._connection_lookup[session] = weakref.proxy(connection)
+                
+        return session
+        
+    async def send(self, session, msg, request_code, await_reply=True):
         ''' Creates a request or response.
         
         If await_reply=True, will wait for response and then return its
@@ -672,24 +716,28 @@ class Autoresponder(LooperTrooper):
         '''
         version = self._version
         # Get a token and pack the message.
-        token = connection._gen_req_token()
+        token = await session._gen_req_token()
         
         packed_msg = self._pack_request(version, token, request_code, msg)
         
         # Create an event to signal response waiting and then put the outgoing
         # in the send queue
-        connection.pending_responses[token] = asyncio.Queue(maxsize=1)
+        session.pending_responses[token] = asyncio.Queue(maxsize=1)
             
+        # Send the message
+        connection = self._connection_lookup[session]
         await connection.send_loopsafe(packed_msg)
+        
+        # Start waiting for a response
         response_future = asyncio.ensure_future(
-            self._await_response(connection, token)
+            self._await_response(session, token)
         )
         
         # Wait for the response if desired.
         # Note that this CANNOT be changed to return the future itself, as that
         # would break when wrapping with loopsafe or threadsafe calls.
-        if expect_reply:
-            await asyncio.wait_for(response_future)
+        if await_reply:
+            await asyncio.wait_for(response_future, timeout=None)
             
             if response_future.exception():
                 raise response_future.exception()
@@ -699,7 +747,7 @@ class Autoresponder(LooperTrooper):
         else:
             return response_future
             
-    async def send_loopsafe(self, connection, msg, request_code, await_reply=True):
+    async def send_loopsafe(self, session, msg, request_code, await_reply=True):
         ''' Call send, but wait in a different event loop.
         
         Note that if await_reply is False, the result will be inaccessible.
@@ -708,7 +756,7 @@ class Autoresponder(LooperTrooper):
         # different event loop. That's a problem.
         # Solution: for now, discard the future and return None.
         result = await run_coroutine_loopsafe(
-            coro = self.send(connection, msg, request_code, await_reply),
+            coro = self.send(session, msg, request_code, await_reply),
             target_loop = self._loop
         )
             
@@ -721,13 +769,13 @@ class Autoresponder(LooperTrooper):
             
         return result
         
-    def send_threadsafe(self, connection, msg, request_code, await_reply=True):
+    def send_threadsafe(self, session, msg, request_code, await_reply=True):
         ''' Calls send, in a synchronous, threadsafe way.
         '''
         # See above re: discarding the result if not await_reply.
         result = call_coroutine_threadsafe(
-            coro = self.send(connection, msg, request_code, await_reply),
-            target_loop = self._loop
+            coro = self.send(session, msg, request_code, await_reply),
+            loop = self._loop
         )
             
         if not await_reply:
@@ -749,53 +797,143 @@ class Autoresponder(LooperTrooper):
             logger.warning(
                 ('Unhandled exception in ignored response! ' +
                 repr(exc) + '\n'
-                ).join(traceback.format_tb(exc.__traceback__))
+                ) + ''.join(traceback.format_tb(exc.__traceback__))
             )
         else:
             logger.debug('Response received, but ignored.')
         
-    async def _await_response(self, connection, token):
+    async def _await_response(self, session, token):
         ''' Waits for a response and then cleans up the response stuff.
         '''
         try:
-            response = await connection.pending_responses[token].get()
+            response = await session.pending_responses[token].get()
 
             # If the response was, in fact, an exception, raise it.
             if isinstance(response, Exception):
                 raise response
         
         finally:
-            del connection.pending_responses[token]
+            del session.pending_responses[token]
+            
+        return response
         
-    async def _wake_sender(self, connection, token, response):
-        ''' Attempts to deliver a response to the token at connection.
+    async def _wake_sender(self, session, token, response):
+        ''' Attempts to deliver a response to the token at session.
         '''
         try:
-            waiter = connection.pending_responses[token]
+            waiter = session.pending_responses[token]
             await waiter.put(response)
         except KeyError:
             # Silence KeyErrors that indicate token was not being waited for.
             # No cleanup necessary, since it already doesn't exist.
             logger.info('Received an unexpected or unawaited response.')
-        
-        
-class WSAutoServer:
-    def __init__(self, host, port, req_handlers, success_code, failure_code, 
-    error_lookup=None, birthday_bits=40, debug=False, aengel=True):
+
+
+class Autocomms:
+    ''' Marries an autoresponder to a Client/Server.
+    '''
+    def __init__(self, autoresponder_class, connector_class, 
+    autoresponder_args=None, autoresponder_kwargs=None, connector_args=None,
+    connector_kwargs=None, aengel=True, debug=False):
         ''' Note: aengel is like daemon, but will shut down gracefully 
         if the main thread terminates.
         '''
-        # Automatically find unique, paired names for all potential threads
-        autoresponder_name = None
-        server_name = None
-        aengel_name = None
+        autoresponder_args = self._args_normalizer(autoresponder_args)
+        autoresponder_kwargs = self._kwargs_normalizer(autoresponder_kwargs)
+        connector_args = self._args_normalizer(connector_args)
+        connector_kwargs = self._kwargs_normalizer(connector_kwargs)
+                
+        autoresponder_name, connector_name, aengel_name = \
+            self._generate_threadnames('autoresponder', 'connector', 'aengel')
+                
+        self._autoresponder_name = autoresponder_name
+        self._connector_name = connector_name
+    
+        autoresponder = autoresponder_class(
+            threaded = True,
+            debug = debug,
+            thread_name = autoresponder_name,
+            *autoresponder_args,
+            **autoresponder_kwargs,
+        )
+        self.autoresponder = autoresponder
+        
+        class LinkedConnector(connector_class):
+            async def new_connection(self, *args, **kwargs):
+                connection = await super().new_connection(*args, **kwargs)
+                await autoresponder._generate_session_loopsafe(connection)
+                return connection
+        
+        self.connector = LinkedConnector(
+            receiver = self.autoresponder.receiver,
+            threaded = True,
+            debug = debug,
+            thread_name = connector_name,
+            *connector_args,
+            **connector_kwargs,
+        )
+        
+        if aengel:
+            self._aengel_thread = threading.Thread(
+                target = self._guardian_aengel,
+                daemon = True,
+                name = aengel_name
+            )
+            self._aengel_thread.start()
+            
+    def __getattr__(self, attr):
+        try:
+            value = getattr(self.autoresponder, attr)
+        except AttributeError:
+            try:
+                value = getattr(self.connector, attr)
+            except AttributeError:
+                raise AttributeError(
+                    attr + ' not found at AutoComms, Autoresponder, or '
+                    'Connector instances.'
+                )
+        return value
+            
+    @staticmethod
+    def _args_normalizer(args):
+        if args is None:
+            return []
+        else:
+            return args
+        
+    @staticmethod
+    def _kwargs_normalizer(kwargs):
+        if kwargs is None:
+            return {}
+        else:
+            return kwargs
+        
+    @staticmethod
+    def _generate_threadnames(*prefixes):
+        ''' Generates a matching set of unique threadnames, of the form
+        prefix[0] + '-1', prefix[1] + '-1', etc.
+        '''
         ctr = 0
+        names = []
         
-        existing_threads = set()
+        # Get existing thread NAMES (not the threads themselves!)
+        existing_threadnames = set()
         for t in threading.enumerate():
-            existing_threads.add(t.name)
-        
-        while not autoresponder_name:
+            existing_threadnames.add(t.name)
+            
+        while len(names) != len(prefixes):
+            candidates = [prefix + '-' + str(ctr) for prefix in prefixes]
+            # Check the intersection of candidates and existing names
+            if len(test_names & set(candidates)) > 0:
+                ctr += 1
+            else:
+                names.extend(candidates)
+                
+        return names
+                
+            for test_name in test_names:
+                if test_name in existing_threadnames:
+                    
             test_ares_name = 'autoresponder' + str(ctr)
             test_srvr_name = 'server' + str(ctr)
             test_angl_name = 'aengel' + str(ctr)
@@ -809,34 +947,6 @@ class WSAutoServer:
                 server_name = test_srvr_name
                 aengel_name = test_angl_name
     
-        self._autoresponder = Autoresponder(
-            req_handlers = req_handlers,
-            success_code = success_code,
-            failure_code = failure_code,
-            error_lookup = error_lookup,
-            threaded = True,
-            debug = debug,
-            thread_name = autoresponder_name,
-        )
-        self._server = WSBasicServer(
-            host = host,
-            port = port,
-            receiver = self._autoresponder.receiver,
-            birthday_bits = birthday_bits,
-            connection_class = _AutoreConnection,
-            threaded = True,
-            debug = debug,
-            thread_name = server_name,
-        )
-        
-        if aengel:
-            self._aengel_thread = threading.Thread(
-                target = self._guardian_aengel,
-                daemon = False,
-                name = aengel_name
-            )
-            self._aengel_thread.start()
-        
     def _guardian_aengel(self):
         ''' Automatically watches for termination of the main thread and
         then closes the autoresponder and server gracefully.
@@ -846,103 +956,47 @@ class WSAutoServer:
         self.stop()
         
     def stop(self):
-        self._server.stop_threadsafe()
-        self._autoresponder.stop_threadsafe()
-    
-    async def send(self, *args, **kwargs):
-        yield from self._autoresponder.send(*args, **kwargs)
-        
-    async def send_loopsafe(self, *args, **kwargs):
-        yield from self._autoresponder.send(*args, **kwargs)
-        
-    def send_threadsafe(self, *args, **kwargs):
-        self._autoresponder.send_threadsafe(*args, **kwargs)
-        
-        
-class WSAutoClient:
-    def __init__(self, host, port, req_handlers, success_code, failure_code, 
-    error_lookup=None, birthday_bits=40, debug=False, aengel=True):
-        ''' Note: aengel is like daemon, but will shut down gracefully 
-        if the main thread terminates.
-        '''
-        # Automatically find unique, paired names for all potential threads
-        autoresponder_name = None
-        client_name = None
-        aengel_name = None
-        ctr = 0
-        
-        existing_threads = set()
-        for t in threading.enumerate():
-            existing_threads.add(t.name)
-        
-        while not autoresponder_name:
-            test_ares_name = 'autoresponder' + str(ctr)
-            test_clnt_name = 'client' + str(ctr)
-            test_angl_name = 'aengel' + str(ctr)
+        try:
+            self._connector.stop_threadsafe()
+        except:
+            # This is very precarious. Swallow all exceptions.
+            logger.error(
+                'Swallowed exception while closing ' + 
+                self._connector_name + '.\n' + ''.join(
+                traceback.format_exc())
+            )
             
-            if (test_ares_name in existing_threads or 
-            test_clnt_name in existing_threads or
-            test_angl_name in existing_threads):
-                ctr += 1
-            else:
-                autoresponder_name = test_ares_name
-                client_name = test_clnt_name
-                aengel_name = test_angl_name
-    
-        self._autoresponder = Autoresponder(
-            req_handlers = req_handlers,
-            success_code = success_code,
-            failure_code = failure_code,
-            error_lookup = error_lookup,
-            threaded = True,
-            debug = debug,
-            thread_name = autoresponder_name,
-        )
-        self._client = WSBasicServer(
-            host = host,
-            port = port,
-            receiver = self._autoresponder.receiver,
-            birthday_bits = birthday_bits,
-            connection_class = _AutoreConnection,
-            threaded = True,
-            debug = debug,
-            thread_name = client_name,
-        )
-        
-        if aengel:
-            self._aengel_thread = threading.Thread(
-                target = self._guardian_aengel,
-                daemon = False,
-                name = aengel_name
+        try:
+            self._autoresponder.stop_threadsafe()
+        except:
+            # This is very precarious. Swallow all exceptions.
+            logger.error(
+                'Swallowed exception while closing ' + 
+                self._autoresponder_name + '.\n' + ''.join(
+                traceback.format_exc())
             )
-            self._aengel_thread.start()
-        
-    def _guardian_aengel(self):
-        ''' Automatically watches for termination of the main thread and
-        then closes the autoresponder and server gracefully.
-        '''
-        watcher = threading.main_thread()
-        watcher.join()
-        self.stop()
-        
-    def stop(self):
-        self._client.stop_threadsafe()
-        self._autoresponder.stop_threadsafe()
     
     async def send(self, *args, **kwargs):
-        yield from self._autoresponder.send(*args, **kwargs)
+        return (await self.autoresponder.send(*args, **kwargs))
         
     async def send_loopsafe(self, *args, **kwargs):
-        yield from self._autoresponder.send(*args, **kwargs)
+        return (await self.autoresponder.send(*args, **kwargs))
         
     def send_threadsafe(self, *args, **kwargs):
-        self._autoresponder.send_threadsafe(*args, **kwargs)
-        
-    @property
-    def connection(self):
-        ''' Read-only access to the connection.
-        '''
-        return self._client._connection
+        return self.autoresponder.send_threadsafe(*args, **kwargs)
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1282,7 +1336,7 @@ class ReqResWSBase(ConnectorBase):
                     self._handle_failure(connection, body)
                     continue
                 
-                res_handler = self._get_recv_handler(req_code, msg)
+                res_handler = self._get_recv_handler(req_code, body)
                 # Note: we should probably wrap the res_handler into something
                 # that tolerates no return value (probably by wrapping None 
                 # into b'')
