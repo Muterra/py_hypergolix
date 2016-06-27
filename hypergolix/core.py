@@ -92,8 +92,8 @@ from .exceptions import DispatchWarning
 from .persisters import _PersisterBase
 from .persisters import MemoryPersister
 
-from .ipc_hosts import _IPCBase
-from .ipc_hosts import _EndpointBase
+# from .ipc import _IPCBase
+# from .ipc import _EndpointBase
         
 # ###############################################
 # Utilities, etc

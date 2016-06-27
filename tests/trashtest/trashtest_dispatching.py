@@ -47,8 +47,8 @@ from hypergolix import AgentBase
 from hypergolix.persisters import MemoryPersister
 from hypergolix.core import Dispatcher
 from hypergolix.utils import DispatchObj
-from hypergolix.embeds import _TestEmbed
-from hypergolix.ipc_hosts import _EndpointBase
+from hypergolix.ipc import _TestEmbed
+# from hypergolix.ipc import _EndpointBase
 
 
 # ###############################################
@@ -64,7 +64,8 @@ class _TestDispatch(AgentBase, Dispatcher, _TestEmbed):
         pass
 
 
-class _TestEndpoint(_EndpointBase):
+# class _TestEndpoint(_EndpointBase):
+class _TestEndpoint:
     def __init__(self, name, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__name = name

@@ -52,8 +52,8 @@ from golix import Ghid
 from hypergolix.core import AgentBase
 from hypergolix.core import Dispatcher
 from hypergolix.persisters import WSPersister
-from hypergolix.ipc_hosts import WebsocketsIPC
-from hypergolix.embeds import WebsocketsEmbed
+# from hypergolix.ipc import WebsocketsIPC
+# from hypergolix.ipc import WebsocketsEmbed
 
 
 # ###############################################

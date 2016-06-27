@@ -49,9 +49,13 @@ from hypergolix.core import Dispatcher
 
 from hypergolix.persisters import MemoryPersister
 
-from hypergolix.ipc_hosts import WebsocketsIPC
+from hypergolix.comms import Autocomms
+from hypergolix.comms import WSBasicServer
+from hypergolix.comms import WSBasicClient
+from hypergolix.ipc import IPCHost
+from hypergolix.ipc import IPCEmbed
 
-from hypergolix.embeds import WebsocketsEmbed
+# from hypergolix.embeds import WebsocketsEmbed
 
 
 class WebsocketsHost(WebsocketsIPC, Dispatcher, AgentBase):

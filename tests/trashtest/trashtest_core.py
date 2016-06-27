@@ -50,7 +50,7 @@ from hypergolix import DynamicObject
 from hypergolix.exceptions import NakError
 from hypergolix.exceptions import PersistenceWarning
 
-from hypergolix.embeds import _TestEmbed
+from hypergolix.ipc import _TestEmbed
 
 # from hypergolix.embeds import _EmbedBase
 
