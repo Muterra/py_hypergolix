@@ -49,6 +49,7 @@ from hypergolix.core import Dispatcher
 
 from hypergolix.persisters import MemoryPersister
 
+from hypergolix.utils import Aengel
 from hypergolix.comms import Autocomms
 from hypergolix.comms import WSBasicServer
 from hypergolix.comms import WSBasicClient
@@ -58,9 +59,14 @@ from hypergolix.ipc import IPCEmbed
 # from hypergolix.embeds import WebsocketsEmbed
 
 
-class WebsocketsHost(WebsocketsIPC, Dispatcher, AgentBase):
+# ###############################################
+# Testing fixtures
+# ###############################################
+
+
+class MockCore(Dispatcher, AgentBase):
     def __init__(self, persister, *args, **kwargs):
-        super().__init__(dispatcher=self, dispatch=self, persister=persister, *args, **kwargs)
+        super().__init__(dispatcher=self, persister=persister, *args, **kwargs)
     
     
 # class WebsocketsApp(WSReqResClient):
@@ -94,47 +100,70 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.persister = MemoryPersister()
+        cls.aengel = Aengel()
         
-        cls.alice = WebsocketsHost(
-            persister = cls.persister,
-            host = 'localhost',
-            port = 4628,
-            debug = True
+        cls.alice_core = MockCore(persister=cls.persister)
+        cls.alice = Autocomms(
+            autoresponder_class = IPCHost,
+            autoresponder_kwargs = {'dispatch': cls.alice_core},
+            connector_class = WSBasicServer,
+            connector_kwargs = {
+                'host': 'localhost',
+                'port': 4628,
+            },
+            debug = True,
+            aengel = cls.aengel,
         )
         
         time.sleep(.5)
         
-        cls.bob = WebsocketsHost(
-            persister = cls.persister,
-            host = 'localhost',
-            port = 4629,
-            debug = True
+        cls.bob_core = MockCore(persister=cls.persister)
+        cls.bob = Autocomms(
+            autoresponder_class = IPCHost,
+            autoresponder_kwargs = {'dispatch': cls.bob_core},
+            connector_class = WSBasicServer,
+            connector_kwargs = {
+                'host': 'localhost',
+                'port': 4629,
+            },
+            debug = True,
+            aengel = cls.aengel,
         )
         
         time.sleep(.5)
         
-        cls.app1 = WebsocketsEmbed(
-            host = 'localhost', 
-            port = 4628, 
-            debug = True
+        cls.app1 = Autocomms(
+            autoresponder_class = IPCEmbed,
+            connector_class = WSBasicClient,
+            connector_kwargs = {
+                'host': 'localhost',
+                'port': 4628,
+            },
+            debug = True,
+            aengel = cls.aengel,
         )
-        
         time.sleep(.5)
+        cls.app1endpoint = cls.alice.any_session
         
-        cls.app1endpoint = list(cls.alice.connections.values())[0]
-        
-        cls.app2 = WebsocketsEmbed(
-            host = 'localhost', 
-            port = 4628, 
-            # debug = True
+        cls.app2 = Autocomms(
+            autoresponder_class = IPCEmbed,
+            connector_class = WSBasicClient,
+            connector_kwargs = {
+                'host': 'localhost',
+                'port': 4628,
+            },
+            debug = True,
+            aengel = cls.aengel,
         )
-        
         time.sleep(.5)
-        
-        endpoints = set(cls.alice.connections.values())
+        endpoints = set(cls.alice.sessions)
         cls.app2endpoint = list(endpoints - {cls.app1endpoint})[0]
         
         cls.__api_id = bytes(64) + b'1'
+        
+        # Should these be moved into a dedicated test? Probably.
+        cls.app1.new_token_threadsafe()
+        cls.app2.new_token_threadsafe()
         
     def test_client1(self):
         pt0 = b'I am a sexy stagnant beast.'
@@ -148,12 +177,12 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         print(self.app1.app_token)
         
         # Test whoami
-        whoami = self.app1.whoami
+        whoami = self.app1.whoami_threadsafe()
         print('whoami', whoami)
         
         # Test registering an api_id
-        self.app1.register_api(self.__api_id, _objhandler)
-        self.app2.register_api(self.__api_id, _objhandler)
+        self.app1.register_api_threadsafe(self.__api_id, _objhandler)
+        self.app2.register_api_threadsafe(self.__api_id, _objhandler)
         self.assertIn(self.__api_id, self.app1endpoint.apis)
         
         obj1 = self.app1.new_object(
@@ -187,20 +216,21 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         joint3 = self.app2.get_object(obj3.address)
         self.assertEqual(obj3, joint3)
         
-        self.app1.share_object(obj3, self.bob.whoami)
-        self.assertIn(obj3.address, self.bob._orphan_shares_incoming)
+        # Note that this is calling bob's DISPATCH whoami, NOT an app whoami.
+        self.app1.share_object(obj3, self.bob_core.whoami)
+        self.assertIn(obj3.address, self.bob_core._orphan_shares_incoming)
         
         frozen3 = self.app1.freeze_object(obj3)
         self.assertEqual(frozen3.state, obj3.state)
         
         self.app2.hold_object(joint3)
-        self.assertIn(obj3.address, self.alice._holdings)
+        self.assertIn(obj3.address, self.alice_core._holdings)
         
         self.app2.discard_object(joint3)
-        self.assertIn(self.app2endpoint.app_token, self.alice._discarders_by_ghid[obj3.address])
+        self.assertIn(self.app2endpoint.app_token, self.alice_core._discarders_by_ghid[obj3.address])
         self.assertTrue(joint3._inoperable)
         
-        # self.assertIn(obj1.address, self.alice._state_by_ghid)
+        # self.assertIn(obj1.address, self.alice_core._state_by_ghid)
         
         self.app1.delete_object(obj1)
         self.assertNotIn(obj1.address, self.persister._store)
@@ -214,11 +244,11 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         # with warnings.catch_warnings():
         #     warnings.simplefilter('ignore')
         #     IPython.embed()
-    
+        
     @classmethod
     def tearDownClass(cls):
-        time.sleep(1)
+        cls.aengel.stop()
 
 if __name__ == "__main__":
-    logging.basicConfig(filename='ipchosts.log',level=logging.DEBUG)
+    logging.basicConfig(filename='logs/ipchosts.log', level=logging.DEBUG)
     unittest.main()

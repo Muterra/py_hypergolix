@@ -66,31 +66,34 @@ class _TestDispatch(AgentBase, Dispatcher, _TestEmbed):
 
 # class _TestEndpoint(_EndpointBase):
 class _TestEndpoint:
-    def __init__(self, name, *args, **kwargs):
+    def __init__(self, name, dispatch, apis, app_token=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__name = name
         self._assigned_objs = []
         self._failed_objs = []
+        self.dispatch = dispatch
+        self.app_token = self.dispatch.new_token()
+        self.apis = set(apis)
         
-    def send_object(self, obj, state=None):
+    def notify_object_threadsafe(self, obj, state=None):
         self._assigned_objs.append(obj)
         print('Endpoint ', self.__name, ' incoming: ', obj)
         
-    def send_update(self, obj, state=None):
-        self._assigned_objs.append(obj)
-        print('Endpoint ', self.__name, ' updated: ', obj)
+    # def send_update(self, obj, state=None):
+    #     self._assigned_objs.append(obj)
+    #     print('Endpoint ', self.__name, ' updated: ', obj)
         
-    def send_delete(self, ghid):
+    def send_delete_threadsafe(self, ghid):
         ''' Notifies the endpoint that the object has been deleted 
         upstream.
         '''
         print('Endpoint ', self.__name, ' received delete: ', obj)
         
-    def notify_share_failure(self, obj, recipient):
+    def notify_share_failure_threadsafe(self, obj, recipient):
         self._failed_objs.append(obj)
         print('Endpoint ', self.__name, ' failed: ', obj)
         
-    def notify_share_success(self, obj, recipient):
+    def notify_share_success_threadsafe(self, obj, recipient):
         self._assigned_objs.append(obj)
         print('Endpoint ', self.__name, ' success: ', obj)
 
@@ -110,7 +113,8 @@ class TestDispatching(unittest.TestCase):
         cls.endpoint1 = _TestEndpoint(
             dispatch = cls.agent1,
             apis = [cls.__api_id],
-            name = 'Agent1, ep1'
+            # app_token = b'1234',
+            name = 'Agent1, ep1',
         )
         cls.agent1.register_endpoint(cls.endpoint1)
         
@@ -118,12 +122,14 @@ class TestDispatching(unittest.TestCase):
         cls.endpoint2 = _TestEndpoint(
             dispatch = cls.agent2,
             apis = [cls.__api_id],
-            name = 'Agent2, ep1'
+            # app_token = b'5678',
+            name = 'Agent2, ep1',
         )
         cls.endpoint3 = _TestEndpoint(
             dispatch = cls.agent2,
             apis = [cls.__api_id],
-            name = 'Agent2, ep2'
+            # app_token = b'9101',
+            name = 'Agent2, ep2',
         )
         cls.agent2.register_endpoint(cls.endpoint2)
         cls.agent2.register_endpoint(cls.endpoint3)

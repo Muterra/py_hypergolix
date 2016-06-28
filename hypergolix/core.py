@@ -94,6 +94,16 @@ from .persisters import MemoryPersister
 
 # from .ipc import _IPCBase
 # from .ipc import _EndpointBase
+
+
+# ###############################################
+# Logging boilerplate
+# ###############################################
+
+
+import logging
+logger = logging.getLogger(__name__)
+
         
 # ###############################################
 # Utilities, etc
@@ -1147,6 +1157,7 @@ class Dispatcher(DispatcherBase):
             address = self.new_static(state=wrapped_state)
             
         self.register_object(address, self.whoami, state, api_id, app_token, dynamic)
+        
         # Note: should we add some kind of mechanism to defer passing to other 
         # endpoints until we update the one that actually requested the obj?
         self._distribute_to_endpoints(
@@ -1508,7 +1519,16 @@ class Dispatcher(DispatcherBase):
             except KeyError as e:
                 raise ValueError('Invalid command.') from e
                 
-            do_dispatch(ghid, *args, **kwargs)
+            # TODO: fix leaky abstraction that's causing us to spit out threads
+            wargs = [ghid]
+            wargs.extend(args)
+            worker = threading.Thread(
+                target = do_dispatch,
+                daemon = True,
+                args = wargs,
+                kwargs = kwargs,
+            )
+            worker.start()
     
     def register_endpoint(self, endpoint):
         ''' Registers an endpoint and all of its appdefs / APIs. If the

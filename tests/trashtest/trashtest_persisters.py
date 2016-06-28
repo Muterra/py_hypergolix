@@ -42,8 +42,14 @@ import logging
 
 # These are normal imports
 from hypergolix.persisters import MemoryPersister
-from hypergolix.persisters import WSPersisterBridge
-from hypergolix.persisters import WSPersister
+from hypergolix.persisters import PersisterBridgeServer
+from hypergolix.persisters import PersisterBridgeClient
+
+from hypergolix.utils import Aengel
+
+from hypergolix.comms import Autocomms
+from hypergolix.comms import WSBasicServer
+from hypergolix.comms import WSBasicClient
 
 from hypergolix.exceptions import NakError
 from hypergolix.exceptions import PersistenceWarning
@@ -55,7 +61,7 @@ from golix import SecondParty
 from golix import FirstParty
 
 # ###############################################
-# Testing
+# Test fixtures
 # ###############################################
 
 
@@ -74,6 +80,11 @@ def subs_notification_checker(timeout=5):
     result = SUBS_NOTIFIER.wait(timeout)
     SUBS_NOTIFIER.clear()
     return result
+
+
+# ###############################################
+# Unified persister testing (bad division of concerns)
+# ###############################################
     
     
 class _GenericPersisterTest:
@@ -495,6 +506,11 @@ class _GenericPersisterTest:
         #     warnings.simplefilter('ignore')
         #     IPython.embed()
 
+
+# ###############################################
+# Testing
+# ###############################################
+
     
 class MemoryPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
     @classmethod
@@ -509,26 +525,45 @@ class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
     @classmethod
     def setUpClass(cls):
         cls.backend = MemoryPersister()
-        cls.server = WSPersisterBridge(
-            persister = cls.backend,
-            host = 'localhost',
-            port = 5358,
-            threaded = True,
-        )
-        cls.persister = WSPersister(
-            host = 'localhost',
-            port = 5358,
-            threaded = True,
-        )
         cls.vault = cls.backend._store
         cls.debindings_by_ghid = cls.backend._targets_debind
         cls.debound_by_ghid = cls.backend._debindings
-    
+        
+        cls.aengel = Aengel()
+        cls.server = Autocomms(
+            autoresponder_class = PersisterBridgeServer,
+            autoresponder_kwargs = { 'persister': cls.backend, },
+            connector_class = WSBasicServer,
+            connector_kwargs = {
+                'host': 'localhost',
+                'port': 5358,
+                # 48 bits = 1% collisions at 2.4 e 10^6 connections
+                'birthday_bits': 48,
+            },
+            debug = True,
+            aengel = cls.aengel,
+        )
+        
+        time.sleep(.5)
+        
+        cls.persister = Autocomms(
+            autoresponder_class = PersisterBridgeClient,
+            connector_class = WSBasicClient,
+            connector_kwargs = {
+                'host': 'localhost',
+                'port': 5358,
+            },
+            debug = True,
+            aengel = cls.aengel,
+        )
+        
+        time.sleep(.5)
+        
     @classmethod
     def tearDownClass(cls):
-        cls.persister.halt()
-        cls.server.halt()
-        time.sleep(1)
+        cls.aengel.stop()
+        
 
 if __name__ == "__main__":
+    logging.basicConfig(filename='logs/persisters.log', level=logging.DEBUG)
     unittest.main()

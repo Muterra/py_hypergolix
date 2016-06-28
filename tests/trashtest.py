@@ -59,14 +59,16 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     # Override the module-level logger definition to root
-    logger = logging.getLogger()
+    # logger = logging.getLogger()
     # For now, log to console
-    log_handler = logging.StreamHandler()
+    # log_handler = logging.StreamHandler()
     if args.debug or args.traceur:
-        log_handler.setLevel(logging.DEBUG)
+        logging.basicConfig(filename='logs/full.log', level=logging.DEBUG)
+        # log_handler.setLevel(logging.DEBUG)
     else:
-        log_handler.setLevel(logging.WARNING)
-    logger.addHandler(log_handler)
+        logging.basicConfig(filename='logs/full.log', level=logging.WARNING)
+        # log_handler.setLevel(logging.WARNING)
+    # logger.addHandler(log_handler)
     
     # Dammit unittest using argparse
     sys.argv[1:] = args.unittest_args

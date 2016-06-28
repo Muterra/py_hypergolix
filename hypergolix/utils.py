@@ -1366,9 +1366,16 @@ class LooperTrooper(metaclass=abc.ABCMeta):
     if threaded evaluates to False, must call LooperTrooper().start() to
     get the ball rolling.
     
+    If aengel is not None, will immediately attempt to register self 
+    with the aengel to guard against main thread completion causing an
+    indefinite hang.
+    
     *args and **kwargs are passed to the required async def loop_init.
     '''
-    def __init__(self, threaded, thread_name=None, debug=False, *args, **kwargs):
+    def __init__(self, threaded, thread_name=None, debug=False, aengel=None, *args, **kwargs):
+        if aengel is not None:
+            aengel.prepend_guardling(self)
+        
         super().__init__(*args, **kwargs)
         
         self._shutdown_init_flag = None
@@ -1450,7 +1457,8 @@ class LooperTrooper(metaclass=abc.ABCMeta):
     def stop_threadsafe(self):
         ''' Stops the loop EXTERNALLY.
         '''
-        self._loop.call_soon_threadsafe(self._shutdown_init_flag.set)
+        if not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._shutdown_init_flag.set)
         self._shutdown_complete_flag.wait()
         
     async def catch_interrupt(self):
@@ -1524,9 +1532,84 @@ class LooperTrooper(metaclass=abc.ABCMeta):
     def _raise_if_exc(fut):
         if fut.exception():
             raise fut.exception()
+            
+            
+class Aengel:
+    ''' Watches for completion of the main thread and then automatically
+    closes any other threaded objects (that have been registered with 
+    the Aengel) by calling their close methods.
+    '''
+    def __init__(self, threadname='aengel', guardlings=None):
+        ''' Creates an aengel.
         
+        Uses threadname as the thread name.
         
-
+        guardlings is an iterable of threaded objects to watch. Each 
+        must have a stop_threadsafe() method, which will be invoked upon 
+        completion of the main thread, from the aengel's own thread. The
+        aengel WILL NOT prevent garbage collection of the guardling 
+        objects; they are internally referenced weakly.
+        
+        They will be called **in the order that they were added.**
+        '''
+        # I would really prefer this to be an orderedset, but oh well.
+        # That would actually break weakref proxies anyways.
+        self._guardlings = collections.deque()
+        
+        if guardlings is not None:
+            for guardling in guardlings:
+                self.append_guardling(guardling)
+            
+        self._thread = threading.Thread(
+            target = self._watcher,
+            daemon = True,
+            name = threadname,
+        )
+        self._thread.start()
+        
+    def append_guardling(self, guardling):
+        if not isinstance(guardling, weakref.ProxyTypes):
+            guardling = weakref.proxy(guardling)
+            
+        self._guardlings.append(guardling)
+        
+    def prepend_guardling(self, guardling):
+        if not isinstance(guardling, weakref.ProxyTypes):
+            guardling = weakref.proxy(guardling)
+            
+        self._guardlings.appendleft(guardling)
+        
+    def remove_guardling(self, guardling):
+        ''' Attempts to remove the first occurrence of the guardling.
+        Raises ValueError if guardling is unknown.
+        '''
+        try:
+            self._guardlings.remove(guardling)
+        except ValueError:
+            logger.error('Missing guardling ' + repr(guardling))
+            logger.error('State: ' + repr(self._guardlings))
+            raise
+    
+    def _watcher(self):
+        ''' Automatically watches for termination of the main thread and
+        then closes the autoresponder and server gracefully.
+        '''
+        main = threading.main_thread()
+        main.join()
+        self.stop()
+        
+    def stop(self):
+        ''' Call stop_threadsafe on all guardlings.
+        '''
+        for guardling in self._guardlings:
+            try:
+                guardling.stop_threadsafe()
+            except:
+                # This is very precarious. Swallow all exceptions.
+                logger.error(
+                    'Swallowed exception while closing ' + repr(guardling) + 
+                    '.\n' + ''.join(traceback.format_exc())
+                )
 
 
 

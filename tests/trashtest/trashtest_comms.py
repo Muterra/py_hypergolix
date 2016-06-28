@@ -44,12 +44,12 @@ import random
 import traceback
 import logging
 
+from hypergolix.utils import Aengel
+
 from hypergolix.comms import WSBasicServer
 from hypergolix.comms import WSBasicClient
-from hypergolix.comms import WSAutoServer
-from hypergolix.comms import WSAutoClient
-# from hypergolix.comms import WSReqResServer
-# from hypergolix.comms import WSReqResClient
+from hypergolix.comms import Autoresponder
+from hypergolix.comms import Autocomms
 
 from hypergolix.exceptions import RequestFinished
 
@@ -59,175 +59,8 @@ from hypergolix.exceptions import RequestFinished
 # ###############################################
 
 
-# class BareTestServer(WSBasicServer):
-#     def __init__(self, *args, **kwargs):
-#         self._incoming_counter = 0
-#         super().__init__(*args, **kwargs)
-        
-#         self.producer_thread = threading.Thread(
-#             target = self.producer,
-#             daemon = True,
-#         )
-#         self.producer_thread.start()
-#         self.consumer_thread = threading.Thread(
-#             target = self.consumer,
-#             daemon = True,
-#         )
-#         self.consumer_thread.start()
-    
-#     @asyncio.coroutine
-#     def init_connection(self, *args, **kwargs):
-#         ''' Does anything necessary to initialize a connection.
-#         '''
-#         # print('----Starting connection.')
-#         connection = yield from super().init_connection(*args, **kwargs)
-#         print('Connection established, Morty #', str(connection.connid), '.')
-#         return connection
-        
-#     def producer(self):
-#         ''' Produces anything needed to send to the connection. Must 
-#         return bytes.
-#         '''
-#         while True:
-#             # This clearly doesn't scale, but we wouldn't normally be iterating
-#             # across all connections to send out something.
-#             for connection in list(self._connections.values()):
-#                 time.sleep(random.randint(1,4))
-#                 print('Get it together, Morty #', str(connection.connid), '.')
-#                 time.sleep(.5)
-#                 # buuuuuuurp
-#                 self.send_threadsafe(connection, b'B' + (b'u' * random.randint(1, 14)) + b'rp')
-        
-#     def consumer(self):
-#         ''' Consumes the msg produced by the websockets receiver 
-#         listening to the connection.
-#         '''
-#         while True:
-#             connection, msg = self.receive_blocking()
-#             print('Shuddup Morty #', str(connection.connid), '.')
-        
-#     @asyncio.coroutine
-#     def handle_producer_exc(self, connection, exc):
-#         ''' Handles the exception (if any) created by the producer task.
-        
-#         exc is either:
-#         1. the exception, if it was raised
-#         2. None, if no exception was encountered
-#         '''
-#         if exc is not None:
-#             print(repr(exc))
-#             traceback.print_tb(exc.__traceback__)
-#             raise exc
-        
-#     @asyncio.coroutine
-#     def handle_listener_exc(self, connection, exc):
-#         ''' Handles the exception (if any) created by the consumer task.
-        
-#         exc is either:
-#         1. the exception, if it was raised
-#         2. None, if no exception was encountered
-#         '''
-#         if exc is not None:
-#             print(repr(exc))
-#             traceback.print_tb(exc.__traceback__)
-#             raise exc
-    
-    
-# class BareTestClient(WSBasicClient):
-#     def __init__(self, name, *args, **kwargs):
-#         super().__init__(*args, **kwargs)
-        
-#         self._incoming_counter = 0
-#         self._name = name
-        
-#         self.producer_thread = threading.Thread(
-#             target = self.producer,
-#             daemon = True,
-#         )
-#         self.producer_thread.start()
-#         self.consumer_thread = threading.Thread(
-#             target = self.consumer,
-#             daemon = True,
-#         )
-#         self.consumer_thread.start()
-    
-#     @asyncio.coroutine
-#     def init_connection(self, *args, **kwargs):
-#         ''' Does anything necessary to initialize a connection.
-#         '''
-#         print('Connection established, Rick.')
-#         return (yield from super().init_connection(*args, **kwargs))
-        
-#     def producer(self):
-#         ''' Produces anything needed to send to the connection. Must 
-#         return bytes.
-#         '''
-#         while True:
-#             time.sleep(random.randint(2,7))
-#             print('Rick, ', self._name, ' wants attention!')
-#             self.send_threadsafe(self.connection, b'Goodbye, Moonman.')
-        
-#     def consumer(self):
-#         ''' Consumes the msg produced by the websockets receiver 
-#         listening to the connection.
-#         '''
-#         while True:
-#             self._incoming_counter += 1
-#             connection, msg = self.receive_blocking()
-#             print(
-#                 'For the ', self._incoming_counter, 
-#                 'th time, Rick just told me, ', self._name, ', ', msg
-#             )
-        
-#     @asyncio.coroutine
-#     def handle_producer_exc(self, connection, exc):
-#         ''' Handles the exception (if any) created by the producer task.
-        
-#         exc is either:
-#         1. the exception, if it was raised
-#         2. None, if no exception was encountered
-#         '''
-#         if exc is not None:
-#             print(repr(exc))
-#             traceback.print_tb(exc.__traceback__)
-#             raise exc
-        
-#     @asyncio.coroutine
-#     def handle_listener_exc(self, connection, exc):
-#         ''' Handles the exception (if any) created by the consumer task.
-        
-#         exc is either:
-#         1. the exception, if it was raised
-#         2. None, if no exception was encountered
-#         '''
-#         if exc is not None:
-#             print(repr(exc))
-#             traceback.print_tb(exc.__traceback__)
-#             raise exc
-
-
-class TestServer(WSAutoServer):
-    def __init__(self, *args, **kwargs):
-        req_handlers = {
-            # Parrot
-            b'!P': self.parrot,
-        }
-        
-        self._incoming_counter = 0
-        
-        super().__init__(
-            req_handlers = req_handlers, 
-            failure_code = b'-S', 
-            success_code = b'+S', 
-            *args, **kwargs)
-        
-    async def parrot(self, connection, msg):
-        # print('Msg from client ' + str(connection.connid) + ': ' + repr(msg))
-        return msg
-    
-    
-class TestClient(WSAutoClient):
-    def __init__(self, name, *args, **kwargs):
+class TestParrot(Autoresponder):
+    def __init__(self, name=None, *args, **kwargs):
         req_handlers = {
             # Parrot
             b'!P': self.parrot,
@@ -242,8 +75,8 @@ class TestClient(WSAutoClient):
             success_code = b'+S', 
             *args, **kwargs)
         
-    async def parrot(self, connection, msg):
-        # print(self._name + ': msg from server: ' + repr(msg))
+    async def parrot(self, session, msg):
+        # print('Msg from client ' + str(connection.connid) + ': ' + repr(msg))
         return msg
         
         
@@ -322,6 +155,8 @@ class WSBasicTrashTest(unittest.TestCase):
             # debug = True
         )
         
+        time.sleep(.5)
+        
         self.client1 = WSBasicClient(
             host = 'localhost', 
             port = 9318, 
@@ -395,24 +230,45 @@ class WSBasicTrashTest(unittest.TestCase):
 class WSAutoTrashtest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.server = TestServer(
-            host = 'localhost',
-            port = 9319,
-            debug = True
+        cls.aengel = Aengel()
+        
+        cls.server = Autocomms(
+            autoresponder_class = TestParrot,
+            connector_class = WSBasicServer,
+            connector_kwargs = {
+                'host': 'localhost',
+                'port': 9319,
+            },
+            debug = True,
+            aengel = cls.aengel,
         )
         
-        cls.client1 = TestClient(
-            host = 'localhost', 
-            port = 9319, 
-            name = 'OneTrueMorty',
-            debug = True
+        time.sleep(1)
+        
+        cls.client1 = Autocomms(
+            autoresponder_class = TestParrot,
+            autoresponder_args = ('OneTrueMorty',),
+            connector_class = WSBasicClient,
+            connector_kwargs = {
+                'host': 'localhost',
+                'port': 9319,
+            },
+            debug = True,
+            aengel = cls.aengel,
         )
         
-        cls.client2 = TestClient(
-            host = 'localhost', 
-            port = 9319, 
-            name = 'HammerMorty',
-            debug = True
+        time.sleep(.5)
+        
+        cls.client2 = Autocomms(
+            autoresponder_class = TestParrot,
+            autoresponder_args = ('HammerMorty',),
+            connector_class = WSBasicClient,
+            connector_kwargs = {
+                'host': 'localhost',
+                'port': 9319,
+            },
+            debug = True,
+            aengel = cls.aengel,
         )
         time.sleep(1)
         
@@ -421,7 +277,7 @@ class WSAutoTrashtest(unittest.TestCase):
             msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
             msg = msg.encode('utf-8')
             response = self.client1.send_threadsafe(
-                connection = self.client1.connection, 
+                session = self.client1.any_session, 
                 msg = msg,
                 request_code = b'!P'
             )
@@ -432,7 +288,7 @@ class WSAutoTrashtest(unittest.TestCase):
             msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
             msg = msg.encode('utf-8')
             response = self.client2.send_threadsafe(
-                connection = self.client2.connection, 
+                session = self.client2.any_session, 
                 msg = msg,
                 request_code = b'!P'
             )
@@ -440,11 +296,11 @@ class WSAutoTrashtest(unittest.TestCase):
         
     def test_server(self):
         for ii in range(TEST_ITERATIONS):
-            for connection in list(self.server._server._connections.values()):
+            for session in self.server.sessions:
                 msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
                 msg = msg.encode('utf-8')
                 response = self.server.send_threadsafe(
-                    connection = connection, 
+                    session = session, 
                     msg = msg,
                     request_code = b'!P'
                 )
@@ -461,12 +317,10 @@ class WSAutoTrashtest(unittest.TestCase):
         #     warnings.simplefilter('ignore')
         #     IPython.embed()
         
-    # @classmethod
-    # def tearDownClass(cls):
-    #     cls.client1.halt()
-    #     cls.client2.halt()
-    #     cls.server.halt()
-    #     # time.sleep(5)
+    @classmethod
+    def tearDownClass(cls):
+        cls.aengel.stop()
+        # time.sleep(5)
 
 import os
 import sys
@@ -513,7 +367,7 @@ if __name__ == "__main__":
     # log_handler = logging.StreamHandler()
     # log_handler.setLevel(logging.DEBUG)
     # logger.addHandler(log_handler)
-    logging.basicConfig(filename='example.log',level=logging.DEBUG)
+    logging.basicConfig(filename='logs/comms.log', level=logging.DEBUG)
     
     unittest.main()
     # with open('std.py', 'w') as f:

@@ -51,7 +51,7 @@ from golix import Ghid
 
 from hypergolix.core import AgentBase
 from hypergolix.core import Dispatcher
-from hypergolix.persisters import WSPersister
+# from hypergolix.persisters import WSPersister
 # from hypergolix.ipc import WebsocketsIPC
 # from hypergolix.ipc import WebsocketsEmbed
 
@@ -70,7 +70,8 @@ logger = logging.getLogger(__name__)
 # ###############################################
 
 
-class HypergolixService(WebsocketsIPC, Dispatcher, AgentBase):
+# class HypergolixService(WebsocketsIPC, Dispatcher, AgentBase):
+class HypergolixService(Dispatcher, AgentBase):
     def __init__(self, host, debug=False, *args, **kwargs):
         super().__init__(
             dispatcher = self, 
@@ -89,7 +90,8 @@ class HypergolixService(WebsocketsIPC, Dispatcher, AgentBase):
         )
         
     
-class HypergolixLink(WebsocketsEmbed):
+# class HypergolixLink(WebsocketsEmbed):
+class HypergolixLink():
     def __init__(self, debug=False, *args, **kwargs):
         super().__init__(
             host = 'localhost', # IPC host

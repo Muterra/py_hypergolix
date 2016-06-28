@@ -33,7 +33,8 @@ hypergolix: A python Golix client.
 # Control * imports.
 __all__ = [
     'IPCHost',
-    'IPCEmbed'
+    'IPCEmbed',
+    'AppObj'
 ]
 
 # External dependencies
@@ -43,6 +44,7 @@ import os
 import warnings
 import weakref
 import threading
+import collections
 
 from golix import Ghid
 
@@ -76,13 +78,10 @@ from .exceptions import IPCError
 
 from .utils import IPCPackerMixIn
 from .utils import RawObj
-from .utils import call_coroutine_threadafe
+from .utils import call_coroutine_threadsafe
 
-from .comms import _WSConnection
 from .comms import _AutoresponderSession
-from .comms import WSBasicServer
 from .comms import Autoresponder
-from .comms import Autocomms
 
 
 # ###############################################
@@ -94,7 +93,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class IPCHostEndpoint(metaclass=abc.ABCMeta):
+class IPCHostEndpoint(_AutoresponderSession):
     ''' An application endpoints, as used by IPC hosts. Must only be 
     created from within an event loop!
     
@@ -106,6 +105,10 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
     since they're only ever called by the dispatch, which doesn't know 
     about the endpoint until it has been successfully registered, we 
     don't need to check for the app token.
+    
+    TODO: in the process of above, will need to modify dispatchers to 
+    accommodate new behavior. That will also standardize the call 
+    signatures for anything involving sessions, connections, etc.
     '''
     def __init__(self, ipc, dispatch, app_token=None, apis=None, *args, **kwargs):
         ''' Creates an endpoint for the specified agent that handles the
@@ -155,7 +158,15 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
         '''
         return frozenset(self._apis)
         
-    def notify_object(self, ghid, state):
+    def notify_object_threadsafe(self, ghid, state):
+        ''' Do that whole threadsafe thing.
+        '''
+        return call_coroutine_threadsafe(
+            coro = self.notify_object(ghid, state),
+            loop = self._ipc._loop
+        )
+        
+    async def notify_object(self, ghid, state):
         ''' Notifies the endpoint that the object is available. May be
         either a new object, or an updated one.
         
@@ -164,10 +175,10 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
         '''
         # if not self._expecting_exchange.locked():
         if ghid in self._known_ghids:
-            self.send_update(ghid, state)
+            await self.send_update(ghid, state)
         else:
             self.register_ghid(ghid)
-            self.send_object(ghid, state)
+            await self.send_object(ghid, state)
             
     def register_ghid(self, ghid):
         ''' Pretty simple wrapper to make sure we know about the ghid.
@@ -177,7 +188,7 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
     def send_object_threadsafe(self, ghid, state):
         return call_coroutine_threadsafe(
             coro = self.send_object(ghid, state),
-            loop = self.ipc._loop
+            loop = self._ipc._loop
         )
         
     async def send_object(self, ghid, state):
@@ -193,9 +204,9 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
         dynamic = self.dispatch._dynamic_by_ghid[ghid]
         api_id = self.dispatch._api_by_ghid[ghid]
         
-        response = await self.ipc.send(
+        response = await self._ipc.send(
             session = self,
-            msg = self.ipc._pack_object_def(
+            msg = self._ipc._pack_object_def(
                 ghid,
                 author,
                 state,
@@ -206,17 +217,17 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
                 dynamic,
                 None
             ),
-            request_code = self.ipc.REQUEST_CODES['send_object'],
+            request_code = self._ipc.REQUEST_CODES['send_object'],
             # Note: for now, just don't worry about failures.
             # Todo: expect reply, and enclose within try/catch to prevent apps
             # from crashing the service.
-            expect_reply = False
+            await_reply = False
         )
     
     def send_update_threadsafe(self, ghid, state):
         return call_coroutine_threadsafe(
             coro = self.send_update(ghid, state),
-            loop = self.ipc._loop
+            loop = self._ipc._loop
         )
     
     async def send_update(self, ghid, state):
@@ -233,9 +244,9 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
         else:
             is_link = False
         
-        response = await self.ipc.send(
+        response = await self._ipc.send(
             session = self,
-            msg = self.ipc._pack_object_def(
+            msg = self._ipc._pack_object_def(
                 ghid,
                 None,
                 state,
@@ -246,9 +257,9 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
                 None,
                 None
             ),
-            request_code = self.ipc.REQUEST_CODES['send_update'],
+            request_code = self._ipc.REQUEST_CODES['send_update'],
             # Note: for now, just don't worry about failures. See previous note
-            expect_reply = False
+            await_reply = False
         )
         # print('Update sent and resuming life.')
         # if response == b'\x01':
@@ -256,10 +267,10 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
         # else:
         #     raise RuntimeError('Unknown error while delivering object update.')
     
-    def send_delete_threadsafe(self, ghid, state):
+    def send_delete_threadsafe(self, ghid):
         return call_coroutine_threadsafe(
             coro = self.send_delete(ghid),
-            loop = self.ipc._loop
+            loop = self._ipc._loop
         )
         
     async def send_delete(self, ghid):
@@ -269,12 +280,12 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
         if not isinstance(ghid, Ghid):
             raise TypeError('ghid must be type Ghid or similar.')
         
-        response = await self.ipc.send(
+        response = await self._ipc.send(
             session = self,
             msg = bytes(ghid),
-            request_code = self.ipc.REQUEST_CODES['send_delete'],
+            request_code = self._ipc.REQUEST_CODES['send_delete'],
             # Note: for now, just don't worry about failures.
-            expect_reply = False
+            await_reply = False
         )
         # print('Update sent and resuming life.')
         # if response == b'\x01':
@@ -284,8 +295,8 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
     
     def notify_share_failure_threadsafe(self, ghid, recipient):
         return call_coroutine_threadsafe(
-            coro = self.notify_share_failure(ghid, state),
-            loop = self.ipc._loop
+            coro = self.notify_share_failure(ghid, recipient),
+            loop = self._ipc._loop
         )
         
     async def notify_share_failure(self, ghid, recipient):
@@ -295,8 +306,8 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
     
     def notify_share_success_threadsafe(self, ghid, recipient):
         return call_coroutine_threadsafe(
-            coro = self.notify_share_success(ghid, state),
-            loop = self.ipc._loop
+            coro = self.notify_share_success(ghid, recipient),
+            loop = self._ipc._loop
         )
         
     async def notify_share_success(self, ghid, recipient):
@@ -305,7 +316,7 @@ class IPCHostEndpoint(metaclass=abc.ABCMeta):
         pass
 
 
-class IPCHost(IPCPackerMixIn, metaclass=abc.ABCMeta):
+class IPCHost(Autoresponder, IPCPackerMixIn):
     ''' Reusable base class for Hypergolix IPC hosts. Subclasses 
     Autoresponder. Combine with a server in an AutoComms to establish 
     IPC over that transport.
@@ -406,7 +417,7 @@ class IPCHost(IPCPackerMixIn, metaclass=abc.ABCMeta):
         Obviously doesn't require an existing app token.
         '''
         app_token = self.dispatch.new_token()
-        endpoint.app_token = app_token
+        endpoint._token = app_token
         endpoint._ctx.set()
         return app_token
         
@@ -647,10 +658,576 @@ class IPCHost(IPCPackerMixIn, metaclass=abc.ABCMeta):
         return b'\x01'
         
         
-class IPCEmbed:
-    ''' The thing you actually put in your app.
+class IPCEmbed(Autoresponder, IPCPackerMixIn):
+    ''' The thing you actually put in your app. Pair with a client in an
+    Autocomms to establish IPC over that transport.
+    
+    Note that each embed has exactly one endpoint. I guess there's not
+    really any reason an application couldn't use multiple embeds, but
+    there really should never be a reason to do that?
+    
+    Todo: asyncify.
     '''
-    pass
+    REQUEST_CODES = {
+        # # Get new app token
+        'new_token': b'+T',
+        # # Register existing app token
+        'set_token': b'$T',
+        # Register an API
+        'register_api': b'$A',
+        # Whoami?
+        'whoami': b'?I',
+        # Get object
+        'get_object': b'>O',
+        # New object
+        'new_object': b'+O',
+        # Sync object
+        'sync_object': b'~O',
+        # Update object
+        'update_object': b'!O',
+        # Share object
+        'share_object': b'@O',
+        # Freeze object
+        'freeze_object': b'*O',
+        # Hold object
+        'hold_object': b'#O',
+        # Discard an object
+        'discard_object': b'-O',
+        # Delete object
+        'delete_object': b'XO',
+    }
+    
+    def __init__(self, *args, **kwargs):
+        ''' Initializes self.
+        '''
+        try:    
+            self._legroom = 3
+        
+        # Something strange using _TestEmbed is causing this, suppress it for
+        # now until technical debt can be reduced
+        except AttributeError:
+            pass
+        
+        # Lookup for ghid -> object
+        self._objs_by_ghid = weakref.WeakValueDictionary()
+        
+        # Track registered callbacks for new objects
+        self._object_handlers = {}
+        
+        # Note that these are only for unsolicited contact from the server.
+        req_handlers = {
+            # Receive/dispatch a new object.
+            b'+O': self.deliver_object_wrapper,
+            # Receive an update for an existing object.
+            b'!O': self.update_object_wrapper,
+            # Receive a delete command.
+            b'XO': self.delete_object_wrapper,
+            # Receive an async notification of a sharing failure.
+            b'^F': self.notify_share_failure_wrapper,
+            # Receive an async notification of a sharing success.
+            b'^S': self.notify_share_success_wrapper,
+        }
+        
+        super().__init__(
+            req_handlers = req_handlers,
+            success_code = b'AK',
+            failure_code = b'NK',
+            # Note: can also add error_lookup = {b'er': RuntimeError}
+            *args, **kwargs
+        )
+    
+    @property
+    def app_token(self):
+        ''' Get your app token, or if you have none, register a new one.
+        '''
+        return self._token
+        
+    @app_token.setter
+    def app_token(self, value):
+        ''' Set your app token.
+        '''
+        self._token = value
+    
+    def whoami_threadsafe(self):
+        ''' Threadsafe wrapper for whoami.
+        '''
+        return call_coroutine_threadsafe(
+            self.whoami(),
+            loop = self._loop,
+        )
+        
+    async def whoami(self):
+        ''' Gets our identity GHID from the hypergolix service.
+        '''
+        raw_ghid = await self.send(
+            session = self.any_session,
+            msg = b'',
+            request_code = self.REQUEST_CODES['whoami']
+        )
+        return Ghid.from_bytes(raw_ghid)
+        
+    def register_api_threadsafe(self, api_id, object_handler=None):
+        return call_coroutine_threadsafe(
+            self.register_api(api_id, object_handler),
+            loop = self._loop,
+        )
+        
+    async def register_api(self, api_id, object_handler=None):
+        ''' Registers an API ID with the hypergolix service for this 
+        application.
+        
+        Note that object handlers must be threadsafe.
+        '''
+        if len(api_id) != 65:
+            raise ValueError('Invalid API ID.')
+        
+        if object_handler is None:
+            object_handler = lambda *args, **kwargs: None
+            
+        if not callable(object_handler):
+            raise TypeError('object_handler must be callable')
+        
+        response = await self.send(
+            session = self.any_session,
+            msg = api_id,
+            request_code = self.REQUEST_CODES['register_api']
+        )
+        if response == b'\x01':
+            self._object_handlers[api_id] = object_handler
+            return True
+        else:
+            raise RuntimeError('Unknown error while registering API.')
+        
+    def get_object(self, ghid):
+        ''' Loads an object into local memory from the hypergolix 
+        service.
+        '''
+        response = self._get_object(ghid)
+        (
+            address,
+            author,
+            state, 
+            is_link, 
+            api_id, 
+            app_token, 
+            private, 
+            dynamic, 
+            _legroom
+        ) = self._unpack_object_def(response)
+        
+        if app_token == bytes(4):
+            app_token = None
+            
+        if is_link:
+            link = Ghid.from_bytes(state)
+            state = self.get_object(link)
+            
+        state = (state, api_id, private, dynamic, _legroom)
+        
+        return AppObj(
+            embed = self,
+            state = state,
+            _preexisting = (address, author),
+        )
+        
+    def _get_object(self, ghid):
+        ''' Loads an object into local memory from the hypergolix 
+        service.
+        '''
+        # Simple enough. super().get_object() will handle converting this to an
+        # actual object.
+        return self.send_threadsafe(
+            session = self.any_session,
+            msg = bytes(ghid),
+            request_code = self.REQUEST_CODES['get_object']
+        )
+        
+    def new_object(self, *args, **kwargs):
+        ''' Alternative constructor for AppObj that does not require 
+        passing the embed explicitly.
+        '''
+        # We don't need to do anything special here, since AppObj will call
+        # _new_object for us.
+        return AppObj(embed=self, *args, **kwargs)
+        
+    def _new_object(self, obj):
+        ''' Handles only the creation of a new object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        
+        return address, author
+        '''
+        
+        if obj.api_id is None and not obj.private:
+            raise TypeError('api_id must be defined for a non-private object.')
+            
+        if obj.private:
+            app_token = self.app_token
+        else:
+            app_token = bytes(4)
+            
+        if obj.is_link:
+            state = obj.link_address
+        else:
+            state = obj.state
+            
+        if obj.is_dynamic:
+            _legroom = obj._legroom
+        else:
+            _legroom = None
+            
+        payload = self._pack_object_def(
+            None,
+            None,
+            state,
+            obj.is_link,
+            obj.api_id,
+            app_token,
+            obj.private,
+            obj.is_dynamic,
+            _legroom
+        )
+        
+        # Note that currently, we're not re-packing the api_id or app_token.
+        response = self.send_threadsafe(
+            session = self.any_session,
+            msg = payload,
+            request_code = self.REQUEST_CODES['new_object']
+        )
+        
+        address = Ghid.from_bytes(response)
+            
+        # Note that the upstream ipc_host will automatically send us updates.
+            
+        return address, self.whoami_threadsafe()
+        
+    def update_object(self, obj, state):
+        ''' Wrapper for obj.update.
+        '''
+        if not obj.is_owned:
+            raise TypeError(
+                'Cannot update an object that was not created by the '
+                'attached Agent.'
+            )
+            
+        # First operate on the object, since it's easier to undo local changes
+        obj._update(state)
+        self._update_object(obj, state)
+        # Todo: add try-catch to revert update after failed upstream push
+        
+        return True
+        
+    def _update_object(self, obj, state):
+        ''' Handles only the updating of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        if isinstance(state, AppObj):
+            state = bytes(state.address)
+        
+        msg = self._pack_object_def(
+            obj.address,
+            None,
+            state,
+            obj.is_link,
+            None,
+            None,
+            None,
+            None,
+            None
+        )
+        
+        response = self.send_threadsafe(
+            session = self.any_session,
+            msg = msg,
+            request_code = self.REQUEST_CODES['update_object']
+        )
+        
+        if response == b'\x01':
+            return True
+        else:
+            raise RuntimeError('Unknown error while updating object.')
+        
+    def sync_object(self, obj):
+        ''' Checks for an update to a dynamic object, and if one is 
+        available, performs an update.
+        '''
+        obj._sync_object()
+        self._sync_object(obj)
+
+    def _sync_object(self, obj):
+        ''' Handles only the syncing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        raise NotImplementedError(
+            'Manual object syncing is not yet supported. Approximate it with '
+            'get_object?'
+        )
+        if obj.is_dynamic:
+            pass
+        else:
+            other = self._get_object(obj.address)
+            if other.state != obj.state:
+                raise RuntimeError(
+                    'Local object state appears to be corrupted.'
+                )
+        
+    def share_object(self, obj, recipient):
+        ''' Shares an object with someone else.
+        '''
+        # Todo: add try-catch to undo local changes after failed upstream share
+        # First operate on the object, since it's easier to undo local changes
+        obj._share(recipient)
+        self._share_object(obj, recipient)
+
+    def _share_object(self, obj, recipient):
+        ''' Handles only the sharing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        response = self.send_threadsafe(
+            session = self.any_session,
+            msg = bytes(obj.address) + bytes(recipient),
+            request_code = self.REQUEST_CODES['share_object']
+        )
+        
+        if response == b'\x01':
+            return True
+        else:
+            raise RuntimeError('Unknown error while updating object.')
+        
+    def freeze_object(self, obj):
+        ''' Converts a dynamic object to a static object.
+        '''
+        obj._freeze()
+        return self._freeze_object(obj)
+
+    def _freeze_object(self, obj):
+        ''' Handles only the freezing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        response = self.send_threadsafe(
+            session = self.any_session,
+            msg = bytes(obj.address),
+            request_code = self.REQUEST_CODES['freeze_object']
+        )
+        address = Ghid.from_bytes(response)
+        return AppObj(
+            embed = self,
+            _preexisting = (address, obj.author),
+            state = (obj.state, obj.api_id, obj.private, False, None)
+        )
+        
+    def hold_object(self, obj):
+        ''' Binds an object, preventing its deletion.
+        '''
+        obj._hold()
+        self._hold_object(obj)
+
+    def _hold_object(self, obj):
+        ''' Handles only the holding of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        response = self.send_threadsafe(
+            session = self.any_session,
+            msg = bytes(obj.address),
+            request_code = self.REQUEST_CODES['hold_object']
+        )
+        
+        if response == b'\x01':
+            return True
+        else:
+            raise RuntimeError('Unknown error while updating object.')
+        
+    def discard_object(self, obj):
+        ''' Attempts to delete an object. May not succeed, if another 
+        Agent has bound to it.
+        '''
+        obj._discard()
+        self._discard_object(obj)
+        
+    def _discard_object(self, obj):
+        ''' Handles only the discarding of an object via the hypergolix
+        service.
+        '''
+        response = self.send_threadsafe(
+            session = self.any_session,
+            msg = bytes(obj.address),
+            request_code = self.REQUEST_CODES['discard_object']
+        )
+        
+        if response != b'\x01':
+            raise RuntimeError('Unknown error while updating object.')
+        
+        del self._objs_by_ghid[obj.address]
+        return True
+        
+    def delete_object(self, obj):
+        ''' Attempts to delete an object. May not succeed, if another 
+        Agent has bound to it.
+        '''
+        obj._delete()
+        self._delete_object(obj)
+
+    def _delete_object(self, obj):
+        ''' Handles only the deleting of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        response = self.send_threadsafe(
+            session = self.any_session,
+            msg = bytes(obj.address),
+            request_code = self.REQUEST_CODES['delete_object']
+        )
+        
+        if response != b'\x01':
+            raise RuntimeError('Unknown error while updating object.')
+        
+        try:
+            del self._objs_by_ghid[obj.address]
+        except KeyError:
+            pass
+        
+        return True
+        
+    async def deliver_object_wrapper(self, session, request_body):
+        ''' Deserializes an incoming object delivery, dispatches it to
+        the application, and serializes a response to the IPC host.
+        '''
+        (
+            address,
+            author,
+            state, 
+            is_link, 
+            api_id,
+            app_token, # Will be unused and set to None 
+            private, # Will be unused and set to None 
+            dynamic,
+            _legroom # Will be unused and set to None
+        ) = self._unpack_object_def(request_body)
+        
+        # Resolve any links
+        if is_link:
+            link = Ghid.from_bytes(state)
+            # Note: this may cause things to freeze, because async
+            state = self.get_object(link)
+            
+        # Okay, now let's create an object for it
+        obj = AppObj(
+            embed = self,
+            state = (state, api_id, False, dynamic, None),
+            _preexisting = (address, author)
+        )
+            
+        # Well this is a huge hack. But something about the event loop 
+        # itself is fucking up control flow and causing the world to hang
+        # here.
+        # TODO: fix this.
+        worker = threading.Thread(
+            target = self._object_handlers[api_id],
+            daemon = True,
+            args = (obj,),
+        )
+        worker.start()
+        
+        # Successful delivery. Return true
+        return b'\x01'
+
+    async def update_object_wrapper(self, session, request_body):
+        ''' Deserializes an incoming object update, updates the AppObj
+        instance(s) accordingly, and serializes a response to the IPC 
+        host.
+        '''
+        (
+            address,
+            author, # Will be unused and set to None
+            state, 
+            is_link, 
+            api_id, # Will be unused and set to None 
+            app_token, # Will be unused and set to None 
+            private, # Will be unused and set to None 
+            dynamic, # Will be unused and set to None 
+            _legroom # Will be unused and set to None
+        ) = self._unpack_object_def(request_body)
+                
+        if address in self._objs_by_ghid:
+            if is_link:
+                link = Ghid.from_bytes(state)
+                # Note: this may cause things to freeze, because async
+                state = self.get_object(link)
+            
+            # Still a hack.
+            # TODO: fix this.
+            worker = threading.Thread(
+                target = self._objs_by_ghid[address]._update,
+                daemon = True,
+                args = (state,),
+            )
+            worker.start()
+            
+            # self._ws_loop.call_soon_threadsafe(, state)
+            # self._objs_by_ghid[address]._update(state)
+            
+            # python tests/trashtest/trashtest_ipc_hosts.py
+            
+        return b'\x01'
+        
+    async def delete_object_wrapper(self, session, request_body):
+        ''' Deserializes an incoming object deletion, and applies it to
+        the object.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        self._objs_by_ghid[ghid]._delete()
+        return b'\x01'
+
+    async def notify_share_failure_wrapper(self, session, request_body):
+        ''' Deserializes an incoming async share failure notification, 
+        dispatches that to the app, and serializes a response to the IPC 
+        host.
+        '''
+        return b''
+
+    async def notify_share_success_wrapper(self, session, request_body):
+        ''' Deserializes an incoming async share failure notification, 
+        dispatches that to the app, and serializes a response to the IPC 
+        host.
+        '''
+        return b''
+    
+    def new_token_threadsafe(self):
+        ''' Threadsafe wrapper for new_token.
+        '''
+        return call_coroutine_threadsafe(
+            self.new_token(),
+            loop = self._loop,
+        )
+        
+    async def new_token(self):
+        ''' Gets a new app_token.
+        '''
+        app_token = await self.send(
+            session = self.any_session,
+            msg = b'',
+            request_code = self.REQUEST_CODES['new_token']
+        )
+        self.app_token = app_token
+        return app_token
+    
+    def set_token_threadsafe(self, app_token):
+        ''' Threadsafe wrapper for set_token.
+        '''
+        return call_coroutine_threadsafe(
+            self.set_token(app_token),
+            loop = self._loop,
+        )
+        
+    async def set_token(self, app_token):
+        ''' Sets an existing token.
+        '''
+        response = await self.send(
+            session = self.any_session,
+            msg = app_token,
+            request_code = self.REQUEST_CODES['set_token']
+        )
+        # If we haven't errored out...
+        self.app_token = app_token
+        return response
 
 
 class AppObj:
@@ -810,7 +1387,7 @@ class AppObj:
         
         returns True/False.
         '''
-        return self._embed.whoami == self.author
+        return self._embed.whoami_threadsafe() == self.author
             
     @property
     def mutable(self):
@@ -1193,385 +1770,18 @@ class AppObj:
         # '''
         # return collated
         
+        
+        
 
-class _EmbedBase(IPCPackerMixIn, metaclass=abc.ABCMeta):
-    ''' Embeds are what you put in the actual application to communicate
-    with the Hypergolix service.
-    
-    Note that each embed will have exactly one endpoint. However, for 
-    some types of IPC systems (ex: filesystems), it may make sense for
-    a single application to use multiple endpoints. Therefore, an 
-    application may want to use multiple embeds.
-    
-    Note that this API will be merged with AgentCore when DynamicObject
-    and StaticObject are reconciled with AppObj.
-    '''
-    def __init__(self, app_token=None, *args, **kwargs):
-        ''' Initializes self.
-        '''
-        try:    
-            self._legroom = 3
-        
-        # Something strange using _TestEmbed is causing this, suppress it for
-        # now until technical debt can be reduced
-        except AttributeError:
-            pass
-        
-        self.app_token = app_token
-        
-        # Lookup for ghid -> object
-        self._objs_by_ghid = WeakValueDictionary()
-        
-        # Track registered callbacks for new objects
-        self._object_handlers = {}
-        
-        super().__init__(*args, **kwargs)
-    
-    @property
-    def app_token(self):
-        ''' Get your app token, or if you have none, register a new one.
-        '''
-        return self._token
-        
-    @app_token.setter
-    def app_token(self, value):
-        ''' Set your app token.
-        '''
-        self._token = value
-    
-    @abc.abstractmethod
-    def register_api(self, api_id):
-        ''' Registers the embed with the service as supporting the
-        passed api_id.
-        
-        May be called multiple times to denote that a single application 
-        endpoint is capable of supporting multiple api_ids.
-        
-        Returns True.
-        '''
-        pass
-        
-    @property
-    @abc.abstractmethod
-    def whoami(self):
-        ''' Return the address of the currently active agent.
-        '''
-        pass
-        
-    def get_object(self, ghid):
-        ''' Loads an object into local memory from the hypergolix 
-        service.
-        '''
-        response = self._get_object(ghid)
-        (
-            address,
-            author,
-            state, 
-            is_link, 
-            api_id, 
-            app_token, 
-            private, 
-            dynamic, 
-            _legroom
-        ) = self._unpack_object_def(response)
-        
-        if app_token == bytes(4):
-            app_token = None
-            
-        if is_link:
-            link = Ghid.from_bytes(state)
-            state = self.get_object(link)
-            
-        state = (state, api_id, private, dynamic, _legroom)
-        
-        return AppObj(
-            embed = self,
-            state = state,
-            _preexisting = (address, author),
-        )
-        
-    @abc.abstractmethod
-    def _get_object(self, ghid):
-        ''' Gets the serialized version of the object from the 
-        hypergolix service.
-        '''
-        pass
-        
-    def new_object(self, *args, **kwargs):
-        ''' Alternative constructor for AppObj that does not require 
-        passing the embed explicitly.
-        '''
-        # We don't need to do anything special here, since AppObj will call
-        # _new_object for us.
-        return AppObj(embed=self, *args, **kwargs)
-        
-    @abc.abstractmethod
-    def _new_object(self, obj):
-        ''' Handles only the creation of a new object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        
-        return address, author
-        '''
-        if obj.api_id is None and not obj.private:
-            raise TypeError('api_id must be defined for a non-private object.')
-            
-        if obj.private:
-            app_token = self.app_token
-        else:
-            app_token = bytes(4)
-            
-        if obj.is_link:
-            state = obj.link_address
-        else:
-            state = obj.state
-            
-        if obj.is_dynamic:
-            _legroom = obj._legroom
-        else:
-            _legroom = None
-            
-        payload = self._pack_object_def(
-            None,
-            None,
-            state,
-            obj.is_link,
-            obj.api_id,
-            app_token,
-            obj.private,
-            obj.is_dynamic,
-            _legroom
-        )
-        
-        return payload, obj.api_id, app_token
-        
-    def update_object(self, obj, state):
-        ''' Wrapper for obj.update.
-        '''
-        if not obj.is_owned:
-            raise TypeError(
-                'Cannot update an object that was not created by the '
-                'attached Agent.'
-            )
-            
-        # First operate on the object, since it's easier to undo local changes
-        obj._update(state)
-        self._update_object(obj, state)
-        # Todo: add try-catch to revert update after failed upstream push
-        
-        return True
-        
-    @abc.abstractmethod
-    def _update_object(self, obj, state):
-        ''' Handles only the updating of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        # If the state is a link, convert it to a ghid and bytes thereof.
-        if isinstance(state, AppObj):
-            state = bytes(state.address)
-        
-        return self._pack_object_def(
-            obj.address,
-            None,
-            state,
-            obj.is_link,
-            None,
-            None,
-            None,
-            None,
-            None
-        )
-        
-    def sync_object(self, obj):
-        ''' Checks for an update to a dynamic object, and if one is 
-        available, performs an update.
-        '''
-        obj._sync_object()
-        self._sync_object(obj)
-        
-    @abc.abstractmethod
-    def _sync_object(self, obj):
-        ''' Handles only the syncing of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass
-        
-    def share_object(self, obj, recipient):
-        ''' Shares an object with someone else.
-        '''
-        # Todo: add try-catch to undo local changes after failed upstream share
-        # First operate on the object, since it's easier to undo local changes
-        obj._share(recipient)
-        self._share_object(obj, recipient)
-        
-    @abc.abstractmethod
-    def _share_object(self, obj, recipient):
-        ''' Handles only the sharing of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass
-        
-    def freeze_object(self, obj):
-        ''' Converts a dynamic object to a static object.
-        '''
-        obj._freeze()
-        return self._freeze_object(obj)
-        
-    @abc.abstractmethod
-    def _freeze_object(self, obj):
-        ''' Handles only the freezing of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass
-        
-    def hold_object(self, obj):
-        ''' Binds an object, preventing its deletion.
-        '''
-        obj._hold()
-        self._hold_object(obj)
-        
-    @abc.abstractmethod
-    def _hold_object(self, obj):
-        ''' Handles only the holding of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass
-        
-    def discard_object(self, obj):
-        ''' Attempts to delete an object. May not succeed, if another 
-        Agent has bound to it.
-        '''
-        obj._discard()
-        self._discard_object(obj)
-        
-    @abc.abstractmethod
-    def _discard_object(self, obj):
-        ''' Handles only the discarding of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass
-        
-    def delete_object(self, obj):
-        ''' Attempts to delete an object. May not succeed, if another 
-        Agent has bound to it.
-        '''
-        obj._delete()
-        self._delete_object(obj)
-        
-    @abc.abstractmethod
-    def _delete_object(self, obj):
-        ''' Handles only the deleting of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass
-        
-    async def deliver_object_wrapper(self, connection, request_body):
-        ''' Deserializes an incoming object delivery, dispatches it to
-        the application, and serializes a response to the IPC host.
-        '''
-        (
-            address,
-            author,
-            state, 
-            is_link, 
-            api_id,
-            app_token, # Will be unused and set to None 
-            private, # Will be unused and set to None 
-            dynamic,
-            _legroom # Will be unused and set to None
-        ) = self._unpack_object_def(request_body)
-        
-        # Resolve any links
-        if is_link:
-            link = Ghid.from_bytes(state)
-            # Note: this may cause things to freeze, because async
-            state = self.get_object(link)
-            
-        # Okay, now let's create an object for it
-        obj = AppObj(
-            embed = self,
-            state = (state, api_id, False, dynamic, None),
-            _preexisting = (address, author)
-        )
-            
-        # Well this is a huge hack. But something about the event loop 
-        # itself is fucking up control flow and causing the world to hang
-        # here. May want to create a dedicated thread just for pushing 
-        # updates? Like autoresponder, but autoupdater?
-        worker = threading.Thread(
-            target = self._object_handlers[api_id],
-            daemon = True,
-            args = (obj,),
-        )
-        worker.start()
-        
-        # Successful delivery. Return true
-        return b'\x01'
 
-    async def update_object_wrapper(self, connection, request_body):
-        ''' Deserializes an incoming object update, updates the AppObj
-        instance(s) accordingly, and serializes a response to the IPC 
-        host.
-        '''
-        (
-            address,
-            author, # Will be unused and set to None
-            state, 
-            is_link, 
-            api_id, # Will be unused and set to None 
-            app_token, # Will be unused and set to None 
-            private, # Will be unused and set to None 
-            dynamic, # Will be unused and set to None 
-            _legroom # Will be unused and set to None
-        ) = self._unpack_object_def(request_body)
-                
-        if address in self._objs_by_ghid:
-            if is_link:
-                link = Ghid.from_bytes(state)
-                # Note: this may cause things to freeze, because async
-                state = self.get_object(link)
-            
-            # Well this is a huge hack. But something about the event loop 
-            # itself is fucking up control flow and causing the world to hang
-            # here. May want to create a dedicated thread just for pushing 
-            # updates? Like autoresponder, but autoupdater?
-            worker = threading.Thread(
-                target = self._objs_by_ghid[address]._update,
-                daemon = True,
-                args = (state,),
-            )
-            worker.start()
-            
-            # self._ws_loop.call_soon_threadsafe(, state)
-            # self._objs_by_ghid[address]._update(state)
-            
-            # python tests/trashtest/trashtest_ipc_hosts.py
-            
-        return b'\x01'
-        
-    async def delete_object_wrapper(self, connection, request_body):
-        ''' Deserializes an incoming object deletion, and applies it to
-        the object.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        self._objs_by_ghid[ghid]._delete()
-        return b'\x01'
 
-    async def notify_share_failure_wrapper(self, connection, request_body):
-        ''' Deserializes an incoming async share failure notification, 
-        dispatches that to the app, and serializes a response to the IPC 
-        host.
-        '''
-        return b''
-
-    async def notify_share_success_wrapper(self, connection, request_body):
-        ''' Deserializes an incoming async share failure notification, 
-        dispatches that to the app, and serializes a response to the IPC 
-        host.
-        '''
-        return b''
+# ###############################################
+# Deprecated, but not yet excised
+# ###############################################
         
         
-class _TestEmbed(_EmbedBase):
+        
+class _TestEmbed:
     def register_api(self, api_id, object_handler=None):
         ''' Just here to silence errors from ABC.
         '''
@@ -1763,563 +1973,3 @@ class _TestEmbed(_EmbedBase):
         service. Does not manage anything to do with the AppObj itself.
         '''
         pass
-        
-        
-class WebsocketsEmbed(_EmbedBase, WSAutoClient):
-    REQUEST_CODES = {
-        # # Get new app token
-        # b'+T': None,
-        # # Register existing app token
-        # b'$T': None,
-        # Register an API
-        'register_api': b'$A',
-        # Whoami?
-        'whoami': b'?I',
-        # Get object
-        'get_object': b'>O',
-        # New object
-        'new_object': b'+O',
-        # Sync object
-        'sync_object': b'~O',
-        # Update object
-        'update_object': b'!O',
-        # Share object
-        'share_object': b'@O',
-        # Freeze object
-        'freeze_object': b'*O',
-        # Hold object
-        'hold_object': b'#O',
-        # Discard an object
-        'discard_object': b'-O',
-        # Delete object
-        'delete_object': b'XO',
-    }
-    
-    def __init__(self, *args, **kwargs):
-        # Note that these are only for unsolicited contact from the server.
-        req_handlers = {
-            # Receive/dispatch a new object.
-            b'+O': self.deliver_object_wrapper,
-            # Receive an update for an existing object.
-            b'!O': self.update_object_wrapper,
-            # Receive a delete command.
-            b'XO': self.delete_object_wrapper,
-            # Receive an async notification of a sharing failure.
-            b'^F': self.notify_share_failure_wrapper,
-            # Receive an async notification of a sharing success.
-            b'^S': self.notify_share_success_wrapper,
-        }
-        
-        super().__init__(
-            req_handlers = req_handlers,
-            success_code = b'AK',
-            failure_code = b'NK',
-            # Note: can also add error_lookup = {b'er': RuntimeError}
-            *args, **kwargs
-        )
-        
-    async def new_connection(self, websocket, path, *args, **kwargs):
-        ''' Wrap super() to add initial app token registration process.
-        '''
-        connection = await super().new_connection(
-            websocket, path, dispatch=self, *args, **kwargs
-        )
-        
-        # First command on the wire MUST be us registering the application.
-        if self.app_token is None:
-            app_token = b''
-            request_code = b'+T'
-        else:
-            app_token = self.app_token
-            request_code = b'$T'
-        
-        msg = self._pack_request(
-            version = self._version, 
-            token = 0, 
-            req_code = request_code, 
-            body = app_token
-        )
-        
-        await websocket.send(msg)
-        reply = await websocket.recv()
-        
-        version, resp_token, resp_code, resp_body = self._unpack_request(reply)
-        
-        if resp_code == self._success_code:
-            # Note: somewhere, app_token consistency should be checked.
-            my_token, app_token = self.unpack_success(resp_body)
-            self.app_token = app_token
-            
-        elif resp_code == self._failure_code:
-            my_token, exc = self.unpack_failure(resp_body)
-            raise IPCError('IPC host denied app registration.') from exc
-            
-        else:
-            raise IPCError(
-                'IPC host did not respond appropriately during initial app '
-                'handshake.'
-            )
-            
-        logger.info('Connection established with IPC server.')
-        return connection
-    
-    @property
-    def whoami(self):
-        ''' Inherited from Agent.
-        '''
-        raw_ghid = self.send_threadsafe(
-            connection = self.connection,
-            msg = b'',
-            request_code = self.REQUEST_CODES['whoami']
-        )
-        return Ghid.from_bytes(raw_ghid)
-        
-    def register_api(self, api_id, object_handler=None):
-        ''' Registers an API ID with the hypergolix service for this 
-        application.
-        
-        Note that object handlers must be threadsafe.
-        '''
-        if len(api_id) != 65:
-            raise ValueError('Invalid API ID.')
-        
-        if object_handler is None:
-            object_handler = lambda *args, **kwargs: None
-            
-        if not callable(object_handler):
-            raise TypeError('object_handler must be callable')
-        
-        response = self.send_threadsafe(
-            connection = self.connection,
-            msg = api_id,
-            request_code = self.REQUEST_CODES['register_api']
-        )
-        if response == b'\x01':
-            self._object_handlers[api_id] = object_handler
-            return True
-        else:
-            raise RuntimeError('Unknown error while registering API.')
-            
-    @asyncio.coroutine
-    def handle_producer_exc(self, connection, exc):
-        ''' Handles the exception (if any) created by the producer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            print(repr(exc))
-            traceback.print_tb(exc.__traceback__)
-            raise exc
-        
-    @asyncio.coroutine
-    def handle_listener_exc(self, connection, exc):
-        ''' Handles the exception (if any) created by the consumer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            print(repr(exc))
-            traceback.print_tb(exc.__traceback__)
-            raise exc
-        
-    @asyncio.coroutine
-    def handle_autoresponder_exc(self, exc, token):
-        ''' Handles the exception (if any) created by the consumer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            print(repr(exc))
-            traceback.print_tb(exc.__traceback__)
-        return repr(exc)
-        
-    def _get_object(self, ghid):
-        ''' Loads an object into local memory from the hypergolix 
-        service.
-        '''
-        # Simple enough. super().get_object() will handle converting this to an
-        # actual object.
-        return self.send_threadsafe(
-            connection = self.connection,
-            msg = bytes(ghid),
-            request_code = self.REQUEST_CODES['get_object']
-        )
-        
-    def _new_object(self, obj):
-        ''' Handles only the creation of a new object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        
-        return address, author
-        '''
-        # Pack and get the payload from super.
-        payload, api_id, app_token = super()._new_object(obj)
-        
-        # Note that currently, we're not re-packing the api_id or app_token.
-        response = self.send_threadsafe(
-            connection = self.connection,
-            msg = payload,
-            request_code = self.REQUEST_CODES['new_object']
-        )
-        
-        address = Ghid.from_bytes(response)
-            
-        # Note that the upstream ipc_host will automatically send us updates.
-            
-        return address, self.whoami
-        
-    def _update_object(self, obj, state):
-        ''' Handles only the updating of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        response = self.send_threadsafe(
-            connection = self.connection,
-            msg = super()._update_object(obj, state),
-            request_code = self.REQUEST_CODES['update_object']
-        )
-        
-        if response == b'\x01':
-            return True
-        else:
-            raise RuntimeError('Unknown error while updating object.')
-
-    def _sync_object(self, obj):
-        ''' Handles only the syncing of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        raise NotImplementedError(
-            'Manual object syncing is not yet supported. Approximate it with '
-            'get_object?'
-        )
-        if obj.is_dynamic:
-            pass
-        else:
-            other = self._get_object(obj.address)
-            if other.state != obj.state:
-                raise RuntimeError(
-                    'Local object state appears to be corrupted.'
-                )
-
-    def _share_object(self, obj, recipient):
-        ''' Handles only the sharing of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        response = self.send_threadsafe(
-            connection = self.connection,
-            msg = bytes(obj.address) + bytes(recipient),
-            request_code = self.REQUEST_CODES['share_object']
-        )
-        
-        if response == b'\x01':
-            return True
-        else:
-            raise RuntimeError('Unknown error while updating object.')
-
-    def _freeze_object(self, obj):
-        ''' Handles only the freezing of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        response = self.send_threadsafe(
-            connection = self.connection,
-            msg = bytes(obj.address),
-            request_code = self.REQUEST_CODES['freeze_object']
-        )
-        address = Ghid.from_bytes(response)
-        return AppObj(
-            embed = self,
-            _preexisting = (address, obj.author),
-            state = (obj.state, obj.api_id, obj.private, False, None)
-        )
-
-    def _hold_object(self, obj):
-        ''' Handles only the holding of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        response = self.send_threadsafe(
-            connection = self.connection,
-            msg = bytes(obj.address),
-            request_code = self.REQUEST_CODES['hold_object']
-        )
-        
-        if response == b'\x01':
-            return True
-        else:
-            raise RuntimeError('Unknown error while updating object.')
-        
-    def _discard_object(self, obj):
-        ''' Handles only the discarding of an object via the hypergolix
-        service.
-        '''
-        response = self.send_threadsafe(
-            connection = self.connection,
-            msg = bytes(obj.address),
-            request_code = self.REQUEST_CODES['discard_object']
-        )
-        
-        if response != b'\x01':
-            raise RuntimeError('Unknown error while updating object.')
-        
-        del self._objs_by_ghid[obj.address]
-        return True
-
-    def _delete_object(self, obj):
-        ''' Handles only the deleting of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        response = self.send_threadsafe(
-            connection = self.connection,
-            msg = bytes(obj.address),
-            request_code = self.REQUEST_CODES['delete_object']
-        )
-        
-        if response != b'\x01':
-            raise RuntimeError('Unknown error while updating object.')
-        
-        try:
-            del self._objs_by_ghid[obj.address]
-        except KeyError:
-            pass
-        
-        return True
-        
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class WSAutoServer:
-    def __init__(self, host, port, req_handlers, success_code, failure_code, 
-    error_lookup=None, birthday_bits=40, debug=False, aengel=True, 
-    connection_class=None, *args, **kwargs):
-        pass
-class WSAutoClient:
-    def __init__(self, host, port, req_handlers, success_code, failure_code, 
-    error_lookup=None, debug=False, aengel=True, connection_class=None, 
-    *args, **kwargs):
-        pass
-    
-    
-class WebsocketsIPC(_IPCBase, WSAutoServer):
-    ''' Websockets IPC via localhost. Sets up a server.
-    '''
-    REQUEST_CODES = {
-        # Receive/dispatch a new object.
-        'send_object': b'+O',
-        # Receive an update for an existing object.
-        'send_update': b'!O',
-        # Receive an update that an object has been deleted.
-        'send_delete': b'XO',
-        # Receive an async notification of a sharing failure.
-        'notify_share_failure': b'^F',
-        # Receive an async notification of a sharing success.
-        'notify_share_success': b'^S',
-    }
-    
-    def __init__(self, *args, **kwargs):
-        req_handlers = {
-            # New app tokens are handled during endpoint creation.
-            # # Get new app token
-            # b'+T': self.new_token_wrapper,
-            # # Register existing app token
-            # b'$T': self,
-            # Register an API
-            b'$A': self.add_api_wrapper,
-            # Whoami?
-            b'?I': self.whoami_wrapper,
-            # Get object
-            b'>O': self.get_object_wrapper,
-            # New object
-            b'+O': self.new_object_wrapper,
-            # Sync object
-            b'~O': self.sync_object_wrapper,
-            # Update object
-            b'!O': self.update_object_wrapper,
-            # Share object
-            b'@O': self.share_object_wrapper,
-            # Freeze object
-            b'*O': self.freeze_object_wrapper,
-            # Hold object
-            b'#O': self.hold_object_wrapper,
-            # Discard object
-            b'-O': self.discard_object_wrapper,
-            # Delete object
-            b'XO': self.delete_object_wrapper,
-        }
-        
-        super().__init__(
-            req_handlers = req_handlers,
-            success_code = b'AK',
-            failure_code = b'NK',
-            connection_class = connection_class,
-            # Note: can also add error_lookup = {b'er': RuntimeError}
-            *args, **kwargs
-        )
-        
-    @property
-    def connection_factory(self):
-        ''' Proxy for connection factory to allow saner subclassing.
-        '''
-        return WSEndpoint
-        
-    async def new_connection(self, websocket, path, *args, **kwargs):
-        ''' Initializes the connection with the client, creating an 
-        endpoint/connection object, and registering it with dispatch.
-        '''
-        # First command on the wire MUST be registering the application.
-        msg = await websocket.recv()
-        # This insulates us from unpacking problems during the except bit
-        req_token = 0
-        try:
-            version, req_token, req_code, body = self._unpack_request(msg)
-            
-            # New app requesting a new token.
-            if req_code == b'+T':
-                app_token = self.dispatch.new_token()
-            # Existing app registering existing token.
-            elif req_code == b'$T':
-                app_token = body[0:4]
-            else:
-                raise ValueError('Improper handshake command.')
-            
-            connection = await super().new_connection(
-                websocket = websocket, 
-                path = path, 
-                app_token = app_token,
-                *args, **kwargs
-            )
-            self.dispatch.register_endpoint(connection)
-            
-        # If anything there went wrong, notify the app and then terminate.
-        except Exception as e:
-            # Send a failure nak and reraise.
-            reply = self._pack_request(
-                version = self._version,
-                token = 0,
-                req_code = self._failure_code,
-                body = self.pack_failure(
-                    their_token = req_token,
-                    exc = e
-                )
-            )
-            await websocket.send(reply)
-            raise
-            
-        # Nothing went wrong, so notify the app and continue.
-        else:
-            # Send a success message and continue.
-            reply = self._pack_request(
-                version = self._version,
-                token = 0,
-                req_code = self._success_code,
-                body = self.pack_success(
-                    their_token = req_token,
-                    data = app_token
-                )
-            )
-            await websocket.send(reply)
-            
-        print('Connection established with embedded client', str(app_token))
-        return connection
-        
-    @asyncio.coroutine
-    def handle_producer_exc(self, connection, exc):
-        ''' Handles the exception (if any) created by the producer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            print(repr(exc))
-            traceback.print_tb(exc.__traceback__)
-            raise exc
-        
-    @asyncio.coroutine
-    def handle_listener_exc(self, connection, exc):
-        ''' Handles the exception (if any) created by the consumer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            print(repr(exc))
-            traceback.print_tb(exc.__traceback__)
-            raise exc
-        
-    @asyncio.coroutine
-    def handle_autoresponder_exc(self, exc, token):
-        ''' Handles the exception (if any) created by the consumer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            print(repr(exc))
-            traceback.print_tb(exc.__traceback__)
-        return repr(exc)

@@ -99,9 +99,10 @@ from .utils import _WeldedSetDeepChainMap
 from .utils import _block_on_result
 from .utils import _JitSetDict
 
-from .comms import WSAutoServer
-from .comms import WSAutoClient
-from .comms import _WSConnection
+# from .comms import WSAutoServer
+# from .comms import WSAutoClient
+from .comms import _AutoresponderSession
+from .comms import Autoresponder
 
 
 # ###############################################
@@ -1009,16 +1010,9 @@ class MemoryPersister(UnsafeMemoryPersister):
 
 class DiskPersister(_PersisterBase):
     pass
-    
-    
-class ProxyPersister(_PersisterBase):
-    ''' Allows for customized persister implementation using an IPC 
-    proxy.
-    '''
-    pass
 
 
-class _PersisterBridgeConnection(_WSConnection):
+class _PersisterBridgeSession(_AutoresponderSession):
     def __init__(self, transport, *args, **kwargs):
         # Copying like this seems dangerous, but I think it should be okay.
         if isinstance(transport, weakref.ProxyTypes):
@@ -1027,21 +1021,49 @@ class _PersisterBridgeConnection(_WSConnection):
             self._transport = weakref.proxy(transport)
             
         self._subscriptions = {}
-        
-        self._processing = threading.Event()
+        self._processing = asyncio.Event()
         
         super().__init__(*args, **kwargs)
     
-    @abc.abstractmethod
     def send_subs_update(self, subscribed_ghid, notification_ghid):
-        ''' Sends a subscription update to the connected client.
+        ''' Send the connection its subscription update.
+        Note that this is going to be called from within an event loop,
+        but not asynchronously (no await).
+        
+        TODO: make persisters async.
         '''
-        pass
+        asyncio.ensure_future(
+            self.send_subs_update_ax(subscribed_ghid, notification_ghid)
+        )
+        # asyncio.run_coroutine_threadsafe(
+        #     coro = self.send_subs_update_ax(subscribed_ghid, notification_ghid)
+        #     loop = self._transport._loop
+        # )
+            
+    async def send_subs_update_ax(self, subscribed_ghid, notification_ghid):
+        ''' Deliver any subscription updates.
+        
+        Also, temporary workaround for not re-delivering updates for 
+        objects we just sent up.
+        '''
+        if not self._processing.is_set():
+            await self._transport.send(
+                session = self,
+                msg = bytes(subscribed_ghid) + bytes(notification_ghid),
+                request_code = self._transport.REQUEST_CODES['send_subs_update'],
+                # Note: for now, just don't worry about failures.
+                await_reply = False
+            )
 
 
-class _PersisterBridgeBase:
+class PersisterBridgeServer(Autoresponder):
     ''' Serialization mixins for persister bridges.
     '''
+    REQUEST_CODES = {
+        # Receive an update for an existing object.
+        'send_subs_update': b'!!',
+    }
+    
     def __init__(self, persister, *args, **kwargs):
         # Copying like this seems dangerous, but I think it should be okay.
         if isinstance(persister, weakref.ProxyTypes):
@@ -1049,216 +1071,6 @@ class _PersisterBridgeBase:
         else:
             self._persister = weakref.proxy(persister)
             
-        super().__init__(*args, **kwargs)
-        
-    @property
-    def connection_factory(self):
-        ''' Proxy for connection factory to allow saner subclassing.
-        '''
-        return _PersisterBridgeConnection
-            
-    async def ping_wrapper(self, connection, request_body):
-        ''' Deserializes a ping request; forwards it to the persister.
-        '''
-        try:
-            if self._persister.ping():
-                return b'\x01'
-            else:
-                return b'\x00'
-        
-        except Exception as exc:
-            msg = ('Error while receiving ping.\n' + repr(exc) + '\n').join(
-                traceback.format_tb(exc.__traceback__)
-            )
-            logger.error(msg)
-            # return b'\x00'
-            raise exc
-            
-    async def publish_wrapper(self, connection, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        connection._processing.set()
-        self._persister.publish(request_body)
-        connection._processing.clear()
-        return b'\x01'
-            
-    async def get_wrapper(self, connection, request_body):
-        ''' Deserializes a get request; forwards it to the persister.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        return self._persister.get(ghid)
-            
-    async def subscribe_wrapper(self, connection, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        
-        def updater(notification_ghid, subscribed_ghid=ghid, 
-        call=connection.send_subs_update):
-            call(subscribed_ghid, notification_ghid)
-        
-        self._persister.subscribe(ghid, updater)
-        connection._subscriptions[ghid] = updater
-        return b'\x01'
-            
-    async def unsubscribe_wrapper(self, connection, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        callback = connection._subscriptions[ghid]
-        unsubbed = self._persister.unsubscribe(ghid, callback)
-        del connection._subscriptions[ghid]
-        if unsubbed:
-            return b'\x01'
-        else:
-            return b'\x00'
-            
-    async def list_subs_wrapper(self, connection, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        ghidlist = list(connection._subscriptions)
-        parser = generate_ghidlist_parser()
-        return parser.pack(ghidlist)
-            
-    async def list_bindings_wrapper(self, connection, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        ghidlist = self._persister.list_bindings(ghid)
-        parser = generate_ghidlist_parser()
-        return parser.pack(ghidlist)
-            
-    async def list_debinding_wrapper(self, connection, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        result = self._persister.list_debinding(ghid)
-        
-        if not result:
-            result = b'\x00'
-        else:
-            result = bytes(result)
-        
-        return result
-            
-    async def query_wrapper(self, connection, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        status = self._persister.query(ghid)
-        if status:
-            return b'\x01'
-        else:
-            return b'\x00'
-            
-    async def disconnect_wrapper(self, connection, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        for sub_ghid, sub_callback in connection._subscriptions.items():
-            self._persister.unsubscribe(sub_ghid, sub_callback)
-        connection._subscriptions.clear()
-        return b'\x01'
-
-
-class _WSBridgeConnection(_PersisterBridgeConnection):
-    def send_subs_update(self, subscribed_ghid, notification_ghid):
-        ''' Send the connection its subscription update.
-        '''
-        # TODO: fix this other leaky abstraction
-        if not self._processing.is_set():
-            # TODO: fix this leaky abstraction
-            response = self._transport.send_threadsafe(
-                connection = self,
-                msg = bytes(subscribed_ghid) + bytes(notification_ghid),
-                request_code = self._transport.REQUEST_CODES['send_subs_update'],
-                # Note: for now, just don't worry about failures.
-                expect_reply = False
-            )
-        
-            
-class _WSBridgeBase(_PersisterBridgeBase):
-    # FILE POINTER LEFT HERE
-    # Problem 1: need to run most things in executor, or all of the 
-    # threadsafe calls will fail. Alternatively, change them to either
-    # loopsafe (if appropriate) or async.
-    
-    # Problem 2: how to pass arguments to new connections? Was the argument
-    # thing actually the best idea?
-        
-    @property
-    def connection_factory(self):
-        ''' Proxy for connection factory to allow saner subclassing.
-        '''
-        return _WSBridgeConnection
-            
-    async def new_connection(self, *args, **kwargs):
-        ''' Merge the connection and endpoint to the same thing.
-        '''
-        return (await super().new_connection(transport=self, *args, **kwargs))
-        
-    @asyncio.coroutine
-    def handle_producer_exc(self, connection, exc):
-        ''' Handles the exception (if any) created by the producer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            msg = ('Error in producer.\n' + repr(exc) + '\n').join(
-                traceback.format_tb(exc.__traceback__)
-            )
-            logger.warning(msg)
-            raise exc
-        
-    @asyncio.coroutine
-    def handle_listener_exc(self, connection, exc):
-        ''' Handles the exception (if any) created by the consumer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            msg = ('Error in listener.\n' + repr(exc) + '\n').join(
-                traceback.format_tb(exc.__traceback__)
-            )
-            logger.warning(msg)
-            raise exc
-        
-    @asyncio.coroutine
-    def handle_autoresponder_exc(self, exc, token):
-        ''' Handles the exception (if any) created by the consumer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None and not isinstance(exc, NakError):
-            msg = ('Error in autoresponder.\n' + repr(exc) + '\n').join(
-                traceback.format_tb(exc.__traceback__)
-            )
-            logger.warning(msg)
-        return repr(exc).encode()
-    
-
-class WSPersisterBridge(_WSBridgeBase, WSAutoServer):
-    ''' Websockets request/response bridge to a persister, server half.
-    '''
-    REQUEST_CODES = {
-        # Receive an update for an existing object.
-        'send_subs_update': b'!!',
-    }
-    
-    def __init__(self, *args, **kwargs):
         req_handlers = {
             # ping 
             b'??': self.ping_wrapper,
@@ -1287,26 +1099,128 @@ class WSPersisterBridge(_WSBridgeBase, WSAutoServer):
             success_code = b'AK',
             failure_code = b'NK',
             error_lookup = ERROR_CODES,
-            # 48 bits = 1% collisions at 2.4 e 10^6 connections
-            birthday_bits = 48,
             *args, **kwargs
         )
-        
-    @asyncio.coroutine
-    def init_connection(self, websocket, path):
-        ''' Initializes the connection with the client, creating an 
-        endpoint/connection object, and registering it with dispatch.
+            
+    def session_factory(self):
+        ''' Added for easier subclassing. Returns the session class.
         '''
-        connection = yield from super().init_connection(
-            websocket = websocket, 
-            path = path
+        logger.debug('Session created.')
+        return _PersisterBridgeSession(
+            transport = self,
         )
             
-        logger.info('Connection established with client', str(connection.connid))
-        return connection
-
-
-class WSPersister(_PersisterBase, WSAutoClient):
+    async def ping_wrapper(self, session, request_body):
+        ''' Deserializes a ping request; forwards it to the persister.
+        '''
+        try:
+            if self._persister.ping():
+                return b'\x01'
+            else:
+                return b'\x00'
+        
+        except Exception as exc:
+            msg = ('Error while receiving ping.\n' + repr(exc) + '\n' + 
+                ''.join(traceback.format_tb(exc.__traceback__)))
+            logger.error(msg)
+            # return b'\x00'
+            raise exc
+            
+    async def publish_wrapper(self, session, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        session._processing.set()
+        self._persister.publish(request_body)
+        session._processing.clear()
+        return b'\x01'
+            
+    async def get_wrapper(self, session, request_body):
+        ''' Deserializes a get request; forwards it to the persister.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        return self._persister.get(ghid)
+            
+    async def subscribe_wrapper(self, session, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        
+        def updater(notification_ghid, subscribed_ghid=ghid, 
+        call=session.send_subs_update):
+            call(subscribed_ghid, notification_ghid)
+        
+        self._persister.subscribe(ghid, updater)
+        session._subscriptions[ghid] = updater
+        return b'\x01'
+            
+    async def unsubscribe_wrapper(self, session, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        callback = session._subscriptions[ghid]
+        unsubbed = self._persister.unsubscribe(ghid, callback)
+        del session._subscriptions[ghid]
+        if unsubbed:
+            return b'\x01'
+        else:
+            return b'\x00'
+            
+    async def list_subs_wrapper(self, session, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        ghidlist = list(session._subscriptions)
+        parser = generate_ghidlist_parser()
+        return parser.pack(ghidlist)
+            
+    async def list_bindings_wrapper(self, session, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        ghidlist = self._persister.list_bindings(ghid)
+        parser = generate_ghidlist_parser()
+        return parser.pack(ghidlist)
+            
+    async def list_debinding_wrapper(self, session, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        result = self._persister.list_debinding(ghid)
+        
+        if not result:
+            result = b'\x00'
+        else:
+            result = bytes(result)
+        
+        return result
+            
+    async def query_wrapper(self, session, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        ghid = Ghid.from_bytes(request_body)
+        status = self._persister.query(ghid)
+        if status:
+            return b'\x01'
+        else:
+            return b'\x00'
+            
+    async def disconnect_wrapper(self, session, request_body):
+        ''' Deserializes a publish request and forwards it to the 
+        persister.
+        '''
+        for sub_ghid, sub_callback in session._subscriptions.items():
+            self._persister.unsubscribe(sub_ghid, sub_callback)
+        session._subscriptions.clear()
+        return b'\x01'
+        
+        
+class PersisterBridgeClient(Autoresponder, _PersisterBase):
     ''' Websockets request/response persister (the client half).
     '''
             
@@ -1350,43 +1264,33 @@ class WSPersister(_PersisterBase, WSAutoClient):
             *args, **kwargs
         )
         
-    @asyncio.coroutine
-    def init_connection(self, websocket, path):
-        ''' Initializes the connection with the client, creating an 
-        endpoint/connection object, and registering it with dispatch.
-        '''
-        connection = yield from super().init_connection(
-            websocket = websocket, 
-            path = path
-        )
-            
-        logger.info('Connection established with persistence server.')
-        return connection
-        
-    def deliver_update_wrapper(self, connection, response_body):
+    async def deliver_update_wrapper(self, session, response_body):
         ''' Handles update pings.
         '''
-        time.sleep(.01)
-        # Shit, I have a race condition somewhere.
+        # # Shit, I have a race condition somewhere.
+        # time.sleep(.01)
         subscribed_ghid = Ghid.from_bytes(response_body[0:65])
         notification_ghid = Ghid.from_bytes(response_body[65:130])
         
-        for callback in self._subscriptions[subscribed_ghid]:
-            callback(notification_ghid)
-            
-        # def run_callbacks(subscribed_ghid=subscribed_ghid, notification_ghid=notification_ghid):
-        #     for callback in self._subscriptions[subscribed_ghid]:
-        #         callback(notification_ghid)
+        # for callback in self._subscriptions[subscribed_ghid]:
+        #     callback(notification_ghid)
                 
-        # # Well this is a huge hack. But something about the event loop 
-        # # itself is fucking up control flow and causing the world to hang
-        # # here. May want to create a dedicated thread just for pushing 
-        # # updates? Like autoresponder, but autoupdater?
-        # worker = threading.Thread(
-        #     target = run_callbacks,
-        #     daemon = True,
-        # )
-        # worker.start()
+        # Well this is a huge hack. But something about the event loop 
+        # itself is fucking up control flow and causing the world to hang
+        # here. May want to create a dedicated thread just for pushing 
+        # updates? Like autoresponder, but autoupdater?
+        # TODO: fix this gross mess
+            
+        def run_callbacks(subscribed_ghid, notification_ghid):
+            for callback in self._subscriptions[subscribed_ghid]:
+                callback(notification_ghid)
+        
+        worker = threading.Thread(
+            target = run_callbacks,
+            daemon = True,
+            args = (subscribed_ghid, notification_ghid),
+        )
+        worker.start()
         
         return b'\x01'
     
@@ -1397,7 +1301,7 @@ class WSPersister(_PersisterBase, WSAutoClient):
         NAK/failure is represented by raise NakError
         '''
         response = self.send_threadsafe(
-            connection = self.connection,
+            session = self.any_session,
             msg = b'',
             request_code = self.REQUEST_CODES['ping']
         )
@@ -1418,7 +1322,7 @@ class WSPersister(_PersisterBase, WSAutoClient):
         NAK/failure is represented by raise NakError
         '''
         response = self.send_threadsafe(
-            connection = self.connection,
+            session = self.any_session,
             msg = packed,
             request_code = self.REQUEST_CODES['publish']
         )
@@ -1436,7 +1340,7 @@ class WSPersister(_PersisterBase, WSAutoClient):
         NAK/failure is represented by raise NakError
         '''
         response = self.send_threadsafe(
-            connection = self.connection,
+            session = self.any_session,
             msg = bytes(ghid),
             request_code = self.REQUEST_CODES['get']
         )
@@ -1461,7 +1365,7 @@ class WSPersister(_PersisterBase, WSAutoClient):
         '''
         if ghid not in self._subscriptions:
             response = self.send_threadsafe(
-                connection = self.connection,
+                session = self.any_session,
                 msg = bytes(ghid),
                 request_code = self.REQUEST_CODES['subscribe']
             )
@@ -1489,7 +1393,7 @@ class WSPersister(_PersisterBase, WSAutoClient):
             del self._subscriptions[ghid]
             
             response = self.send_threadsafe(
-                connection = self.connection,
+                session = self.any_session,
                 msg = bytes(ghid),
                 request_code = self.REQUEST_CODES['unsubscribe']
             )
@@ -1519,7 +1423,7 @@ class WSPersister(_PersisterBase, WSAutoClient):
         # This would probably be a good time to reconcile states between the
         # persistence provider and our local set of subs!
         response = self.send_threadsafe(
-            connection = self.connection,
+            session = self.any_session,
             msg = b'',
             request_code = self.REQUEST_CODES['list_subs']
         )
@@ -1535,7 +1439,7 @@ class WSPersister(_PersisterBase, WSAutoClient):
         NAK/failure is represented by raise NakError
         '''
         response = self.send_threadsafe(
-            connection = self.connection,
+            session = self.any_session,
             msg = bytes(ghid),
             request_code = self.REQUEST_CODES['list_bindings']
         )
@@ -1553,7 +1457,7 @@ class WSPersister(_PersisterBase, WSAutoClient):
         NAK/failure is represented by raise NakError
         '''
         response = self.send_threadsafe(
-            connection = self.connection,
+            session = self.any_session,
             msg = bytes(ghid),
             request_code = self.REQUEST_CODES['list_debinding']
         )
@@ -1573,7 +1477,7 @@ class WSPersister(_PersisterBase, WSAutoClient):
         NAK/failure is represented by raise NakError
         '''
         response = self.send_threadsafe(
-            connection = self.connection,
+            session = self.any_session,
             msg = bytes(ghid),
             request_code = self.REQUEST_CODES['query']
         )
@@ -1593,7 +1497,7 @@ class WSPersister(_PersisterBase, WSAutoClient):
         NAK/failure is represented by raise NakError
         '''
         response = self.send_threadsafe(
-            connection = self.connection,
+            session = self.any_session,
             msg = b'',
             request_code = self.REQUEST_CODES['disconnect']
         )
@@ -1603,51 +1507,6 @@ class WSPersister(_PersisterBase, WSAutoClient):
             return True
         else:
             raise RuntimeError('Unknown status code during disconnection.')
-        
-    @asyncio.coroutine
-    def handle_producer_exc(self, connection, exc):
-        ''' Handles the exception (if any) created by the producer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            msg = ('Error in producer.\n' + repr(exc) + '\n').join(
-                traceback.format_tb(exc.__traceback__)
-            )
-            logger.warning(msg)
-            raise exc
-        
-    @asyncio.coroutine
-    def handle_listener_exc(self, connection, exc):
-        ''' Handles the exception (if any) created by the consumer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None:
-            msg = ('Error in listener.\n' + repr(exc) + '\n').join(
-                traceback.format_tb(exc.__traceback__)
-            )
-            logger.warning(msg)
-            raise exc
-        
-    @asyncio.coroutine
-    def handle_autoresponder_exc(self, exc, token):
-        ''' Handles the exception (if any) created by the consumer task.
-        
-        exc is either:
-        1. the exception, if it was raised
-        2. None, if no exception was encountered
-        '''
-        if exc is not None and not isinstance(exc, NakError):
-            msg = ('Error in autoresponder.\n' + repr(exc) + '\n').join(
-                traceback.format_tb(exc.__traceback__)
-            )
-            logger.warning(msg)
-        return repr(exc).encode()
     
     
 class LocalhostServer(MemoryPersister):
