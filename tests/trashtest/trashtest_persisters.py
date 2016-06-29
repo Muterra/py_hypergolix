@@ -544,8 +544,6 @@ class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
             aengel = cls.aengel,
         )
         
-        time.sleep(.5)
-        
         cls.persister = Autocomms(
             autoresponder_class = PersisterBridgeClient,
             connector_class = WSBasicClient,
@@ -556,8 +554,6 @@ class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
             debug = True,
             aengel = cls.aengel,
         )
-        
-        time.sleep(.5)
         
     @classmethod
     def tearDownClass(cls):

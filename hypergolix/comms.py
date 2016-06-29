@@ -271,6 +271,16 @@ class WSBasicClient(ConnectorBase):
     in the thread where this was created, and if you don't, it will 
     close down.
     '''    
+    def __init__(self, threaded, *args, **kwargs):
+        super().__init__(threaded=threaded, *args, **kwargs)
+        
+        # If we're threaded, we need to wait for the clear to transmit flag
+        if threaded:
+            call_coroutine_threadsafe(
+                coro = self._ctx.wait(),
+                loop = self._loop,
+            )
+    
     async def loop_init(self):
         self._ctx = asyncio.Event()
         await super().loop_init()
@@ -288,7 +298,7 @@ class WSBasicClient(ConnectorBase):
         '''
         async with websockets.connect(self._ws_loc) as websocket:
             try:
-                self._ctx.set()
+                self._loop.call_soon(self._ctx.set)
                 await self._handle_connection(websocket)
             except ConnectionClosed as exc:
                 # For now, if the connection closes, just stop everything. We 
@@ -406,6 +416,7 @@ class Autoresponder(LooperTrooper):
         self._session_lookup = weakref.WeakKeyDictionary()
         self._connection_lookup = weakref.WeakKeyDictionary()
         self._session_lock = None
+        self._has_session = None
         
         # This needs to be called last, otherwise we set up the event loop too
         # early.
@@ -545,6 +556,7 @@ class Autoresponder(LooperTrooper):
         so that the receivers can spawn handlers, instead of us needing
         to dynamically add them or something silly.
         '''
+        self._has_session = asyncio.Event()
         self._dumblock = asyncio.Event()
         self._session_lock = asyncio.Lock()
                 
@@ -688,6 +700,27 @@ class Autoresponder(LooperTrooper):
         # Then grab the "first" of those and return it.
         return next(iter(self._connection_lookup))
         
+    async def await_session_async(self):
+        ''' Waits for a session to be available.
+        '''
+        await self._has_session.wait()
+        
+    async def await_session_loopsafe(self):
+        ''' Waits for a session to be available (loopsafe).
+        '''
+        await run_coroutine_loopsafe(
+            coro = self.await_session_async(),
+            target_loop = self._loop,
+        )
+        
+    def await_session_threadsafe(self):
+        ''' Waits for a session to be available (threadsafe)
+        '''
+        return call_coroutine_threadsafe(
+            coro = self.await_session_async(),
+            loop = self._loop,
+        )
+        
     async def _generate_session_loopsafe(self, connection):
         ''' Loopsafe wrapper for generating sessions.
         '''
@@ -710,6 +743,9 @@ class Autoresponder(LooperTrooper):
                 session = self.session_factory()
                 self._session_lookup[connection] = session
                 self._connection_lookup[session] = weakref.proxy(connection)
+                
+        # Release anyone waiting for a session
+        self._has_session.set()
                 
         return session
         

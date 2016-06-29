@@ -115,8 +115,6 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             aengel = cls.aengel,
         )
         
-        time.sleep(.5)
-        
         cls.bob_core = MockCore(persister=cls.persister)
         cls.bob = Autocomms(
             autoresponder_class = IPCHost,
@@ -130,8 +128,6 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             aengel = cls.aengel,
         )
         
-        time.sleep(.5)
-        
         cls.app1 = Autocomms(
             autoresponder_class = IPCEmbed,
             connector_class = WSBasicClient,
@@ -142,7 +138,6 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             debug = True,
             aengel = cls.aengel,
         )
-        time.sleep(.5)
         cls.app1endpoint = cls.alice.any_session
         
         cls.app2 = Autocomms(
@@ -155,7 +150,6 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             debug = True,
             aengel = cls.aengel,
         )
-        time.sleep(.5)
         endpoints = set(cls.alice.sessions)
         cls.app2endpoint = list(endpoints - {cls.app1endpoint})[0]
         
@@ -172,7 +166,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         pt3 = b'Listening...'
         pt4 = b'All ears!'
         
-        time.sleep(1)
+        # time.sleep(1)
         # Make sure we have an app token.
         print(self.app1.app_token)
         

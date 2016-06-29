@@ -46,14 +46,23 @@ import collections
 import threading
 import time
 import argparse
+import signal
 
 from golix import Ghid
 
 from hypergolix.core import AgentBase
 from hypergolix.core import Dispatcher
-# from hypergolix.persisters import WSPersister
-# from hypergolix.ipc import WebsocketsIPC
-# from hypergolix.ipc import WebsocketsEmbed
+
+from hypergolix.utils import Aengel
+
+from hypergolix.comms import Autocomms
+from hypergolix.comms import WSBasicClient
+from hypergolix.comms import WSBasicServer
+
+from hypergolix.persisters import PersisterBridgeClient
+
+from hypergolix.ipc import IPCHost
+from hypergolix.ipc import IPCEmbed
 
 
 # ###############################################
@@ -70,40 +79,28 @@ logger = logging.getLogger(__name__)
 # ###############################################
 
 
-# class HypergolixService(WebsocketsIPC, Dispatcher, AgentBase):
-class HypergolixService(Dispatcher, AgentBase):
-    def __init__(self, host, debug=False, *args, **kwargs):
-        super().__init__(
-            dispatcher = self, 
-            dispatch = self, 
-            persister = WSPersister(
-                host = host, 
-                port = 7770, 
-                threaded = True, 
-                debug = debug
-            ), 
-            host = 'localhost', # IPC host
-            port = 7772, # IPC port
-            # threaded = True,
-            debug = debug,
-            *args, **kwargs
-        )
-        
+class _HGXCore(Dispatcher, AgentBase):
+    def __init__(self, persister, *args, **kwargs):
+        super().__init__(dispatcher=self, persister=persister, *args, **kwargs)
     
-# class HypergolixLink(WebsocketsEmbed):
-class HypergolixLink():
-    def __init__(self, debug=False, *args, **kwargs):
-        super().__init__(
-            host = 'localhost', # IPC host
-            port = 7772, # IPC port
-            debug = debug,
-            # threaded = True,
-            *args, **kwargs
-        )
+    
+def HypergolixLink(ipc_port=7772, debug=False, *args, **kwargs):
+    aengel = Aengel()
+    acomms = Autocomms(
+        autoresponder_class = IPCEmbed,
+        connector_class = WSBasicClient,
+        connector_kwargs = {
+            'host': 'localhost', # IPC host
+            'port': ipc_port, # IPC port
+        },
+        debug = debug,
+        aengel = aengel,
+    )
+    acomms.aengel = aengel
+    return acomms
 
 
 if __name__ == '__main__':
-
     parser = argparse.ArgumentParser(description='Start the Hypergolix service.')
     parser.add_argument(
         '--host', 
@@ -111,6 +108,27 @@ if __name__ == '__main__':
         default = 'localhost', 
         type = str,
         help = 'Specify the persistence provider host [default: localhost]'
+    )
+    parser.add_argument(
+        '--port', 
+        action = 'store',
+        default = 7770, 
+        type = int,
+        help = 'Specify the persistence provider port [default: 7770]'
+    )
+    parser.add_argument(
+        '--ipc_port', 
+        action = 'store',
+        default = 7772, 
+        type = int,
+        help = 'Specify the ipc port [default: 7772]'
+    )
+    parser.add_argument(
+        '--logfile', 
+        action = 'store',
+        default = None, 
+        type = str,
+        help = 'Log to a specified file, relative to current directory.',
     )
     parser.add_argument(
         '--verbosity', 
@@ -131,13 +149,13 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     
-    if args.debug is not None:
+    if args.verbosity is not None:
         debug = True
         log_level = {
             'debug': logging.DEBUG,
             'info': logging.INFO,
             'error': logging.ERROR,
-        }[args.debug.lower()]
+        }[args.verbosity.lower()]
     else:
         debug = False
         log_level = logging.WARNING
@@ -148,25 +166,52 @@ if __name__ == '__main__':
         log_level = logging.DEBUG
     else:
         traceur = False
+        
+    if args.logfile:
+        logging.basicConfig(filename=args.logfile, level=log_level)
+    else:
+        logging.basicConfig(level=log_level)
     
-    # Override the module-level logger definition to root
-    logger = logging.getLogger()
-    # For now, log to console
-    log_handler = logging.StreamHandler()
-    log_handler.setLevel(log_level)
-    logger.addHandler(log_handler)
+    # # Override the module-level logger definition to root
+    # logger = logging.getLogger()
+    # # For now, log to console
+    # log_handler = logging.StreamHandler()
+    # log_handler.setLevel(log_level)
+    # logger.addHandler(log_handler)
     
     # Todo: add traceur argument to dump stack traces into debug log, and/or
     # use them to auto-detect deadlocks/hangs
     
-    service = HypergolixService(
-        host = args.host,
-        threaded = False,
-        debug = debug
+    aengel = Aengel()
+    persister = Autocomms(
+        autoresponder_class = PersisterBridgeClient,
+        connector_class = WSBasicClient,
+        connector_kwargs = {
+            'host': args.host,
+            'port': args.port,
+        },
+        debug = debug,
+        aengel = aengel,
+    )
+    core = _HGXCore(
+        persister = persister,
+    )
+    ipc = Autocomms(
+        autoresponder_class = IPCHost,
+        autoresponder_kwargs = {'dispatch': core},
+        connector_class = WSBasicServer,
+        connector_kwargs = {
+            'host': 'localhost',
+            'port': args.ipc_port,
+        },
+        debug = debug,
+        aengel = aengel,
     )
     
-    # trace_start('debug/service.html')
-    
-    service.ws_run()
-    
-    # trace_stop()
+    try:
+        signal.signal(signal.SIGINT, aengel.stop)
+        signal.signal(signal.SIGTERM, aengel.stop)
+        # This is an intentional deadlock until someone else does something
+        aengel._thread.join()
+    finally:
+        aengel.stop()

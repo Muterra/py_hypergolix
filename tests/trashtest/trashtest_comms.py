@@ -155,8 +155,6 @@ class WSBasicTrashTest(unittest.TestCase):
             # debug = True
         )
         
-        time.sleep(.5)
-        
         self.client1 = WSBasicClient(
             host = 'localhost', 
             port = 9318, 
@@ -192,6 +190,13 @@ class WSBasicTrashTest(unittest.TestCase):
             self.assertEqual(msg, SERVER_CHECK.pop())
         
     def test_server(self):
+        # Okay so on the one hand, this is bad. On the other hand, we're never
+        # going to just rattle off server connections and shoot things off.
+        # But, that being said, be careful because there's a race condition 
+        # between connid assignment and adding the connection to the lookup.
+        # See: async def new_connection in comms.py.
+        time.sleep(.1)
+        
         for connection in list(self.server._connections.values()):
             
             connection.send_threadsafe(msg=b'test')
@@ -243,8 +248,6 @@ class WSAutoTrashtest(unittest.TestCase):
             aengel = cls.aengel,
         )
         
-        time.sleep(1)
-        
         cls.client1 = Autocomms(
             autoresponder_class = TestParrot,
             autoresponder_args = ('OneTrueMorty',),
@@ -257,8 +260,6 @@ class WSAutoTrashtest(unittest.TestCase):
             aengel = cls.aengel,
         )
         
-        time.sleep(.5)
-        
         cls.client2 = Autocomms(
             autoresponder_class = TestParrot,
             autoresponder_args = ('HammerMorty',),
@@ -270,7 +271,6 @@ class WSAutoTrashtest(unittest.TestCase):
             debug = True,
             aengel = cls.aengel,
         )
-        time.sleep(1)
         
     def test_client1(self):
         for ii in range(TEST_ITERATIONS):

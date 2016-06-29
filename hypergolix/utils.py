@@ -1378,6 +1378,7 @@ class LooperTrooper(metaclass=abc.ABCMeta):
         
         super().__init__(*args, **kwargs)
         
+        self._startup_complete_flag = threading.Event()
         self._shutdown_init_flag = None
         self._shutdown_complete_flag = threading.Event()
         self._debug = debug
@@ -1397,6 +1398,7 @@ class LooperTrooper(metaclass=abc.ABCMeta):
                 name = thread_name
             )
             self._thread.start()
+            self._startup_complete_flag.wait()
             
         else:
             self._loop = asyncio.get_event_loop()
@@ -1496,6 +1498,9 @@ class LooperTrooper(metaclass=abc.ABCMeta):
         task = asyncio.ensure_future(self.loop_run())
         interrupt = asyncio.ensure_future(self._shutdown_init_flag.wait())
         
+        if not self._startup_complete_flag.is_set():
+            self._loop.call_soon(self._startup_complete_flag.set)
+            
         finished, pending = await asyncio.wait(
             fs = [task, interrupt],
             return_when = asyncio.FIRST_COMPLETED
@@ -1598,7 +1603,7 @@ class Aengel:
         main.join()
         self.stop()
         
-    def stop(self):
+    def stop(self, *args, **kwargs):
         ''' Call stop_threadsafe on all guardlings.
         '''
         for guardling in self._guardlings:
