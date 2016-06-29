@@ -359,7 +359,7 @@ class _AutoresponderSession:
         # Get a random-ish (no need for CSRNG) 16-bit token
         token = random.getrandbits(16)
         if token in self.pending_responses:
-            token = self._get_unused_token()
+            token = self._gen_unused_token()
         return token
         
         

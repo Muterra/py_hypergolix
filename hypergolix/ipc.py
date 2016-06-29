@@ -701,6 +701,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         ''' Initializes self.
         '''
         try:    
+            self._token = None
             self._legroom = 3
         
         # Something strange using _TestEmbed is causing this, suppress it for
@@ -740,13 +741,12 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
     def app_token(self):
         ''' Get your app token, or if you have none, register a new one.
         '''
-        return self._token
-        
-    @app_token.setter
-    def app_token(self, value):
-        ''' Set your app token.
-        '''
-        self._token = value
+        if self._token is None:
+            return RuntimeError(
+                'You must get a new token (or set an existing one) first!'
+            )
+        else:
+            return self._token
     
     def whoami_threadsafe(self):
         ''' Threadsafe wrapper for whoami.
@@ -765,6 +765,45 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             request_code = self.REQUEST_CODES['whoami']
         )
         return Ghid.from_bytes(raw_ghid)
+    
+    def new_token_threadsafe(self):
+        ''' Threadsafe wrapper for new_token.
+        '''
+        return call_coroutine_threadsafe(
+            self.new_token(),
+            loop = self._loop,
+        )
+        
+    async def new_token(self):
+        ''' Gets a new app_token.
+        '''
+        app_token = await self.send(
+            session = self.any_session,
+            msg = b'',
+            request_code = self.REQUEST_CODES['new_token']
+        )
+        self._token = app_token
+        return app_token
+    
+    def set_token_threadsafe(self, app_token):
+        ''' Threadsafe wrapper for set_token.
+        '''
+        return call_coroutine_threadsafe(
+            self.set_token(app_token),
+            loop = self._loop,
+        )
+        
+    async def set_token(self, app_token):
+        ''' Sets an existing token.
+        '''
+        response = await self.send(
+            session = self.any_session,
+            msg = app_token,
+            request_code = self.REQUEST_CODES['set_token']
+        )
+        # If we haven't errored out...
+        self._token = app_token
+        return response
         
     def register_api_threadsafe(self, api_id, object_handler=None):
         return call_coroutine_threadsafe(
@@ -1189,45 +1228,6 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         host.
         '''
         return b''
-    
-    def new_token_threadsafe(self):
-        ''' Threadsafe wrapper for new_token.
-        '''
-        return call_coroutine_threadsafe(
-            self.new_token(),
-            loop = self._loop,
-        )
-        
-    async def new_token(self):
-        ''' Gets a new app_token.
-        '''
-        app_token = await self.send(
-            session = self.any_session,
-            msg = b'',
-            request_code = self.REQUEST_CODES['new_token']
-        )
-        self.app_token = app_token
-        return app_token
-    
-    def set_token_threadsafe(self, app_token):
-        ''' Threadsafe wrapper for set_token.
-        '''
-        return call_coroutine_threadsafe(
-            self.set_token(app_token),
-            loop = self._loop,
-        )
-        
-    async def set_token(self, app_token):
-        ''' Sets an existing token.
-        '''
-        response = await self.send(
-            session = self.any_session,
-            msg = app_token,
-            request_code = self.REQUEST_CODES['set_token']
-        )
-        # If we haven't errored out...
-        self.app_token = app_token
-        return response
 
 
 class AppObj:
