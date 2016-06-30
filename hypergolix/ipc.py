@@ -58,6 +58,7 @@ from golix import Ghid
 # import functools
 # import struct
 
+import concurrent
 import asyncio
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -715,6 +716,9 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         # Track registered callbacks for new objects
         self._object_handlers = {}
         
+        # Create an executor for awaiting threadsafe callbacks
+        self._executor = concurrent.futures.ThreadPoolExecutor()
+        
         # Note that these are only for unsolicited contact from the server.
         req_handlers = {
             # Receive/dispatch a new object.
@@ -752,11 +756,11 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         ''' Threadsafe wrapper for whoami.
         '''
         return call_coroutine_threadsafe(
-            self.whoami(),
+            self.whoami_async(),
             loop = self._loop,
         )
         
-    async def whoami(self):
+    async def whoami_async(self):
         ''' Gets our identity GHID from the hypergolix service.
         '''
         raw_ghid = await self.send(
@@ -770,11 +774,11 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         ''' Threadsafe wrapper for new_token.
         '''
         return call_coroutine_threadsafe(
-            self.new_token(),
+            self.new_token_async(),
             loop = self._loop,
         )
         
-    async def new_token(self):
+    async def new_token_async(self):
         ''' Gets a new app_token.
         '''
         app_token = await self.send(
@@ -785,15 +789,15 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         self._token = app_token
         return app_token
     
-    def set_token_threadsafe(self, app_token):
+    def set_token_threadsafe(self, *args, **kwargs):
         ''' Threadsafe wrapper for set_token.
         '''
         return call_coroutine_threadsafe(
-            self.set_token(app_token),
+            self.set_token_async(*args, **kwargs),
             loop = self._loop,
         )
         
-    async def set_token(self, app_token):
+    async def set_token_async(self, app_token):
         ''' Sets an existing token.
         '''
         response = await self.send(
@@ -805,13 +809,13 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         self._token = app_token
         return response
         
-    def register_api_threadsafe(self, api_id, object_handler=None):
+    def register_api_threadsafe(self, *args, **kwargs):
         return call_coroutine_threadsafe(
-            self.register_api(api_id, object_handler),
+            self.register_api_async(*args, **kwargs),
             loop = self._loop,
         )
         
-    async def register_api(self, api_id, object_handler=None):
+    async def register_api_async(self, api_id, object_handler=None):
         ''' Registers an API ID with the hypergolix service for this 
         application.
         
@@ -837,11 +841,20 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         else:
             raise RuntimeError('Unknown error while registering API.')
         
-    def get_object(self, ghid):
+    def get_obj_threadsafe(self, *args, **kwargs):
         ''' Loads an object into local memory from the hypergolix 
         service.
         '''
-        response = self._get_object(ghid)
+        return call_coroutine_threadsafe(
+            self.get_obj_async(*args, **kwargs),
+            loop = self._loop,
+        )
+        
+    async def get_obj_async(self, ghid):
+        ''' Loads an object into local memory from the hypergolix 
+        service.
+        '''
+        response = await self._get_object(ghid)
         (
             address,
             author,
@@ -859,103 +872,122 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             
         if is_link:
             link = Ghid.from_bytes(state)
-            state = self.get_object(link)
-            
-        state = (state, api_id, private, dynamic, _legroom)
+            state = await self.get_object_async(link)
         
         return AppObj(
-            embed = self,
-            state = state,
-            _preexisting = (address, author),
+            embed = self, # embed
+            address = address, 
+            state = state, 
+            author = author, 
+            api_id = api_id, 
+            private = private, 
+            dynamic = dynamic,
+            _legroom = _legroom,
+            threadsafe_callbacks = [],
+            async_callbacks = [],
         )
         
-    def _get_object(self, ghid):
+    async def _get_object(self, ghid):
         ''' Loads an object into local memory from the hypergolix 
         service.
         '''
         # Simple enough. super().get_object() will handle converting this to an
         # actual object.
-        return self.send_threadsafe(
+        return (await self.send(
             session = self.any_session,
             msg = bytes(ghid),
             request_code = self.REQUEST_CODES['get_object']
-        )
+        ))
         
-    def new_object(self, *args, **kwargs):
+    def new_obj_threadsafe(self, *args, **kwargs):
         ''' Alternative constructor for AppObj that does not require 
         passing the embed explicitly.
         '''
         # We don't need to do anything special here, since AppObj will call
         # _new_object for us.
-        return AppObj(embed=self, *args, **kwargs)
+        return AppObj.from_threadsafe(embed=self, *args, **kwargs)
         
-    def _new_object(self, obj):
+    async def new_obj_async(self, *args, **kwargs):
+        ''' Alternative constructor for AppObj that does not require 
+        passing the embed explicitly.
+        '''
+        # We don't need to do anything special here, since AppObj will call
+        # _new_object for us.
+        return (await AppObj.from_async(embed=self, *args, **kwargs))
+        
+    async def _new_object(self, state, api_id, private, dynamic, _legroom):
         ''' Handles only the creation of a new object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         
         return address, author
         '''
-        
-        if obj.api_id is None and not obj.private:
-            raise TypeError('api_id must be defined for a non-private object.')
-            
-        if obj.private:
+        if private:
             app_token = self.app_token
+            
         else:
             app_token = bytes(4)
+            if api_id is None:
+                raise TypeError(
+                    'api_id must be defined for a non-private object.'
+                )
             
-        if obj.is_link:
-            state = obj.link_address
+        if isinstance(state, AppObj):
+            state = state.address
+            is_link = True
         else:
-            state = obj.state
-            
-        if obj.is_dynamic:
-            _legroom = obj._legroom
-        else:
-            _legroom = None
+            is_link = False
             
         payload = self._pack_object_def(
             None,
             None,
             state,
-            obj.is_link,
-            obj.api_id,
+            is_link,
+            api_id,
             app_token,
-            obj.private,
-            obj.is_dynamic,
+            private,
+            dynamic,
             _legroom
         )
         
         # Note that currently, we're not re-packing the api_id or app_token.
-        response = self.send_threadsafe(
+        # ^^ Not sure what that note is actually about.
+        response = await self.send(
             session = self.any_session,
             msg = payload,
             request_code = self.REQUEST_CODES['new_object']
         )
-        
-        address = Ghid.from_bytes(response)
             
         # Note that the upstream ipc_host will automatically send us updates.
-            
-        return address, self.whoami_threadsafe()
         
-    def update_object(self, obj, state):
+        address = Ghid.from_bytes(response)
+        author = await self.whoami_async()
+        return address, author
+        
+    def update_obj_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.update_obj_async(*args, **kwargs),
+            loop = self._loop,
+        )
+        
+    async def update_obj_async(self, obj, state):
         ''' Wrapper for obj.update.
         '''
-        if not obj.is_owned:
-            raise TypeError(
-                'Cannot update an object that was not created by the '
-                'attached Agent.'
-            )
+        # is_owned will call whoami which will deadlock
+        # TODO: fix or reconsider strategy
+        # if not obj.is_owned:
+        #     raise TypeError(
+        #         'Cannot update an object that was not created by the '
+        #         'attached Agent.'
+        #     )
             
         # First operate on the object, since it's easier to undo local changes
-        obj._update(state)
-        self._update_object(obj, state)
+        await obj._update(state)
+        await self._update_object(obj, state)
         # Todo: add try-catch to revert update after failed upstream push
         
         return True
         
-    def _update_object(self, obj, state):
+    async def _update_object(self, obj, state):
         ''' Handles only the updating of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
@@ -974,25 +1006,36 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             None
         )
         
-        response = self.send_threadsafe(
+        response = await self.send(
             session = self.any_session,
             msg = msg,
             request_code = self.REQUEST_CODES['update_object']
         )
         
-        if response == b'\x01':
-            return True
-        else:
+        if response != b'\x01':
             raise RuntimeError('Unknown error while updating object.')
+            
+        # This breaks our DoC but effectively insulates us from calling any 
+        # callbacks on an invalid update.
+        await obj._notify_callbacks()
+        return True
         
-    def sync_object(self, obj):
+    def sync_obj_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.sync_obj_async(*args, **kwargs),
+            loop = self._loop,
+        )
+        
+    async def sync_obj_async(self, obj):
         ''' Checks for an update to a dynamic object, and if one is 
         available, performs an update.
         '''
-        obj._sync_object()
-        self._sync_object(obj)
+        await obj._sync_object()
+        await self._sync_object(obj)
+        
+        return True
 
-    def _sync_object(self, obj):
+    async def _sync_object(self, obj):
         ''' Handles only the syncing of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
@@ -1000,6 +1043,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             'Manual object syncing is not yet supported. Approximate it with '
             'get_object?'
         )
+        # Note: this is probably all trash.
         if obj.is_dynamic:
             pass
         else:
@@ -1009,19 +1053,27 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
                     'Local object state appears to be corrupted.'
                 )
         
-    def share_object(self, obj, recipient):
+    def share_obj_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.share_obj_async(*args, **kwargs),
+            loop = self._loop,
+        )
+        
+    async def share_obj_async(self, obj, recipient):
         ''' Shares an object with someone else.
         '''
         # Todo: add try-catch to undo local changes after failed upstream share
         # First operate on the object, since it's easier to undo local changes
-        obj._share(recipient)
-        self._share_object(obj, recipient)
+        await obj._share(recipient)
+        await self._share_object(obj, recipient)
+        
+        return True
 
-    def _share_object(self, obj, recipient):
+    async def _share_object(self, obj, recipient):
         ''' Handles only the sharing of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
-        response = self.send_threadsafe(
+        response = await self.send(
             session = self.any_session,
             msg = bytes(obj.address) + bytes(recipient),
             request_code = self.REQUEST_CODES['share_object']
@@ -1032,39 +1084,66 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         else:
             raise RuntimeError('Unknown error while updating object.')
         
-    def freeze_object(self, obj):
+    def freeze_obj_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.freeze_obj_async(*args, **kwargs),
+            loop = self._loop,
+        )
+        
+    async def freeze_obj_async(self, obj):
         ''' Converts a dynamic object to a static object.
         '''
-        obj._freeze()
-        return self._freeze_object(obj)
+        await obj._freeze()
+        frozen = await self._freeze_object(obj)
+        
+        return frozen
 
-    def _freeze_object(self, obj):
+    async def _freeze_object(self, obj):
         ''' Handles only the freezing of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
-        response = self.send_threadsafe(
+        # TODO: make better fix for race condition in applying state freezing. 
+        # (Freeze, and while awaiting response, update state; results in 
+        # later obj.state being incorrect)
+        state_ish = obj.state
+        
+        response = await self.send(
             session = self.any_session,
             msg = bytes(obj.address),
             request_code = self.REQUEST_CODES['freeze_object']
         )
-        address = Ghid.from_bytes(response)
         return AppObj(
             embed = self,
-            _preexisting = (address, obj.author),
-            state = (obj.state, obj.api_id, obj.private, False, None)
+            address = Ghid.from_bytes(response),
+            state = state_ish,
+            author = obj.author,
+            api_id = obj.api_id,
+            private = obj.private,
+            dynamic = False,
+            _legroom = 0,
+            threadsafe_callbacks = [],
+            async_callbacks = [],
         )
         
-    def hold_object(self, obj):
+    def hold_obj_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.hold_obj_async(*args, **kwargs),
+            loop = self._loop,
+        )
+        
+    async def hold_obj_async(self, obj):
         ''' Binds an object, preventing its deletion.
         '''
-        obj._hold()
-        self._hold_object(obj)
+        await obj._hold()
+        await self._hold_object(obj)
+        
+        return True
 
-    def _hold_object(self, obj):
+    async def _hold_object(self, obj):
         ''' Handles only the holding of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
-        response = self.send_threadsafe(
+        response = await self.send(
             session = self.any_session,
             msg = bytes(obj.address),
             request_code = self.REQUEST_CODES['hold_object']
@@ -1075,18 +1154,26 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         else:
             raise RuntimeError('Unknown error while updating object.')
         
-    def discard_object(self, obj):
+    def discard_obj_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.discard_obj_async(*args, **kwargs),
+            loop = self._loop,
+        )
+        
+    async def discard_obj_async(self, obj):
         ''' Attempts to delete an object. May not succeed, if another 
         Agent has bound to it.
         '''
-        obj._discard()
-        self._discard_object(obj)
+        await obj._discard()
+        await self._discard_object(obj)
         
-    def _discard_object(self, obj):
+        return True
+        
+    async def _discard_object(self, obj):
         ''' Handles only the discarding of an object via the hypergolix
         service.
         '''
-        response = self.send_threadsafe(
+        response = await self.send(
             session = self.any_session,
             msg = bytes(obj.address),
             request_code = self.REQUEST_CODES['discard_object']
@@ -1098,18 +1185,26 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         del self._objs_by_ghid[obj.address]
         return True
         
-    def delete_object(self, obj):
+    def delete_obj_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.delete_obj_async(*args, **kwargs),
+            loop = self._loop,
+        )
+        
+    async def delete_obj_async(self, obj):
         ''' Attempts to delete an object. May not succeed, if another 
         Agent has bound to it.
         '''
-        obj._delete()
-        self._delete_object(obj)
+        await obj._delete()
+        await self._delete_object(obj)
+        
+        return True
 
-    def _delete_object(self, obj):
+    async def _delete_object(self, obj):
         ''' Handles only the deleting of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
-        response = self.send_threadsafe(
+        response = await self.send(
             session = self.any_session,
             msg = bytes(obj.address),
             request_code = self.REQUEST_CODES['delete_object']
@@ -1149,9 +1244,16 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             
         # Okay, now let's create an object for it
         obj = AppObj(
-            embed = self,
-            state = (state, api_id, False, dynamic, None),
-            _preexisting = (address, author)
+            embed = self, 
+            address = address, 
+            state = state, 
+            author = author, 
+            api_id = api_id, 
+            private = False,
+            dynamic = dynamic,
+            _legroom = None,
+            threadsafe_callbacks = [],
+            async_callbacks = [],
         )
             
         # Well this is a huge hack. But something about the event loop 
@@ -1191,14 +1293,8 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
                 # Note: this may cause things to freeze, because async
                 state = self.get_object(link)
             
-            # Still a hack.
-            # TODO: fix this.
-            worker = threading.Thread(
-                target = self._objs_by_ghid[address]._update,
-                daemon = True,
-                args = (state,),
-            )
-            worker.start()
+            await self._objs_by_ghid[address]._update(state)
+            await self._objs_by_ghid[address]._notify_callbacks()
             
             # self._ws_loop.call_soon_threadsafe(, state)
             # self._objs_by_ghid[address]._update(state)
@@ -1273,7 +1369,8 @@ class AppObj:
         '__weakref__',
         '_embed',
         '_is_dynamic',
-        '_callbacks',
+        '_callbacks_threadsafe',
+        '_callbacks_async',
         '_inoperable',
         '_author',
         '_address',
@@ -1285,54 +1382,96 @@ class AppObj:
     
     # Restore the original behavior of hash
     __hash__ = type.__hash__
+        
+    @classmethod
+    def from_threadsafe(cls, embed, *args, **kwargs):
+        ''' Synchronous constructor.
+        '''
+        return call_coroutine_threadsafe(
+            cls.from_async(embed, *args, **kwargs),
+            loop = embed._loop,
+        )
+        
+    @classmethod
+    async def from_async(cls, embed, state, api_id=None, private=False, 
+    dynamic=True, threadsafe_callbacks=None, async_callbacks=None, 
+    _legroom=None):
+        ''' Asyncronous constructor. Use ONLY for direct new object 
+        creation.
+        '''
+        dynamic = bool(dynamic)
+        private = bool(private)
+        
+        if threadsafe_callbacks is None:
+            threadsafe_callbacks = []
+        
+        if async_callbacks is None:
+            async_callbacks = []
+        
+        # This creates an actual Golix object via hypergolix service.
+        address, author = await embed._new_object(
+            state, api_id, private, dynamic, _legroom
+        )
+        
+        try:
+            obj = cls(embed, address, state, author, api_id, private, dynamic, 
+                threadsafe_callbacks, async_callbacks, _legroom)
+        except:
+            # Cleanup any failure and reraise
+            await embed.send(
+                session = embed.any_session,
+                msg = bytes(address),
+                request_code = embed.REQUEST_CODES['delete_object']
+            )
+            raise
+            
+        return obj
     
-    def __init__(self, embed, state, api_id=None, private=False, dynamic=True, 
-    callbacks=None, _preexisting=None, _legroom=None, *args, **kwargs):
+    def __init__(self, embed, address, state, author, api_id, private, dynamic, 
+    threadsafe_callbacks, async_callbacks, _legroom=None):
         ''' Create a new AppObj with:
         
         state isinstance bytes(like)
         dynamic isinstance bool(like) (optional)
         callbacks isinstance iterable of callables (optional)
-        
-        _preexisting isinstance tuple(like):
-            _preexisting[0] = address
-            _preexisting[1] = author
-            
-        NOTE: entirely replaces RawObj.__init__.
         '''
-        # This needs to be done first so we have access to object creation
-        self._init_embed(embed)
-        self._inoperable = False
-        
-        # _preexisting was set, so we're loading an existing object.
-        # "Trust" anything using _preexisting to have passed a correct value
-        # for state and dynamic.
-        if _preexisting is not None:
-            address = _preexisting[0]
-            author = _preexisting[1]
-            state, api_id, private, dynamic, _legroom = state
+        # Copying like this seems dangerous, but I think it should be okay.
+        if not isinstance(embed, weakref.ProxyTypes):
+            embed = weakref.proxy(embed)
+        self._embed = embed
             
-        # Now do all of the common init stuff.
-        self._init_dynamic(dynamic)
-        self._init_legroom(_legroom)
-        self._init_state(state)
+        self._inoperable = False
+        self._is_dynamic = dynamic
         self._api_id = api_id
         self._private = private
-            
-        # Finally, set the callbacks. Will error if inappropriate def (ex: 
-        # attempt to register callbacks on static object)
-        self._init_callbacks(callbacks)
-            
-        # Now that we have successfully created a new AppObj, if this is a new
-        # object, let's update upstream. Split this from above so we can do the
-        # middle (dangerous) stuff without ever calling this.
-        if _preexisting is None:
-            # This creates an actual Golix object via hypergolix service.
-            address, author = self._embed._new_object(obj=self)
-                
-        # These bits should always work, so we don't need to worry about it.
+        self._callbacks_threadsafe = collections.deque(threadsafe_callbacks)
+        self._callbacks_async = collections.deque(async_callbacks)
         self._author = author
         self._address = address
+            
+        # Legroom is None. Infer it from the dispatch.
+        if _legroom is None:
+            self._legroom = self._embed._legroom
+        else:
+            self._legroom = _legroom
+        
+        # Only proceed to define legroom if this is dynamic.
+        if self.is_dynamic:
+            self._state = collections.deque(
+                maxlen = self._legroom
+            )
+            self._state.appendleft(state)
+            
+        else:
+            self._state = state
+        
+        # # _preexisting was set, so we're loading an existing object.
+        # # "Trust" anything using _preexisting to have passed a correct value
+        # # for state and dynamic.
+        # if _preexisting is not None:
+        #     address = _preexisting[0]
+        #     author = _preexisting[1]
+        #     state, api_id, private, dynamic, _legroom = state
         
         # Todo: add (python) gc logic such that this is removed when the object
         # is removed as well. Note that we currently DO do this in delete, but
@@ -1367,9 +1506,16 @@ class AppObj:
         return self._api_id
         
     @property
-    def callbacks(self):
+    def threadsafe_callbacks(self):
         if self.is_dynamic:
-            return self._callbacks
+            return self._callbacks_threadsafe
+        else:
+            raise TypeError('Static objects cannot have callbacks.')
+        
+    @property
+    def async_callbacks(self):
+        if self.is_dynamic:
+            return self._callbacks_async
         else:
             raise TypeError('Static objects cannot have callbacks.')
             
@@ -1386,6 +1532,8 @@ class AppObj:
         Agent.
         
         returns True/False.
+        
+        TODO: fix this. Maybe with hook in get_object?
         '''
         return self._embed.whoami_threadsafe() == self.author
             
@@ -1393,6 +1541,8 @@ class AppObj:
     def mutable(self):
         ''' Returns true if and only if self is a dynamic object and is
         owned by the current agent.
+        
+        TODO: fix this. Maybe with hook in get_object?
         '''
         return self.is_dynamic and self.is_owned
         
@@ -1428,34 +1578,8 @@ class AppObj:
                 return self._state[0]
         else:
             return self._state
-            
-    @state.setter
-    def state(self, value):
-        ''' Wraps update() for dynamic objects. Attempts to directly set
-        self._state for static objects, but will return AttributeError
-        if state is already set.
-        '''
-        if self.is_dynamic:
-            self.update(value)
-            
-        else:
-            # Note that we don't need a LBYL for existing state, since our
-            # modified __setattr__ will prevent updates
-            try:
-                # Typecheck AppObj specifically, since it is not allowed for
-                # static objects, but declaring it will create problems for the
-                # packing and unpacking.
-                if isinstance(value, AppObj):
-                    raise ValueError(
-                        'Static objects cannot link to other objects.'
-                    )
-                self._state = value
-            except AttributeError as e:
-                raise AttributeError(
-                    'Cannot update the state of a static object.'
-                ) from e
         
-    def add_callback(self, callback):
+    def append_threadsafe_callback(self, callback):
         ''' Registers a callback to be called when the object receives
         an update.
         
@@ -1464,36 +1588,106 @@ class AppObj:
         
         On update, callbacks are passed the object.
         '''
-        if not self.is_dynamic:
-            raise TypeError('Static objects cannot register callbacks.')
         if not callable(callback):
             raise TypeError('Callback must be callable.')
-        self._callbacks.add(callback)
+        self._callbacks_threadsafe.append(callback)
         
-    def remove_callback(self, callback):
-        ''' Removes a callback.
-        
-        Raises KeyError if the callback has not been registered.
+    def prepend_threadsafe_callback(self, callback):
+        ''' Registers a callback for updates.
         '''
-        if self.is_dynamic:
-            if callback in self._callbacks:
-                self._callbacks.remove(callback)
-            else:
-                raise KeyError(
-                    'Callback not found in dynamic obj callback set.'
+        if not callable(callback):
+            raise TypeError('Callback must be callable.')
+        self._callbacks_threadsafe.appendleft(callback)
+        
+    def remove_threadsafe_callback(self, callback):
+        ''' Removes the first instance of a threadsafe callback.
+        
+        Raises ValueError if the callback has not been registered.
+        '''
+        self._callbacks_threadsafe.remove(callback)
+        
+    def clear_threadsafe_callbacks(self):
+        ''' Resets all threadsafe callbacks.
+        '''
+        self._callbacks_threadsafe.clear()
+        
+    def append_async_callback(self, callback):
+        ''' Registers a callback to be called when the object receives
+        an update.
+        
+        callback must be hashable and callable. Function definitions and
+        lambdas are natively hashable; callable classes may not be.
+        
+        On update, callbacks are passed the object.
+        '''
+        # TODO: complain about lack of built-in awaitable() function
+        if not callable(callback):
+            raise TypeError('Callback must be callable.')
+        self._callbacks_async.append(callback)
+        
+    def prepend_async_callback(self, callback):
+        ''' Registers a callback for updates.
+        '''
+        # TODO: complain about lack of built-in awaitable() function
+        if not callable(callback):
+            raise TypeError('Callback must be callable.')
+        self._callbacks_async.appendleft(callback)
+        
+    def remove_threadsafe_callback(self, callback):
+        ''' Removes the first instance of an async callback.
+        
+        Raises ValueError if the callback has not been registered.
+        '''
+        self._callbacks_async.remove(callback)
+        
+    def clear_async_callbacks(self):
+        ''' Resets all threadsafe callbacks.
+        '''
+        self._callbacks_threadsafe.clear()
+        
+    async def _notify_callbacks(self):
+        ''' INFORM THE OTHERS
+        '''
+        def callerbackyall():
+            # At least the closure makes this much easier
+            for callback in self.threadsafe_callbacks:
+                try:
+                    callback(self)
+                except Exception as exc:
+                    logger.error(
+                        'Callback exception swallowed: ' + repr(exc) + '\n' + 
+                        ''.join(traceback.format_tb(exc.__traceback__))
+                    )
+        
+        threadsafe = asyncio.ensure_future(
+            self._embed._loop.run_in_executor(
+                self._embed._executor,
+                callerbackyall,
+            )
+        )
+        assy = asyncio.ensure_future(
+            self._notify_async_callbacks()
+        )
+        await asyncio.wait([threadsafe, assy])
+        
+    async def _notify_async_callbacks(self):
+        # TODO: convert this to parallel execution using ensure_future?
+        for callback in self.async_callbacks:
+            try:
+                await callback(self)
+            except Exception as exc:
+                logger.error(
+                    'Callback exception swallowed: ' + repr(exc) + '\n' + 
+                    ''.join(traceback.format_tb(exc.__traceback__))
                 )
-        else:
-            raise TypeError('Static objects cannot have callbacks.')
         
-    def clear_callbacks(self):
-        ''' Resets all callbacks.
-        '''
-        if self.is_dynamic:
-            self._callbacks.clear()
-        # It's meaningless to call this on a static object, but there's also 
-        # no need to error out
+    def update_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.update_async(*args, **kwargs),
+            loop = self._embed._loop,
+        )
             
-    def update(self, state):
+    async def update_async(self, state):
         ''' Updates a mutable object to a new state.
         
         May only be called on a dynamic object that was created by the
@@ -1502,18 +1696,21 @@ class AppObj:
         If _preexisting is True, this is an update coming down from a
         persister, and we will NOT push it upstream.
         '''
-        if not self.is_owned:
-            raise TypeError(
-                'Cannot update an object that was not created by the '
-                'attached Agent.'
-            )
+        # TODO: fix this, or update a way around it, or something. This will
+        # hang otherwise.
+        # if not self.is_owned:
+        #     raise TypeError(
+        #         'Cannot update an object that was not created by the '
+        #         'attached Agent.'
+        #     )
             
         # First operate on the object, since it's easier to undo local changes
-        self._update(state)
-        self._embed._update_object(self, state)
-        # Todo: add try-catch to revert update after failed upstream push
+        await self._update(state)
+        await self._embed._update_object(self, state)
+        
+        return True
             
-    def _update(self, state):
+    async def _update(self, state):
         ''' Handles the actual updating **for the object only.** Does 
         not update or involve the embed.
         '''
@@ -1526,35 +1723,45 @@ class AppObj:
         # Update local state.
         self._state.appendleft(state)
         
-        # Todo: figure out some mechanism to delay this until confirmed upsream
-        # successful push
-        # INFORM THE OTHERS
-        for callback in self.callbacks:
-            callback(self)
+    def sync_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.sync_async(*args, **kwargs),
+            loop = self._embed._loop,
+        )
             
-    def sync(self, *args):
+    async def sync_async(self, *args):
         ''' Checks the current state matches the state at the connected
         Agent. If this is a dynamic and an update is available, do that.
         If it's a static and the state mismatches, raise error.
         '''
-        self._embed._sync_object(self)
-        self._sync()
+        await self._embed._sync_object(self)
+        await self._sync()
+        
+        return True
             
-    def _sync(self, *args):
+    async def _sync(self, *args):
         ''' Handles the actual syncing **for the object only.** Does not
         update or involve the embed.
         '''
         pass
+        
+    def share_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.share_async(*args, **kwargs),
+            loop = self._embed._loop,
+        )
             
-    def share(self, recipient):
+    async def share_async(self, recipient):
         ''' Public accessor for sharing via object.
         '''
         # Todo: add try-catch to undo local changes after failed upstream share
         # First operate on the object, since it's easier to undo local changes
-        self._share(recipient)
-        self._embed._share_object(self, recipient)
+        await self._share(recipient)
+        await self._embed._share_object(self, recipient)
+        
+        return True
             
-    def _share(self, recipient):
+    async def _share(self, recipient):
         ''' Handles the actual sharing **for the object only.** Does not
         update or involve the embed.
         
@@ -1571,7 +1778,13 @@ class AppObj:
         else:
             return True
         
-    def freeze(self):
+    def freeze_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.freeze_async(*args, **kwargs),
+            loop = self._embed._loop,
+        )
+        
+    async def freeze_async(self):
         ''' Creates a static snapshot of the dynamic object. Returns a 
         new static RawObj instance. Does NOT modify the existing object.
         May only be called on dynamic objects. 
@@ -1583,10 +1796,12 @@ class AppObj:
         Note: does not currently traverse nested dynamic bindings, and
         will probably error out if you attempt to freeze one.
         '''
-        self._freeze()
-        return self._embed._freeze_object(self)
+        await self._freeze()
+        frozen = await self._embed._freeze_object(self)
+        
+        return frozen
             
-    def _freeze(self):
+    async def _freeze(self):
         ''' Handles the actual freezing **for the object only.** Does 
         not update or involve the embed.
         '''
@@ -1596,47 +1811,72 @@ class AppObj:
                 'call hold instead.'
             )
         
-    def hold(self):
+    def hold_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.hold_async(*args, **kwargs),
+            loop = self._embed._loop,
+        )
+        
+    async def hold_async(self):
         ''' Binds to the object, preventing its deletion.
         '''
-        self._hold()
-        self._embed.hold_object(self)
+        await self._hold()
+        await self._embed.hold_object(self)
+        
+        return True
             
-    def _hold(self):
+    async def _hold(self):
         ''' Handles the actual holding **for the object only.** Does not
         update or involve the embed.
         '''
         pass
         
-    def discard(self):
+    def discard_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.discard_async(*args, **kwargs),
+            loop = self._embed._loop,
+        )
+        
+    async def discard_async(self):
         ''' Tells the hypergolix service that the application is done 
         with the object, but does not directly delete it. No more 
         updates will be received.
         '''
-        self._discard()
-        self._embed._discard_object(self)
+        await self._discard()
+        await self._embed._discard_object(self)
         
-    def _discard(self):
+        return True
+        
+    async def _discard(self):
         ''' Performs AppObj actions necessary to discard.
         '''
-        self.clear_callbacks()
+        self.clear_threadsafe_callbacks()
+        self.clear_async_callbacks()
         super().__setattr__('_inoperable', True)
         super().__setattr__('_is_dynamic', None)
         super().__setattr__('_author', None)
+        
+    def delete_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            self.delete_async(*args, **kwargs),
+            loop = self._embed._loop,
+        )
             
-    def delete(self):
+    async def delete_async(self):
         ''' Tells any persisters to delete. Clears local state. Future
         attempts to access will raise ValueError, but does not (and 
         cannot) remove the object from memory.
         '''
-        self._delete()
-        self._embed._delete_object(self)
+        await self._delete()
+        await self._embed._delete_object(self)
+        
+        return True
             
-    def _delete(self):
+    async def _delete(self):
         ''' Handles the actual deleting **for the object only.** Does 
         not update or involve the embed.
         '''
-        self._discard()
+        await self._discard()
         # This creates big problems down the road.
         # super().__setattr__('_embed', None)
     
@@ -1702,73 +1942,6 @@ class AppObj:
             
         # Return the result of the whole comparison
         return meta_comparison and state_comparison
-            
-    def _init_embed(self, embed):
-        ''' Typechecks embed and them creates a weakref to it.
-        '''
-        # Copying like this seems dangerous, but I think it should be okay.
-        if isinstance(embed, weakref.ProxyTypes):
-            self._embed = embed
-        else:
-            self._embed = weakref.proxy(embed)
-            
-    def _init_dynamic(self, dynamic):
-        ''' Sets whether or not we're dynamic based on dynamic.
-        '''
-        if dynamic:
-            self._is_dynamic = True
-        else:
-            self._is_dynamic = False
-            
-    def _init_legroom(self, legroom):
-        ''' Sets up our legroom. If not defined, then default to the 
-        embed's preference.
-        '''
-        # Only proceed to define legroom if this is dynamic.
-        if self.is_dynamic:
-            # Legroom is None. Infer it from the dispatch.
-            if legroom is None:
-                legroom = self._embed._legroom
-                
-            self._legroom = legroom
-        
-    def _init_state(self, state):
-        ''' Makes the first state commit for the object, regardless of
-        whether or not the object is new or loaded. Even dynamic objects
-        are initially loaded with a single frame of history.
-        '''
-        if self.is_dynamic:
-            self._state = collections.deque(
-                maxlen = self._legroom
-            )
-            self._state.appendleft(state)
-        else:
-            self._state = state
-            
-    def _init_callbacks(self, callbacks):
-        ''' Initializes callbacks.
-        '''
-        # Only proceed if dynamic, and if callbacks is defined.
-        if self.is_dynamic:
-            self._callbacks = set()
-            
-            if callbacks is not None:
-                for callback in callbacks:
-                    self.add_callback(callback)
-        
-    # def collate(self):
-        # ''' Converts state (and any ancillary information) into a format
-        # that can be packed by the embed. Mostly here to allow subclasses
-        # to intelligently extend the AppObj class.
-        # '''
-        # return self.state
-        
-    # def decollate(self, collated):
-        # ''' Handles any ancillary information required by subclasses of
-        # AppObj. MUST return the state of the object. Has access to all
-        # of the AppObj except the author and address.
-        # '''
-        # return collated
         
         
         
@@ -1776,7 +1949,7 @@ class AppObj:
 
 
 # ###############################################
-# Deprecated, but not yet excised
+# Shitty leftover test fixture be damned! Deprecated but not yet excised
 # ###############################################
         
         

@@ -179,54 +179,54 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         self.app2.register_api_threadsafe(self.__api_id, _objhandler)
         self.assertIn(self.__api_id, self.app1endpoint.apis)
         
-        obj1 = self.app1.new_object(
+        obj1 = self.app1.new_obj_threadsafe(
             state = pt0,
             api_id = self.__api_id,
             dynamic = False
         )
         self.assertIn(obj1.address, self.persister._store)
         
-        obj2 = self.app1.new_object(
+        obj2 = self.app1.new_obj_threadsafe(
             state = pt1,
             api_id = self.__api_id,
             dynamic = True
         )
         self.assertIn(obj2.address, self.persister._store)
         
-        joint1 = self.app2.get_object(obj1.address)
+        joint1 = self.app2.get_obj_threadsafe(obj1.address)
         self.assertEqual(obj1, joint1)
         
-        joint2 = self.app2.get_object(obj2.address)
+        joint2 = self.app2.get_obj_threadsafe(obj2.address)
         self.assertEqual(obj2, joint2)
         
-        obj3 = self.app1.new_object(
+        obj3 = self.app1.new_obj_threadsafe(
             state = pt1,
             api_id = self.__api_id,
             dynamic = True
         )
         self.assertIn(obj3.address, self.persister._store)
         
-        self.app1.update_object(obj3, pt2)
-        joint3 = self.app2.get_object(obj3.address)
+        self.app1.update_obj_threadsafe(obj3, pt2)
+        joint3 = self.app2.get_obj_threadsafe(obj3.address)
         self.assertEqual(obj3, joint3)
         
         # Note that this is calling bob's DISPATCH whoami, NOT an app whoami.
-        self.app1.share_object(obj3, self.bob_core.whoami)
+        self.app1.share_obj_threadsafe(obj3, self.bob_core.whoami)
         self.assertIn(obj3.address, self.bob_core._orphan_shares_incoming)
         
-        frozen3 = self.app1.freeze_object(obj3)
+        frozen3 = self.app1.freeze_obj_threadsafe(obj3)
         self.assertEqual(frozen3.state, obj3.state)
         
-        self.app2.hold_object(joint3)
+        self.app2.hold_obj_threadsafe(joint3)
         self.assertIn(obj3.address, self.alice_core._holdings)
         
-        self.app2.discard_object(joint3)
+        self.app2.discard_obj_threadsafe(joint3)
         self.assertIn(self.app2endpoint.app_token, self.alice_core._discarders_by_ghid[obj3.address])
         self.assertTrue(joint3._inoperable)
         
         # self.assertIn(obj1.address, self.alice_core._state_by_ghid)
         
-        self.app1.delete_object(obj1)
+        self.app1.delete_obj_threadsafe(obj1)
         self.assertNotIn(obj1.address, self.persister._store)
         self.assertTrue(obj1._inoperable)
         
