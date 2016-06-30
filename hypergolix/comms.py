@@ -47,6 +47,7 @@ import random
 from .exceptions import RequestError
 from .exceptions import RequestFinished
 from .exceptions import RequestUnknown
+from .exceptions import SessionClosed
 
 from .utils import _BijectDict
 from .utils import LooperTrooper
@@ -170,12 +171,19 @@ class ConnectorBase(LooperTrooper):
         except ConnectionClosed:
             pass
                     
-        except Exception:
+        except Exception as exc:
             await connection.close()
+            logger.error(
+                'Error running connection! Cleanup not called.\n' +
+                ''.join(traceback.format_tb(exc.__traceback__))
+            )
             raise
             
         else:
             await connection.close()
+            
+        # In case subclasses want to do any cleanup
+        return connection
         
         
 class WSBasicServer(ConnectorBase):
@@ -361,6 +369,13 @@ class _AutoresponderSession:
         if token in self.pending_responses:
             token = self._gen_unused_token()
         return token
+        
+    async def close(self):
+        ''' Perform any needed cleanup.
+        '''
+        # Awaken any further pending responses that they're doomed
+        for waiter in self.pending_responses.values():
+            await waiter.put(SessionClosed())
         
         
 class Autoresponder(LooperTrooper):
@@ -749,6 +764,28 @@ class Autoresponder(LooperTrooper):
                 
         return session
         
+    async def _close_session_loopsafe(self, connection):
+        ''' Loopsafe wrapper for closing sessions.
+        '''
+        await run_coroutine_loopsafe(
+            self._close_session(connection),
+            target_loop = self._loop
+        )
+        
+    async def _close_session(self, connection):
+        ''' Loopsafe wrapper for closing sessions.
+        '''
+        try:
+            session = self._session_lookup[connection]
+            del self._session_lookup[connection]
+            del self._connection_lookup[session]
+            await session.close()
+        except KeyError as exc:
+            logger.error(
+                'KeyError while closing session:\n' +
+                ''.join(traceback.format_tb(exc.__traceback__))
+            )
+        
     async def send(self, session, msg, request_code, await_reply=True):
         ''' Creates a request or response.
         
@@ -940,9 +977,17 @@ def Autocomms(autoresponder_class, connector_class, autoresponder_args=None,
     
     class LinkedConnector(connector_class):
         async def new_connection(self, *args, **kwargs):
+            ''' Bridge the connection with a newly created session.
+            '''
             connection = await super().new_connection(*args, **kwargs)
             await autoresponder._generate_session_loopsafe(connection)
             return connection
+        
+        async def _handle_connection(self, *args, **kwargs):
+            ''' Close the session with the connection.
+            '''
+            connection = await super()._handle_connection(*args, **kwargs)
+            await autoresponder._close_session_loopsafe(connection)
     
     connector = LinkedConnector(
         receiver = autoresponder.receiver,

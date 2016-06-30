@@ -80,6 +80,7 @@ from .exceptions import IPCError
 from .utils import IPCPackerMixIn
 from .utils import RawObj
 from .utils import call_coroutine_threadsafe
+from .utils import await_sync_future
 
 from .comms import _AutoresponderSession
 from .comms import Autoresponder
@@ -315,6 +316,10 @@ class IPCHostEndpoint(_AutoresponderSession):
         ''' Notifies the embedded client of a successful share.
         '''
         pass
+        
+    async def close(self):
+        await super().close()
+        self.dispatch.close_endpoint(self)
 
 
 class IPCHost(Autoresponder, IPCPackerMixIn):
@@ -1659,16 +1664,14 @@ class AppObj:
                         ''.join(traceback.format_tb(exc.__traceback__))
                     )
         
-        threadsafe = asyncio.ensure_future(
-            self._embed._loop.run_in_executor(
-                self._embed._executor,
-                callerbackyall,
-            )
+        thread_fut_sync = self._embed._executor.submit(callerbackyall)
+        thread_fut_async = asyncio.ensure_future(
+            await_sync_future(thread_fut_sync)
         )
-        assy = asyncio.ensure_future(
+        assy_fut = asyncio.ensure_future(
             self._notify_async_callbacks()
         )
-        await asyncio.wait([threadsafe, assy])
+        await asyncio.wait([thread_fut_async, assy_fut])
         
     async def _notify_async_callbacks(self):
         # TODO: convert this to parallel execution using ensure_future?

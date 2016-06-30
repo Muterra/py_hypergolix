@@ -54,8 +54,10 @@ __all__ = [
     'IPCError',
     # These are comms errors
     'CommsError',
+    'RequestError',
     'RequestFinished',
-    'RequestUnknown'
+    'RequestUnknown',
+    'SessionClosed',
 ]
 
 
@@ -162,5 +164,11 @@ class RequestFinished(RequestError):
     
 class RequestUnknown(RequestError):
     ''' Raised when a request code is unknown.
+    '''
+    pass
+    
+    
+class SessionClosed(CommsError):
+    ''' Raised when something goes wrong with IPC (bad commands, etc).
     '''
     pass

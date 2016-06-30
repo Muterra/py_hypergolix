@@ -390,7 +390,18 @@ class AgentBase:
         ''' Removes the secret for the passed ghid, if it exists. If 
         unknown, raises KeyError.
         '''
-        del self._secrets[ghid]
+        # TODO: fix leaking abstraction resulting in stuff going poorly.
+        # Escaping this is very bad practice, but the entirety of secret 
+        # handling is about to be refactored, so let's just focus on stability
+        # first for the demo.
+        try:
+            del self._secrets[ghid]
+            
+        except KeyError as exc:
+            logger.warning(
+                'Missing reference when removing secret for expired frame:\n' +
+                ''.join(traceback.format_tb(exc.__traceback__))
+            )
         
     def _make_static(self, data, secret=None):
         if secret is None:
@@ -974,16 +985,17 @@ class Dispatcher(DispatcherBase):
         
         # Lookup for app_tokens -> endpoints. Will be specific to the current
         # state of this particular client for this agent.
+        self._active_tokens = weakref.WeakValueDictionary()
         # Defining b'\x00\x00\x00\x00' will prevent using it as a token.
-        self._active_tokens = {
-            b'\x00\x00\x00\x00': False,
-        }
+        self._active_tokens[b'\x00\x00\x00\x00'] = self
         # Set of all known tokens. Add b'\x00\x00\x00\x00' to prevent its use.
+        # Should be made persistent across all clients for any given agent.
         self._known_tokens = set()
         self._known_tokens.add(b'\x00\x00\x00\x00')
         
-        # Lookup for api_ids -> app_tokens. Should be made persistent across 
-        # all clients for any given agent.
+        # Lookup for api_ids -> app_tokens. Should this contain ONLY the apps 
+        # that are currently available? That might encourage ephemeral API 
+        # subscription, which could be good or bad.
         self._api_ids = _JitSetDict()
         
         # Lookup for handshake ghid -> handshake object
