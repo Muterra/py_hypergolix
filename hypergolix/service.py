@@ -208,10 +208,23 @@ if __name__ == '__main__':
         aengel = aengel,
     )
     
+    # SO BEGINS the "cross-platform signal wait workaround"
+    
+    signame_lookup = {
+        signal.SIGINT: 'SIGINT',
+        signal.SIGTERM: 'SIGTERM',
+    }
+    def sighandler(signum, sigframe):
+        raise ZeroDivisionError('Caught ' + signame_lookup[signum])
+
     try:
-        signal.signal(signal.SIGINT, aengel.stop)
-        signal.signal(signal.SIGTERM, aengel.stop)
-        # This is an intentional deadlock until someone else does something
-        aengel._thread.join()
-    finally:
-        aengel.stop()
+        signal.signal(signal.SIGINT, sighandler)
+        signal.signal(signal.SIGTERM, sighandler)
+        
+        # This is a little gross, but will be broken out of by the signal handlers
+        # erroring out.
+        while True:
+            time.sleep(600)
+            
+    except ZeroDivisionError as exc:
+        logging.info(str(exc))
