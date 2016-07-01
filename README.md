@@ -11,16 +11,27 @@ All secret material is handled by Hypergolix, as is network delivery. **Hypergol
 
 ```python
 class AppObj:    
-    def __init__(self, embed, state, api_id=None, private=False, dynamic=True, 
-    callbacks=None):
-        ''' Create a new AppObj.
+    @classmethod
+    def from_threadsafe(cls, embed, state, api_id=None, private=False, 
+    dynamic=True, threadsafe_callbacks=None, async_callbacks=None, 
+    _legroom=None):
+        ''' Synchronous, threadsafe constructor. DO NOT CALL __init__
+        DIRECTLY!
         
         embed is the Hypergolix link object.
         state is bytes-like.
         api_id is bytes-like and len(65) (see below).
         private is truthy.
         dynamic is truthy.
-        callbacks is iterable of hashable, callable objects.
+        callback arguments are iterables of callable objects.
+        '''
+        
+    @classmethod
+    async def from_async(cls, embed, state, api_id=None, private=False, 
+    dynamic=True, threadsafe_callbacks=None, async_callbacks=None, 
+    _legroom=None):
+        ''' Asynchronous version of above. Must be called from within 
+        the HypergolixLink's event loop.
         '''
         
     @property
@@ -45,11 +56,6 @@ class AppObj:
         ''' The api_id (if one exists) of the object. This identifier 
         can more or less be thought of as a unique identifier for a 
         particular binary API schema. Optional for private objects.
-        '''
-        
-    @property
-    def callbacks(self):
-        ''' Lists current update callbacks.
         '''
             
     @property
@@ -98,28 +104,39 @@ class AppObj:
         if state is already set.
         '''
         
-    def add_callback(self, callback):
+    @property
+    def threadsafe_callbacks(self):
+    @property
+    def async_callbacks(self):
+        ''' Lists current update callbacks.
+        '''
+        
+    def append_threadsafe_callback(self, callback):
+    def prepend_threadsafe_callback(self, callback):
+    def append_async_callback(self, callback):
+    def prepend_async_callback(self, callback):
         ''' Registers a callback to be called when the object receives
         an update.
         
-        callback must be hashable and callable. Function definitions and
-        lambdas are natively hashable; callable classes may or may not 
-        be; you may need to define __hash__.
+        callback must be callable.
         
         On update, callbacks are passed the object.
         '''
         
-    def remove_callback(self, callback):
-        ''' Removes a callback.
+    def remove_threadsafe_callback(self, callback):
+    def remove_async_callback(self, callback):
+        ''' Removes the first instance of a callback.
         
-        Raises KeyError if the callback has not been registered.
+        Raises ValueError if the callback has not been registered.
         '''
         
-    def clear_callbacks(self):
-        ''' Resets all callbacks.
+    def clear_threadsafe_callbacks(self):
+    def clear_async_callbacks(self):
+        ''' Resets callbacks.
         '''
             
-    def update(self, state):
+    def update_threadsafe(self, state):
+    async def update_async(self, state):
         ''' Updates a mutable object to a new state. This update is 
         automatically distributed to any shared recipients, as well as
         any other machines the current Agent is logged in at.
@@ -128,28 +145,33 @@ class AppObj:
         attached Agent.
         '''
             
-    def share(self, recipient):
+    def share_threadsafe(self, recipient):
+    async def share_async(self, recipient):
         ''' Share the object with recipient, as identified by their GHID 
         (a public key fingerprint).
         '''
         
-    def freeze(self):
+    def freeze_threadsafe(self):
+    async def freeze_async(self):
         ''' Creates a static snapshot of the dynamic object. Returns a 
         new static AppObj instance. Does NOT modify the existing object.
         May only be called on dynamic objects. 
         '''
         
-    def hold(self):
+    def hold_threadsafe(self):
+    async def hold_async(self):
         ''' Binds to the object, preventing its deletion.
         '''
         
-    def discard(self):
+    def discard_threadsafe(self):
+    async def discard_async(self):
         ''' Tells the hypergolix service that the application is done 
         with the object, but does not directly delete it. No more 
         updates will be received.
         '''
             
-    def delete(self):
+    def delete_threadsafe(self):
+    async def delete_async(self):
         ''' Tells any persisters to delete. Clears local state. Future
         attempts to access will raise ValueError, but does not (and 
         cannot) remove the object from memory.
@@ -158,7 +180,7 @@ class AppObj:
 
 ```python
 class HypergolixLink:
-    def __init__(self, app_token=None, *args, **kwargs):
+    def __init__(self, ipc_port=7772, debug=False):
         ''' Connects to the Hypergolix service.
         
         app_token is bytes-like and len(4). When resuming an existing
@@ -172,8 +194,26 @@ class HypergolixLink:
         ''' Read-only property returning the current application's app 
         token.
         '''
+        
+    def whoami_threadsafe(self):
+    async def whoami_async(self):
+        ''' Return the GHID address of the currently active agent (their
+        public key fingerprint).
+        '''
+        
+    def new_token_threadsafe(self):
+    async def new_token_async(self):
+        ''' Requests a new app token. App tokens are required for most 
+        operations.
+        '''
+        
+    def set_token_threadsafe(self):
+    async def set_token_async(self):
+        ''' Sets an existing app token.
+        '''
     
-    def register_api(self, api_id, object_handler):
+    def register_api_threadsafe(self, api_id, object_handler):
+    async def register_api_async(self, api_id, object_handler):
         ''' Registers the embed with the service as supporting the
         passed api_id.
         
@@ -186,43 +226,45 @@ class HypergolixLink:
         Returns True.
         '''
         
-    @property
-    def whoami(self):
-        ''' Return the GHID address of the currently active agent (their
-        public key fingerprint).
-        '''
-        
-    def get_object(self, ghid):
+    def get_obj_threadsafe(self, ghid):
+    async def get_obj_async(self, ghid):
         ''' Retrieve the object identified by its GHID (hash address).
         
         Returns an AppObj.
         '''
         
-    def new_object(self, *args, **kwargs):
+    def new_obj_threadsafe(self, *args, **kwargs):
+    async def new_obj_async(self, *args, **kwargs):
         ''' Wraps AppObj.__init__, implicitly using self as the embed.
         '''
         
-    def update_object(self, obj, *args, **kwargs):
+    def update_obj_threadsafe(self, obj, *args, **kwargs):
+    async def update_obj_async(self, obj, *args, **kwargs):
         ''' Wrapper for obj.update.
         '''
         
-    def share_object(self, obj, *args, **kwargs):
+    def share_obj_threadsafe(self, obj, *args, **kwargs):
+    async def share_obj_async(self, obj, *args, **kwargs):
         ''' Wrapper for obj.share.
         '''
         
-    def freeze_object(self, obj, *args, **kwargs):
+    def freeze_obj_threadsafe(self, obj, *args, **kwargs):
+    async def freeze_obj_async(self, obj, *args, **kwargs):
         ''' Wrapper for obj.freeze.
         '''
         
-    def hold_object(self, obj, *args, **kwargs):
+    def hold_obj_threadsafe(self, obj, *args, **kwargs):
+    async def hold_obj_async(self, obj, *args, **kwargs):
         ''' Wrapper for obj.hold.
         '''
         
-    def discard_object(self, obj, *args, **kwargs):
+    def discard_obj_threadsafe(self, obj, *args, **kwargs):
+    async def discard_obj_async(self, obj, *args, **kwargs):
         ''' Wrapper for obj.discard.
         '''
         
-    def delete_object(self, obj, *args, **kwargs):
+    def delete_obj_threadsafe(self, obj, *args, **kwargs):
+    async def delete_obj_async(self, obj, *args, **kwargs):
         ''' Wrapper for obj.delete.
         '''
 ```
