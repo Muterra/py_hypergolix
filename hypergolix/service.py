@@ -138,6 +138,7 @@ if __name__ == '__main__':
         help = 'Set debug mode and specify the logging level. '
                 '"debug" -> most verbose, '
                 '"info" -> somewhat verbose, '
+                '"warning" -> default python verbosity, '
                 '"error" -> quiet.',
     )
     parser.add_argument(
@@ -154,6 +155,7 @@ if __name__ == '__main__':
         log_level = {
             'debug': logging.DEBUG,
             'info': logging.INFO,
+            'warning': logging.WARNING,
             'error': logging.ERROR,
         }[args.verbosity.lower()]
     else:
