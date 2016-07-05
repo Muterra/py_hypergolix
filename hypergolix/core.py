@@ -110,6 +110,159 @@ logger = logging.getLogger(__name__)
 # ###############################################
 
 
+class _Privateer:
+    ''' Lookup system to get secret from ghid. Threadsafe.
+    '''
+    def __init__(self):
+        self._modlock = threading.Lock()
+        self._secrets_persistent = {}
+        self._secrets_staging = {}
+        self._secrets = collections.ChainMap(
+            self._secrets_persistent, 
+            self._secrets_staging,
+        )
+        
+    def get(self, ghid):
+        ''' Get a secret for a ghid, regardless of status.
+        
+        Raises KeyError if secret is not present.
+        '''
+        try:
+            with self._modlock:
+                return self._secrets[ghid]
+        except KeyError as exc:
+            raise KeyError('Secret not found for GHID ' + str(ghid)) from exc
+        
+    def stage(self, ghid, secret):
+        ''' Preliminarily set a secret for a ghid.
+        
+        If a secret is already staged for that ghid and the ghids are 
+        not equal, raises ValueError.
+        '''
+        with self._modlock:
+            if ghid in self._secrets_staging:
+                if self._secrets_staging[ghid] != secret:
+                    raise ValueError(
+                        'Non-matching secret already staged for GHID ' + 
+                        str(ghid)
+                    )
+            else:
+                self._secrets_staging[ghid] = secret
+            
+    def unstage(self, ghid):
+        ''' Remove a staged secret, probably due to a SecurityError.
+        Returns the secret.
+        '''
+        with self._modlock:
+            try:
+                secret = self._secrets_staging.pop(ghid)
+            except KeyError as exc:
+                raise KeyError(
+                    'No currently staged secret for GHID ' + str(ghid)
+                ) from exc
+        return secret
+        
+    def commit(self, ghid):
+        ''' Store a secret "permanently". The secret must already be
+        staged.
+        
+        Raises KeyError if ghid is not currently in staging
+        
+        This is indempotent; if a ghid is currently in staging AND 
+        already committed, will compare the two and raise ValueError if
+        they don't match.
+        
+        This is transactional and atomic; any errors (ex: ValueError 
+        above) will return its state to the previous.
+        '''
+        try:
+            with self._modlock:
+                secret = self._secrets_staging.pop(ghid)
+                if ghid in self._secrets_persistent:
+                    if self._secrets_persistent[ghid] != secret:
+                        self._secrets_staging[ghid] = secret
+                        raise ValueError(
+                            'Non-matching secret already committed for GHID ' +
+                            str(ghid)
+                        )
+                else:
+                    self._secrets_persistent[ghid] = secret
+        except KeyError as exc:
+            raise KeyError(
+                'Secret not currently staged for GHID ' + str(ghid)
+            ) from exc
+        
+    def abandon(self, ghid, quiet=True):
+        ''' Remove a secret. If quiet=True, silence any KeyErrors.
+        '''
+        # Short circuit any tests if quiet is enabled
+        fail_test = not quiet
+        
+        with self._modlock:
+            try:
+                del self._secrets_staging[ghid]
+            except KeyError as exc:
+                fail_test &= True
+                logger.debug('Secret not staged for GHID ' + str(ghid))
+            else:
+                fail_test = False
+                
+            try:
+                del self._secrets_persistend[ghid]
+            except KeyError as exc:
+                fail_test &= True
+                logger.debug('Secret not stored for GHID ' + str(ghid))
+            else:
+                fail_test = False
+                
+        if fail_test:
+            raise KeyError('Secret not found for GHID ' + str(ghid))
+
+
+class _GhidProxier:
+    ''' Resolve the base container GHID from any associated ghid. Uses
+    all weak references, so should not interfere with GCing objects.
+    
+    Threadsafe.
+    '''
+    def __init__(self):
+        # The usual.
+        self._refs = weakref.WeakKeyDictionary()
+        self._modlock = threading.RLock()
+        
+    def chain(self, proxy, target):
+        ''' Set, or update, a ghid proxy.
+        
+        Ghids must only ever have a single proxy. Calling chain on an 
+        existing proxy will update the target.
+        '''
+        if not isinstance(target, weakref.ProxyTypes):
+            target = weakref.proxy(target)
+            
+        if isinstance(proxy, weakref.ProxyTypes):
+            # Well this is a total hack to dereference the proxy, but oh well
+            proxy = proxy.__repr__.__self__
+        
+        with self._modlock:
+            self._refs[proxy] = target
+        
+    def resolve(self, ghid):
+        ''' Recursively resolves the container ghid for a proxy (or a 
+        container).
+        '''
+        # Is this seriously fucking necessary?
+        if isinstance(ghid, weakref.ProxyTypes):
+            # Well this is a total hack to dereference the proxy, but oh well
+            ghid = ghid.__repr__.__self__
+            
+        # Note that _modlock must be reentrant
+        with self._modlock:
+            try:
+                return self.resolve(self._refs[ghid])
+            except KeyError:
+                return ghid
+
+
 class AgentBase:
     ''' Base class for all Agents.
     '''
@@ -134,19 +287,8 @@ class AgentBase:
             raise TypeError('dispatcher must subclass DispatcherBase.')
         self._dispatcher = dispatcher
         
-        # This bit is clever. We want to allow for garbage collection of 
-        # secrets as soon as they're no longer needed, but we also need a way
-        # to get secrets for the targets of dynamic binding frames. So, let's
-        # combine a chainmap and a weakvaluedictionary.
-        self._secrets_persistent = {}
-        self._secrets_staging = {}
-        self._secrets_proxy = weakref.WeakValueDictionary()
-        self._secrets = collections.ChainMap(
-            self._secrets_persistent, 
-            self._secrets_staging,
-            self._secrets_proxy
-        )
-        self._secrets_pending = {}
+        self._ghidproxy = _GhidProxier()
+        self._privateer = _Privateer()
         
         self._contacts = {}
         # Bindings lookup: {<target ghid>: <binding ghid>}
@@ -249,10 +391,12 @@ class AgentBase:
     def _handle_req_handshake(self, request, source_ghid):
         ''' Handles a handshake request after reception.
         '''
-        # Note that get_object handles committing the secret (etc).
-        self._set_secret_pending(
-            secret = request.secret, 
-            ghid = request.target
+        # First, we need to figure out what the actual container object's
+        # address is, and then stage the secret for it.
+        real_target = self._deref_ghid(request.target)
+        self._privateer.stage(
+            ghid = real_target, 
+            secret = request.secret
         )
         
         try:
@@ -293,6 +437,45 @@ class AgentBase:
         del self._pending_requests[request.target]
         self.dispatcher.dispatch_handshake_nak(request, target)
         
+    def _deref_ghid(self, ghid):
+        ''' Recursively walks the ghid to any references. If dynamic,
+        stores the reference in proxies.
+        '''
+        unpacked = self._identity.unpack_any(
+            self.persister.get(ghid)
+        )
+        if isinstance(unpacked, GEOC):
+            target = ghid
+            
+        elif isinstance(unpacked, GOBD):
+            # Resolve and store the proxy, then call recursively.
+            target = self._identity.receive_bind_dynamic(
+                binder = self._retrieve_contact(unpacked.binder),
+                binding = unpacked
+            )
+            
+            # Make sure to update historian, too.
+            if ghid in self._historian:
+                self._historian[ghid].append(unpacked.ghid)
+            else:
+                self._historian[ghid] = collections.deque(
+                iterable = (unpacked.ghid,),
+                maxlen = self._legroom
+            )
+            
+            self._ghidproxy.chain(
+                proxy = ghid,
+                target = target,
+            )
+            target = self._deref_ghid(target)
+            
+        else:
+            raise RuntimeError(
+                'Ghid did not resolve to a dynamic binding or container.'
+            )
+            
+        return target
+        
     @property
     def persister(self):
         return self._persister
@@ -301,108 +484,6 @@ class AgentBase:
     def dispatcher(self):
         return self._dispatcher
         
-    def _get_secret(self, ghid):
-        ''' Return the secret for the passed ghid, if one is available.
-        If unknown, raise InaccessibleError.
-        '''
-        # If ghid is a dynamic binding, resolve it into the most recent frame,
-        # which is how we're storing secrets in self._secrets.
-        if ghid in self._historian:
-            ghid = self._historian[ghid][0]
-            
-        try:
-            return self._secrets[ghid]
-        except KeyError as e:
-            raise InaccessibleError('Agent has no access to object.') from e
-            
-    def _set_secret(self, ghid, secret):
-        ''' Stores the secret for the passed ghid persistently.
-        '''
-        # Should this add parallel behavior for handling dynamic ghids?
-        if ghid not in self._secrets_persistent:
-            self._secrets[ghid] = secret
-            
-    def _set_secret_temporary(self, ghid, secret):
-        ''' Stores the secret for the passed ghid only as long as it is
-        used by other objects.
-        '''
-        if ghid not in self._secrets_proxy:
-            self._secrets_proxy[ghid] = secret
-            
-    def _set_secret_pending(self, ghid, secret):
-        ''' Sets a pending secret of unknown target type.
-        '''
-        if ghid not in self._secrets_pending:
-            self._secrets_pending[ghid] = secret
-            
-    def _stage_secret(self, unpacked):
-        ''' Moves a secret from _secrets_pending into its appropriate
-        location.
-        
-        NOTE: we haven't verified a dynamic binding yet, so we might 
-        accidentally store a key that doesn't verify. We should check 
-        and remove them if we're forced to clean up.
-        '''
-        ghid = unpacked.ghid
-        
-        # Short-circuit if we've already dispatched the secret.
-        if ghid in self._secrets:
-            return
-        
-        if isinstance(unpacked, GEOC):
-            secret = self._secrets_pending.pop(ghid)
-            
-        elif isinstance(unpacked, GOBD):
-            try:
-                secret = self._secrets_pending.pop(ghid)
-            except KeyError:
-                secret = self._secrets_pending.pop(unpacked.ghid_dynamic)
-                
-            # No need to stage this, since it isn't persistent if we don't
-            # commit. Note that _set_secret handles the case of existing 
-            # secrets, so we should be immune to malicious attempts to override 
-            # existing secrets.
-            # Temporarily point the secret at the target, in case the target
-            # is immediately GC'd on update. But, persistently stage it to the
-            # frame ghid (below).
-            self._set_secret_temporary(unpacked.target, secret)
-            
-        if ghid not in self._secrets_staging:
-            self._secrets_staging[ghid] = secret
-            
-    def _commit_secret(self, ghid):
-        ''' The secret was successfully used to load the object. Commit
-        it to persistent store.
-        '''
-        if ghid in self._secrets_staging:
-            secret = self._secrets_staging.pop(ghid)
-            self._set_secret(ghid, secret)
-            
-    def _abandon_secret(self, ghid):
-        ''' De-stage and abandon a secret, probably due to security 
-        issues. Isn't absolutely necessary, as _set_secret won't defer
-        to _secrets_staging.
-        '''
-        if ghid in self._secrets_staging:
-            del self._secrets_staging[ghid]
-        
-    def _del_secret(self, ghid):
-        ''' Removes the secret for the passed ghid, if it exists. If 
-        unknown, raises KeyError.
-        '''
-        # TODO: fix leaking abstraction resulting in stuff going poorly.
-        # Escaping this is very bad practice, but the entirety of secret 
-        # handling is about to be refactored, so let's just focus on stability
-        # first for the demo.
-        try:
-            del self._secrets[ghid]
-            
-        except KeyError as exc:
-            logger.warning(
-                'Missing reference when removing secret for expired frame:\n' +
-                ''.join(traceback.format_tb(exc.__traceback__))
-            )
-        
     def _make_static(self, data, secret=None):
         if secret is None:
             secret = self._identity.new_secret()
@@ -410,7 +491,9 @@ class AgentBase:
             secret = secret,
             plaintext = data
         )
-        return container, secret
+        self._privateer.stage(container.ghid, secret)
+        self._privateer.commit(container.ghid)
+        return container
         
     def _make_bind(self, ghid):
         binding = self._identity.make_bind_static(
@@ -431,8 +514,7 @@ class AgentBase:
         ''' Makes a new static object, handling binding, persistence, 
         and so on. Returns container ghid.
         '''
-        container, secret = self._make_static(state)
-        self._set_secret(container.ghid, secret)
+        container = self._make_static(state)
         binding = self._make_bind(container.ghid)
         # This would be a good spot to figure out a way to make use of
         # publish_unsafe.
@@ -480,12 +562,30 @@ class AgentBase:
         
         old_tail = frame_history[len(frame_history) - 1]
         old_frame = frame_history[0]
+        
+        # TODO CRITICAL SECURITY ISSUE:
+        # First we need to decide if we're going to ratchet the secret, or 
+        # create a new one. The latter will require updating anyone who we've
+        # shared it with. Ratcheting is only available if the last target was
+        # directly referenced.
+        # But, keep in mind that if the Golix spec ever changes, we could 
+        # potentially create two separate top-level refs to containers. So in
+        # that case, we would need to implement some kind of ownership of the
+        # secret by a particular dynamic binding.
+        # TEMPORARY FIX: Don't support nesting dynamic bindings. Document that 
+        # downstream stuff cannot reuse links in dynamic bindings (or prevent
+        # their use entirely).
+        # Note: currently in Hypergolix, links in dynamic objects aren't yet
+        # fully supported at all, and certainly aren't documented, so they 
+        # shouldn't yet be considered a public part of the api.
+        
+        current_container = self._ghidproxy.resolve(ghid_dynamic)
         dynamic = self._do_dynamic(
             state = state, 
             ghid_dynamic = ghid_dynamic,
             history = frame_history,
             secret = self._ratchet_secret(
-                secret = self._get_secret(old_frame),
+                secret = self._privateer.get(current_container),
                 ghid = old_frame
             )
         )
@@ -493,16 +593,18 @@ class AgentBase:
         # Update the various buffers and do the object's callbacks
         frame_history.appendleft(dynamic.ghid)
         
-        # Clear out old key material
-        if old_tail not in frame_history:
-            # So this should actually be handled via the weakvaluedict -- we
-            # should be automatically clearing out anything that isn't the most
-            # recent key for the binding.
-            if old_tail in self._secrets:
-                warnings.warn(RuntimeWarning(
-                    'Tail secret was inappropriately retained.'
-                ))
-            # self._del_secret(old_tail)
+        # Note: this should all move to dispatch, which maintains the ownership
+        # records for ghids.
+        # # Clear out old key material
+        # if old_tail not in frame_history:
+        #     # So this should actually be handled via the weakvaluedict -- we
+        #     # should be automatically clearing out anything that isn't the most
+        #     # recent key for the binding.
+        #     if old_tail in self._secrets:
+        #         warnings.warn(RuntimeWarning(
+        #             'Tail secret was inappropriately retained.'
+        #         ))
+        #     # self._del_secret(old_tail)
         
         # # Since we're not doing a ratchet right now, just do this every time.
         # if obj.address in self._shared_objects:
@@ -514,11 +616,10 @@ class AgentBase:
         '''
         if isinstance(state, Ghid):
             target = state
-            secret = self._get_secret(target)
             container = None
             
         else:
-            container, secret = self._make_static(state, secret)
+            container = self._make_static(state, secret)
             target = container.ghid
             
         dynamic = self._identity.make_bind_dynamic(
@@ -526,14 +627,15 @@ class AgentBase:
             ghid_dynamic = ghid_dynamic,
             history = history
         )
-            
-        # Add the secret to the chamber. HOWEVER, associate it with the frame
-        # ghid, so that (if we've held it as a static object) it won't be 
-        # garbage collected when we advance past legroom. Simultaneously add
-        # a temporary proxy to it so that it's accessible from the actual 
-        # container's ghid.
-        self._set_secret(dynamic.ghid, secret)
-        self._set_secret_temporary(target, secret)
+        
+        # Don't forget to update our proxy!
+        self._ghidproxy.chain(
+            proxy = dynamic.ghid_dynamic,
+            target = target,
+        )
+        
+        # Note: the dispatcher worries about ghid lifetimes (and therefore 
+        # also secret lifetimes).
             
         self.persister.publish(dynamic.packed)
         if container is not None:
@@ -548,6 +650,9 @@ class AgentBase:
         if one exists, gets its state and calls an update on obj.
         
         Should probably modify this to also check state vs current.
+        
+        TODO: throw out this whole fucking mess, because it's redundant
+        with get_ghid, and shitty, etc etc.
         '''
         # Is this doing what I think it's doing?
         frame_ghid = ghid
@@ -555,28 +660,22 @@ class AgentBase:
             self.persister.get(frame_ghid)
         )
         ghid = unpacked_binding.ghid_dynamic
-        
+        # Goddammit. It is. Why the hell are we passing frame_ghid as ghid?!
         
         # First, make sure we're not being asked to update something we 
         # initiated the update for.
         if ghid not in self._ignore_subs_because_updating:
             # This bit trusts that the persistence provider is enforcing proper
-            # monotonic state progression for dynamic bindings.
+            # monotonic state progression for dynamic bindings. Check that our
+            # current frame is the most recent, and if so, return immediately.
             last_known_frame = self._historian[ghid][0]
             if unpacked_binding.ghid == last_known_frame:
                 return None
                 
-            # Note: this probably (?) depends on our memory persister checking 
-            # author consistency
-            binder = self._retrieve_contact(unpacked_binding.binder)
-            
-            # Figure out the new target
-            target = self._identity.receive_bind_dynamic(
-                binder = binder,
-                binding = unpacked_binding
-            )
-            
-            secret = self._get_secret(ghid)
+            # Get our CURRENT secret (before dereffing)
+            secret = self._privateer.get(self._ghidproxy.resolve(ghid))
+            # Get our FUTURE target
+            target = self._deref_ghid(ghid)
             offset = unpacked_binding.history.index(last_known_frame)
             
             # Count backwards in index (and therefore forward in time) from the 
@@ -589,63 +688,18 @@ class AgentBase:
                     ghid = unpacked_binding.history[ii]
                 )
                 
-            # Now assign the secret, persistently to the frame ghid and temporarily
-            # to the container ghid
-            self._set_secret(unpacked_binding.ghid, secret)
-            self._set_secret_temporary(target, secret)
+            # Stage our FUTURE secret
+            self._privateer.stage(target, secret)
             
-            # Check to see if we're losing anything from historian while we update
-            # it. Remove those secrets.
-            old_history = set(self._historian[ghid])
+            # Dispatcher handles secret lifetimes, so don't worry about that
+            # here.
             self._historian[ghid].appendleft(unpacked_binding.ghid)
-            new_history = set(self._historian[ghid])
-            expired = old_history - new_history
-            for expired_frame in expired:
-                self._del_secret(expired_frame)
             
-            return ghid, self._fetch_dynamic_state(target)
+            author, is_dynamic, state = self.get_ghid(target)
+            return ghid, state
             
         else:
             return None
-        
-    def _fetch_dynamic_state(self, target):
-        ''' Grabs the state of the dynamic target. Will either return a
-        bytes-like object, or a Ghid. The latter indicates a linked
-        object.
-        
-        However, can't currently handle using a GIDC as a target.
-        '''
-        # Unpack the target container and extract the plaintext.
-        # NOTE THAT THIS IS GOING TO CAUSE PROBLEMS if it's a nested 
-        # dynamic binding. Will probably need to make this recursive at 
-        # some point in the future.
-        unpacked = self._identity.unpack_any(
-            self.persister.get(target)
-        )
-        if isinstance(unpacked, GEOC):
-            try:
-                state = self._identity.receive_container(
-                    author = self._retrieve_contact(unpacked.author),
-                    secret = self._get_secret(target),
-                    container = unpacked
-                )
-            except SecurityError:
-                self._abandon_secret(target)
-                raise
-            else:
-                self._commit_secret(target)
-            
-        elif isinstance(unpacked, GOBD):
-            # Simply return the target as the state, since we're linking to it.
-            state = target
-            
-        else:
-            raise RuntimeError(
-                'The dynamic binding has an illegal target and is therefore '
-                'invalid.'
-            )
-            
-        return state
         
     def freeze_dynamic(self, ghid_dynamic):
         ''' Creates a static binding for the most current state of a 
@@ -659,9 +713,6 @@ class AgentBase:
         # frame_ghid = self._historian[obj.address][0]
         target = self._dynamic_targets[ghid_dynamic]
         self.hold_ghid(target)
-        
-        # Don't forget to add the actual static resource to _secrets
-        self._set_secret(target, self._get_secret(ghid_dynamic))
         
         # Return the ghid that was just held.
         return target
@@ -679,8 +730,11 @@ class AgentBase:
         binding = self._make_bind(ghid)
         self.persister.publish(binding.packed)
         self._holdings[ghid] = binding.ghid
-        # Also make sure the secret is persistent.
-        self._set_secret(ghid, self._get_secret(ghid))
+        
+        # Note that this is no longer needed, since secret retention is handled
+        # exclusively by the dispatcher.
+        # # Also make sure the secret is persistent.
+        # self._set_secret(ghid, self._get_secret(ghid))
         
     def delete_ghid(self, ghid):
         ''' Removes an object identified by ghid (if possible). May 
@@ -717,9 +771,12 @@ class AgentBase:
             )
             
         contact = self._retrieve_contact(recipient)
+        # TODO: make sure that the ghidproxy has already resolved the container
+        container_ghid = self._ghidproxy.resolve(target)
+        
         handshake = self._identity.make_handshake(
             target = target,
-            secret = self._get_secret(target)
+            secret = self._privateer.get(container_ghid)
         )
         
         request = self._identity.make_request(
@@ -732,48 +789,6 @@ class AgentBase:
         # successfully post.
         self._pending_requests[request.ghid] = target
         self.persister.publish(request.packed)
-        
-    def _resolve_dynamic_plaintext(self, target):
-        ''' Recursively find the plaintext state of the dynamic target. 
-        Correctly handles (?) nested dynamic bindings.
-        
-        However, can't currently handle using a GIDC as a target.
-        '''
-        # Unpack the target container and extract the plaintext.
-        # NOTE THAT THIS IS GOING TO CAUSE PROBLEMS if it's a nested 
-        # dynamic binding. Will probably need to make this recursive at 
-        # some point in the future.
-        unpacked = self._identity.unpack_any(
-            self.persister.get(target)
-        )
-        if isinstance(unpacked, GEOC):
-            try:
-                plaintext = self._identity.receive_container(
-                    author = self._retrieve_contact(unpacked.author),
-                    secret = self._get_secret(target),
-                    container = unpacked
-                )
-            except SecurityError:
-                self._abandon_secret(target)
-                raise
-            else:
-                self._commit_secret(target)
-            
-        elif isinstance(unpacked, GOBD):
-            # Call recursively.
-            nested_target = self._identity.receive_bind_dynamic(
-                binder = self._retrieve_contact(unpacked.author),
-                binding = unpacked
-            )
-            plaintext = self._resolve_dynamic_plaintext(nested_target)
-            
-        else:
-            raise RuntimeError(
-                'The dynamic binding has an illegal target and is therefore '
-                'invalid.'
-            )
-            
-        return plaintext
         
     def get_ghid(self, ghid):
         ''' Gets a new local copy of the object, assuming the Agent has 
@@ -789,43 +804,22 @@ class AgentBase:
         if not isinstance(ghid, Ghid):
             raise TypeError('Passed ghid must be a Ghid or similar.')
             
-        packed = self.persister.get(ghid)
+        # First assume we've already dereferenced it.
+        target = self._ghidproxy.resolve(ghid)
+        packed = self.persister.get(target)
         unpacked = self._identity.unpack_any(packed=packed)
-        self._stage_secret(unpacked)
+        # TODO: add caching of unpacked objects.
         
         if isinstance(unpacked, GEOC):
-            is_dynamic = False
-            author = unpacked.author
-            contact = self._retrieve_contact(author)
-            try:
-                state = self._identity.receive_container(
-                    author = contact,
-                    secret = self._get_secret(ghid),
-                    container = unpacked
-                )
-            except SecurityError:
-                self._abandon_secret(ghid)
-                raise
-            else:
-                self._commit_secret(ghid)
+            # Do nothing; just hold on a second.
+            pass
             
+        # Evidently our assumption was wrong, and it hasn't yet been derefed.
         elif isinstance(unpacked, GOBD):
-            is_dynamic = True
-            author = unpacked.binder
-            contact = self._retrieve_contact(author)
-            target = self._identity.receive_bind_dynamic(
-                binder = contact,
-                binding = unpacked
-            )
+            target = self._deref_ghid(target)
+            packed = self.persister.get(target)
             
-            # Recursively grab the plaintext once we add the secret
-            state = self._fetch_dynamic_state(target)
-            
-            # Add the dynamic ghid to historian using our own _legroom param.
-            self._historian[ghid] = collections.deque(
-                iterable = (unpacked.ghid,),
-                maxlen = self._legroom
-            )
+            unpacked = self._identity.unpack_container(packed)
             
         else:
             raise ValueError(
@@ -833,8 +827,33 @@ class AgentBase:
                 'target either a container (GEOC) or a dynamic binding (GOBD).'
             )
             
+        try:
+            author, state = self._open_container(unpacked)
+            
+        except SecurityError:
+            self._privateer.abandon(target)
+            raise
+            
+        else:
+            self._privateer.commit(target)
+            
+        # If the real target and the passed ghid differ, this must be a dynamic
+        is_dynamic = (target != ghid)
+            
         # This is gross, not sure I like it.
         return author, is_dynamic, state
+        
+    def _open_container(self, unpacked):
+        ''' Takes an unpacked GEOC and converts it to author and state.
+        '''
+        author = unpacked.author
+        contact = self._retrieve_contact(author)
+        state = self._identity.receive_container(
+            author = contact,
+            secret = self._privateer.get(unpacked.ghid),
+            container = unpacked
+        )
+        return author, state
         
     def cleanup_ghid(self, ghid):
         ''' Does anything needed to clean up the object with address 

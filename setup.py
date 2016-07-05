@@ -114,7 +114,7 @@ setup(
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
     install_requires=[
-        'golix>=0.1.0',
+        'golix>=0.1.1',
         'websockets>=3.1',
         'msgpack-python>=0.4.7',
     ],
