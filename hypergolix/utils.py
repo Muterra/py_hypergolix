@@ -38,6 +38,7 @@ import msgpack
 import traceback
 import asyncio
 import warnings
+import signal
 
 from concurrent.futures import CancelledError
 
@@ -1674,3 +1675,30 @@ class TraceLogger:
         
     def __exit__(self, *args, **kwargs):
         self.stop()
+        
+        
+def threading_autojoin():
+    ''' Checks if this is the main thread. If so, registers interrupt
+    mechanisms and then hangs indefinitely. Otherwise, returns 
+    immediately.
+    '''
+    # SO BEGINS the "cross-platform signal wait workaround"
+    if threading.current_thread() == threading.main_thread():
+        signame_lookup = {
+            signal.SIGINT: 'SIGINT',
+            signal.SIGTERM: 'SIGTERM',
+        }
+        def sighandler(signum, sigframe):
+            raise ZeroDivisionError('Caught ' + signame_lookup[signum])
+
+        try:
+            signal.signal(signal.SIGINT, sighandler)
+            signal.signal(signal.SIGTERM, sighandler)
+            
+            # This is a little gross, but will be broken out of by the signal 
+            # handlers erroring out.
+            while True:
+                time.sleep(600)
+                
+        except ZeroDivisionError as exc:
+            logging.info(str(exc))
