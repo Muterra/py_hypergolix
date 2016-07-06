@@ -82,7 +82,8 @@ logger = logging.getLogger(__name__)
 # ###############################################
 
 
-def _hgx_server(host, port, debug, verbosity, logfile, traceur, foreground=True):
+def _hgx_server(host, port, debug, verbosity, logfile, traceur, 
+foreground=True, aengel=None):
     ''' Simple persistence server.
     Expected defaults:
     host:       'localhost'
@@ -92,8 +93,10 @@ def _hgx_server(host, port, debug, verbosity, logfile, traceur, foreground=True)
     debug:      False
     traceur:    False
     '''
+    if not aengel:
+        aengel = Aengel()
+        
     backend = MemoryPersister()
-    aengel = Aengel()
     server = Autocomms(
         autoresponder_class = PersisterBridgeServer,
         autoresponder_kwargs = { 'persister': backend, },
@@ -117,8 +120,10 @@ class _HGXCore(Dispatcher, AgentBase):
         super().__init__(dispatcher=self, persister=persister, *args, **kwargs)
     
     
-def HypergolixLink(ipc_port=7772, debug=False, *args, **kwargs):
-    aengel = Aengel()
+def HypergolixLink(ipc_port=7772, debug=False, aengel=None, *args, **kwargs):
+    if not aengel:
+        aengel = Aengel()
+        
     acomms = Autocomms(
         autoresponder_class = IPCEmbed,
         connector_class = WSBasicClient,
@@ -133,7 +138,8 @@ def HypergolixLink(ipc_port=7772, debug=False, *args, **kwargs):
     return acomms
     
     
-def main(host, port, ipc_port, debug, verbosity, logfile, traceur, foreground=True):
+def main(host, port, ipc_port, debug, verbosity, logfile, traceur, 
+foreground=True, aengel=None):
     ''' Expected defaults:
     host:       'localhost'
     port:       7770
@@ -173,7 +179,9 @@ def main(host, port, ipc_port, debug, verbosity, logfile, traceur, foreground=Tr
     # Todo: add traceur argument to dump stack traces into debug log, and/or
     # use them to auto-detect deadlocks/hangs
     
-    aengel = Aengel()
+    if not aengel:
+        aengel = Aengel()
+        
     persister = Autocomms(
         autoresponder_class = PersisterBridgeClient,
         connector_class = WSBasicClient,

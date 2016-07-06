@@ -48,6 +48,7 @@ import warnings
 from hypergolix.service import _hgx_server
 from hypergolix.service import main as hgxservice
 from hypergolix.service import HypergolixLink
+from hypergolix.utils import Aengel
 
 from golix import Ghid
 
@@ -67,6 +68,8 @@ def make_fixtures(debug, verbosity, log_prefix):
         fname_des = None
         fname_server = None
         
+    aengel = Aengel()
+        
     hgxserver = _hgx_server(
         host = 'localhost',
         port = 6022,
@@ -75,6 +78,7 @@ def make_fixtures(debug, verbosity, log_prefix):
         logfile = fname_server,
         traceur = False,
         foreground = False,
+        aengel = aengel,
     )
     hgxraz = hgxservice(
         host = 'localhost',
@@ -85,6 +89,7 @@ def make_fixtures(debug, verbosity, log_prefix):
         logfile = fname_raz,
         traceur = False,
         foreground = False,
+        aengel = aengel,
     )
     hgxdes = hgxservice(
         host = 'localhost',
@@ -95,9 +100,10 @@ def make_fixtures(debug, verbosity, log_prefix):
         logfile = fname_des,
         traceur = False,
         foreground = False,
+        aengel = aengel,
     )
         
-    return hgxserver, hgxraz, hgxdes
+    return hgxserver, hgxraz, hgxdes, aengel
     
 
 # ###############################################
@@ -105,7 +111,7 @@ def make_fixtures(debug, verbosity, log_prefix):
 # ###############################################
 
 
-def make_tests(iterations, debug, raz, des):
+def make_tests(iterations, debug, raz, des, aengel):
 
     # Declare API
     request_api = bytes(64) + b'\x01'
@@ -134,8 +140,16 @@ def make_tests(iterations, debug, raz, des):
     class DemoReplicatorTest(unittest.TestCase):
         @classmethod
         def setUpClass(cls):
-            cls.razlink = HypergolixLink(ipc_port=6023, debug=debug)
-            cls.deslink = HypergolixLink(ipc_port=6024, debug=debug)
+            cls.razlink = HypergolixLink(
+                ipc_port = 6023, 
+                debug = debug, 
+                aengel = aengel
+            )
+            cls.deslink = HypergolixLink(
+                ipc_port = 6024, 
+                debug = debug, 
+                aengel = aengel
+            )
             
             cls.raz = cls.razlink.whoami_threadsafe()
             cls.des = cls.deslink.whoami_threadsafe()
@@ -246,8 +260,12 @@ if __name__ == '__main__':
     sys.argv[1:] = args.unittest_args
     
     # Okay, let's set up the tests
-    server, raz, des = make_fixtures(args.debug, args.verbosity, args.logfile)    
-    apptest = make_tests(args.iters, args.debug, raz, des)
+    server, raz, des, aengel = make_fixtures(
+        args.debug, 
+        args.verbosity, 
+        args.logfile
+    )    
+    apptest = make_tests(args.iters, args.debug, raz, des, aengel)
     
     # And finally, run them
     suite = unittest.TestSuite()
