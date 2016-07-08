@@ -1507,3 +1507,210 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
             return True
         else:
             raise RuntimeError('Unknown status code during disconnection.')
+            
+            
+class _Librarian:
+    ''' Keeps objects. Should contain the only strong references to the
+    objects it keeps. Threadsafe.
+    '''
+    def __init__(self):
+        ''' Sets up internal tracking.
+        '''
+        # Lookup for ghid -> raw bytes
+        self._shelf = {}
+        # Lookup for ghid -> hypergolix description
+        self._catalog = {}
+        # Operations lock
+        self._opslock = threading.Lock()
+        
+    def tend(self, raw_obj):
+        ''' Starts tracking an object.
+        raw_obj is a Golix object.
+        '''
+        for cls, converter in (
+        (GIDC, self._convert_gidc),
+        (GEOC, self._convert_geoc),
+        (GOBS, self._convert_gobs),
+        (GOBD, self._convert_gobd),
+        (GDXX, self._convert_gdxx),
+        (GARQ, self._convert_garq)):
+            if isinstance(raw_obj, cls):
+                obj = converter(raw_obj)
+                break
+                
+        with self._opslock:
+            self._shelf[obj.ghid] = raw_obj.packed
+            self._catalog[obj.ghid] = obj
+        
+    def abandon(self, ghid):
+        ''' Stops tracking an object. Will result in it being GC'd by
+        python.
+        
+        Raises KeyError if not currently tending the ghid.
+        '''
+        with self._opslock:
+            del self._shelf[ghid]
+            del self._catalog[ghid]
+        
+    def dereference(self, ghid):
+        ''' Returns the raw data associated with the ghid.
+        '''
+        return self._shelf[ghid]
+        
+    def whois(self, ghid):
+        ''' Returns a lightweight Hypergolix description of the object.
+        '''
+        return self._catalog[ghid]
+        
+    @staticmethod
+    def _convert_gidc(gidc):
+        ''' Converts a Golix object into a Hypergolix description.
+        '''
+        return _GidcLite(gidc.ghid)
+        
+    @staticmethod
+    def _convert_geoc(geoc):
+        ''' Converts a Golix object into a Hypergolix description.
+        '''
+        return _GeocLite(
+            ghid = geoc.ghid,
+            author = geoc.author,
+        )
+        
+    @staticmethod
+    def _convert_gobs(gobs):
+        ''' Converts a Golix object into a Hypergolix description.
+        '''
+        return _GobsLite(
+            ghid = gobs.ghid,
+            author = gobs.binder,
+            target = gobs.target,
+        )
+        
+    @staticmethod
+    def _convert_gobd(gobd):
+        ''' Converts a Golix object into a Hypergolix description.
+        '''
+        return _GobdLite(
+            ghid = gobd.ghid_dynamic,
+            author = gobd.binder,
+            target = gobd.target,
+            frame_ghid = gobd.ghid,
+            history = gobd.history,
+        )
+        
+    @staticmethod
+    def _convert_gdxx(gdxx):
+        ''' Converts a Golix object into a Hypergolix description.
+        '''
+        return _GdxxLite(
+            ghid = gdxx.ghid,
+            author = gdxx.debinder, 
+            target = gdxx.target,
+        )
+        
+    @staticmethod
+    def _convert_garq(garq):
+        ''' Converts a Golix object into a Hypergolix description.
+        '''
+        return _GarqLite(
+            ghid = garq.ghid,
+            recipient = garq.recipient,
+        )
+        
+        
+class _GidcLite:
+    ''' Lightweight description of a GIDC.
+    '''
+    __slots__ = [
+        'ghid',
+        '__weakref__',
+    ]
+    
+    def __init__(self, ghid):
+        self.ghid = ghid
+        # self.key_sign
+        # self.key_encr
+        # self.key_exch
+        # self.cipher
+        
+        
+class _GeocLite:
+    ''' Lightweight description of a GEOC.
+    '''
+    __slots__ = [
+        'ghid',
+        'author',
+        '__weakref__',
+    ]
+    
+    def __init__(self, ghid, author):
+        self.ghid = ghid
+        self.author = author
+        
+        
+class _GobsLite:
+    ''' Lightweight description of a GOBS.
+    '''
+    __slots__ = [
+        'ghid',
+        'author',
+        'target',
+        '__weakref__',
+    ]
+    
+    def __init__(self, ghid, author, target):
+        self.ghid = ghid
+        self.author = author
+        self.target = target
+    
+        
+class _GobdLite:
+    ''' Lightweight description of a GOBD.
+    '''
+    __slots__ = [
+        'ghid',
+        'author',
+        'target',
+        'frame_ghid',
+        'history',
+        '__weakref__',
+    ]
+    
+    def __init__(self, ghid, author, target, frame_ghid, history):
+        self.ghid = ghid
+        self.author = author
+        self.target = target
+        self.frame_ghid = frame_ghid
+        self.history = history
+    
+        
+class _GdxxLite:
+    ''' Lightweight description of a GDXX.
+    '''
+    __slots__ = [
+        'ghid',
+        'author',
+        'target',
+        '__weakref__',
+    ]
+    
+    def __init__(self, ghid, author, target):
+        self.ghid = ghid
+        self.author = author
+        self.target = target
+        
+        
+class _GarqLite:
+    ''' Lightweight description of a GARQ.
+    '''
+    __slots__ = [
+        'ghid',
+        'recipient',
+        '__weakref__',
+    ]
+    
+    def __init__(self, ghid, recipient):
+        self.ghid = ghid
+        self.recipient = recipient
+    
