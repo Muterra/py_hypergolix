@@ -72,8 +72,8 @@ from .utils import DispatchObj
 from .exceptions import NakError
 from .exceptions import HandshakeError
 from .exceptions import HandshakeWarning
-from .exceptions import InaccessibleError
-from .exceptions import UnknownPartyError
+from .exceptions import Inaccessible
+from .exceptions import UnknownParty
 from .exceptions import DispatchError
 from .exceptions import DispatchWarning
 

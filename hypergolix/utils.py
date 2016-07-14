@@ -1226,8 +1226,11 @@ class _BijectDict:
     corresponds to exactly one value, and one value to exactly one key.
     
     Implemented as two dicts, with forward and backwards versions.
+    
+    Threadsafe.
     '''
     def __init__(self, *args, **kwargs):
+        self._opslock = threading.Lock()
         self._fwd = dict(*args, **kwargs)
         # Make sure no values repeat and that all are hashable
         if len(list(self._fwd.values())) != len(set(self._fwd.values())):
@@ -1235,41 +1238,45 @@ class _BijectDict:
         self._rev = {value: key for key, value in self._fwd.items()}
     
     def __getitem__(self, key):
-        try:
-            return self._fwd[key]
-        except KeyError:
-            return self._rev[key]
+        with self._opslock:
+            try:
+                return self._fwd[key]
+            except KeyError:
+                return self._rev[key]
     
     def __setitem__(self, key, value):
-        # Remove any previous connections with these values
-        if value in self._fwd:
-            raise ValueError('Value already exists as a forward key.')
-        if key in self._rev:
-            raise ValueError('Key already exists as a forward value.')
-        # Note: this isn't perfectly atomic, as it won't restore a previous 
-        # value that we just failed to replace.
-        try:
-            self._fwd[key] = value
-            self._rev[value] = key
-        except:
-            # Default to None when popping to avoid KeyError
-            self._fwd.pop(key, None)
-            self._rev.pop(value, None)
-            raise
+        with self._opslock:
+            # Remove any previous connections with these values
+            if value in self._fwd:
+                raise ValueError('Value already exists as a forward key.')
+            if key in self._rev:
+                raise ValueError('Key already exists as a forward value.')
+            # Note: this isn't perfectly atomic, as it won't restore a previous 
+            # value that we just failed to replace.
+            try:
+                self._fwd[key] = value
+                self._rev[value] = key
+            except:
+                # Default to None when popping to avoid KeyError
+                self._fwd.pop(key, None)
+                self._rev.pop(value, None)
+                raise
 
     def __delitem__(self, key):
-        try:
-            value = self._fwd.pop(key, None)
-            del self._rev[value]
-        except KeyError:
-            value = self._rev.pop(key, None)
-            del self._fwd[value]
+        with self._opslock:
+            try:
+                value = self._fwd.pop(key, None)
+                del self._rev[value]
+            except KeyError:
+                value = self._rev.pop(key, None)
+                del self._fwd[value]
 
     def __len__(self):
         return len(self._fwd)
         
     def __contains__(self, key):
-        return key in self._fwd or key in self._rev
+        with self._opslock:
+            return key in self._fwd or key in self._rev
         
         
 

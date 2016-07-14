@@ -33,7 +33,7 @@ NakError status code conventions:
 -----
 0x0001: Does not appear to be a Golix object.
 0x0002: Failed to verify.
-0x0003: Unknown author or recipient.
+0x0003: Unknown or invalid author or recipient.
 0x0004: Unbound GEOC; immediately garbage collected
 0x0005: Existing debinding for address; (de)binding rejected.
 0x0006: Invalid or unknown target.
@@ -58,6 +58,7 @@ import warnings
 import functools
 import struct
 import weakref
+import queue
 
 import asyncio
 import websockets
@@ -89,10 +90,17 @@ from golix._getlow import GARQ
 
 # Local dependencies
 from .exceptions import NakError
-from .exceptions import UnboundContainerError
-from .exceptions import DoesNotExistError
+from .exceptions import MalformedGolixPrimitive
+from .exceptions import VerificationFailure
+from .exceptions import UnboundContainer
+from .exceptions import InvalidIdentity
+from .exceptions import DoesNotExist
+from .exceptions import AlreadyDebound
+from .exceptions import InvalidTarget
 from .exceptions import PersistenceWarning
 from .exceptions import RequestError
+from .exceptions import InconsistentAuthor
+from .exceptions import IllegalDynamicFrame
 
 from .utils import _DeepDeleteChainMap
 from .utils import _WeldedSetDeepChainMap
@@ -121,23 +129,21 @@ logger = logging.getLogger(__name__)
 
 ERROR_CODES = {
     b'\xFF\xFF': NakError,
-    b'\x00\x04': UnboundContainerError,
-    b'\x00\x08': DoesNotExistError,
+    b'\x00\x01': MalformedGolixPrimitive,
+    b'\x00\x02': VerificationFailure,
+    b'\x00\x03': InvalidIdentity,
+    b'\x00\x04': UnboundContainer,
+    b'\x00\x05': AlreadyDebound,
+    b'\x00\x06': InvalidTarget,
+    b'\x00\x07': InconsistentAuthor,
+    b'\x00\x08': DoesNotExist,
+    b'\x00\x09': IllegalDynamicFrame,
 }
 
 
 class _PersisterBase(metaclass=abc.ABCMeta):
     ''' Base class for persistence providers.
-    '''
-    def __init__(self, *args, **kwargs):
-        ''' Note: if this starts to do anything that links need to 
-        include (ie WSPersister), you'll need to change them to call
-        super().
-        '''
-        self._golix_provider = ThirdParty()
-        
-        super().__init__(*args, **kwargs)
-    
+    '''    
     @abc.abstractmethod
     def publish(self, packed):
         ''' Submits a packed object to the persister.
@@ -416,7 +422,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             
         if geoc.ghid not in self._bindings:
             logger.debug('0x0004: Unbound container')
-            raise UnboundContainerError(
+            raise UnboundContainer(
                 '0x0004: Attempt to upload unbound GEOC; object immediately '
                 'garbage collected.'
             )
@@ -778,7 +784,7 @@ class UnsafeMemoryPersister(_PersisterBase):
             return self._store[ghid]
         except KeyError as e:
             logger.debug('0x0008: Ghid not found in store.')
-            raise DoesNotExistError('0x0008: Ghid not found in store.') from e
+            raise DoesNotExist('0x0008: Ghid not found in store.') from e
         
     def subscribe(self, ghid, callback):
         ''' Request that the persistence provider update the client on
@@ -802,7 +808,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         if (ghid not in self._targets_dynamic and 
             ghid not in self._secondparties):
                 logger.debug('0x0006: Invalid or unknown subscription target.')
-                raise NakError(
+                raise InvalidTarget(
                     '0x0006: Invalid or unknown target for subscription.'
                 )
                 
@@ -976,7 +982,7 @@ class UnsafeMemoryPersister(_PersisterBase):
         del self._store[ghid]
         
 
-class MemoryPersister(UnsafeMemoryPersister):
+class __MemoryPersister(UnsafeMemoryPersister):
     ''' A safe memory persister. Fully verifies everything in both 
     directions.
     '''
@@ -1006,6 +1012,81 @@ class MemoryPersister(UnsafeMemoryPersister):
         NAK/failure is represented by raise NakError
         '''
         return super().get(ghid).packed
+
+
+class MemoryPersister:
+    ''' Basic in-memory persister.
+    '''    
+    def __init__(self):
+        (core, doorman, enforcer, lawyer, bookie, librarian, undertaker, 
+            postman) = circus_factory()
+        self.core = core
+        self.doorman = doorman
+        self.enforcer = enforcer
+        self.lawyer = lawyer
+        self.bookie = bookie
+        self.librarian = librarian
+        self.undertaker = undertaker
+        self.postman = postman
+        
+        self.subscribe = self.postman.subscribe
+        self.unsubscribe = self.postman.unsubscribe
+        # self.publish = self.core.ingest
+        self.list_bindings = self.bookie.bind_status
+        self.list_debinding = self.bookie.debind_status
+        
+    def publish(self, *args, **kwargs):
+        # This is a temporary fix to force memorypersisters to notify during
+        # publishing. Ideally, this would happen immediately after returning.
+        self.core.ingest(*args, **kwargs)
+        self.postman.do_mail_run()
+        
+    def ping(self):
+        ''' Queries the persistence provider for availability.
+        '''
+        return True
+        
+    def get(self, ghid):
+        ''' Returns a packed Golix object.
+        '''
+        try:
+            return self.librarian.dereference(ghid)
+        except KeyError as exc:
+            raise DoesNotExist('0x0008: Ghid not found at persister.') from exc
+        
+    def list_subs(self):
+        ''' List all currently subscribed ghids for the connected 
+        client.
+        '''
+        # TODO: figure out what to do instead of this
+        return tuple(self.postman._listeners)
+            
+    def query(self, ghid):
+        ''' Checks the persistence provider for the existence of the
+        passed ghid.
+        
+        ACK/success is represented by returning:
+            True if it exists
+            False otherwise
+        NAK/failure is represented by raise NakError
+        '''
+        if ghid in self.librarian:
+            return True
+        else:
+            return False
+        
+    def disconnect(self):
+        ''' Terminates all subscriptions. Not required for a disconnect, 
+        but highly recommended, and prevents an window of attack for 
+        address spoofers. Note that such an attack would only leak 
+        metadata.
+        
+        ACK/success is represented by a return True
+        NAK/failure is represented by raise NakError
+        '''
+        # TODO: figure out something different to do here.
+        self.postman._listeners = {}
+        return True
         
 
 class DiskPersister(_PersisterBase):
@@ -1134,6 +1215,13 @@ class PersisterBridgeServer(Autoresponder):
         self._persister.publish(request_body)
         session._processing.clear()
         return b'\x01'
+        obj = self._persister.ingest(request_body)
+        self.schedule_ignore_update(obj.ghid, session)
+        ensure_future(do_future_subs_update())
+        
+    def subs_callback(self, ghid):
+        return True
+        schedule_future_subs_update(ghid)
             
     async def get_wrapper(self, session, request_body):
         ''' Deserializes a get request; forwards it to the persister.
@@ -1509,48 +1597,1229 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
             raise RuntimeError('Unknown status code during disconnection.')
             
             
+class PersisterCore:
+    ''' Core functions for persistence. Not to be confused with the 
+    persister commands, which wrap the core.
+    
+    Other persisters should pass through the "ingestive tract". Local
+    objects can be published directly through calling the ingest_<type> 
+    methods.
+    '''
+    def __init__(self, doorman, enforcer, lawyer, bookie, librarian, 
+                    undertaker, postman):
+        self._opslock = threading.Lock()
+        
+        self._librarian = librarian
+        self._bookie = bookie
+        self._enforcer = enforcer
+        self._lawyer = lawyer
+        self._doorman = doorman
+        self._postman = postman
+        self._undertaker = undertaker
+        self._enlitener = _Enlitener
+        
+    def ingest(self, packed):
+        ''' Called on an untrusted and unknown object. May be bypassed
+        by locally-created, trusted objects (by calling the individual 
+        ingest methods directly). Parses, validates, and stores the 
+        object, and returns True; or, raises an error.
+        '''
+        for loader, ingester in (
+        (self._doorman.load_gidc, self.ingest_gidc),
+        (self._doorman.load_geoc, self.ingest_geoc),
+        (self._doorman.load_gobs, self.ingest_gobs),
+        (self._doorman.load_gobd, self.ingest_gobd),
+        (self._doorman.load_gdxx, self.ingest_gdxx),
+        (self._doorman.load_garq, self.ingest_garq)):
+            # Attempt this loader
+            try:
+                golix_obj = loader(packed)
+            # This loader failed. Continue to the next.
+            except MalformedGolixPrimitive:
+                continue
+            # This loader succeeded. Ingest it and then break out of the loop.
+            else:
+                obj = ingester(golix_obj)
+                break
+        # Running into the else means we could not find a loader.
+        else:
+            raise MalformedGolixPrimitive(
+                '0x0001: Packed bytes do not appear to be a Golix primitive.'
+            )
+                    
+        # Note that we don't need to call postman from the individual ingest
+        # methods, because they will only be called directly for locally-built
+        # objects, which will be distributed by the dispatcher.
+        self._postman.schedule(obj)
+                    
+        return obj
+        
+    def ingest_gidc(self, obj):
+        raw = obj.packed
+        obj = self._enlitener._convert_gidc(obj)
+        
+        # Take the lock first, since this will mutate state
+        with self._opslock:
+            # First need to enforce target selection
+            self._enforcer.validate_gidc(obj)
+            # Now make sure authorship requirements are satisfied
+            self._lawyer.validate_gidc(obj)
+            # Finally make sure persistence rules are followed
+            self._bookie.validate_gidc(obj)
+        
+            # Force GC pass after every mutation
+            with self._undertaker:
+                # And now prep the undertaker for any necessary GC
+                self._undertaker.prep_gidc(obj)
+                # Everything is validated. Place with the bookie first, so that 
+                # it has access to the old librarian state
+                self._bookie.place_gidc(obj)
+                # And finally add it to the librarian
+                self._librarian.store(obj, raw)
+        
+        return obj
+        
+    def ingest_geoc(self, obj):
+        raw = obj.packed
+        obj = self._enlitener._convert_geoc(obj)
+        
+        # Take the lock first, since this will mutate state
+        with self._opslock:
+            # First need to enforce target selection
+            self._enforcer.validate_geoc(obj)
+            # Now make sure authorship requirements are satisfied
+            self._lawyer.validate_geoc(obj)
+            # Finally make sure persistence rules are followed
+            self._bookie.validate_geoc(obj)
+        
+            # Force GC pass after every mutation
+            with self._undertaker:
+                # And now prep the undertaker for any necessary GC
+                self._undertaker.prep_geoc(obj)
+                # Everything is validated. Place with the bookie first, so that 
+                # it has access to the old librarian state
+                self._bookie.place_geoc(obj)
+                # And finally add it to the librarian
+                self._librarian.store(obj, raw)
+        
+        return obj
+        
+    def ingest_gobs(self, obj):
+        raw = obj.packed
+        obj = self._enlitener._convert_gobs(obj)
+        
+        # Take the lock first, since this will mutate state
+        with self._opslock:
+            # First need to enforce target selection
+            self._enforcer.validate_gobs(obj)
+            # Now make sure authorship requirements are satisfied
+            self._lawyer.validate_gobs(obj)
+            # Finally make sure persistence rules are followed
+            self._bookie.validate_gobs(obj)
+        
+            # Force GC pass after every mutation
+            with self._undertaker:
+                # And now prep the undertaker for any necessary GC
+                self._undertaker.prep_gobs(obj)
+                # Everything is validated. Place with the bookie first, so that 
+                # it has access to the old librarian state
+                self._bookie.place_gobs(obj)
+                # And finally add it to the librarian
+                self._librarian.store(obj, raw)
+        
+        return obj
+        
+    def ingest_gobd(self, obj):
+        raw = obj.packed
+        obj = self._enlitener._convert_gobd(obj)
+        
+        # Take the lock first, since this will mutate state
+        with self._opslock:
+            # First need to enforce target selection
+            self._enforcer.validate_gobd(obj)
+            # Now make sure authorship requirements are satisfied
+            self._lawyer.validate_gobd(obj)
+            # Finally make sure persistence rules are followed
+            self._bookie.validate_gobd(obj)
+        
+            # Force GC pass after every mutation
+            with self._undertaker:
+                # And now prep the undertaker for any necessary GC
+                self._undertaker.prep_gobd(obj)
+                # Everything is validated. Place with the bookie first, so that 
+                # it has access to the old librarian state
+                self._bookie.place_gobd(obj)
+                # And finally add it to the librarian
+                self._librarian.store(obj, raw)
+        
+        return obj
+        
+    def ingest_gdxx(self, obj):
+        raw = obj.packed
+        obj = self._enlitener._convert_gdxx(obj)
+        
+        # Take the lock first, since this will mutate state
+        with self._opslock:
+            # First need to enforce target selection
+            self._enforcer.validate_gdxx(obj)
+            # Now make sure authorship requirements are satisfied
+            self._lawyer.validate_gdxx(obj)
+            # Finally make sure persistence rules are followed
+            self._bookie.validate_gdxx(obj)
+        
+            # Force GC pass after every mutation
+            with self._undertaker:
+                # And now prep the undertaker for any necessary GC
+                self._undertaker.prep_gdxx(obj)
+                # Everything is validated. Place with the bookie first, so that 
+                # it has access to the old librarian state
+                self._bookie.place_gdxx(obj)
+                # And finally add it to the librarian
+                self._librarian.store(obj, raw)
+        
+        return obj
+        
+    def ingest_garq(self, obj):
+        raw = obj.packed
+        obj = self._enlitener._convert_garq(obj)
+        
+        # Take the lock first, since this will mutate state
+        with self._opslock:
+            # First need to enforce target selection
+            self._enforcer.validate_garq(obj)
+            # Now make sure authorship requirements are satisfied
+            self._lawyer.validate_garq(obj)
+            # Finally make sure persistence rules are followed
+            self._bookie.validate_garq(obj)
+        
+            # Force GC pass after every mutation
+            with self._undertaker:
+                # And now prep the undertaker for any necessary GC
+                self._undertaker.prep_garq(obj)
+                # Everything is validated. Place with the bookie first, so that 
+                # it has access to the old librarian state
+                self._bookie.place_garq(obj)
+                # And finally add it to the librarian
+                self._librarian.store(obj, raw)
+        
+        return obj
+        
+        
+class _Doorman:
+    ''' Parses files and enforces crypto. Can be bypassed for trusted 
+    (aka locally-created) objects. Only called from within the typeless
+    PersisterCore.ingest() method.
+    '''
+    def __init__(self, librarian):
+        self._librarian = librarian
+        self._golix = ThirdParty()
+        
+    def load_gidc(self, packed):
+        try:
+            obj = GIDC.unpack(packed)
+        except Exception as exc:
+            # logger.error('Malformed gidc: ' + str(packed))
+            # logger.error(repr(exc) + '\n').join(traceback.format_tb(exc.__traceback__))
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GIDC object.'
+            ) from exc
+            
+        # No further verification required.
+            
+        return obj
+        
+    def load_geoc(self, packed):
+        try:
+            obj = GEOC.unpack(packed)
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GEOC object.'
+            ) from exc
+            
+        # Okay, now we need to verify the object
+        try:
+            author = self._librarian.whois(obj.author)
+        except KeyError as exc:
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient.'
+            ) from exc
+            
+        try:
+            self._golix.verify_object(
+                second_party = author.identity,
+                obj = obj,
+            )
+        except SecurityError as exc:
+            raise VerificationFailure(
+                '0x0002: Failed to verify object.'
+            ) from exc
+            
+        return obj
+        
+    def load_gobs(self, packed):
+        try:
+            obj = GOBS.unpack(packed)
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GOBS object.'
+            ) from exc
+            
+        # Okay, now we need to verify the object
+        try:
+            author = self._librarian.whois(obj.binder)
+        except KeyError as exc:
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient.'
+            ) from exc
+            
+        try:
+            self._golix.verify_object(
+                second_party = author.identity,
+                obj = obj,
+            )
+        except SecurityError as exc:
+            raise VerificationFailure(
+                '0x0002: Failed to verify object.'
+            ) from exc
+            
+        return obj
+        
+    def load_gobd(self, packed):
+        try:
+            obj = GOBD.unpack(packed)
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GOBD object.'
+            ) from exc
+            
+        # Okay, now we need to verify the object
+        try:
+            author = self._librarian.whois(obj.binder)
+        except KeyError as exc:
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient.'
+            ) from exc
+            
+        try:
+            self._golix.verify_object(
+                second_party = author.identity,
+                obj = obj,
+            )
+        except SecurityError as exc:
+            raise VerificationFailure(
+                '0x0002: Failed to verify object.'
+            ) from exc
+            
+        return obj
+        
+    def load_gdxx(self, packed):
+        try:
+            obj = GDXX.unpack(packed)
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GDXX object.'
+            ) from exc
+            
+        # Okay, now we need to verify the object
+        try:
+            author = self._librarian.whois(obj.debinder)
+        except KeyError as exc:
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient.'
+            ) from exc
+            
+        try:
+            self._golix.verify_object(
+                second_party = author.identity,
+                obj = obj,
+            )
+        except SecurityError as exc:
+            raise VerificationFailure(
+                '0x0002: Failed to verify object.'
+            ) from exc
+            
+        return obj
+        
+    def load_garq(self, packed):
+        try:
+            obj = GARQ.unpack(packed)
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GARQ object.'
+            ) from exc
+            
+        # Persisters cannot further verify the object.
+            
+        return obj
+            
+
+_MrPostcard = collections.namedtuple(
+    typename = '_MrPostcard',
+    field_names = ('subscription', 'notification'),
+)
+
+            
+class _MrPostman:
+    ''' Tracks, delivers notifications about objects using **only weak
+    references** to them. Threadsafe.
+    
+    ♫ Please Mister Postman...
+    
+    Question: should the distributed state management of GARQ recipients
+    be managed here, or in the bookie (where it currently is)?
+    '''
+    def __init__(self, librarian, bookie):
+        self._bookie = bookie
+        self._librarian = librarian
+        
+        # Lookup <ghid>: set(<callback>)
+        self._opslock_listen = threading.Lock()
+        self._listeners = {}
+        
+        # The scheduling queue
+        self._scheduled = queue.Queue()
+        # Ignoring lookup: <subscribed ghid>: set(<callbacks>)
+        self._opslock_ignore = threading.Lock()
+        self._ignored = {}
+        # The delayed lookup. <awaiting ghid>: set(<subscribed ghids>)
+        self._opslock_defer = threading.Lock()
+        self._deferred = {}
+        
+    def schedule(self, obj, removed=False):
+        ''' Schedules update delivery for the passed object.
+        '''
+        for deferred in self._has_deferred(obj):
+            # These have already been put into _MrPostcard form.
+            self._scheduled.put(deferred)
+            
+        for primitive, scheduler in (
+        (_GidcLite, self._schedule_gidc),
+        (_GeocLite, self._schedule_geoc),
+        (_GobsLite, self._schedule_gobs),
+        (_GobdLite, self._schedule_gobd),
+        (_GdxxLite, self._schedule_gdxx),
+        (_GarqLite, self._schedule_garq)):
+            if isinstance(obj, primitive):
+                scheduler(obj, removed)
+                break
+        else:
+            raise TypeError('Could not schedule: wrong obj type.')
+            
+        return True
+        
+    def _schedule_gidc(self, obj, removed):
+        # GIDC will never trigger a subscription.
+        pass
+        
+    def _schedule_geoc(self, obj, removed):
+        # GEOC will never trigger a subscription directly, though they might
+        # have deferred updates (which are handled by self.schedule)
+        pass
+        
+    def _schedule_gobs(self, obj, removed):
+        # GOBS will never trigger a subscription.
+        pass
+        
+    def _schedule_gobd(self, obj, removed):
+        # GOBD might trigger a subscription! But, we also might to need to 
+        # defer it. Or, we might be removing it.
+        if removed:
+            debinding_ghid = self._bookie.debind_status(obj.ghid)
+            if not debinding_ghid:
+                raise RuntimeError(
+                    'Obj flagged removed, but bookie lacks debinding for it.'
+                )
+            self._scheduled.put(
+                _MrPostcard(obj.ghid, debinding_ghid)
+            )
+        elif obj.target not in self._librarian:
+            self._defer_update(
+                awaiting_ghid = obj.target,
+                subscribed_ghid = obj.ghid,
+            )
+        else:
+            self._scheduled.put(
+                _MrPostcard(obj.ghid, obj.ghid)
+            )
+        
+    def _schedule_gdxx(self, obj, removed):
+        # GDXX will never directly trigger a subscription. If they are removing
+        # a subscribed object, the actual removal (in the undertaker GC) will 
+        # trigger a subscription without us.
+        pass
+        
+    def _schedule_garq(self, obj, removed):
+        # GARQ might trigger a subscription! Or we might be removing it.
+        if removed:
+            debinding_ghid = self._bookie.debind_status(obj.ghid)
+            if not debinding_ghid:
+                raise RuntimeError(
+                    'Obj flagged removed, but bookie lacks debinding for it.'
+                )
+            self._scheduled.put(
+                _MrPostcard(obj.recipient, debinding_ghid)
+            )
+        else:
+            self._scheduled.put(
+                _MrPostcard(obj.recipient, obj.ghid)
+            )
+            
+    def _defer_update(self, awaiting_ghid, subscribed_ghid):
+        ''' Defer a subscription notification until the awaiting_ghid is
+        received as well.
+        '''
+        # Note that deferred updates will always be dynamic bindings, so the
+        # subscribed ghid will be identical to the notification ghid.
+        with self._opslock_defer:
+            try:
+                self._deferred[awaiting_ghid].add(
+                    _MrPostcard(subscribed_ghid, subscribed_ghid)
+                )
+            except KeyError:
+                self._deferred[awaiting_ghid] = { 
+                    _MrPostcard(subscribed_ghid, subscribed_ghid) 
+                }
+            
+    def _has_deferred(self, obj):
+        ''' Checks to see if a subscription is waiting on the obj, and 
+        if so, returns the originally subscribed ghid.
+        '''
+        with self._opslock_defer:
+            try:
+                subscribed_ghids = self._deferred[obj.ghid]
+            except KeyError:
+                return set()
+            else:
+                del self._deferred[obj.ghid]
+                return subscribed_ghids
+        
+    def ignore_next_update(self, ghid, callback):
+        ''' Tells the postman to ignore the next update received for the
+        passed ghid at the callback.
+        '''
+        with self._opslock_ignore:
+            try:
+                self._ignored[ghid].add(callback)
+            except KeyError:
+                self._ignored[ghid] = { callback }
+        
+    def subscribe(self, ghid, callback):
+        ''' Tells the postman that the watching_session would like to be
+        updated about ghid.
+        '''
+        # First add the subscription listeners
+        with self._opslock_listen:
+            try:
+                self._listeners[ghid].add(callback)
+            except KeyError:
+                self._listeners[ghid] = { callback }
+            
+        # Now manually reinstate any desired notifications for garq requests
+        # that have yet to be handled
+        for existing_mail in self._bookie.recipient_status(ghid):
+            obj = self._librarian.whois(existing_mail)
+            self.schedule(obj)
+            
+    def unsubscribe(self, ghid, callback):
+        ''' Remove the callback for ghid. Indempotent; will never raise
+        a keyerror.
+        '''
+        try:
+            self._listeners[ghid].discard(callback)
+        except KeyError:
+            logger.debug('KeyError while unsubscribing.')
+            
+    def do_mail_run(self):
+        ''' Executes the actual mail run, clearing out the _scheduled
+        queue.
+        '''
+        while not self._scheduled.empty():
+            # Ideally this will be the only consumer, but we might be running
+            # in multiple threads or something, so try/catch just in case.
+            try:
+                subscription, notification = self._scheduled.get(block=False)
+                
+            except queue.Empty:
+                break
+                
+            else:
+                self._deliver(subscription, notification)
+            
+    def _deliver(self, subscription, notification):
+        ''' Do the actual subscription update.
+        '''
+        with self._opslock_listen:
+            try:
+                for callback in self._listeners[subscription]:
+                    callback(subscription, notification)
+            # No listeners for it? No worries.
+            except KeyError:
+                pass
+        
+        
+class _Undertaker:
+    ''' Note: what about post-facto removal of bindings that have 
+    illegal targets? For example, if someone uploads a binding for a 
+    target that isn't currently known, and then it turns out that the
+    target, once uploaded, actually doesn't support that binding, what
+    should we do?
+    
+    In theory it shouldn't affect other operations. Should we just bill
+    for it and call it a day? We'd need to make some kind of call to the
+    bookie to handle that.
+    '''
+    def __init__(self, librarian, bookie, postman):
+        self._librarian = librarian
+        self._bookie = bookie
+        self._postman = postman
+        self._staging = None
+        
+    def __enter__(self):
+        # Create a new staging object.
+        self._staging = set()
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # TODO: exception handling
+        # This is pretty clever; we need to be able to modify the set while 
+        # iterating it, so just wait until it's empty.
+        while self._staging:
+            ghid = self._staging.pop()
+            try:
+                obj = self._librarian.whois(ghid)
+            except KeyError:
+                logger.warning(
+                    'Attempt to GC an object not found in librarian.'
+                )
+            
+            for primitive, gcollector in (
+            (_GidcLite, self._gc_gidc),
+            (_GeocLite, self._gc_geoc),
+            (_GobsLite, self._gc_gobs),
+            (_GobdLite, self._gc_gobd),
+            (_GdxxLite, self._gc_gdxx),
+            (_GarqLite, self._gc_garq)):
+                if isinstance(obj, primitive):
+                    gcollector(obj)
+                    break
+            else:
+                # No appropriate GCer found (should we typerror?); so continue 
+                # with WHILE loop
+                continue
+                logger.error('No appropriate GC routine found!')
+            
+        self._staging = None
+        
+    def triage(self, ghid):
+        ''' Schedule GC check for object.
+        
+        Note: should triaging be order-dependent?
+        '''
+        logger.info('Performing triage.')
+        if self._staging is None:
+            raise RuntimeError(
+                'Cannot triage outside of the undertaker\'s context manager.'
+            )
+        else:
+            self._staging.add(ghid)
+            
+    def _gc_gidc(self, obj):
+        ''' Check whether we should remove a GIDC, and then remove it
+        if appropriate. Currently we don't do that, so just leave it 
+        alone.
+        '''
+        return
+            
+    def _gc_geoc(self, obj):
+        ''' Check whether we should remove a GEOC, and then remove it if
+        appropriate. Pretty simple: is it bound?
+        '''
+        if not self._bookie.is_bound(obj):
+            self._gc_execute(obj)
+            
+    def _gc_gobs(self, obj):
+        logger.info('Entering gobs GC.')
+        if self._bookie.is_debound(obj):
+            logger.info('Gobs is debound. Staging target and executing GC.')
+            # Add our target to the list of GC checks
+            self._staging.add(obj.target)
+            self._gc_execute(obj)
+            
+    def _gc_gobd(self, obj):
+        # Child bindings can prevent GCing GOBDs
+        if self._bookie.is_debound(obj) and not self._bookie.is_bound(obj):
+            # Still need to add target
+            self._staging.add(obj.target)
+            self._gc_execute(obj)
+            
+    def _gc_gdxx(self, obj):
+        # Note that removing a debinding cannot result in a downstream target
+        # being GCd, because it wouldn't exist.
+        if self._bookie.is_debound(obj):
+            self._gc_execute(obj)
+            
+    def _gc_garq(self, obj):
+        if self._bookie.is_debound(obj):
+            self._gc_execute(obj)
+        
+    def _gc_execute(self, obj):
+        # Call GC at bookie first so that librarian is still in the know.
+        self._bookie.force_gc(obj)
+        # Next, goodbye object.
+        self._librarian.force_gc(obj)
+        # Now notify the postman, and tell her it's a removal.
+        self._postman.schedule(obj, removed=True)
+        
+    def prep_gidc(self, obj):
+        ''' GIDC do not affect GC.
+        '''
+        return True
+        
+    def prep_geoc(self, obj):
+        ''' GEOC do not affect GC.
+        '''
+        return True
+        
+    def prep_gobs(self, obj):
+        ''' GOBS do not affect GC.
+        '''
+        return True
+        
+    def prep_gobd(self, obj):
+        ''' GOBD require triage for previous targets.
+        '''
+        logger.info('-------------------------------------------')
+        logger.info('Prepping for GOBD frame.')
+        try:
+            existing = self._librarian.whois(obj.ghid)
+        except KeyError:
+            # This will always happen if it's the first frame, so let's be sure
+            # to ignore that for logging.
+            if obj.history:
+                logger.error('Could not find gobd to check existing target.')
+        else:
+            self.triage(existing.target)
+            logger.info('Triaged existing target.')
+            
+        logger.info('-------------------------------------------')
+        return True
+        
+    def prep_gdxx(self, obj):
+        ''' GDXX require triage for new targets.
+        '''
+        self.triage(obj.target)
+        return True
+        
+    def prep_garq(self, obj):
+        ''' GARQ do not affect GC.
+        '''
+        return True
+        
+        
+class _Lawyer:
+    ''' Enforces authorship requirements, including both having a known
+    entity as author/recipient and consistency for eg. bindings and 
+    debindings.
+    
+    Threadsafe.
+    '''
+    def __init__(self, librarian):
+        # Lookup for all known identity ghids
+        # This must remain valid at all persister instances regardless of the
+        # python runtime state
+        self._librarian = librarian
+        
+    def _validate_author(self, obj):
+        try:
+            author = self._librarian.whois(obj.author)
+        except KeyError as exc:
+            logger.info('0x0003: Unknown author / recipient.')
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient.'
+            ) from exc
+        else:
+            if not isinstance(author, _GidcLite):
+                logger.info('0x0003: Invalid author / recipient.')
+                raise InvalidIdentity(
+                    '0x0003: Invalid author / recipient.'
+                )
+                
+        return True
+        
+    def validate_gidc(self, obj):
+        ''' GIDC need no validation.
+        '''
+        return True
+        
+    def validate_geoc(self, obj):
+        ''' Ensure author is known and valid.
+        '''
+        return self._validate_author(obj)
+        
+    def validate_gobs(self, obj):
+        ''' Ensure author is known and valid.
+        '''
+        return self._validate_author(obj)
+        
+    def validate_gobd(self, obj):
+        ''' Ensure author is known and valid, and consistent with the
+        previous author for the binding (if it already exists).
+        '''
+        self._validate_author(obj)
+        try:
+            existing = self._librarian.whois(obj.ghid)
+        except KeyError:
+            pass
+        else:
+            if existing.author != obj.author:
+                logger.info('0x0007: Inconsistent binding author.')
+                raise InconsistentAuthor(
+                    '0x0007: Inconsistent binding author.'
+                )
+        return True
+        
+    def validate_gdxx(self, obj):
+        ''' Ensure author is known and valid, and consistent with the
+        previous author for the binding.
+        '''
+        self._validate_author(obj)
+        try:
+            existing = self._librarian.whois(obj.target)
+        except KeyError:
+            pass
+        else:
+            if isinstance(existing, _GarqLite):
+                if existing.recipient != obj.author:
+                    logger.info('0x0007: Inconsistent debinding author.')
+                    raise InconsistentAuthor(
+                        '0x0007: Inconsistent debinding author.'
+                    )
+                
+            else:
+                if existing.author != obj.author:
+                    logger.info('0x0007: Inconsistent debinding author.')
+                    raise InconsistentAuthor(
+                        '0x0007: Inconsistent debinding author.'
+                    )
+        return True
+        
+    def validate_garq(self, obj):
+        ''' Validate recipient.
+        '''
+        try:
+            recipient = self._librarian.whois(obj.recipient)
+        except KeyError as exc:
+            logger.info('0x0003: Unknown author / recipient.')
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient.'
+            ) from exc
+        else:
+            if not isinstance(recipient, _GidcLite):
+                logger.info('0x0003: Invalid author / recipient.')
+                raise InvalidIdentity(
+                    '0x0003: Invalid author / recipient.'
+                )
+                
+        return True
+        
+        
+class _Enforcer:
+    ''' Enforces valid target selections.
+    '''
+    def __init__(self, librarian):
+        self._librarian = librarian
+        
+    def validate_gidc(self, obj):
+        ''' GIDC need no target verification.
+        '''
+        return True
+        
+    def validate_geoc(self, obj):
+        ''' GEOC need no target validation.
+        '''
+        return True
+        
+    def validate_gobs(self, obj):
+        ''' Check if target is known, and if it is, validate it.
+        '''
+        try:
+            target = self._librarian.whois(obj.target)
+        except KeyError:
+            pass
+        else:
+            for forbidden in (_GidcLite, _GobsLite, _GdxxLite, _GarqLite):
+                if isinstance(target, forbidden):
+                    logger.info('0x0006: Invalid static binding target.')
+                    raise InvalidTarget(
+                        '0x0006: Invalid static binding target.'
+                    )
+        return True
+        
+    def validate_gobd(self, obj):
+        ''' Check if target is known, and if it is, validate it.
+        
+        Also do a state check on the dynamic binding.
+        '''
+        try:
+            target = self._librarian.whois(obj.target)
+        except KeyError:
+            pass
+        else:
+            for forbidden in (_GidcLite, _GobsLite, _GdxxLite, _GarqLite):
+                if isinstance(target, forbidden):
+                    logger.info('0x0006: Invalid dynamic binding target.')
+                    raise InvalidTarget(
+                        '0x0006: Invalid dynamic binding target.'
+                    )
+                    
+        self._validate_dynamic_history(obj)
+                    
+        return True
+        
+    def validate_gdxx(self, obj):
+        ''' Check if target is known, and if it is, validate it.
+        '''
+        try:
+            target = self._librarian.whois(obj.target)
+        except KeyError:
+            logger.info('0x0006: Unknown debinding target.')
+            raise InvalidTarget(
+                '0x0006: Unknown debinding target. Cannot debind an unknown '
+                'resource, to prevent a malicious party from preemptively '
+                'uploading a debinding for a resource s/he did not bind.'
+            )
+        else:
+            # NOTE: if this changes, will need to modify place_gdxx in _Bookie
+            for forbidden in (_GidcLite, _GeocLite):
+                if isinstance(target, forbidden):
+                    logger.info('0x0006: Invalid debinding target.')
+                    raise InvalidTarget(
+                        '0x0006: Invalid debinding target.'
+                    )
+        return True
+        
+    def validate_garq(self, obj):
+        ''' No additional validation needed.
+        '''
+        return True
+        
+    def _validate_dynamic_history(self, obj):
+        ''' Enforces state flow / progression for dynamic objects. In 
+        other words, prevents zeroth bindings with history, makes sure
+        future bindings contain previous ones in history, etc.
+        '''
+        # Try getting an existing binding.
+        try:
+            existing = self._librarian.whois(obj.ghid)
+            
+        except KeyError:
+            if obj.history:
+                raise IllegalDynamicFrame(
+                    '0x0009: Illegal frame. Cannot upload a frame with '
+                    'history as the first frame in a persistence provider.'
+                )
+                
+        else:
+            if existing.frame_ghid not in obj.history:
+                raise IllegalDynamicFrame(
+                    '0x0009: Illegal frame. Frame history did not contain the '
+                    'most recent frame.'
+                )
+            
+            
+class _Bookie:
+    ''' Tracks state relationships between objects using **only weak
+    references** to them. ONLY CONCERNED WITH LIFETIMES! Does not check
+    (for example) consistent authorship.
+    
+    Threadsafe.
+    '''
+    def __init__(self, librarian):
+        self._opslock = threading.Lock()
+        self._librarian = librarian
+        
+        # Lookup <bound ghid>: set(<binding obj>)
+        # This must remain valid at all persister instances regardless of the
+        # python runtime state
+        self._bound_by_ghid = {}
+        
+        # Lookup <debound ghid>: <debinding ghid>
+        # This must remain valid at all persister instances regardless of the
+        # python runtime state
+        # Note that any particular object can have exactly zero or one debinds
+        self._debound_by_ghid = {}
+        # # Lookup <debinding ghid>: <debound ghid>
+        # self._debound_to_ghid = weakref.WeakKeyDictionary()
+        
+        # Lookup <recipient>: set(<request ghid>)
+        self._requests_for_recipient = {}
+        
+    def recipient_status(self, ghid):
+        ''' Return a frozenset of ghids assigned to the passed ghid as
+        a recipient.
+        '''
+        try:
+            return frozenset(self._requests_for_recipient[ghid])
+        except KeyError:
+            return frozenset()
+        
+    def bind_status(self, ghid):
+        ''' Return a frozenset of ghids binding the passed ghid.
+        '''
+        try:
+            return frozenset(self._bound_by_ghid[ghid])
+        except KeyError:
+            return frozenset()
+        
+    def debind_status(self, ghid):
+        ''' Return either a ghid, or None.
+        '''
+        try:
+            return self._debound_by_ghid[ghid]
+        except KeyError:
+            return None
+        
+    def is_bound(self, obj):
+        try:
+            bindings = self._bound_by_ghid[obj.ghid]
+        except KeyError:
+            return False
+        else:
+            return True
+            
+    def is_debound(self, obj):
+        try:
+            debinding = self._debound_by_ghid[obj.ghid]
+        except KeyError:
+            return False
+        else:
+            return True
+        
+    def _add_binding(self, being_bound, doing_binding):
+        try:
+            self._bound_by_ghid[being_bound].add(doing_binding)
+        except KeyError:
+            self._bound_by_ghid[being_bound] = { doing_binding }
+            
+    def _remove_binding(self, obj):
+        being_unbound = obj.target
+        
+        try:
+            bindings_for_target = self._bound_by_ghid[being_unbound]
+        except KeyError:
+            logger.warning(
+                'Attempting to remove a binding, but the bookie has no record '
+                'of its existence.'
+            )
+        else:
+            bindings_for_target.discard(obj.ghid)
+            if len(bindings_for_target) == 0:
+                del self._bound_by_ghid[being_unbound]
+            
+    def _remove_request(self, obj):
+        recipient = obj.recipient
+            
+        try:
+            self._requests_for_recipient[recipient].discard(obj.ghid)
+        except KeyError:
+            return
+            
+    def _remove_debinding(self, obj):
+        target = obj.target
+            
+        try:
+            del self._debound_by_ghid[target]
+        except KeyError:
+            return
+        
+    def validate_gidc(self, obj):
+        ''' GIDC need no state verification.
+        '''
+        return True
+        
+    def place_gidc(self, obj):
+        ''' GIDC needs no special treatment here.
+        '''
+        pass
+        
+    def validate_geoc(self, obj):
+        ''' GEOC must verify that they are bound.
+        '''
+        if self.is_bound(obj):
+            return True
+        else:
+            raise UnboundContainer(
+                '0x0004: Attempt to upload unbound GEOC; object immediately '
+                'garbage collected.'
+            )
+        
+    def place_geoc(self, obj):
+        ''' No special treatment here.
+        '''
+        pass
+        
+    def validate_gobs(self, obj):
+        if self.is_debound(obj):
+            raise AlreadyDebound(
+                '0x0005: Attempt to upload a binding for which a debinding '
+                'already exists. Remove the debinding first.'
+            )
+        else:
+            return True
+        
+    def place_gobs(self, obj):
+        self._add_binding(
+            being_bound = obj.target,
+            doing_binding = obj.ghid,
+        )
+        
+    def validate_gobd(self, obj):
+        # A deliberate binding can override a debinding for GOBD.
+        if self.is_debound(obj) and not self.is_bound(obj):
+            raise AlreadyDebound(
+                '0x0005: Attempt to upload a binding for which a debinding '
+                'already exists. Remove the debinding first.'
+            )
+        else:
+            return True
+        
+    def place_gobd(self, obj):
+        # First we need to make sure we're not missing an existing frame for
+        # this binding, and then to schedule a GC check for its target.
+        try:
+            existing = self._librarian.whois(obj.ghid)
+        except KeyError:
+            if obj.history:
+                logger.error(
+                    'Placing a dynamic frame with history, but it\'s missing '
+                    'at the librarian.'
+                )
+        else:
+            self._remove_binding(existing)
+            
+        # Now we have a clean slate and need to update things accordingly.
+        self._add_binding(
+            being_bound = obj.target,
+            doing_binding = obj.ghid,
+        )
+        
+    def validate_gdxx(self, obj):
+        if self.is_debound(obj):
+            raise AlreadyDebound(
+                '0x0005: Attempt to upload a binding for which a debinding '
+                'already exists. Remove the debinding first.'
+            )
+        else:
+            return True
+        
+    def place_gdxx(self, obj):
+        ''' Just record the fact that there is a debinding. Let GCing 
+        worry about removing other records.
+        '''
+        # Note that the undertaker will worry about removing stuff from local
+        # state. 
+        self._debound_by_ghid[obj.target] = obj.ghid
+        
+    def validate_garq(self, obj):
+        if self.is_debound(obj):
+            raise AlreadyDebound(
+                '0x0005: Attempt to upload a binding for which a debinding '
+                'already exists. Remove the debinding first.'
+            )
+        else:
+            return True
+        
+    def place_garq(self, obj):
+        ''' Add the garq to the books.
+        '''
+        try:
+            self._requests_for_recipient[obj.recipient].add(obj.ghid)
+        except KeyError:
+            self._requests_for_recipient[obj.recipient] = { obj.ghid }
+        
+    def force_gc(self, obj):
+        ''' Forces erasure of an object.
+        '''
+        is_binding = (isinstance(obj, _GobsLite) or
+            isinstance(obj, _GobdLite))
+        is_debinding = isinstance(obj, _GdxxLite)
+        is_request = isinstance(obj, _GarqLite)
+            
+        if is_binding:
+            self._remove_binding(obj)
+        elif is_debinding:
+            self._remove_debinding(obj)
+        elif is_request:
+            self._remove_request(obj)
+                
+    def __check_illegal_binding(self, ghid):
+        ''' Deprecated-ish and unused. Former method to retroactively
+        clear bindings that were initially (and illegally) accepted 
+        because their (illegal) target was unknown at the time.
+        
+        Checks for an existing binding for ghid. If it exists,
+        removes the binding, and forces its garbage collection. Used to
+        overcome race condition inherent to binding.
+        
+        Should this warn?
+        '''
+        # Make sure not to check implicit bindings, or dynamic bindings will
+        # show up as illegal if/when we statically bind them
+        if ghid in self._bindings_static or ghid in self._bindings_dynamic:
+            illegal_binding = self._bindings[ghid]
+            del self._bindings[ghid]
+            self._gc_execute(illegal_binding)
+            
+            
 class _Librarian:
     ''' Keeps objects. Should contain the only strong references to the
     objects it keeps. Threadsafe.
+    
+    TODO: convert shelf, catalog to single object with function calls 
+    instead of __getitem__ / __setitem__ / __delitem__
     '''
-    def __init__(self):
+    def __init__(self, shelf=None, catalog=None):
         ''' Sets up internal tracking.
         '''
+        if shelf is None:
+            shelf = {}
+        if catalog is None:
+            catalog = {}
+            
         # Lookup for ghid -> raw bytes
-        self._shelf = {}
+        # This must be valid across all instances at the persister.
+        self._shelf = shelf
         # Lookup for ghid -> hypergolix description
-        self._catalog = {}
+        # This may be GC'd by the python process.
+        self._catalog = catalog
         # Operations lock
         self._opslock = threading.Lock()
         
-    def tend(self, raw_obj):
+    def force_gc(self, obj):
+        ''' Forces erasure of an object. Does not notify the undertaker.
+        Indempotent. Should never raise KeyError.
+        '''
+        with self._opslock:
+            try:
+                del self._shelf[obj.ghid]
+            except KeyError:
+                logger.warning(
+                    'Attempted to GC a non-existent object. Probably a bug.'
+                )
+            
+            try:
+                del self._catalog[obj.ghid]
+            except KeyError:
+                pass
+        
+    def store(self, obj, raw):
         ''' Starts tracking an object.
-        raw_obj is a Golix object.
-        '''
-        for cls, converter in (
-        (GIDC, self._convert_gidc),
-        (GEOC, self._convert_geoc),
-        (GOBS, self._convert_gobs),
-        (GOBD, self._convert_gobd),
-        (GDXX, self._convert_gdxx),
-        (GARQ, self._convert_garq)):
-            if isinstance(raw_obj, cls):
-                obj = converter(raw_obj)
-                break
-                
+        obj is a hypergolix representation object.
+        raw is bytes-like.
+        '''  
         with self._opslock:
-            self._shelf[obj.ghid] = raw_obj.packed
+            self._shelf[obj.ghid] = raw
             self._catalog[obj.ghid] = obj
-        
-    def abandon(self, ghid):
-        ''' Stops tracking an object. Will result in it being GC'd by
-        python.
-        
-        Raises KeyError if not currently tending the ghid.
-        '''
-        with self._opslock:
-            del self._shelf[ghid]
-            del self._catalog[ghid]
         
     def dereference(self, ghid):
         ''' Returns the raw data associated with the ghid.
@@ -1559,14 +2828,29 @@ class _Librarian:
         
     def whois(self, ghid):
         ''' Returns a lightweight Hypergolix description of the object.
+        
+        TODO: incorporate lazy-loading in case of catalog GCing.
         '''
         return self._catalog[ghid]
         
+    def __contains__(self, ghid):
+        # Catalog may only be accurate locally. Shelf is accurate globally.
+        return ghid in self._shelf
+        
+        
+class _Enlitener:
+    ''' Handles conversion from heavyweight Golix objects to lightweight
+    Hypergolix representations.
+    ''' 
     @staticmethod
     def _convert_gidc(gidc):
         ''' Converts a Golix object into a Hypergolix description.
         '''
-        return _GidcLite(gidc.ghid)
+        identity = SecondParty.from_identity(gidc)
+        return _GidcLite(
+            ghid = gidc.ghid,
+            identity = identity,
+        )
         
     @staticmethod
     def _convert_geoc(geoc):
@@ -1619,62 +2903,96 @@ class _Librarian:
         )
         
         
-class _GidcLite:
-    ''' Lightweight description of a GIDC.
-    '''
+class _BaseLite:
     __slots__ = [
         'ghid',
         '__weakref__',
     ]
     
-    def __init__(self, ghid):
+    def __hash__(self):
+        return hash(self.ghid)
+        
+    def __eq__(self, other):
+        try:
+            return self.ghid == other.ghid
+        except AttributeError as exc:
+            raise TypeError('Incomparable types.') from exc
+        
+        
+class _GidcLite(_BaseLite):
+    ''' Lightweight description of a GIDC.
+    '''
+    __slots__ = [
+        'identity'
+    ]
+    
+    def __init__(self, ghid, identity):
         self.ghid = ghid
-        # self.key_sign
-        # self.key_encr
-        # self.key_exch
-        # self.cipher
+        self.identity = identity
         
         
-class _GeocLite:
+class _GeocLite(_BaseLite):
     ''' Lightweight description of a GEOC.
     '''
     __slots__ = [
-        'ghid',
         'author',
-        '__weakref__',
     ]
     
     def __init__(self, ghid, author):
         self.ghid = ghid
         self.author = author
         
+    def __eq__(self, other):
+        try:
+            return (
+                super().__eq__(other) and 
+                self.author == other.author
+            )
+        # This will not catch a super() TyperError, so we want to be able to
+        # compare anything with a ghid. In reality, any situation where the
+        # authors don't match but the ghids do is almost certainly a bug; but,
+        # compare it anyways just in case.
+        except AttributeError as exc:
+            return False
         
-class _GobsLite:
+        
+class _GobsLite(_BaseLite):
     ''' Lightweight description of a GOBS.
     '''
     __slots__ = [
-        'ghid',
         'author',
         'target',
-        '__weakref__',
     ]
     
     def __init__(self, ghid, author, target):
         self.ghid = ghid
         self.author = author
         self.target = target
+        
+    def __eq__(self, other):
+        try:
+            return (
+                super().__eq__(other) and 
+                self.author == other.author and
+                self.target == other.target
+            )
+            
+        # This will not catch a super() TyperError, so we want to be able to
+        # compare anything with a ghid. In reality, any situation where the
+        # authors don't match but the ghids do is almost certainly a bug; but,
+        # compare it anyways just in case.
+        except AttributeError as exc:
+            return False
     
         
-class _GobdLite:
+class _GobdLite(_BaseLite):
     ''' Lightweight description of a GOBD.
     '''
     __slots__ = [
-        'ghid',
         'author',
         'target',
         'frame_ghid',
         'history',
-        '__weakref__',
     ]
     
     def __init__(self, ghid, author, target, frame_ghid, history):
@@ -1683,34 +3001,131 @@ class _GobdLite:
         self.target = target
         self.frame_ghid = frame_ghid
         self.history = history
+        
+    def __eq__(self, other):
+        try:
+            return (
+                super().__eq__(other) and 
+                self.author == other.author and
+                self.target == other.target and
+                self.frame_ghid == other.frame_ghid
+                # Skip history, because it could potentially vary
+                # self.history == other.history
+            )
+            
+        # This will not catch a super() TyperError, so we want to be able to
+        # compare anything with a ghid. In reality, any situation where the
+        # authors don't match but the ghids do is almost certainly a bug; but,
+        # compare it anyways just in case.
+        except AttributeError as exc:
+            return False
     
         
-class _GdxxLite:
+class _GdxxLite(_BaseLite):
     ''' Lightweight description of a GDXX.
     '''
     __slots__ = [
-        'ghid',
         'author',
         'target',
-        '__weakref__',
+        '_debinding',
     ]
     
     def __init__(self, ghid, author, target):
         self.ghid = ghid
         self.author = author
         self.target = target
+        self._debinding = True
+        
+    def __eq__(self, other):
+        try:
+            return (
+                super().__eq__(other) and 
+                self.author == other.author and
+                self._debinding == other._debinding
+            )
+            
+        # This will not catch a super() TyperError, so we want to be able to
+        # compare anything with a ghid. In reality, any situation where the
+        # authors don't match but the ghids do is almost certainly a bug; but,
+        # compare it anyways just in case.
+        except AttributeError as exc:
+            return False
         
         
-class _GarqLite:
+class _GarqLite(_BaseLite):
     ''' Lightweight description of a GARQ.
     '''
     __slots__ = [
-        'ghid',
         'recipient',
-        '__weakref__',
     ]
     
     def __init__(self, ghid, recipient):
         self.ghid = ghid
         self.recipient = recipient
+        
+    def __eq__(self, other):
+        try:
+            return (
+                super().__eq__(other) and 
+                self.recipient == other.recipient
+            )
+            
+        # This will not catch a super() TyperError, so we want to be able to
+        # compare anything with a ghid. In reality, any situation where the
+        # authors don't match but the ghids do is almost certainly a bug; but,
+        # compare it anyways just in case.
+        except AttributeError as exc:
+            return False
     
+            
+            
+def circus_factory(core_class=PersisterCore, core_kwargs=None, 
+                    doorman_class=_Doorman, doorman_kwargs=None, 
+                    enforcer_class=_Enforcer, enforcer_kwargs=None,
+                    lawyer_class=_Lawyer, lawyer_kwargs=None,
+                    bookie_class=_Bookie, bookie_kwargs=None,
+                    librarian_class=_Librarian, librarian_kwargs=None,
+                    undertaker_class=_Undertaker, undertaker_kwargs=None,
+                    postman_class=_MrPostman, postman_kwargs=None):
+    ''' Generate a PersisterCore, and its associated circus, correctly
+    linking all of the objects in the process. Returns their instances
+    in the same order they were passed.
+    '''
+    core_kwargs = core_kwargs or {}
+    doorman_kwargs = doorman_kwargs or {}
+    enforcer_kwargs = enforcer_kwargs or {}
+    lawyer_kwargs = lawyer_kwargs or {}
+    bookie_kwargs = bookie_kwargs or {}
+    librarian_kwargs = librarian_kwargs or {}
+    undertaker_kwargs = undertaker_kwargs or {}
+    postman_kwargs = postman_kwargs or {}
+    
+    librarian = librarian_class(**librarian_kwargs)
+    doorman = doorman_class(librarian=librarian, **doorman_kwargs)
+    enforcer = enforcer_class(librarian=librarian, **enforcer_kwargs)
+    lawyer = lawyer_class(librarian=librarian, **lawyer_kwargs)
+    bookie = bookie_class(librarian=librarian, **bookie_kwargs)
+    postman = postman_class(
+        librarian = librarian,
+        bookie = bookie,
+        **postman_kwargs
+    )
+    undertaker = undertaker_class(
+        librarian = librarian,
+        bookie = bookie,
+        postman = postman,
+        **undertaker_kwargs
+    )
+    core = core_class(
+        doorman = doorman,
+        enforcer = enforcer,
+        lawyer = lawyer,
+        bookie = bookie,
+        librarian = librarian,
+        undertaker = undertaker,
+        postman = postman,
+        **core_kwargs
+    )
+    
+    return (core, doorman, enforcer, lawyer, bookie, librarian, undertaker, 
+            postman)

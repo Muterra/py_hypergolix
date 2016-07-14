@@ -84,8 +84,7 @@ from .utils import _JitDictDict
 from .exceptions import NakError
 from .exceptions import HandshakeError
 from .exceptions import HandshakeWarning
-from .exceptions import InaccessibleError
-from .exceptions import UnknownPartyError
+from .exceptions import UnknownParty
 from .exceptions import DispatchError
 from .exceptions import DispatchWarning
 
@@ -342,7 +341,7 @@ class AgentBase:
         
     def _retrieve_contact(self, ghid):
         ''' Attempt to retrieve a contact, first from self, then from 
-        persister. Raise UnknownPartyError if failure. Return the 
+        persister. Raise UnknownParty if failure. Return the 
         contact.
         '''
         if ghid in self._contacts:
@@ -353,7 +352,7 @@ class AgentBase:
                 contact = SecondParty.from_packed(contact_packed)
                 self._contacts[ghid] = contact
             except NakError as e:
-                raise UnknownPartyError(
+                raise UnknownParty(
                     'Could not find identity in known contacts or at the '
                     'Agent\'s persistence provider.'
                 ) from e

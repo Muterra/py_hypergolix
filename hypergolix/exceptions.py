@@ -39,14 +39,21 @@ __all__ = [
     'HypergolixException',
     # These are all persister errors and warnings
     'NakError',
-    'UnboundContainerError',
-    'DoesNotExistError',
+    'VerificationFailure',
+    'MalformedGolixPrimitive',
+    'UnboundContainer',
+    'InvalidIdentity',
+    'AlreadyDebound',
+    'InconsistentAuthor',
+    'DoesNotExist',
+    'InvalidTarget',
+    'IllegalDynamicFrame',
     'PersistenceWarning',
     # These are Agent/integration errors
     'HandshakeError',
     'HandshakeWarning',
-    'InaccessibleError',
-    'UnknownPartyError',
+    'Inaccessible',
+    'UnknownParty',
     # These are dispatch errors
     'DispatchError',
     'DispatchWarning',
@@ -76,7 +83,28 @@ class NakError(HypergolixException, RuntimeError):
     pass
     
     
-class UnboundContainerError(NakError):
+class MalformedGolixPrimitive(NakError):
+    ''' This NakError is raised when a packed Golix primitive appears to
+    be malformed.
+    '''
+    pass
+    
+    
+class VerificationFailure(NakError):
+    ''' This NakError is raised when signature verification fails on a
+    Golix object.
+    '''
+    pass
+    
+    
+class InvalidIdentity(NakError):
+    ''' This NakError is raised when a persistence provider has received
+    a primitive with an unknown or invalid author or recipient.
+    '''
+    pass
+    
+    
+class UnboundContainer(NakError):
     ''' This NakError is raised when a persistence provider has no 
     binding for the attempted container, and it was therefore passed
     immediately to garbage collection.
@@ -84,9 +112,41 @@ class UnboundContainerError(NakError):
     pass
     
     
-class DoesNotExistError(NakError):
+class InvalidTarget(NakError):
+    ''' This NakError is raised when a persistence provider has received
+    a primitive targeting an inappropriate object (for example, trying
+    to debind a GEOC directly).
+    '''
+    pass
+    
+    
+class AlreadyDebound(NakError):
+    ''' This NakError is raised when a persistence provider has already
+    received a debinding for the primitive being published.
+    '''
+    pass
+    
+    
+class InconsistentAuthor(NakError):
+    ''' This NakError is raised when a persistence provider has received
+    a primitive targeting an inappropriate object (for example, trying
+    to debind a GEOC directly).
+    '''
+    pass
+    
+    
+class DoesNotExist(NakError):
     ''' This NakError is raised when a persistence provider has received
     a request for a ghid that does not exist in its object store.
+    '''
+    pass
+    
+    
+class IllegalDynamicFrame(NakError):
+    ''' This NakError is raised when a persistence provider has received
+    an illegal dynamic frame, ie. if the existing frame is not contained
+    within the new frame's history, or if the zeroth frame contains 
+    history.
     '''
     pass
     
@@ -105,13 +165,13 @@ class HandshakeError(HypergolixException, RuntimeError):
     pass
 
 
-class InaccessibleError(HypergolixException, RuntimeError):
+class Inaccessible(HypergolixException, RuntimeError):
     ''' Raised when an Agent does not have access to an object.
     '''
     pass
     
     
-class UnknownPartyError(HypergolixException, RuntimeError):
+class UnknownParty(HypergolixException, RuntimeError):
     ''' Raised when an Agent cannot find an identity definition for an
     author and therefore cannot verify anything.
     '''
