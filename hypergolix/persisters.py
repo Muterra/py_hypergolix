@@ -1135,6 +1135,13 @@ class _PersisterBridgeSession(_AutoresponderSession):
                 # Note: for now, just don't worry about failures.
                 await_reply = False
             )
+        # await self._transport.send(
+        #     session = self,
+        #     msg = bytes(subscribed_ghid) + bytes(notification_ghid),
+        #     request_code = self._transport.REQUEST_CODES['send_subs_update'],
+        #     # Note: for now, just don't worry about failures.
+        #     await_reply = False
+        # )
 
 
 class PersisterBridgeServer(Autoresponder):
@@ -1215,13 +1222,9 @@ class PersisterBridgeServer(Autoresponder):
         self._persister.publish(request_body)
         session._processing.clear()
         return b'\x01'
-        obj = self._persister.ingest(request_body)
-        self.schedule_ignore_update(obj.ghid, session)
-        ensure_future(do_future_subs_update())
-        
-    def subs_callback(self, ghid):
-        return True
-        schedule_future_subs_update(ghid)
+        # obj = self._persister.ingest(request_body)
+        # self.schedule_ignore_update(obj.ghid, session)
+        # ensure_future(do_future_subs_update())
             
     async def get_wrapper(self, session, request_body):
         ''' Deserializes a get request; forwards it to the persister.
@@ -1235,8 +1238,8 @@ class PersisterBridgeServer(Autoresponder):
         '''
         ghid = Ghid.from_bytes(request_body)
         
-        def updater(notification_ghid, subscribed_ghid=ghid, 
-        call=session.send_subs_update):
+        def updater(subscribed_ghid, notification_ghid, 
+                    call=session.send_subs_update):
             call(subscribed_ghid, notification_ghid)
         
         self._persister.subscribe(ghid, updater)
@@ -1371,7 +1374,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
             
         def run_callbacks(subscribed_ghid, notification_ghid):
             for callback in self._subscriptions[subscribed_ghid]:
-                callback(notification_ghid)
+                callback(subscribed_ghid, notification_ghid)
         
         worker = threading.Thread(
             target = run_callbacks,
