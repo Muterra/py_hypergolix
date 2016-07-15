@@ -47,12 +47,22 @@ if __name__ == '__main__':
         '--traceur', 
         action = 'store_true',
         help = 'Enable thorough analysis, including stack tracing. '
-                'Implies debug.'
     )
     parser.add_argument(
         '--debug', 
         action = 'store_true',
-        help = 'Up the logging level.'
+        help = 'Currently unused.'
+    )
+    parser.add_argument(
+        '--verbosity', 
+        action = 'store',
+        default = 'warning', 
+        type = str,
+        help = 'Specify the logging level. '
+                '"debug" -> most verbose, '
+                '"info" -> somewhat verbose, '
+                '"warning" -> default python verbosity, '
+                '"error" -> quiet.',
     )
     parser.add_argument('unittest_args', nargs='*')
 

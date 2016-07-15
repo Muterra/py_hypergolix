@@ -1972,6 +1972,8 @@ class _MrPostman:
         self._bookie = bookie
         self._librarian = librarian
         
+        self._out_for_delivery = threading.Event()
+        
         # Lookup <ghid>: set(<callback>)
         self._opslock_listen = threading.Lock()
         self._listeners = {}
@@ -2133,6 +2135,21 @@ class _MrPostman:
         ''' Executes the actual mail run, clearing out the _scheduled
         queue.
         '''
+        # Mail runs will continue until all pending are consumed, so threads 
+        # can add to the queue until everythin is done. But, multiple calls to
+        # do_mail_run will cause us to hang, and if it's from the same thread,
+        # we'll deadlock. So, at least for now, prevent reentrant do_mail_run.
+        # NOTE: there is a small race condition between finishing the delivery
+        # loop and releasing the out_for_delivery event.
+        # TODO: find a more elegant solution.
+        if not self._out_for_delivery.is_set():
+            self._out_for_delivery.set()
+            try:
+                self._delivery_loop()
+            finally:
+                self._out_for_delivery.clear()
+                
+    def _delivery_loop(self):
         while not self._scheduled.empty():
             # Ideally this will be the only consumer, but we might be running
             # in multiple threads or something, so try/catch just in case.
@@ -2148,13 +2165,18 @@ class _MrPostman:
     def _deliver(self, subscription, notification):
         ''' Do the actual subscription update.
         '''
-        with self._opslock_listen:
-            try:
-                for callback in self._listeners[subscription]:
-                    callback(subscription, notification)
-            # No listeners for it? No worries.
-            except KeyError:
-                pass
+        # We need to freeze the listeners before we operate on them, but we 
+        # don't need to lock them while we go through all of the callbacks.
+        # Instead, just sacrifice any subs being added concurrently to the 
+        # current delivery run.
+        try:
+            callbacks = frozenset(self._listeners[subscription])
+        # No listeners for it? No worries.
+        except KeyError:
+            callbacks = frozenset()
+                
+        for callback in callbacks:
+            callback(subscription, notification)
         
         
 class _Undertaker:

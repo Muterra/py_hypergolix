@@ -891,6 +891,12 @@ class Autoresponder(LooperTrooper):
             # If the response was, in fact, an exception, raise it.
             if isinstance(response, Exception):
                 raise response
+                
+        except SessionClosed as exc:
+            logger.debug(
+                'Session closed while awaiting response: \n' + ''.join(
+                traceback.format_exc())
+            )
         
         finally:
             del session.pending_responses[token]

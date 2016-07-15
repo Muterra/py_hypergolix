@@ -1659,7 +1659,7 @@ class TraceLogger:
         while not self.stop_requested.is_set():
             time.sleep(self.interval)
             traces = self.get_traces()
-            logger.debug(traces)
+            logger.info(traces)
     
     def stop(self):
         self.stop_requested.set()
@@ -1667,14 +1667,21 @@ class TraceLogger:
             
     def get_traces(self):
         code = []
-        for threadId, stack in sys._current_frames().items():
-            code.append("\n# ThreadID: %s" % threadId)
-            for filename, lineno, name, line in traceback.extract_stack(stack):
-                code.append('File: "%s", line %d, in %s' % (filename, lineno, name))
-                if line:
-                    code.append("  %s" % (line.strip()))
+        for thread_id, stack in sys._current_frames().items():
+            # Don't dump the trace for the TraceLogger!
+            if thread_id != threading.get_ident():
+                code.extend(self._dump_thread(thread_id, stack))
                     
         return '\n'.join(code)
+        
+    def _dump_thread(self, thread_id, stack):
+        code = []
+        code.append("\n# Thread ID: %s" % thread_id)
+        for filename, lineno, name, line in traceback.extract_stack(stack):
+            code.append('File: "%s", line %d, in %s' % (filename, lineno, name))
+            if line:
+                code.append("  %s" % (line.strip()))
+        return code
         
     def __enter__(self):
         self.thread.start()

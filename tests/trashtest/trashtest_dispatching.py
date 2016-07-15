@@ -270,4 +270,8 @@ class TestDispatching(unittest.TestCase):
         
 
 if __name__ == "__main__":
+    logging.basicConfig(filename='logs/dispatch.log', level=logging.DEBUG)
+    # from hypergolix.utils import TraceLogger
+    # with TraceLogger(interval=10):
+    #     unittest.main()
     unittest.main()

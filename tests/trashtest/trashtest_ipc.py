@@ -184,14 +184,14 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             api_id = self.__api_id,
             dynamic = False
         )
-        self.assertIn(obj1.address, self.persister._store)
+        self.assertIn(obj1.address, self.persister.librarian)
         
         obj2 = self.app1.new_obj_threadsafe(
             state = pt1,
             api_id = self.__api_id,
             dynamic = True
         )
-        self.assertIn(obj2.address, self.persister._store)
+        self.assertIn(obj2.address, self.persister.librarian)
         
         joint1 = self.app2.get_obj_threadsafe(obj1.address)
         self.assertEqual(obj1, joint1)
@@ -204,7 +204,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             api_id = self.__api_id,
             dynamic = True
         )
-        self.assertIn(obj3.address, self.persister._store)
+        self.assertIn(obj3.address, self.persister.librarian)
         
         self.app1.update_obj_threadsafe(obj3, pt2)
         joint3 = self.app2.get_obj_threadsafe(obj3.address)
@@ -227,7 +227,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         # self.assertIn(obj1.address, self.alice_core._state_by_ghid)
         
         self.app1.delete_obj_threadsafe(obj1)
-        self.assertNotIn(obj1.address, self.persister._store)
+        self.assertNotIn(obj1.address, self.persister.librarian)
         self.assertTrue(obj1._inoperable)
         
         # --------------------------------------------------------------------

@@ -68,6 +68,8 @@ from golix import SecurityError
 
 from golix._getlow import GEOC
 from golix._getlow import GOBD
+from golix._getlow import GARQ
+from golix._getlow import GDXX
 
 from golix.utils import AsymHandshake
 from golix.utils import AsymAck
@@ -278,8 +280,8 @@ class AgentBase:
         '''
         super().__init__(*args, **kwargs)
         
-        if not isinstance(persister, _PersisterBase):
-            raise TypeError('Persister must subclass _PersisterBase.')
+        # if not isinstance(persister, _PersisterBase):
+        #     raise TypeError('Persister must subclass _PersisterBase.')
         self._persister = persister
         
         if not isinstance(dispatcher, DispatcherBase):
@@ -358,12 +360,24 @@ class AgentBase:
                 ) from e
         return contact
         
-    def _request_listener(self, request_ghid):
+    def _request_listener(self, subscription, notification):
         ''' Callback to handle any requests.
         '''
-        request_packed = self.persister.get(request_ghid)
-        request_unpacked = self._identity.unpack_request(request_packed)
-        requestor_ghid = request_unpacked.author
+        # Note that the notification could also be a GDXX.
+        request_packed = self.persister.get(notification)
+        request_unpacked = self._identity.unpack_any(request_packed)
+        if isinstance(request_unpacked, GARQ):
+            requestor_ghid = request_unpacked.author
+        elif isinstance(request_unpacked, GDXX):
+            # This case should only be relevant if we have multiple agents 
+            # logged in at separate locations at the same time, processing the
+            # same GARQs. For now, ignore it entirely.
+            # TODO: fix this.
+            return
+        else:
+            raise RuntimeError(
+                'Unexpected Golix primitive while listening for requests.'
+            )
         
         try:
             requestor = self._retrieve_contact(requestor_ghid)
@@ -1425,14 +1439,14 @@ class Dispatcher(DispatcherBase):
             recipient = recipient
         )
                     
-    def dispatch_update(self, ghid):
+    def dispatch_update(self, subscribed, notification):
         ''' Updates local state tracking and distributes the update to 
         the endpoints.
         '''
         # NOTE THAT GHID HERE IS THE FRAME GHID, NOT THE DYNAMIC GHID!
         # Todo: change that, because holy shit.
         # Okay, now do sync and stuff
-        result = self.sync_dynamic(ghid)
+        result = self.sync_dynamic(notification)
         # That will return None if no update was found
         if result is not None:
             ghid_dynamic, state = result
