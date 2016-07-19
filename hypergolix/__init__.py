@@ -33,21 +33,20 @@ hypergolix: A python Golix client.
 
 # Add in core module
 from .core import *
-
-from .utils import StaticObject
-from .utils import DynamicObject
-
-# from .exceptions import NakError
-# from .exceptions import PersistenceWarning
-# from .exceptions import InaccessibleError
-# from .exceptions import UnknownPartyError
+# TODO: change this to select HERE what, exactly, we want as a toplevel 
+# namespace on import
 
 # Submodules
-from . import persisters
-from . import ipc
-from . import utils
+from . import accounting
+from . import comms
+from . import core
+from . import dispatch
 from . import exceptions
+from . import ipc
+from . import persisters
+from . import privateer
 from . import service
+from . import utils
 
 # Logging shenanigans
 import logging

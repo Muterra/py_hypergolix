@@ -42,26 +42,199 @@ import time
 import logging
 
 from golix import Ghid
-from hypergolix import AgentBase
+from hypergolix import HGXCore
 
+from hypergolix.privateer import Privateer
 from hypergolix.persisters import MemoryPersister
-from hypergolix.core import Dispatcher
-from hypergolix.utils import DispatchObj
-from hypergolix.ipc import _TestEmbed
-# from hypergolix.ipc import _EndpointBase
+from hypergolix.dispatch import Dispatcher
 
 
 # ###############################################
-# Fixtures
+# Cheap, trashy test fixtures
 # ###############################################
-
-
-class _TestDispatch(AgentBase, Dispatcher, _TestEmbed):
-    def __init__(self, *args, **kwargs):
-        super().__init__(dispatcher=self, *args, **kwargs)
+        
+        
+from hypergolix.utils import RawObj
+# This is actually almost semi-normal here. Except it needs to be rewritten.
+class _TEFixture:
+    def register_api(self, api_id, object_handler=None):
+        ''' Just here to silence errors from ABC.
+        '''
+        if object_handler is None:
+            object_handler = lambda *args, **kwargs: None
+            
+        self._object_handlers[api_id] = object_handler
+    
+    def get_object(self, ghid):
+        ''' Wraps RawObj.__init__  and get_ghid for preexisting objects.
+        '''
+        author, is_dynamic, state = self.get_ghid(ghid)
+            
+        return RawObj(
+            # Todo: make the dispatch more intelligent
+            dispatch = self,
+            state = state,
+            dynamic = is_dynamic,
+            _preexisting = (ghid, author)
+        )
+        
+    def new_object(self, state, dynamic=True, _legroom=None):
+        ''' Creates a new object. Wrapper for RawObj.__init__.
+        '''
+        return RawObj(
+            # Todo: update dispatch intelligently
+            dispatch = self,
+            state = state,
+            dynamic = dynamic,
+            _legroom = _legroom
+        )
         
     def _discard_object(*args, **kwargs):
         pass
+        
+    def update_object(self, obj, state):
+        ''' Updates a dynamic object. May link to a static (or dynamic) 
+        object's address. Must pass either data or link, but not both.
+        
+        Wraps RawObj.update and modifies the dynamic object in place.
+        
+        Could add a way to update the legroom parameter while we're at
+        it. That would need to update the maxlen of both the obj._buffer
+        and the self._historian.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be an RawObj.'
+            )
+            
+        obj.update(state)
+        
+    def sync_object(self, obj):
+        ''' Wraps RawObj.sync.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError('Must pass RawObj or subclass to sync_object.')
+            
+        return obj.sync()
+        
+    def hand_object(self, obj, recipient):
+        ''' DEPRECATED.
+        
+        Initiates a handshake request with the recipient to share 
+        the object.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be a RawObj or similar.'
+            )
+    
+        # This is, shall we say, suboptimal, for dynamic objects.
+        # frame_ghid = self._historian[obj.address][0]
+        # target = self._dynamic_targets[obj.address]
+        target = obj.address
+        self.hand_ghid(target, recipient)
+        
+    def share_object(self, obj, recipient):
+        ''' Currently, this is just calling hand_object. In the future,
+        this will have a devoted key exchange subprotocol.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Only RawObj may be shared.'
+            )
+        return self.hand_ghid(obj.address, recipient)
+        
+    def freeze_object(self, obj):
+        ''' Wraps RawObj.freeze. Note: does not currently traverse 
+        nested dynamic bindings.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Only RawObj may be frozen.'
+            )
+        return obj.freeze()
+        
+    def hold_object(self, obj):
+        ''' Wraps RawObj.hold.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError('Only RawObj may be held by hold_object.')
+        obj.hold()
+        
+    def delete_object(self, obj):
+        ''' Wraps RawObj.delete. 
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be RawObj or similar.'
+            )
+            
+        obj.delete()
+        
+    # def _get_object(self, ghid):
+    #     ''' Loads an object into local memory from the hypergolix 
+    #     service.
+    #     '''
+    #     pass
+        
+    # def _new_object(self, obj):
+    #     ''' Handles only the creation of a new object via the hypergolix
+    #     service. Does not manage anything to do with the AppObj itself.
+        
+    #     return address, author
+    #     '''
+    #     pass
+        
+    # def _update_object(self, obj, state):
+    #     ''' Handles only the updating of an object via the hypergolix
+    #     service. Does not manage anything to do with the AppObj itself.
+    #     '''
+    #     pass
+
+    # def _sync_object(self, obj):
+    #     ''' Handles only the syncing of an object via the hypergolix
+    #     service. Does not manage anything to do with the AppObj itself.
+    #     '''
+    #     pass
+
+    # def _share_object(self, obj, recipient):
+    #     ''' Handles only the sharing of an object via the hypergolix
+    #     service. Does not manage anything to do with the AppObj itself.
+    #     '''
+    #     pass
+
+    # def _freeze_object(self, obj):
+    #     ''' Handles only the freezing of an object via the hypergolix
+    #     service. Does not manage anything to do with the AppObj itself.
+    #     '''
+    #     pass
+
+    # def _hold_object(self, obj):
+    #     ''' Handles only the holding of an object via the hypergolix
+    #     service. Does not manage anything to do with the AppObj itself.
+    #     '''
+    #     pass
+
+    # def _delete_object(self, obj):
+    #     ''' Handles only the deleting of an object via the hypergolix
+    #     service. Does not manage anything to do with the AppObj itself.
+    #     '''
+    #     pass
+    
+    
+class _TestEmbed(Dispatcher, _TEFixture):
+    # This is a little gross, but we gotta combine 'em somehow
+    pass
+
+
+class _TestDispatch(HGXCore):
+    def __init__(self, *args, **kwargs):
+        super().__init__(
+            # dispatcher = self, 
+            privateer = Privateer(),
+            *args, **kwargs
+        )
+        self.link_dispatch(_TestEmbed(core=self))
 
 
 # class _TestEndpoint(_EndpointBase):
@@ -110,29 +283,31 @@ class TestDispatching(unittest.TestCase):
         cls.__api_id = bytes(64) + b'1'
         
         cls.agent1 = _TestDispatch(persister=cls.persister)
+        cls.dispatch1 = cls.agent1._dispatcher
         cls.endpoint1 = _TestEndpoint(
-            dispatch = cls.agent1,
+            dispatch = cls.dispatch1,
             apis = [cls.__api_id],
             # app_token = b'1234',
             name = 'Agent1, ep1',
         )
-        cls.agent1.register_endpoint(cls.endpoint1)
+        cls.dispatch1.register_endpoint(cls.endpoint1)
         
         cls.agent2 = _TestDispatch(persister=cls.persister)
+        cls.dispatch2 = cls.agent2._dispatcher
         cls.endpoint2 = _TestEndpoint(
-            dispatch = cls.agent2,
+            dispatch = cls.dispatch2,
             apis = [cls.__api_id],
             # app_token = b'5678',
             name = 'Agent2, ep1',
         )
         cls.endpoint3 = _TestEndpoint(
-            dispatch = cls.agent2,
+            dispatch = cls.dispatch2,
             apis = [cls.__api_id],
             # app_token = b'9101',
             name = 'Agent2, ep2',
         )
-        cls.agent2.register_endpoint(cls.endpoint2)
-        cls.agent2.register_endpoint(cls.endpoint3)
+        cls.dispatch2.register_endpoint(cls.endpoint2)
+        cls.dispatch2.register_endpoint(cls.endpoint3)
         
     def test_trash(self):
         pt0 = b'I am a sexy stagnant beast.'
@@ -141,7 +316,7 @@ class TestDispatching(unittest.TestCase):
         pt3 = b'Listening...'
         pt4 = b'All ears!'
 
-        address1 = self.agent1.new_object(
+        address1 = self.dispatch1.new_object(
             asking_token = self.endpoint1.app_token,
             state = pt0,
             # NOTE THAT APP_TOKEN SHOULD ONLY EVER BE DEFINED for non-private
@@ -151,7 +326,7 @@ class TestDispatching(unittest.TestCase):
             dynamic = False
         )
 
-        address2 = self.agent1.new_object(
+        address2 = self.dispatch1.new_object(
             asking_token = self.endpoint1.app_token,
             state = pt1,
             api_id = self.__api_id,
@@ -159,33 +334,33 @@ class TestDispatching(unittest.TestCase):
             dynamic = True
         )
         
-        self.agent1.share_object(
+        self.dispatch1.share_object(
             asking_token = self.endpoint1.app_token,
             ghid = address2, 
             recipient = self.agent2.whoami, 
         )
         
-        self.assertIn(address2, self.agent1._oracle)
-        self.assertIn(address2, self.agent2._oracle)
+        self.assertIn(address2, self.dispatch1._oracle)
+        self.assertIn(address2, self.dispatch2._oracle)
         
-        self.agent1.update_object(
+        self.dispatch1.update_object(
             asking_token = self.endpoint1.app_token,
             ghid = address2,
             state = pt2
         )
         
-        frozen2 = self.agent1.freeze_object(
+        frozen2 = self.dispatch1.freeze_object(
             asking_token = self.endpoint1.app_token,
             ghid = address2
         )
         
-        self.assertIn(address2, self.agent1._oracle)
+        self.assertIn(address2, self.dispatch1._oracle)
         self.assertEqual(
-            self.agent1._oracle[frozen2].state, 
-            self.agent1._oracle[address2].state
+            self.dispatch1._oracle[frozen2].state, 
+            self.dispatch1._oracle[address2].state
         )
         
-        address3 = self.agent2.new_object(
+        address3 = self.dispatch2.new_object(
             asking_token = self.endpoint2.app_token,
             state = pt0,
             app_token = self.endpoint2.app_token,
@@ -193,7 +368,7 @@ class TestDispatching(unittest.TestCase):
             dynamic = False
         )
 
-        address4 = self.agent2.new_object(
+        address4 = self.dispatch2.new_object(
             asking_token = self.endpoint2.app_token,
             state = pt1,
             api_id = self.__api_id,
@@ -201,37 +376,37 @@ class TestDispatching(unittest.TestCase):
             dynamic = True
         )
         
-        self.agent2.hold_object(
+        self.dispatch2.hold_object(
             asking_token = self.endpoint2.app_token,
             ghid = address2
         )
         
-        self.agent1.delete_object(
+        self.dispatch1.delete_object(
             asking_token = self.endpoint1.app_token,
             ghid = address1
         )
         
-        self.assertNotIn(address1, self.agent1._oracle)
+        self.assertNotIn(address1, self.dispatch1._oracle)
         
-        self.agent1.discard_object(
+        self.dispatch1.discard_object(
             asking_token = self.endpoint1.app_token,
             ghid = address2
         )
         
         # Agent1 has only one endpoint following this object so it should be
         # completely deregistered
-        self.assertNotIn(address2, self.agent1._oracle)
+        self.assertNotIn(address2, self.dispatch1._oracle)
         
-        self.agent2.discard_object(
+        self.dispatch2.discard_object(
             asking_token = self.endpoint2.app_token,
             ghid = address2
         )
         
         # Agent2 has two endpoints following this object so it should persist
-        self.assertIn(address2, self.agent2._oracle)
+        self.assertIn(address2, self.dispatch2._oracle)
 
-        # obj1 = self.agent1.new_object(pt0, dynamic=False)
-        # obj2 = self.agent1.new_object(pt1, dynamic=True)
+        # obj1 = self.dispatch1.new_object(pt0, dynamic=False)
+        # obj2 = self.dispatch1.new_object(pt1, dynamic=True)
         
         
         

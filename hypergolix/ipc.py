@@ -48,16 +48,6 @@ import collections
 
 from golix import Ghid
 
-
-
-
-
-
-# import collections
-# import warnings
-# import functools
-# import struct
-
 import concurrent
 import asyncio
 import websockets
@@ -66,11 +56,6 @@ from websockets.exceptions import ConnectionClosed
 import time
 # import string
 import traceback
-
-
-
-
-
 
 # Intrapackage dependencies
 from .exceptions import HandshakeError
@@ -447,7 +432,7 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         
         Does not require an existing app token.
         '''
-        ghid = self.dispatch.whoami
+        ghid = self.dispatch._core.whoami
         return bytes(ghid)
         
     async def get_object_wrapper(self, endpoint, request_body):
@@ -1963,207 +1948,3 @@ class AppObj:
             
         # Return the result of the whole comparison
         return meta_comparison and state_comparison
-        
-        
-        
-
-
-
-# ###############################################
-# Shitty leftover test fixture be damned! Deprecated but not yet excised
-# ###############################################
-        
-        
-        
-class _TestEmbed:
-    def register_api(self, api_id, object_handler=None):
-        ''' Just here to silence errors from ABC.
-        '''
-        if object_handler is None:
-            object_handler = lambda *args, **kwargs: None
-            
-        self._object_handlers[api_id] = object_handler
-    
-    def get_object(self, ghid):
-        ''' Wraps RawObj.__init__  and get_ghid for preexisting objects.
-        '''
-        author, is_dynamic, state = self.get_ghid(ghid)
-            
-        return RawObj(
-            # Todo: make the dispatch more intelligent
-            dispatch = self,
-            state = state,
-            dynamic = is_dynamic,
-            _preexisting = (ghid, author)
-        )
-        
-    def new_object(self, state, dynamic=True, _legroom=None):
-        ''' Creates a new object. Wrapper for RawObj.__init__.
-        '''
-        return RawObj(
-            # Todo: update dispatch intelligently
-            dispatch = self,
-            state = state,
-            dynamic = dynamic,
-            _legroom = _legroom
-        )
-        
-    def update_object(self, obj, state):
-        ''' Updates a dynamic object. May link to a static (or dynamic) 
-        object's address. Must pass either data or link, but not both.
-        
-        Wraps RawObj.update and modifies the dynamic object in place.
-        
-        Could add a way to update the legroom parameter while we're at
-        it. That would need to update the maxlen of both the obj._buffer
-        and the self._historian.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Obj must be an RawObj.'
-            )
-            
-        obj.update(state)
-        
-    def sync_object(self, obj):
-        ''' Wraps RawObj.sync.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError('Must pass RawObj or subclass to sync_object.')
-            
-        return obj.sync()
-        
-    def hand_object(self, obj, recipient):
-        ''' DEPRECATED.
-        
-        Initiates a handshake request with the recipient to share 
-        the object.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Obj must be a RawObj or similar.'
-            )
-    
-        # This is, shall we say, suboptimal, for dynamic objects.
-        # frame_ghid = self._historian[obj.address][0]
-        # target = self._dynamic_targets[obj.address]
-        target = obj.address
-        self.hand_ghid(target, recipient)
-        
-    def share_object(self, obj, recipient):
-        ''' Currently, this is just calling hand_object. In the future,
-        this will have a devoted key exchange subprotocol.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Only RawObj may be shared.'
-            )
-        return self.hand_ghid(obj.address, recipient)
-        
-    def freeze_object(self, obj):
-        ''' Wraps RawObj.freeze. Note: does not currently traverse 
-        nested dynamic bindings.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Only RawObj may be frozen.'
-            )
-        return obj.freeze()
-        
-    def hold_object(self, obj):
-        ''' Wraps RawObj.hold.
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError('Only RawObj may be held by hold_object.')
-        obj.hold()
-        
-    def delete_object(self, obj):
-        ''' Wraps RawObj.delete. 
-        '''
-        if not isinstance(obj, RawObj):
-            raise TypeError(
-                'Obj must be RawObj or similar.'
-            )
-            
-        obj.delete()
-    
-    @property
-    @abc.abstractmethod
-    def whoami(self):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def new_static(self, state):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def new_dynamic(self, state):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def update_dynamic(self, obj, state):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def freeze_dynamic(self, obj):
-        ''' Inherited from Agent.
-        '''
-        pass
-        
-    def _get_object(self, ghid):
-        ''' Loads an object into local memory from the hypergolix 
-        service.
-        '''
-        pass
-        
-    def _new_object(self, obj):
-        ''' Handles only the creation of a new object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        
-        return address, author
-        '''
-        pass
-        
-    def _update_object(self, obj, state):
-        ''' Handles only the updating of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass
-
-    def _sync_object(self, obj):
-        ''' Handles only the syncing of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass
-
-    def _share_object(self, obj, recipient):
-        ''' Handles only the sharing of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass
-
-    def _freeze_object(self, obj):
-        ''' Handles only the freezing of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass
-
-    def _hold_object(self, obj):
-        ''' Handles only the holding of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass
-
-    def _delete_object(self, obj):
-        ''' Handles only the deleting of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        pass

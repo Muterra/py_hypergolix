@@ -46,7 +46,7 @@ import IPython
 import warnings
 
 from hypergolix.service import _hgx_server
-from hypergolix.service import main as hgxservice
+from hypergolix.service import HGXService
 from hypergolix.service import HypergolixLink
 from hypergolix.utils import Aengel
 
@@ -80,7 +80,7 @@ def make_fixtures(debug, verbosity, log_prefix):
         foreground = False,
         aengel = aengel,
     )
-    hgxraz = hgxservice(
+    hgxraz = HGXService(
         host = 'localhost',
         port = 6022,
         ipc_port = 6023,
@@ -91,7 +91,7 @@ def make_fixtures(debug, verbosity, log_prefix):
         foreground = False,
         aengel = aengel,
     )
-    hgxdes = hgxservice(
+    hgxdes = HGXService(
         host = 'localhost',
         port = 6022,
         ipc_port = 6024,

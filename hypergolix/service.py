@@ -40,7 +40,6 @@ __all__ = [
     'HypergolixApplication'
 ]
 
-import unittest
 import warnings
 import collections
 import threading
@@ -50,22 +49,23 @@ import signal
 
 from golix import Ghid
 
-from hypergolix.core import AgentBase
-from hypergolix.core import Dispatcher
+from .core import HGXCore
+from .dispatch import Dispatcher
+from .privateer import Privateer
 
-from hypergolix.utils import Aengel
-from hypergolix.utils import threading_autojoin
+from .utils import Aengel
+from .utils import threading_autojoin
 
-from hypergolix.comms import Autocomms
-from hypergolix.comms import WSBasicClient
-from hypergolix.comms import WSBasicServer
+from .comms import Autocomms
+from .comms import WSBasicClient
+from .comms import WSBasicServer
 
-from hypergolix.persisters import PersisterBridgeClient
-from hypergolix.persisters import PersisterBridgeServer
-from hypergolix.persisters import MemoryPersister
+from .persisters import PersisterBridgeClient
+from .persisters import PersisterBridgeServer
+from .persisters import MemoryPersister
 
-from hypergolix.ipc import IPCHost
-from hypergolix.ipc import IPCEmbed
+from .ipc import IPCHost
+from .ipc import IPCEmbed
 
 
 # ###############################################
@@ -115,9 +115,17 @@ foreground=True, aengel=None):
     return backend, server
 
 
-class _HGXCore(Dispatcher, AgentBase):
+class _HGXCore(HGXCore):
     def __init__(self, persister, *args, **kwargs):
-        super().__init__(dispatcher=self, persister=persister, *args, **kwargs)
+        super().__init__(
+            privateer = Privateer(),
+            persister = persister, 
+            *args, **kwargs
+        )
+        # Note: we now contain the only live reference to dispatch.
+        self.link_dispatch(
+            Dispatcher(core=self)
+        )
     
     
 def HypergolixLink(ipc_port=7772, debug=False, aengel=None, *args, **kwargs):
@@ -138,7 +146,7 @@ def HypergolixLink(ipc_port=7772, debug=False, aengel=None, *args, **kwargs):
     return acomms
     
     
-def main(host, port, ipc_port, debug, verbosity, logfile, traceur, 
+def HGXService(host, port, ipc_port, debug, verbosity, logfile, traceur, 
 foreground=True, aengel=None):
     ''' Expected defaults:
     host:       'localhost'
@@ -197,7 +205,7 @@ foreground=True, aengel=None):
     )
     ipc = Autocomms(
         autoresponder_class = IPCHost,
-        autoresponder_kwargs = {'dispatch': core},
+        autoresponder_kwargs = {'dispatch': core._dispatcher},
         connector_class = WSBasicServer,
         connector_kwargs = {
             'host': 'localhost',
@@ -269,7 +277,7 @@ if __name__ == '__main__':
     )
 
     args = parser.parse_args()    
-    main(
+    HGXService(
         args.host, 
         args.port, 
         args.ipc_port, 

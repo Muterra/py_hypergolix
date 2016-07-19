@@ -37,51 +37,13 @@ __all__ = [
 ]
 
 # Global dependencies
-import collections
-import weakref
-import threading
-import os
-import msgpack
-import abc
-import traceback
-import warnings
-
-from golix import FirstParty
-from golix import SecondParty
-from golix import Ghid
-from golix import Secret
-from golix import SecurityError
-
-from golix._getlow import GEOC
-from golix._getlow import GOBD
-
-from golix.utils import AsymHandshake
-from golix.utils import AsymAck
-from golix.utils import AsymNak
+# import collections
 
 from Crypto.Protocol.KDF import scrypt
 from Crypto.Hash import SHA512
 from Crypto.Protocol.KDF import HKDF
 
 # Intra-package dependencies
-from .utils import _JitSetDict
-from .utils import _JitDictDict
-from .utils import RawObj
-from .utils import DispatchObj
-
-from .exceptions import NakError
-from .exceptions import HandshakeError
-from .exceptions import HandshakeWarning
-from .exceptions import Inaccessible
-from .exceptions import UnknownParty
-from .exceptions import DispatchError
-from .exceptions import DispatchWarning
-
-from .persisters import _PersisterBase
-from .persisters import MemoryPersister
-
-from .ipc_hosts import _IPCBase
-from .ipc_hosts import _EndpointBase
 
 
 # ###############################################

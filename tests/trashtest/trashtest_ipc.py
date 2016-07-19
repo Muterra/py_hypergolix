@@ -44,8 +44,9 @@ import random
 import traceback
 import logging
 
-from hypergolix.core import AgentBase
-from hypergolix.core import Dispatcher
+from hypergolix.core import HGXCore
+from hypergolix.dispatch import Dispatcher
+from hypergolix.privateer import Privateer
 
 from hypergolix.persisters import MemoryPersister
 
@@ -64,9 +65,10 @@ from hypergolix.ipc import IPCEmbed
 # ###############################################
 
 
-class MockCore(Dispatcher, AgentBase):
+class MockCore(HGXCore):
     def __init__(self, persister, *args, **kwargs):
-        super().__init__(dispatcher=self, persister=persister, *args, **kwargs)
+        super().__init__(persister=persister, privateer=Privateer(), *args, **kwargs)
+        self.link_dispatch(Dispatcher(core=self))
     
     
 # class WebsocketsApp(WSReqResClient):
@@ -105,7 +107,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         cls.alice_core = MockCore(persister=cls.persister)
         cls.alice = Autocomms(
             autoresponder_class = IPCHost,
-            autoresponder_kwargs = {'dispatch': cls.alice_core},
+            autoresponder_kwargs = {'dispatch': cls.alice_core._dispatcher},
             connector_class = WSBasicServer,
             connector_kwargs = {
                 'host': 'localhost',
@@ -118,7 +120,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         cls.bob_core = MockCore(persister=cls.persister)
         cls.bob = Autocomms(
             autoresponder_class = IPCHost,
-            autoresponder_kwargs = {'dispatch': cls.bob_core},
+            autoresponder_kwargs = {'dispatch': cls.bob_core._dispatcher},
             connector_class = WSBasicServer,
             connector_kwargs = {
                 'host': 'localhost',
@@ -212,7 +214,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         
         # Note that this is calling bob's DISPATCH whoami, NOT an app whoami.
         self.app1.share_obj_threadsafe(obj3, self.bob_core.whoami)
-        self.assertIn(obj3.address, self.bob_core._orphan_shares_incoming)
+        self.assertIn(obj3.address, self.bob_core._dispatcher._orphan_shares_incoming)
         
         frozen3 = self.app1.freeze_obj_threadsafe(obj3)
         self.assertEqual(frozen3.state, obj3.state)
@@ -221,10 +223,8 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         self.assertIn(obj3.address, self.alice_core._holdings)
         
         self.app2.discard_obj_threadsafe(joint3)
-        self.assertIn(self.app2endpoint.app_token, self.alice_core._discarders_by_ghid[obj3.address])
+        self.assertIn(self.app2endpoint.app_token, self.alice_core._dispatcher._discarders_by_ghid[obj3.address])
         self.assertTrue(joint3._inoperable)
-        
-        # self.assertIn(obj1.address, self.alice_core._state_by_ghid)
         
         self.app1.delete_obj_threadsafe(obj1)
         self.assertNotIn(obj1.address, self.persister.librarian)

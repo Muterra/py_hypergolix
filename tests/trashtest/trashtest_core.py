@@ -39,20 +39,16 @@ import warnings
 import collections
 import logging
 
-# These are normal imports
 from hypergolix.persisters import MemoryPersister
-from hypergolix.core import _TestDispatcher
 
-from hypergolix import AgentBase
-from hypergolix import StaticObject
-from hypergolix import DynamicObject
+from hypergolix.dispatch import _TestDispatcher
+
+from hypergolix.privateer import Privateer
+
+from hypergolix import HGXCore
 
 from hypergolix.exceptions import NakError
 from hypergolix.exceptions import PersistenceWarning
-
-from hypergolix.ipc import _TestEmbed
-
-# from hypergolix.embeds import _EmbedBase
 
 # This is a semi-normal import
 from golix.utils import _dummy_ghid
@@ -63,22 +59,191 @@ from golix import ThirdParty
 from golix import SecondParty
 from golix import FirstParty
 
+
 # ###############################################
-# Testing
+# Really shitty test fixtures
 # ###############################################
         
+        
+# JFC seriously? In HERE?! This is so ridiculously out of scope. This is just
+# disgraceful and gross. TODO: make real actual test fixtures and suite.
+from hypergolix.utils import RawObj
+class _TestEmbed:
+    def register_api(self, api_id, object_handler=None):
+        ''' Just here to silence errors from ABC.
+        '''
+        if object_handler is None:
+            object_handler = lambda *args, **kwargs: None
+            
+        self._object_handlers[api_id] = object_handler
+    
+    def get_object(self, ghid):
+        ''' Wraps RawObj.__init__  and get_ghid for preexisting objects.
+        '''
+        author, is_dynamic, state = self.get_ghid(ghid)
+            
+        return RawObj(
+            # Todo: make the dispatch more intelligent
+            dispatch = self,
+            state = state,
+            dynamic = is_dynamic,
+            _preexisting = (ghid, author)
+        )
+        
+    def new_object(self, state, dynamic=True, _legroom=None):
+        ''' Creates a new object. Wrapper for RawObj.__init__.
+        '''
+        return RawObj(
+            # Todo: update dispatch intelligently
+            dispatch = self,
+            state = state,
+            dynamic = dynamic,
+            _legroom = _legroom
+        )
+        
+    def update_object(self, obj, state):
+        ''' Updates a dynamic object. May link to a static (or dynamic) 
+        object's address. Must pass either data or link, but not both.
+        
+        Wraps RawObj.update and modifies the dynamic object in place.
+        
+        Could add a way to update the legroom parameter while we're at
+        it. That would need to update the maxlen of both the obj._buffer
+        and the self._historian.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be an RawObj.'
+            )
+            
+        obj.update(state)
+        
+    def sync_object(self, obj):
+        ''' Wraps RawObj.sync.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError('Must pass RawObj or subclass to sync_object.')
+            
+        return obj.sync()
+        
+    def hand_object(self, obj, recipient):
+        ''' DEPRECATED.
+        
+        Initiates a handshake request with the recipient to share 
+        the object.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be a RawObj or similar.'
+            )
+    
+        # This is, shall we say, suboptimal, for dynamic objects.
+        # frame_ghid = self._historian[obj.address][0]
+        # target = self._dynamic_targets[obj.address]
+        target = obj.address
+        self.hand_ghid(target, recipient)
+        
+    def share_object(self, obj, recipient):
+        ''' Currently, this is just calling hand_object. In the future,
+        this will have a devoted key exchange subprotocol.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Only RawObj may be shared.'
+            )
+        return self.hand_ghid(obj.address, recipient)
+        
+    def freeze_object(self, obj):
+        ''' Wraps RawObj.freeze. Note: does not currently traverse 
+        nested dynamic bindings.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Only RawObj may be frozen.'
+            )
+        return obj.freeze()
+        
+    def hold_object(self, obj):
+        ''' Wraps RawObj.hold.
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError('Only RawObj may be held by hold_object.')
+        obj.hold()
+        
+    def delete_object(self, obj):
+        ''' Wraps RawObj.delete. 
+        '''
+        if not isinstance(obj, RawObj):
+            raise TypeError(
+                'Obj must be RawObj or similar.'
+            )
+            
+        obj.delete()
+        
+    def _get_object(self, ghid):
+        ''' Loads an object into local memory from the hypergolix 
+        service.
+        '''
+        pass
+        
+    def _new_object(self, obj):
+        ''' Handles only the creation of a new object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        
+        return address, author
+        '''
+        pass
+        
+    def _update_object(self, obj, state):
+        ''' Handles only the updating of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
 
-class _TestClient(AgentBase, MemoryPersister, _TestEmbed, _TestDispatcher):
+    def _sync_object(self, obj):
+        ''' Handles only the syncing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _share_object(self, obj, recipient):
+        ''' Handles only the sharing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _freeze_object(self, obj):
+        ''' Handles only the freezing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _hold_object(self, obj):
+        ''' Handles only the holding of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+
+    def _delete_object(self, obj):
+        ''' Handles only the deleting of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        pass
+        
+
+class _TestClient(HGXCore, MemoryPersister, _TestEmbed, _TestDispatcher):
     def __init__(self):
-        super().__init__(persister=self, dispatcher=self)
+        super().__init__(persister=self, privateer=Privateer())
+        self.link_dispatch(self)
         
     def _discard_object(*args, **kwargs):
         pass
 
 
-class _TestAgent_SharedPersistence(AgentBase, _TestEmbed, _TestDispatcher):
+class _TestAgent_SharedPersistence(HGXCore, _TestEmbed, _TestDispatcher):
     def __init__(self, *args, **kwargs):
-        super().__init__(dispatcher=self, *args, **kwargs)
+        super().__init__(privateer=Privateer(), *args, **kwargs)
+        self.link_dispatch(self)
         
     def subscribe(self, ghid, callback):
         ''' We're not testing this right now but we need to suppress 
@@ -90,62 +255,10 @@ class _TestAgent_SharedPersistence(AgentBase, _TestEmbed, _TestDispatcher):
     def _discard_object(*args, **kwargs):
         pass
 
-    
-class ObjectTrashtest(unittest.TestCase):
-    def setUp(self):
-        pass
-        
-    def test_trash(self):
-        dummy_state = b'0'
-        
-        stat1 = StaticObject(
-            address = _dummy_ghid,
-            author = _dummy_ghid,
-            state = dummy_state,
-        )
-        dyn1 = DynamicObject(
-            address = _dummy_ghid,
-            author = _dummy_ghid,
-            _buffer = collections.deque([dummy_state], maxlen=7),
-        )
-        
-        with self.assertRaises(AttributeError, 
-            msg='Failed to prevent private attr assignment in static obj.'):
-                stat1._state = 5
-        
-        with self.assertRaises(AttributeError, 
-            msg='Failed to prevent public attr assignment in static obj.'):
-                stat1.state = 5
-                stat1.author = _dummy_ghid
-                stat1.address = _dummy_ghid
-        
-        with self.assertRaises(AttributeError, 
-            msg='Failed to prevent public attr assignment in dynamic obj.'):
-                stat1.state = 5
-                stat1.author = _dummy_ghid
-                stat1.address = _dummy_ghid
-                stat1.buffer = [_dummy_ghid]
-                
-        self.assertEqual(stat1.author, _dummy_ghid)
-        self.assertEqual(dyn1.author, _dummy_ghid)
-        self.assertEqual(stat1.address, _dummy_ghid)
-        self.assertEqual(dyn1.address, _dummy_ghid)
-        self.assertEqual(stat1.state, dummy_state)
-        self.assertEqual(dyn1.state, dummy_state)
-        self.assertEqual(dyn1.buffer, (dummy_state,))
-                
-        repr(stat1)
-        repr(dyn1)
-            
-        
-        # --------------------------------------------------------------------
-        # Comment this out if no interactivity desired
-            
-        # # Start an interactive IPython interpreter with local namespace, but
-        # # suppress all IPython-related warnings.
-        # with warnings.catch_warnings():
-        #     warnings.simplefilter('ignore')
-        #     IPython.embed()
+
+# ###############################################
+# Testing
+# ###############################################
         
         
 class AgentTrashTest(unittest.TestCase):
