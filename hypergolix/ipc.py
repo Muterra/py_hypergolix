@@ -202,9 +202,12 @@ class IPCHostEndpoint(_AutoresponderSession):
         else:
             is_link = False
             
-        author = self.dispatch._author_by_ghid[ghid]
-        dynamic = self.dispatch._dynamic_by_ghid[ghid]
-        api_id = self.dispatch._api_by_ghid[ghid]
+        # TODO: some kind of try/catch here?
+        obj = self.dispatch._oracle[ghid]
+            
+        author = obj.author
+        dynamic = obj.dynamic
+        api_id = obj.api_id
         
         response = await self._ipc.send(
             session = self,
@@ -457,22 +460,22 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
             
         ghid = Ghid.from_bytes(request_body)
         
-        author, state, api_id, app_token, is_dynamic = \
-            self.dispatch.get_object(
-                asking_token = endpoint.app_token,
-                ghid = ghid
-            )
+        obj = self.dispatch.get_object(
+            asking_token = endpoint.app_token,
+            ghid = ghid
+        )
             
-        if app_token != bytes(4):
+        if obj.app_token != bytes(4):
             private = True
         else:
             private = False
             
-        if isinstance(state, Ghid):
+        if isinstance(obj.state, Ghid):
             is_link = True
-            state = bytes(state)
+            state = bytes(obj.state)
         else:
             is_link = False
+            state = obj.state
             
         # For now, anyways.
         # Note: need to add some kind of handling for legroom.
@@ -482,14 +485,14 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         endpoint.register_ghid(ghid)
         
         return self._pack_object_def(
-            ghid,
-            author,
+            obj.ghid,
+            obj.author,
             state,
             is_link,
-            api_id,
-            app_token,
+            obj.api_id,
+            obj.app_token,
             private,
-            is_dynamic,
+            obj.dynamic,
             _legroom
         )
         
@@ -1329,6 +1332,21 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         host.
         '''
         return b''
+        
+        
+class _HeadlessIPCEndpoint:
+    ''' Endpoint for a single application that has been directly 
+    embedded within the hypergolix service itself. Not intended for 
+    outside consumption.
+    '''
+    pass
+        
+        
+class _HeadlessIPC:
+    ''' Fake IPC for applications that are directly embedded within the
+    hypergolix service itself. Not intended for outside consumption.
+    '''
+    pass
 
 
 class AppObj:

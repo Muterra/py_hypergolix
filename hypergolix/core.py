@@ -31,16 +31,6 @@ hypergolix: A python Golix client.
 
 Some notes:
 
-There's an awkward balance between streams and dynamic bindings. Streams
-are mutable plaintext objects and totally private, but only ever locally
-updated by Agents (whether receiving or creating). However, dynamic 
-bindings can be subscribed to at persistence providers, and are public 
-objects there. So they need two objects; one for the dynamic binding, 
-which is then resolved into GEOC objects, and one for its plaintext.
-
-
-DO PERSISTENCE PROVIDERS FIRST.
-
 '''
 
 # Control * imports. Therefore controls what is available to toplevel
@@ -176,22 +166,34 @@ class _Privateer:
         This is transactional and atomic; any errors (ex: ValueError 
         above) will return its state to the previous.
         '''
-        try:
-            with self._modlock:
-                secret = self._secrets_staging.pop(ghid)
-                if ghid in self._secrets_persistent:
-                    if self._secrets_persistent[ghid] != secret:
-                        self._secrets_staging[ghid] = secret
-                        raise ValueError(
-                            'Non-matching secret already committed for GHID ' +
-                            str(ghid)
-                        )
+        with self._modlock:
+            if ghid in self._secrets_persistent:
+                self._compare_staged_to_persistent(ghid)
+            else:
+                try:
+                    secret = self._secrets_staging.pop(ghid)
+                except KeyError as exc:
+                    raise KeyError(
+                        'Secret not currently staged for GHID ' + str(ghid)
+                    ) from exc
                 else:
+                    # It doesn't exist, so commit it directly.
                     self._secrets_persistent[ghid] = secret
-        except KeyError as exc:
-            raise KeyError(
-                'Secret not currently staged for GHID ' + str(ghid)
-            ) from exc
+            
+    def _compare_staged_to_persistent(self, ghid):
+        try:
+            staged = self._secrets_staging.pop(ghid)
+        except KeyError:
+            # Nothing is staged. Short-circuit.
+            pass
+        else:
+            if staged != self._secrets_persistent[ghid]:
+                # Re-stage, just in case.
+                self._secrets_staging[ghid] = secret
+                raise ValueError(
+                    'Non-matching secret already committed for GHID ' +
+                    str(ghid)
+                )
         
     def abandon(self, ghid, quiet=True):
         ''' Remove a secret. If quiet=True, silence any KeyErrors.
@@ -576,18 +578,31 @@ class AgentBase:
         old_tail = frame_history[len(frame_history) - 1]
         old_frame = frame_history[0]
         
-        # TODO CRITICAL SECURITY ISSUE:
+        # TODO IMPORTANT:
         # First we need to decide if we're going to ratchet the secret, or 
         # create a new one. The latter will require updating anyone who we've
         # shared it with. Ratcheting is only available if the last target was
         # directly referenced.
+        
+        # Note that this is not directly a security issue, because of the 
+        # specifics of ratcheting: each dynamic binding is salting with the
+        # frame ghid, which will be different for each dynamic binding. So we
+        # won't ever see a two-time pad, but we might accidentally break the
+        # ratchet.
+        
+        # However, note that this (potentially substantially) decreases the
+        # strength of the ratchet, in the event that the KDF salting does not
+        # sufficiently alter the KDF seed.
+        
         # But, keep in mind that if the Golix spec ever changes, we could 
         # potentially create two separate top-level refs to containers. So in
         # that case, we would need to implement some kind of ownership of the
         # secret by a particular dynamic binding.
+        
         # TEMPORARY FIX: Don't support nesting dynamic bindings. Document that 
         # downstream stuff cannot reuse links in dynamic bindings (or prevent
         # their use entirely).
+        
         # Note: currently in Hypergolix, links in dynamic objects aren't yet
         # fully supported at all, and certainly aren't documented, so they 
         # shouldn't yet be considered a public part of the api.
@@ -658,7 +673,7 @@ class AgentBase:
         
         return dynamic
         
-    def sync_dynamic(self, ghid):
+    def touch_dynamic(self, ghid):
         ''' Checks self.persister for a new dynamic frame for ghid, and 
         if one exists, gets its state and calls an update on obj.
         
@@ -667,13 +682,16 @@ class AgentBase:
         TODO: throw out this whole fucking mess, because it's redundant
         with get_ghid, and shitty, etc etc.
         '''
-        # Is this doing what I think it's doing?
-        frame_ghid = ghid
+        # This should be fixed to now pass the subscription ghid and not
+        # the frame ghid.
+        # # Is this doing what I think it's doing?
+        # frame_ghid = ghid
         unpacked_binding = self._identity.unpack_bind_dynamic(
-            self.persister.get(frame_ghid)
+            self.persister.get(ghid)
         )
-        ghid = unpacked_binding.ghid_dynamic
-        # Goddammit. It is. Why the hell are we passing frame_ghid as ghid?!
+        # Should be fixed, as per above.
+        # ghid = unpacked_binding.ghid_dynamic
+        # # Goddammit. It is. Why the hell are we passing frame_ghid as ghid?!
         
         # First, make sure we're not being asked to update something we 
         # initiated the update for.
@@ -709,7 +727,7 @@ class AgentBase:
             self._historian[ghid].appendleft(unpacked_binding.ghid)
             
             author, is_dynamic, state = self.get_ghid(target)
-            return ghid, state
+            return state
             
         else:
             return None
@@ -1015,6 +1033,11 @@ class Dispatcher(DispatcherBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
+        # TODO: remove core from self (use composition instead of inheritance).
+        self._core = self
+        # Note: worthwhile to pass _oracle as arg? Dunno yet.
+        # self._oracle = oracle
+        
         # Lookup for app_tokens -> endpoints. Will be specific to the current
         # state of this particular client for this agent.
         self._active_tokens = weakref.WeakValueDictionary()
@@ -1035,16 +1058,11 @@ class Dispatcher(DispatcherBase):
         # Lookup for handshake ghid -> app_token, recipient
         self._outstanding_shares = {}
         
-        # Lookup for ghid -> token (meaningful for app-private objs only)
-        self._token_by_ghid = {}
-        # Lookup for ghid -> api_id
-        self._api_by_ghid = {}
-        # Lookup for ghid -> state (either bytes-like or Ghid)
-        self._state_by_ghid = {}
-        # Lookup for ghid -> author
-        self._author_by_ghid = {}
-        # Lookup for ghid -> dynamic
-        self._dynamic_by_ghid = {}
+        # State lookup information
+        self._oracle = Oracle(
+            core = self._core,
+            gao_class = _Dispatchable,
+        )
         
         # Lookup for ghid -> tokens that specifically requested the ghid
         self._requestors_by_ghid = _JitSetDict()
@@ -1061,111 +1079,16 @@ class Dispatcher(DispatcherBase):
         # the ones who initiated the update. Simple set of ghids.
         self._ignore_subs_because_updating = set()
         
-    def register_object(self, address, author, state, api_id, app_token, dynamic):
-        ''' Sets all applicable tracking dict entries.
-        '''
-        # This is redundant with new_object, but oh well.
-        api_id, app_token = self._normalize_api_and_token(api_id, app_token)
-        
-        self._dynamic_by_ghid[address] = dynamic
-        self._state_by_ghid[address] = state
-        self._author_by_ghid[address] = author
-        self._token_by_ghid[address] = app_token
-        self._api_by_ghid[address] = api_id
-        
-        if dynamic:
-            self.persister.subscribe(address, self.dispatch_update)
-            
-    def deregister_object(self, address):
-        ''' Removes all applicable tracking, state management, etc.
-        '''
-        if self._dynamic_by_ghid[address]:
-            self.persister.unsubscribe(address, self.dispatch_update)
-        
-        del self._dynamic_by_ghid[address]
-        del self._state_by_ghid[address]
-        del self._author_by_ghid[address]
-        del self._token_by_ghid[address]
-        del self._api_by_ghid[address]
-        
-        # Todo: what about requestors_by_ghid and discarders_by_ghid?
-        
-    def _pack_dispatchable(self, state, api_id, app_token):
-        ''' Packs the object state, its api_id, and its app_token into a
-        format that can be read by a fellow dispatcher.
-        '''
-        version = b'\x00'
-        return b'hgxd' + version + api_id + app_token + state
-        
-    def _unpack_dispatchable(self, packed):
-        ''' Packs the object state, its api_id, and its app_token into a
-        format that can be read by a fellow dispatcher.
-        '''
-        magic = packed[0:4]
-        version = packed[4:5]
-        
-        if magic != b'hgxd':
-            raise DispatchError('Object does not appear to be dispatchable.')
-        if version != b'\x00':
-            raise DispatchError('Incompatible dispatchable version number.')
-            
-        api_id = packed[5:70]
-        app_token = packed[70:74]
-        state = packed[74:]
-        
-        return state, api_id, app_token
-            
-    def _normalize_api_and_token(self, api_id, app_token):
-        ''' Converts app_token and api_id into appropriate values from 
-        what may or may not be None.
-        '''
-        undefined = (app_token is None and api_id is None)
-        
-        if undefined:
-            raise DispatchError(
-                'Cannot leave both app_token and api_id undefined.'
-            )
-            
-        if app_token is None:
-            app_token = bytes(4)
-        else:
-            # Todo: "type" check app_token.
-            pass
-            
-        if api_id is None:
-            # Todo: "type" check api_id.
-            api_id = bytes(65)
-        else:
-            pass
-            
-        return api_id, app_token
-        
-    def _get_object(self, ghid):
-        ''' Gets an object, but doesn't do any tracking based on the 
-        requestor. Also doesn't check to see if the object is private or
-        not.
-        '''
-        if ghid in self._state_by_ghid:
-            state = self._state_by_ghid[ghid]
-            api_id = self._api_by_ghid[ghid]
-            app_token = self._token_by_ghid[ghid]
-            author = self._author_by_ghid[ghid]
-            dynamic = self._dynamic_by_ghid[ghid]
-            
-        else:
-            author, dynamic, wrapped_state = self.get_ghid(ghid)
-            state, api_id, app_token = self._unpack_dispatchable(wrapped_state)
-            self.register_object(ghid, author, state, api_id, app_token, dynamic)
-        
-        return author, state, api_id, app_token, dynamic
-        
     def get_object(self, asking_token, ghid):
         ''' Gets an object by ghid for a specific endpoint. Currently 
         only works for non-private objects.
         '''
-        author, state, api_id, app_token, dynamic = self._get_object(ghid)
+        try:
+            obj = self._oracle[ghid]
+        except KeyError:
+            obj = self._oracle.get_object(dispatch=self, ghid=ghid)
         
-        if app_token != bytes(4) and app_token != asking_token:
+        if obj.app_token != bytes(4) and obj.app_token != asking_token:
             raise DispatchError(
                 'Attempted to load private object from different application.'
             )
@@ -1173,43 +1096,23 @@ class Dispatcher(DispatcherBase):
         self._requestors_by_ghid[ghid].add(asking_token)
         self._discarders_by_ghid[ghid].discard(asking_token)
         
-        return author, state, api_id, app_token, dynamic
+        return obj
         
-    def new_object(self, asking_token, state, api_id, app_token, dynamic, _legroom=None):
+    def new_object(self, asking_token, *args, **kwargs):
         ''' Creates a new object with the upstream golix provider.
-        '''
-        # Restore a default legroom.
-        if _legroom is None:
-            _legroom = self._legroom
-            
-        # Make sure api_id & app_token are valid, and then wrap them up for use
-        api_id, app_token = self._normalize_api_and_token(api_id, app_token)
-        wrapped_state = self._pack_dispatchable(state, api_id, app_token)
-            
-        if dynamic:
-            # Normalize dynamic definition to bool
-            dynamic = True
-            
-            if isinstance(state, Ghid):
-                address = self.new_dynamic(state=state)
-            else:
-                address = self.new_dynamic(state=wrapped_state)
-                
-        else:
-            # Normalize dynamic definition to bool and then make a static obj
-            dynamic = False
-            address = self.new_static(state=wrapped_state)
-            
-        self.register_object(address, self.whoami, state, api_id, app_token, dynamic)
-        
+        asking_token is the app_token requesting the object.
+        *args and **kwargs are passed to Oracle.new_object(), which are 
+            in turn passed to the _GAO_Class (probably _Dispatchable)
+        ''' 
+        obj = self._oracle.new_object(dispatch=self, *args, **kwargs)
         # Note: should we add some kind of mechanism to defer passing to other 
         # endpoints until we update the one that actually requested the obj?
-        self._distribute_to_endpoints(
-            ghid = address, 
+        self.distribute_to_endpoints(
+            ghid = obj.ghid, 
             skip_token = asking_token
         )
         
-        return address
+        return obj.ghid
         
     def update_object(self, asking_token, ghid, state):
         ''' Initiates an update of an object. Must be tied to a specific
@@ -1217,34 +1120,25 @@ class Dispatcher(DispatcherBase):
         return.
         '''
         try:
-            if not self._dynamic_by_ghid[ghid]:
-                raise DispatchError(
-                    'Object is not dynamic. Cannot update.'
-                )
-        except KeyError as e:
-            raise DispatchError(
-                'Object unknown to dispatcher. Call get_object on address to '
-                'sync it before updating.'
-            ) from e
-        
-        
-        # So now we know it's a dynamic object and that we know of it.
-        api_id = self._api_by_ghid[ghid]
-        app_token = self._token_by_ghid[ghid]
-        wrapped_state = self._pack_dispatchable(state, api_id, app_token)
-        
+            obj = self._oracle[ghid]
+        except KeyError:
+            obj = self._oracle.get_object(dispatch=self, ghid=ghid)
+                
         # Try updating golix before local.
         # Temporarily silence updates from persister about the ghid we're 
         # in the process of updating
         try:
             self._ignore_subs_because_updating.add(ghid)
-            self.update_dynamic(ghid, wrapped_state)
+            obj.update(state)
+        except:
+            # Note: because a push() failure restores previous state, we should 
+            # probably distribute it INCLUDING TO THE ASKING TOKEN if there's a 
+            # push failure. TODO: think about this more.
+            raise
+        else:
+            self.distribute_to_endpoints(ghid, skip_token=asking_token)
         finally:
             self._ignore_subs_because_updating.remove(ghid)
-        # Successful, so propagate local
-        self._state_by_ghid[ghid] = state
-        # Finally, tell everyone what's up.
-        self._distribute_to_endpoints(ghid, skip_token=asking_token)
         
     def share_object(self, asking_token, ghid, recipient):
         ''' Do the whole super thing, and then record which application
@@ -1252,10 +1146,12 @@ class Dispatcher(DispatcherBase):
         '''
         # First make sure we actually know the object
         try:
-            if self._token_by_ghid[ghid] != bytes(4):
-                raise DispatchError('Cannot share a private object.')
-        except KeyError as e:
-            raise DispatchError('Attempt to share an unknown object.') from e
+            obj = self._oracle[ghid]
+        except KeyError:
+            obj = self._oracle.get_object(dispatch=self, ghid=ghid)
+            
+        if obj.app_token != bytes(4):
+            raise DispatchError('Cannot share a private object.')
         
         try:
             self._outstanding_shares[ghid] = (
@@ -1265,7 +1161,7 @@ class Dispatcher(DispatcherBase):
             
             # Currently, just perform a handshake. In the future, move this 
             # to a dedicated exchange system.
-            self.hand_ghid(ghid, recipient)
+            self._core.hand_ghid(ghid, recipient)
             
         except:
             del self._outstanding_shares[ghid]
@@ -1276,41 +1172,30 @@ class Dispatcher(DispatcherBase):
         static ghid.
         '''
         try:
-            if not self._dynamic_by_ghid[ghid]:
-                raise DispatchError('Cannot freeze a static object.')
-        except KeyError as e:
-            raise DispatchError(
-                'Object unknown to dispatch; cannot freeze. Call get_object.'
-            ) from e
-            
-        author, state, api_id, app_token, dynamic = self._get_object(ghid)
+            obj = self._oracle[ghid]
+        except KeyError:
+            obj = self._oracle.get_object(dispatch=self, ghid=ghid)
         
-        address = self.freeze_dynamic(
+        if not obj.dynamic:
+            raise DispatchError('Cannot freeze a static object.')
+            
+        static_address = self._core.freeze_dynamic(
             ghid_dynamic = ghid
         )
         
-        self.register_object(
-            address, 
-            author, 
-            state, 
-            api_id, 
-            app_token, 
-            dynamic = False
-        )
+        # We're going to avoid a race condition by pulling the freezed object
+        # post-facto, instead of using a cache.
+        self._oracle.get_object(dispatch=self, ghid=static_address)
         
-        return address
+        return static_address
         
     def hold_object(self, asking_token, ghid):
         ''' Binds to an address, preventing its deletion. Note that this
         will publicly identify you as associated with the address and
         preventing its deletion to any connected persistence providers.
         '''
-        if ghid not in self._state_by_ghid:
-            raise DispatchError(
-                'Object unknown to dispatch; cannot hold. Call get_object.'
-            )
-            
-        self.hold_ghid(ghid)
+        # TODO: add some kind of proofing here? 
+        self._core.hold_ghid(ghid)
         
     def delete_object(self, asking_token, ghid):
         ''' Debinds an object, attempting to delete it. This operation
@@ -1322,14 +1207,20 @@ class Dispatcher(DispatcherBase):
         NOTE THAT THIS DELETES ALL COPIES OF THE OBJECT! It will become
         subsequently unavailable to other applications using it.
         '''
-        if ghid not in self._state_by_ghid:
-            raise DispatchError(
-                'Object unknown to dispatch; cannot delete. Call get_object.'
-            )
-            
+        # First we need to cache the object so we can call updates.
+        try:
+            obj = self._oracle[ghid]
+        except KeyError:
+            obj = self._oracle.get_object(dispatch=self, ghid=ghid)
+        
         try:
             self._ignore_subs_because_updating.add(ghid)
-            self.delete_ghid(ghid)
+            self._core.delete_ghid(ghid)
+        except:
+            # Why is it a syntax error to have else without except?
+            raise
+        else:
+            self._oracle.forget(ghid)
         finally:
             self._ignore_subs_because_updating.remove(ghid)
         
@@ -1338,12 +1229,11 @@ class Dispatcher(DispatcherBase):
         
         # There's only a race condition here if the object wasn't actually 
         # removed upstream.
-        self._distribute_to_endpoints(
+        self.distribute_to_endpoints(
             ghid, 
             skip_token = asking_token, 
-            deleted = True
+            deleted = obj
         )
-        self.deregister_object(ghid)
         
     def discard_object(self, asking_token, ghid):
         ''' Removes the object from *only the asking application*. The
@@ -1353,15 +1243,20 @@ class Dispatcher(DispatcherBase):
         '''
         # This is sorta an accidental check that we're actually tracking the
         # object. Could make it explicit I suppose.
-        api_id = self._api_by_ghid[ghid]
+        try:
+            obj = self._oracle[ghid]
+        except KeyError:
+            obj = self._oracle.get_object(dispatch=self, ghid=ghid)
+            
+        api_id = obj.api_id
         
         # Completely discard/deregister anything we don't care about anymore.
         interested_tokens = set()
         
-        if self._token_by_ghid[ghid] == bytes(4):
+        if obj.app_token == bytes(4):
             interested_tokens.update(self._api_ids[api_id])
         else:
-            interested_tokens.add(self._token_by_ghid[ghid])
+            interested_tokens.add(obj.app_token)
             
         interested_tokens.update(self._requestors_by_ghid[ghid])
         interested_tokens.difference_update(self._discarders_by_ghid[ghid])
@@ -1369,7 +1264,10 @@ class Dispatcher(DispatcherBase):
         
         # Now perform actual updates
         if len(interested_tokens) == 0:
-            self.deregister_object(ghid)
+            # Delete? GC? Not clear what we should do here.
+            # For now, just tell the oracle to ignore it.
+            self._oracle.forget(ghid)
+            
         else:
             self._requestors_by_ghid[ghid].discard(asking_token)
             self._discarders_by_ghid[ghid].add(asking_token)
@@ -1386,13 +1284,9 @@ class Dispatcher(DispatcherBase):
         
         handshake is a StaticObject or DynamicObject.
         Raises HandshakeError if unsuccessful.
-        '''
-        # Well first we need to actually get the object, so it's available to
-        # distribute.
-        author, state, api_id, app_token, dynamic = self._get_object(target)
-        
+        '''        
         # Go ahead and distribute it to the appropriate endpoints.
-        self._distribute_to_endpoints(target)
+        self.distribute_to_endpoints(target)
         
         # Note: we should add something in here to catch issues if we can't
         # distribute to endpoints or something, so that the handshake doesn't
@@ -1439,35 +1333,7 @@ class Dispatcher(DispatcherBase):
             recipient = recipient
         )
                     
-    def dispatch_update(self, subscribed, notification):
-        ''' Updates local state tracking and distributes the update to 
-        the endpoints.
-        '''
-        # NOTE THAT GHID HERE IS THE FRAME GHID, NOT THE DYNAMIC GHID!
-        # Todo: change that, because holy shit.
-        # Okay, now do sync and stuff
-        result = self.sync_dynamic(notification)
-        # That will return None if no update was found
-        if result is not None:
-            ghid_dynamic, state = result
-            
-            # if ghid2 != ghid:
-            #     raise RuntimeError(
-            #         'Error while unpacking incoming update: mismatched ghids'
-            #     )
-            
-            state, api_id, app_token = self._unpack_dispatchable(state)
-            
-            # Explicitly catch empty API_ID to avoid problems with private objs
-            if api_id != bytes(65) and api_id != self._api_by_ghid[ghid_dynamic]:
-                raise RuntimeError(
-                    'Error while unpacking incoming update: mismatched api_ids'
-                )
-            
-            self._state_by_ghid[ghid_dynamic] = state
-            self._distribute_to_endpoints(ghid_dynamic)
-                    
-    def _distribute_to_endpoints(self, ghid, skip_token=None, deleted=False):
+    def distribute_to_endpoints(self, ghid, skip_token=None, deleted=False):
         ''' Passes the object to all endpoints supporting its api via 
         command.
         
@@ -1479,16 +1345,26 @@ class Dispatcher(DispatcherBase):
         '''
         # Create a temporary set
         callsheet = set()
+        
+        # If deleted, we passed the object itself.
+        if deleted:
+            obj = deleted
+        else:
+            # Not deleted? Grab the object.
+            try:
+                obj = self._oracle[ghid]
+            except KeyError:
+                obj = self._oracle.get_object(dispatch=self, ghid=ghid)
             
         # The app token is defined, so contact that endpoint (and only that 
         # endpoint) directly
-        if self._token_by_ghid[ghid] != bytes(4):
-            callsheet.add(self._token_by_ghid[ghid])
+        # Bypass if someone is sending us an app token we don't know about
+        if obj.app_token != bytes(4) and obj.app_token in self._known_tokens:
+            callsheet.add(obj.app_token)
             
         # It's not defined, so get everyone that uses that api_id
         else:
-            api_id = self._api_by_ghid[ghid]
-            callsheet.update(self._api_ids[api_id])
+            callsheet.update(self._api_ids[obj.api_id])
             
         # Now add anyone explicitly tracking that object
         callsheet.update(self._requestors_by_ghid[ghid])
@@ -1520,7 +1396,7 @@ class Dispatcher(DispatcherBase):
                         token, 
                         'notify_object', 
                         ghid, 
-                        state = self._state_by_ghid[ghid]
+                        state = obj.state
                 )
                 
     def _attempt_contact_endpoint(self, app_token, command, ghid, *args, **kwargs):
@@ -1635,5 +1511,385 @@ class EmbeddedMemoryAgent(AgentBase, MemoryPersister, _TestDispatcher):
         super().__init__(persister=self, dispatcher=self)
         
         
-def agentfactory(persisters, ipc_hosts):
-    pass
+class Oracle:
+    ''' Source for total internal truth and state tracking of objects.
+    
+    Maintains <ghid>: <obj> lookup. Used by dispatchers to track obj
+    state. Might eventually be used by AgentBase. Just a quick way to 
+    store and retrieve any objects based on an associated ghid.
+    '''
+    def __init__(self, core, gao_class):
+        ''' Sets up internal tracking.
+        '''
+        self._core = core
+        self._gaoclass = gao_class
+        self._lookup = {}
+        
+    def __getitem__(self, ghid):
+        ''' Returns the raw data associated with the ghid. If the ghid
+        is unavailable, attempts to retrieve it from core.
+        '''
+        # Note: should probably add some kind of explicit cache refresh 
+        # mechanism, in the event that connections or updates are dropped.
+        return self._lookup[ghid]
+            
+    def get_object(self, ghid, *args, **kwargs):
+        obj = self._gaoclass.from_ghid(
+            core = self._core, 
+            ghid = ghid, 
+            *args, **kwargs
+        )
+        self._lookup[ghid] = obj
+        return obj
+        
+    def new_object(self, *args, **kwargs):
+        ''' Creates a new object and returns it. Passes all *args and
+        **kwargs to the declared gao_class. Eliminates the need to pass
+        core, or call push.
+        '''
+        obj = self._gaoclass(core=self._core, *args, **kwargs)
+        obj.push()
+        self._lookup[obj.ghid] = obj
+        return obj
+        
+    def forget(self, ghid):
+        ''' Removes the object from the cache. Next time an application
+        wants it, it will need to be acquired from persisters.
+        
+        Indempotent; will not raise KeyError if called more than once.
+        '''
+        try:
+            del self._lookup[ghid]
+        except KeyError:
+            pass
+            
+    def __contains__(self, ghid):
+        ''' Very quick proxy to self._lookup. Does not check for global
+        access; that's mostly up to privateer.
+        '''
+        return ghid in self._lookup
+    
+    
+class _GAO(metaclass=abc.ABCMeta):
+    ''' Base class for Golix-Aware Objects (Golix Accountability 
+    Objects?). Anyways, used by core to handle plaintexts and things.
+    '''
+    def __init__(self, core, dynamic, _legroom=None, *args, **kwargs):
+        ''' Creates a golix-aware object. If ghid is passed, will 
+        immediately pull from core to sync with existing object. If not,
+        will create new object on first push. If ghid is not None, then
+        dynamic will be ignored.
+        '''
+        self._core = core
+        self.dynamic = bool(dynamic)
+        self.ghid = None
+        self.author = None
+        self.__updater = None
+        # self._frame_ghid = None
+        
+        if _legroom is None:
+            _legroom = core._legroom
+        self._legroom = _legroom
+        
+        super().__init__(*args, **kwargs)
+            
+    @classmethod
+    def from_ghid(cls, core, ghid, _legroom=None, *args, **kwargs):
+        ''' Loads the GAO from an existing ghid.
+        '''
+        author, dynamic, packed_state = core.get_ghid(ghid)
+        # Awwwwkward
+        args1, kwargs1 = cls._init_unpack(packed_state)
+        args = list(args)
+        args.extend(args1)
+        kwargs.update(kwargs1)
+        self = cls(
+            core = core, 
+            dynamic = dynamic, 
+            _legroom = _legroom, 
+            *args, **kwargs
+        )
+        
+        if dynamic:
+            core.persister.subscribe(ghid, self._weak_pull)
+        
+        self.ghid = ghid
+        self.author = author
+        
+        return self
+        
+    @staticmethod
+    def _init_unpack(packed):
+        ''' Unpacks an initial state in from_ghid into *args, **kwargs.
+        Should always be staticmethod or classmethod.
+        
+        TODO: make this less awkward.
+        '''
+        return tuple(), {}
+        
+    @staticmethod
+    def _pack(state):
+        ''' Packs state into a bytes object. May be overwritten in subs
+        to pack more complex objects. Should always be a staticmethod or
+        classmethod.
+        '''
+        return state
+        
+    @staticmethod
+    def _unpack(packed):
+        ''' Unpacks state from a bytes object. May be overwritten in 
+        subs to unpack more complex objects. Should always be a 
+        staticmethod or classmethod.
+        '''
+        return packed
+        
+    @abc.abstractmethod
+    def apply_state(self, state):
+        ''' Apply the UNPACKED state to self.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def extract_state(self):
+        ''' Extract self into a packable state.
+        '''
+        pass
+    
+    def push(self):
+        ''' Pushes updates to upstream. Must be called for every object
+        mutation.
+        '''
+        if self.ghid is None:
+            self.__new()
+        else:
+            if self.dynamic:
+                self.__update()
+            else:
+                raise TypeError('Static GAOs cannot be updated.')
+        
+    def pull(self, *args, **kwargs):
+        ''' Refreshes self from upstream. Should NOT be called at object 
+        instantiation for any existing objects. Should instead be called
+        directly, or through _weak_pull for any new status.
+        '''
+        # Note that, when used as a subs handler, we'll be passed our own 
+        # self.ghid (as the subscription ghid) as well as the ghid for the new
+        # frame (as the notification ghid)
+        
+        if self.dynamic:
+            # State will be None if no update was applied.
+            packed_state = self._core.touch_dynamic(self.ghid)
+            if packed_state:
+                # Don't forget to extract...
+                self.apply_state(
+                    self._unpack(packed_state)
+                )
+        
+    def touch(self):
+        ''' Notifies the object to check upstream for changes.
+        
+        Currently unused. May remain such.
+        '''
+        raise NotImplementedError(
+            'Krieger says: nope-nope-nope-nope-nope-nope-nope'
+        )
+        
+    def __new(self):
+        ''' Creates a new Golix object for self using self._state, 
+        self._dynamic, etc.
+        '''
+        if self.dynamic:
+            address = self._core.new_dynamic(
+                state = self._pack(
+                    self.extract_state()
+                ),
+                _legroom = self._legroom,
+            )
+            self._core.persister.subscribe(address, self._weak_pull)
+            # If we ever decide to handle frame_ghid locally, deal with that 
+            # here.
+        else:
+            address = self._core.new_static(
+                state = self._pack(
+                    self.extract_state()
+                )
+            )
+        
+        self.author = self._core.whoami
+        self.ghid = address
+        
+    def __update(self):
+        ''' Updates an existing golix object. Must already have checked
+        that we 1) are dynamic, and 2) already have a ghid.
+        
+        If there is an error updating, this will attempt to do a pull to
+        automatically roll back the current state. NOTE THAT THIS MAY
+        OR MAY NOT BE THE ACTUAL CURRENT STATE!
+        '''
+        try:
+            self._core.update_dynamic(
+                ghid_dynamic = self.ghid,
+                state = self._pack(
+                    self.extract_state()
+                ),
+            )
+        except:
+            author, dynamic, packed_state = self._core.get_ghid(self.ghid)
+            state = self._unpack(packed_state)
+            self.apply_state(state)
+            raise
+            
+    @property
+    def _weak_pull(self):
+        # This is a disgusting workaround to get the weakmethod to work right.
+        # Basically, I want WeakMethod to be WeakMethodProxy.
+        if not self.__updater:
+            # Note that this is now a closure.
+            r = weakref.WeakMethod(self.pull)
+            
+            def updater(*args, **kwargs):
+                return r()(*args, **kwargs)
+            
+            self.__updater = updater
+            
+        return self.__updater
+            
+    def __del__(self):
+        ''' Cleanup any existing subscriptions.
+        '''
+        # This relies on the indempotent nature of unsubscribe
+        try:
+            self._core.persister.unsubscribe(self.ghid, self._weak_pull)
+        except:
+            logger.error('Error while cleaning up _GAO:\n' + repr(exc) + '\n' + 
+                        ''.join(traceback.format_tb(exc.__traceback__)))
+            
+            
+_DispatchableState = collections.namedtuple(
+    typename = '_DispatchableState',
+    field_names = ('api_id', 'app_token', 'state'),
+)
+            
+            
+class _Dispatchable(_GAO):
+    ''' A dispatchable object.
+    '''
+    def __init__(self, dispatch, api_id, app_token, state, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._dispatch = dispatch
+        api_id, app_token = self._normalize_api_and_token(api_id, app_token)
+        self.state = state
+        self.api_id = api_id
+        self.app_token = app_token
+        
+    def pull(self, *args, **kwargs):
+        ''' Refreshes self from upstream. Should NOT be called at object 
+        instantiation for any existing objects. Should instead be called
+        directly, or through _weak_pull for any new status.
+        '''
+        # Note that, when used as a subs handler, we'll be passed our own 
+        # self.ghid (as the subscription ghid) as well as the ghid for the new
+        # frame (as the notification ghid)
+        
+        if self.dynamic:
+            # State will be None if no update was applied.
+            packed_state = self._core.touch_dynamic(self.ghid)
+            if packed_state:
+                # Don't forget to extract...
+                self.apply_state(
+                    self._unpack(packed_state)
+                )
+                self._dispatch.distribute_to_endpoints(self.ghid)
+        
+    @classmethod
+    def _init_unpack(cls, packed):
+        ''' Unpacks an initial state in from_ghid into *args, **kwargs.
+        Should always be staticmethod or classmethod.
+        '''
+        dispatchablestate = cls._unpack(packed)
+        return tuple(), {
+            'api_id': dispatchablestate[0],
+            'app_token': dispatchablestate[1],
+            'state': dispatchablestate[2],
+        }
+        
+    @staticmethod
+    def _pack(state):
+        ''' Packs state into a bytes object. May be overwritten in subs
+        to pack more complex objects. Should always be a staticmethod or
+        classmethod.
+        '''
+        version = b'\x00'
+        return b'hgxd' + version + state[0] + state[1] + state[2]
+        
+    @staticmethod
+    def _unpack(packed):
+        ''' Unpacks state from a bytes object. May be overwritten in 
+        subs to unpack more complex objects. Should always be a 
+        staticmethod or classmethod.
+        '''
+        magic = packed[0:4]
+        version = packed[4:5]
+        
+        if magic != b'hgxd':
+            raise DispatchError('Object does not appear to be dispatchable.')
+        if version != b'\x00':
+            raise DispatchError('Incompatible dispatchable version number.')
+            
+        api_id = packed[5:70]
+        app_token = packed[70:74]
+        state = packed[74:]
+        
+        return _DispatchableState(api_id, app_token, state)
+        
+    def apply_state(self, state):
+        ''' Apply the UNPACKED state to self.
+        '''
+        self.api_id = state[0]
+        self.app_token = state[1]
+        self.state = state[2]
+        
+    def extract_state(self):
+        ''' Extract self into a packable state.
+        '''
+        return _DispatchableState(self.api_id, self.app_token, self.state)
+            
+    @staticmethod
+    def _normalize_api_and_token(api_id, app_token):
+        ''' Converts app_token and api_id into appropriate values from 
+        what may or may not be None.
+        '''
+        undefined = (app_token is None and api_id is None)
+        
+        if undefined:
+            raise DispatchError(
+                'Cannot leave both app_token and api_id undefined.'
+            )
+            
+        if app_token is None:
+            app_token = bytes(4)
+        else:
+            # Todo: "type" check app_token.
+            pass
+            
+        if api_id is None:
+            # Todo: "type" check api_id.
+            api_id = bytes(65)
+        else:
+            pass
+            
+        return api_id, app_token
+        
+    def update(self, state):
+        ''' Wrapper to apply state that reuses api_id and app_token, and
+        then call push.
+        '''
+        if not self.dynamic:
+            raise DispatchError(
+                'Object is not dynamic. Cannot update.'
+            )
+            
+        self.apply_state(
+            state = (self.api_id, self.app_token, state)
+        )
+        self.push()

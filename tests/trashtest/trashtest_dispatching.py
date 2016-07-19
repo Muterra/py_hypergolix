@@ -144,6 +144,8 @@ class TestDispatching(unittest.TestCase):
         address1 = self.agent1.new_object(
             asking_token = self.endpoint1.app_token,
             state = pt0,
+            # NOTE THAT APP_TOKEN SHOULD ONLY EVER BE DEFINED for non-private
+            # objects!
             app_token = self.endpoint1.app_token,
             api_id = self.__api_id,
             dynamic = False
@@ -163,17 +165,8 @@ class TestDispatching(unittest.TestCase):
             recipient = self.agent2.whoami, 
         )
         
-        self.assertIn(address2, self.agent1._dynamic_by_ghid)
-        self.assertIn(address2, self.agent1._state_by_ghid)
-        self.assertIn(address2, self.agent1._author_by_ghid)
-        self.assertIn(address2, self.agent1._token_by_ghid)
-        self.assertIn(address2, self.agent1._api_by_ghid)
-        
-        self.assertIn(address2, self.agent2._dynamic_by_ghid)
-        self.assertIn(address2, self.agent2._state_by_ghid)
-        self.assertIn(address2, self.agent2._author_by_ghid)
-        self.assertIn(address2, self.agent2._token_by_ghid)
-        self.assertIn(address2, self.agent2._api_by_ghid)
+        self.assertIn(address2, self.agent1._oracle)
+        self.assertIn(address2, self.agent2._oracle)
         
         self.agent1.update_object(
             asking_token = self.endpoint1.app_token,
@@ -186,12 +179,11 @@ class TestDispatching(unittest.TestCase):
             ghid = address2
         )
         
-        self.assertIn(address2, self.agent1._dynamic_by_ghid)
-        self.assertIn(address2, self.agent1._state_by_ghid)
-        self.assertIn(address2, self.agent1._author_by_ghid)
-        self.assertIn(address2, self.agent1._token_by_ghid)
-        self.assertIn(address2, self.agent1._api_by_ghid)
-        self.assertEqual(self.agent1._state_by_ghid[frozen2], self.agent1._state_by_ghid[address2])
+        self.assertIn(address2, self.agent1._oracle)
+        self.assertEqual(
+            self.agent1._oracle[frozen2].state, 
+            self.agent1._oracle[address2].state
+        )
         
         address3 = self.agent2.new_object(
             asking_token = self.endpoint2.app_token,
@@ -219,11 +211,7 @@ class TestDispatching(unittest.TestCase):
             ghid = address1
         )
         
-        self.assertNotIn(address1, self.agent1._dynamic_by_ghid)
-        self.assertNotIn(address1, self.agent1._state_by_ghid)
-        self.assertNotIn(address1, self.agent1._author_by_ghid)
-        self.assertNotIn(address1, self.agent1._token_by_ghid)
-        self.assertNotIn(address1, self.agent1._api_by_ghid)
+        self.assertNotIn(address1, self.agent1._oracle)
         
         self.agent1.discard_object(
             asking_token = self.endpoint1.app_token,
@@ -232,11 +220,7 @@ class TestDispatching(unittest.TestCase):
         
         # Agent1 has only one endpoint following this object so it should be
         # completely deregistered
-        self.assertNotIn(address2, self.agent1._dynamic_by_ghid)
-        self.assertNotIn(address2, self.agent1._state_by_ghid)
-        self.assertNotIn(address2, self.agent1._author_by_ghid)
-        self.assertNotIn(address2, self.agent1._token_by_ghid)
-        self.assertNotIn(address2, self.agent1._api_by_ghid)
+        self.assertNotIn(address2, self.agent1._oracle)
         
         self.agent2.discard_object(
             asking_token = self.endpoint2.app_token,
@@ -244,11 +228,7 @@ class TestDispatching(unittest.TestCase):
         )
         
         # Agent2 has two endpoints following this object so it should persist
-        self.assertIn(address2, self.agent2._dynamic_by_ghid)
-        self.assertIn(address2, self.agent2._state_by_ghid)
-        self.assertIn(address2, self.agent2._author_by_ghid)
-        self.assertIn(address2, self.agent2._token_by_ghid)
-        self.assertIn(address2, self.agent2._api_by_ghid)
+        self.assertIn(address2, self.agent2._oracle)
 
         # obj1 = self.agent1.new_object(pt0, dynamic=False)
         # obj2 = self.agent1.new_object(pt1, dynamic=True)
