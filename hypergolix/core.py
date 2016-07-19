@@ -1760,7 +1760,7 @@ class _GAO(metaclass=abc.ABCMeta):
         # This relies on the indempotent nature of unsubscribe
         try:
             self._core.persister.unsubscribe(self.ghid, self._weak_pull)
-        except:
+        except Exception as exc:
             logger.error('Error while cleaning up _GAO:\n' + repr(exc) + '\n' + 
                         ''.join(traceback.format_tb(exc.__traceback__)))
             
