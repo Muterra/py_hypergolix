@@ -52,6 +52,7 @@ from golix import Ghid
 
 # Intra-package dependencies
 from .core import _GAO
+from .core import _GAODict
 from .core import Oracle
 
 # Intra-package dependencies
@@ -209,9 +210,13 @@ class Dispatcher(DispatcherBase):
         self._known_tokens = set()
         self._known_tokens.add(b'\x00\x00\x00\x00')
         
-        # Lookup for api_ids -> app_tokens. Should this contain ONLY the apps 
-        # that are currently available? That might encourage ephemeral API 
-        # subscription, which could be good or bad.
+        # Set of private objects for a given app_token. Will be passed to the
+        # app immediately after registration.
+        self._private_by_ghid = _GAODict(core=core, dynamic=True)
+        
+        # Lookup for api_ids -> app_tokens. Contains ONLY the apps that are 
+        # currently available, because it's only used for dispatching objects
+        # that are being modified while the dispatcher is running.
         self._api_ids = _JitSetDict()
         
         # Lookup for handshake ghid -> handshake object
@@ -266,6 +271,11 @@ class Dispatcher(DispatcherBase):
             in turn passed to the _GAO_Class (probably _Dispatchable)
         ''' 
         obj = self._oracle.new_object(dispatch=self, *args, **kwargs)
+        
+        # If this is a private object, record it as such
+        if obj.app_token != bytes(4):
+            self._private_by_ghid[obj.ghid] = obj.app_token
+        
         # Note: should we add some kind of mechanism to defer passing to other 
         # endpoints until we update the one that actually requested the obj?
         self.distribute_to_endpoints(
@@ -382,6 +392,11 @@ class Dispatcher(DispatcherBase):
             raise
         else:
             self._oracle.forget(ghid)
+            
+            # If this is a private object, remove it from record
+            if obj.app_token != bytes(4):
+                del self._private_by_ghid[obj.ghid]
+                
         finally:
             self._ignore_subs_because_updating.remove(ghid)
         

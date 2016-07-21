@@ -43,6 +43,9 @@ __all__ = [
 import threading
 import collections
 
+# Intra-package dependencies
+from .core import _GAODict
+
 
 # ###############################################
 # Logging boilerplate
@@ -61,8 +64,13 @@ logger = logging.getLogger(__name__)
 class Privateer:
     ''' Lookup system to get secret from ghid. Threadsafe?
     '''
-    def __init__(self):
+    def __init__(self, core):
+        self._core = core
         self._modlock = threading.Lock()
+        # On second thought, let's hold off on this, bootstrapping it is going
+        # to be a big pain in the dick
+        # self._secrets_persistent = _GAODict(core, dynamic=True)
+        # self._secrets_staging = _GAODict(core, dynamic=True)
         self._secrets_persistent = {}
         self._secrets_staging = {}
         self._secrets = collections.ChainMap(

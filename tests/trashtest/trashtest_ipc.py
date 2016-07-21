@@ -67,8 +67,9 @@ from hypergolix.ipc import IPCEmbed
 
 class MockCore(HGXCore):
     def __init__(self, persister, *args, **kwargs):
-        super().__init__(persister=persister, privateer=Privateer(), *args, **kwargs)
+        super().__init__(persister=persister, *args, **kwargs)
         self.link_dispatch(Dispatcher(core=self))
+        self.link_privateer(Privateer(core=self))
     
     
 # class WebsocketsApp(WSReqResClient):

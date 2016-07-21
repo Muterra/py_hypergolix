@@ -231,10 +231,11 @@ class _TestDispatch(HGXCore):
     def __init__(self, *args, **kwargs):
         super().__init__(
             # dispatcher = self, 
-            privateer = Privateer(),
+            # privateer = Privateer(),
             *args, **kwargs
         )
         self.link_dispatch(_TestEmbed(core=self))
+        self.link_privateer(Privateer(core=self))
 
 
 # class _TestEndpoint(_EndpointBase):

@@ -118,13 +118,16 @@ foreground=True, aengel=None):
 class _HGXCore(HGXCore):
     def __init__(self, persister, *args, **kwargs):
         super().__init__(
-            privateer = Privateer(),
             persister = persister, 
             *args, **kwargs
         )
         # Note: we now contain the only live reference to dispatch.
         self.link_dispatch(
             Dispatcher(core=self)
+        )
+        # Note: we now contain the only live reference to privateer.
+        self.link_privateer(
+            Privateer(core=self)
         )
     
     

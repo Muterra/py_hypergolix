@@ -144,7 +144,7 @@ class HGXCore:
     
     DEFAULT_LEGROOM = 3
     
-    def __init__(self, persister, privateer, _identity=None, *args, **kwargs):
+    def __init__(self, persister, _identity=None, *args, **kwargs):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         
@@ -159,7 +159,7 @@ class HGXCore:
         self._persister = persister
         
         self._ghidproxy = _GhidProxier()
-        self._privateer = privateer
+        # self._privateer = privateer
         # self._privateer = _Privateer()
         
         self._contacts = {}
@@ -200,9 +200,16 @@ class HGXCore:
         )
     
     def link_dispatch(self, dispatch):
+        ''' Chicken vs egg.
+        '''
         # if not isinstance(dispatch, DispatcherBase):
         #     raise TypeError('dispatcher must subclass DispatcherBase.')
         self._dispatcher = dispatch
+        
+    def link_privateer(self, privateer):
+        ''' Chicken vs egg.
+        '''
+        self._privateer = privateer
         
     @property
     def _legroom(self):
@@ -1048,3 +1055,102 @@ class _GAO(metaclass=abc.ABCMeta):
         except Exception as exc:
             logger.error('Error while cleaning up _GAO:\n' + repr(exc) + '\n' + 
                         ''.join(traceback.format_tb(exc.__traceback__)))
+            
+            
+class _GAODict(_GAO):
+    ''' A dispatchable object. For now at least, serializes
+    1. For every change
+    2. Using msgpack
+    '''
+    def __init__(self, core, dynamic, _legroom=None, *args, **kwargs):
+        # Include these so that we can pass *args and **kwargs to the dict
+        super().__init__(core, dynamic, _legroom)
+        self._state = dict(*args, **kwargs)
+        # TODO: Convert this to a ComboLock (threadsafe and asyncsafe)
+        # Note: must be RLock, because we need to take opslock in __setitem__
+        # while calling push.
+        self._opslock = threading.RLock()
+        
+    @classmethod
+    def _init_unpack(cls, packed):
+        ''' Unpacks an initial state in from_ghid into *args, **kwargs.
+        Should always be staticmethod or classmethod.
+        '''
+        dispatchablestate = cls._unpack(packed)
+        return (dispatchablestate,), {}
+        
+    @staticmethod
+    def _pack(state):
+        ''' Packs state into a bytes object. May be overwritten in subs
+        to pack more complex objects. Should always be a staticmethod or
+        classmethod.
+        '''
+        try:
+            return msgpack.packb(state, use_bin_type=True)
+            
+        except (msgpack.exceptions.BufferFull,
+                msgpack.exceptions.ExtraData,
+                msgpack.exceptions.OutOfData,
+                msgpack.exceptions.PackException,
+                msgpack.exceptions.PackValueError) as exc:
+            raise ValueError(
+                'Failed to pack _GAODict. Incompatible nested object?'
+            ) from exc
+        
+    @staticmethod
+    def _unpack(packed):
+        ''' Unpacks state from a bytes object. May be overwritten in 
+        subs to unpack more complex objects. Should always be a 
+        staticmethod or classmethod.
+        '''
+        try:
+            return msgpack.unpackb(packed, encoding='utf-8')
+            
+        # MsgPack errors mean that we don't have a properly formatted handshake
+        except (msgpack.exceptions.BufferFull,
+                msgpack.exceptions.ExtraData,
+                msgpack.exceptions.OutOfData,
+                msgpack.exceptions.UnpackException,
+                msgpack.exceptions.UnpackValueError) as exc:
+            raise ValueError(
+                'Failed to unpack _GAODict. Incompatible serialization?'
+            ) from exc
+        
+    def apply_state(self, state):
+        ''' Apply the UNPACKED state to self.
+        '''
+        with self._opslock:
+            self._state.clear()
+            self._state.update(state)
+        
+    def extract_state(self):
+        ''' Extract self into a packable state.
+        '''
+        with self._opslock:
+            return self._state
+            
+    def __getitem__(self, key):
+        with self._opslock:
+            return self._state[key]
+            
+    def __setitem__(self, key, value):
+        with self._opslock:
+            self._state[key] = value
+            self.push()
+            
+    def __delitem__(self, key):
+        with self._opslock:
+            del self._state[key]
+            self.push()
+            
+    def __contains__(self, key):
+        with self._opslock:
+            return key in self._state
+            
+    def pop(self, key, *args, **kwargs):
+        with self._opslock:
+            result = self._state.pop(key, *args, **kwargs)
+            self.push()
+            
+        return result
+            

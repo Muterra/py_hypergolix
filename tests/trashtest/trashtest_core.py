@@ -233,8 +233,9 @@ class _TestEmbed:
 
 class _TestClient(HGXCore, MemoryPersister, _TestEmbed, _TestDispatcher):
     def __init__(self):
-        super().__init__(persister=self, privateer=Privateer())
+        super().__init__(persister=self)
         self.link_dispatch(self)
+        self.link_privateer(Privateer(core=self))
         
     def _discard_object(*args, **kwargs):
         pass
@@ -242,8 +243,9 @@ class _TestClient(HGXCore, MemoryPersister, _TestEmbed, _TestDispatcher):
 
 class _TestAgent_SharedPersistence(HGXCore, _TestEmbed, _TestDispatcher):
     def __init__(self, *args, **kwargs):
-        super().__init__(privateer=Privateer(), *args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.link_dispatch(self)
+        self.link_privateer(Privateer(core=self),)
         
     def subscribe(self, ghid, callback):
         ''' We're not testing this right now but we need to suppress 
