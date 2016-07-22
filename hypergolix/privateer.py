@@ -43,6 +43,10 @@ __all__ = [
 import threading
 import collections
 
+# These are used for secret ratcheting only.
+from Crypto.Hash import SHA512
+from Crypto.Protocol.KDF import HKDF
+
 # Intra-package dependencies
 from .core import _GAODict
 
@@ -154,7 +158,7 @@ class Privateer:
         else:
             if staged != self._secrets_persistent[ghid]:
                 # Re-stage, just in case.
-                self._secrets_staging[ghid] = secret
+                self._secrets_staging[ghid] = staged
                 raise ValueError(
                     'Non-matching secret already committed for GHID ' +
                     str(ghid)
@@ -176,7 +180,7 @@ class Privateer:
                 fail_test = False
                 
             try:
-                del self._secrets_persistend[ghid]
+                del self._secrets_persistent[ghid]
             except KeyError as exc:
                 fail_test &= True
                 logger.debug('Secret not stored for GHID ' + str(ghid))
@@ -185,3 +189,29 @@ class Privateer:
                 
         if fail_test:
             raise KeyError('Secret not found for GHID ' + str(ghid))
+        
+    @staticmethod
+    def _ratchet_secret(secret, ghid):
+        ''' Ratchets a key using HKDF-SHA512, using the associated 
+        address as salt. For dynamic files, this should be the previous
+        frame ghid (not the dynamic ghid).
+        '''
+        cls = type(secret)
+        cipher = secret.cipher
+        version = secret.version
+        len_seed = len(secret.seed)
+        len_key = len(secret.key)
+        source = bytes(secret.seed + secret.key)
+        ratcheted = HKDF(
+            master = source,
+            salt = bytes(ghid),
+            key_len = len_seed + len_key,
+            hashmod = SHA512,
+            num_keys = 1
+        )
+        return cls(
+            cipher = cipher,
+            version = version,
+            key = ratcheted[:len_key],
+            seed = ratcheted[len_key:]
+        )

@@ -64,10 +64,6 @@ from golix.utils import AsymHandshake
 from golix.utils import AsymAck
 from golix.utils import AsymNak
 
-# These are used for secret ratcheting only.
-from Crypto.Hash import SHA512
-from Crypto.Protocol.KDF import HKDF
-
 # Intra-package dependencies
 from .exceptions import NakError
 from .exceptions import HandshakeError
@@ -493,7 +489,7 @@ class HGXCore:
             state = state, 
             ghid_dynamic = ghid_dynamic,
             history = frame_history,
-            secret = self._ratchet_secret(
+            secret = self._privateer._ratchet_secret(
                 secret = self._privateer.get(current_container),
                 ghid = old_frame
             )
@@ -577,7 +573,8 @@ class HGXCore:
         # First, make sure we're not being asked to update something we 
         # initiated the update for.
         # TODO: fix leaky abstraction
-        if ghid not in self._dispatcher._ignore_subs_because_updating:
+        obj = self._dispatcher._oracle[ghid]
+        if not obj._silenced:
             # This bit trusts that the persistence provider is enforcing proper
             # monotonic state progression for dynamic bindings. Check that our
             # current frame is the most recent, and if so, return immediately.
@@ -586,7 +583,8 @@ class HGXCore:
                 return None
                 
             # Get our CURRENT secret (before dereffing)
-            secret = self._privateer.get(self._ghidproxy.resolve(ghid))
+            old_target = self._ghidproxy.resolve(ghid)
+            secret = self._privateer.get(old_target)
             # Get our FUTURE target
             target = self._deref_ghid(ghid)
             offset = unpacked_binding.history.index(last_known_frame)
@@ -596,7 +594,7 @@ class HGXCore:
             # Note that we're using the previous frame's ghid as salt.
             # This attempts to heal any broken ratchet.
             for ii in range(offset, -1, -1):
-                secret = self._ratchet_secret(
+                secret = self._privateer._ratchet_secret(
                     secret = secret,
                     ghid = unpacked_binding.history[ii]
                 )
@@ -774,32 +772,6 @@ class HGXCore:
         '''
         pass
         
-    @staticmethod
-    def _ratchet_secret(secret, ghid):
-        ''' Ratchets a key using HKDF-SHA512, using the associated 
-        address as salt. For dynamic files, this should be the previous
-        frame ghid (not the dynamic ghid).
-        '''
-        cls = type(secret)
-        cipher = secret.cipher
-        version = secret.version
-        len_seed = len(secret.seed)
-        len_key = len(secret.key)
-        source = bytes(secret.seed + secret.key)
-        ratcheted = HKDF(
-            master = source,
-            salt = bytes(ghid),
-            key_len = len_seed + len_key,
-            hashmod = SHA512,
-            num_keys = 1
-        )
-        return cls(
-            cipher = cipher,
-            version = version,
-            key = ratcheted[:len_key],
-            seed = ratcheted[len_key:]
-        )
-        
         
 class Oracle:
     ''' Source for total internal truth and state tracking of objects.
@@ -881,7 +853,23 @@ class _GAO(metaclass=abc.ABCMeta):
             _legroom = core._legroom
         self._legroom = _legroom
         
+        self._silenced = False
+        
         super().__init__(*args, **kwargs)
+        
+    def silence(self):
+        ''' Temporarily silence update processing for the object.
+        '''
+        # TODO: add some kind of thread safety here.
+        # What about race conditions re: getting an unrelated update while 
+        # trying to push? I suppose that will necessarily result in an error 
+        # followed by a pull to restore correct state.
+        self._silenced = True
+        
+    def unsilence(self):
+        ''' Unsilence update processing for the object.
+        '''
+        self._silenced = False
             
     @classmethod
     def from_ghid(cls, core, ghid, _legroom=None, *args, **kwargs):
@@ -901,7 +889,7 @@ class _GAO(metaclass=abc.ABCMeta):
         )
         
         if dynamic:
-            core.persister.subscribe(ghid, self._weak_pull)
+            core.persister.subscribe(ghid, self._weak_touch)
         
         self.ghid = ghid
         self.author = author
@@ -957,10 +945,10 @@ class _GAO(metaclass=abc.ABCMeta):
             else:
                 raise TypeError('Static GAOs cannot be updated.')
         
-    def pull(self, *args, **kwargs):
+    def pull(self):
         ''' Refreshes self from upstream. Should NOT be called at object 
         instantiation for any existing objects. Should instead be called
-        directly, or through _weak_pull for any new status.
+        directly, or through _weak_touch for any new status.
         '''
         # Note that, when used as a subs handler, we'll be passed our own 
         # self.ghid (as the subscription ghid) as well as the ghid for the new
@@ -975,14 +963,11 @@ class _GAO(metaclass=abc.ABCMeta):
                     self._unpack(packed_state)
                 )
         
-    def touch(self):
+    def touch(self, *args, **kwargs):
         ''' Notifies the object to check upstream for changes.
-        
-        Currently unused. May remain such.
         '''
-        raise NotImplementedError(
-            'Krieger says: nope-nope-nope-nope-nope-nope-nope'
-        )
+        if not self._silenced:
+            self.pull()
         
     def __new(self):
         ''' Creates a new Golix object for self using self._state, 
@@ -995,7 +980,7 @@ class _GAO(metaclass=abc.ABCMeta):
                 ),
                 _legroom = self._legroom,
             )
-            self._core.persister.subscribe(address, self._weak_pull)
+            self._core.persister.subscribe(address, self._weak_touch)
             # If we ever decide to handle frame_ghid locally, deal with that 
             # here.
         else:
@@ -1017,12 +1002,14 @@ class _GAO(metaclass=abc.ABCMeta):
         OR MAY NOT BE THE ACTUAL CURRENT STATE!
         '''
         try:
+            self.silence()
             self._core.update_dynamic(
                 ghid_dynamic = self.ghid,
                 state = self._pack(
                     self.extract_state()
                 ),
             )
+            self.unsilence()
         except:
             author, dynamic, packed_state = self._core.get_ghid(self.ghid)
             state = self._unpack(packed_state)
@@ -1030,12 +1017,12 @@ class _GAO(metaclass=abc.ABCMeta):
             raise
             
     @property
-    def _weak_pull(self):
+    def _weak_touch(self):
         # This is a disgusting workaround to get the weakmethod to work right.
         # Basically, I want WeakMethod to be WeakMethodProxy.
         if not self.__updater:
             # Note that this is now a closure.
-            r = weakref.WeakMethod(self.pull)
+            r = weakref.WeakMethod(self.touch)
             
             def updater(*args, **kwargs):
                 return r()(*args, **kwargs)
@@ -1051,7 +1038,7 @@ class _GAO(metaclass=abc.ABCMeta):
         # may already be closed, etc
         # This relies on the indempotent nature of unsubscribe
         try:
-            self._core.persister.unsubscribe(self.ghid, self._weak_pull)
+            self._core.persister.unsubscribe(self.ghid, self._weak_touch)
         except Exception as exc:
             logger.error('Error while cleaning up _GAO:\n' + repr(exc) + '\n' + 
                         ''.join(traceback.format_tb(exc.__traceback__)))
@@ -1069,7 +1056,34 @@ class _GAODict(_GAO):
         # TODO: Convert this to a ComboLock (threadsafe and asyncsafe)
         # Note: must be RLock, because we need to take opslock in __setitem__
         # while calling push.
-        self._opslock = threading.RLock()
+        self._opslock = threading.Lock()
+        self._statelock = threading.Lock()
+        
+    def pull(self, *args, **kwargs):
+        with self._opslock:
+            super().pull(*args, **kwargs)
+        
+    def push(self, *args, **kwargs):
+        with self._opslock:
+            super().push(*args, **kwargs)
+        
+    @staticmethod
+    def _msgpack_ext_pack(obj):
+        ''' Shitty hack to make msgpack work with ghids.
+        '''
+        if isinstance(obj, Ghid):
+            return msgpack.ExtType(0, bytes(obj))
+        else:
+            raise TypeError('Not a ghid.')
+        
+    @staticmethod
+    def _msgpack_ext_unpack(code, packed):
+        ''' Shitty hack to make msgpack work with ghids.
+        '''
+        if code == 0:
+            return Ghid.from_bytes(packed)
+        else:
+            return msgpack.ExtType(code, data)
         
     @classmethod
     def _init_unpack(cls, packed):
@@ -1079,14 +1093,18 @@ class _GAODict(_GAO):
         dispatchablestate = cls._unpack(packed)
         return (dispatchablestate,), {}
         
-    @staticmethod
-    def _pack(state):
+    @classmethod
+    def _pack(cls, state):
         ''' Packs state into a bytes object. May be overwritten in subs
         to pack more complex objects. Should always be a staticmethod or
         classmethod.
         '''
         try:
-            return msgpack.packb(state, use_bin_type=True)
+            return msgpack.packb(
+                state, 
+                use_bin_type = True, 
+                default = cls._msgpack_ext_pack
+            )
             
         except (msgpack.exceptions.BufferFull,
                 msgpack.exceptions.ExtraData,
@@ -1097,14 +1115,18 @@ class _GAODict(_GAO):
                 'Failed to pack _GAODict. Incompatible nested object?'
             ) from exc
         
-    @staticmethod
-    def _unpack(packed):
+    @classmethod
+    def _unpack(cls, packed):
         ''' Unpacks state from a bytes object. May be overwritten in 
         subs to unpack more complex objects. Should always be a 
         staticmethod or classmethod.
         '''
         try:
-            return msgpack.unpackb(packed, encoding='utf-8')
+            return msgpack.unpackb(
+                packed, 
+                encoding = 'utf-8',
+                ext_hook = cls._msgpack_ext_unpack
+            )
             
         # MsgPack errors mean that we don't have a properly formatted handshake
         except (msgpack.exceptions.BufferFull,
@@ -1119,36 +1141,39 @@ class _GAODict(_GAO):
     def apply_state(self, state):
         ''' Apply the UNPACKED state to self.
         '''
-        with self._opslock:
+        with self._statelock:
             self._state.clear()
             self._state.update(state)
         
     def extract_state(self):
         ''' Extract self into a packable state.
         '''
-        with self._opslock:
-            return self._state
+        # with self._statelock:
+        # Both push and pull take the opslock, and they are the only entry 
+        # points that call extract_state and apply_state, so we should be good
+        # without the lock.
+        return self._state
             
     def __getitem__(self, key):
-        with self._opslock:
+        with self._statelock:
             return self._state[key]
             
     def __setitem__(self, key, value):
-        with self._opslock:
+        with self._statelock:
             self._state[key] = value
             self.push()
             
     def __delitem__(self, key):
-        with self._opslock:
+        with self._statelock:
             del self._state[key]
             self.push()
             
     def __contains__(self, key):
-        with self._opslock:
+        with self._statelock:
             return key in self._state
             
     def pop(self, key, *args, **kwargs):
-        with self._opslock:
+        with self._statelock:
             result = self._state.pop(key, *args, **kwargs)
             self.push()
             

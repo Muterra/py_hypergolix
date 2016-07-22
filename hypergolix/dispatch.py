@@ -241,10 +241,6 @@ class Dispatcher(DispatcherBase):
         # Lookup for token -> waiting ghid -> operations
         self._pending_by_token = _JitDictDict()
         
-        # Very, very quick hack to ignore updates from persisters when we're 
-        # the ones who initiated the update. Simple set of ghids.
-        self._ignore_subs_because_updating = set()
-        
     def get_object(self, asking_token, ghid):
         ''' Gets an object by ghid for a specific endpoint. Currently 
         only works for non-private objects.
@@ -299,7 +295,8 @@ class Dispatcher(DispatcherBase):
         # Temporarily silence updates from persister about the ghid we're 
         # in the process of updating
         try:
-            self._ignore_subs_because_updating.add(ghid)
+            # This is now handled internally by _GAO in the _Dispatchable
+            # self._ignore_subs_because_updating.add(ghid)
             obj.update(state)
         except:
             # Note: because a push() failure restores previous state, we should 
@@ -308,8 +305,9 @@ class Dispatcher(DispatcherBase):
             raise
         else:
             self.distribute_to_endpoints(ghid, skip_token=asking_token)
-        finally:
-            self._ignore_subs_because_updating.remove(ghid)
+        # See above re: no longer needed (handled by _GAO)
+        # finally:
+        #     self._ignore_subs_because_updating.remove(ghid)
         
     def share_object(self, asking_token, ghid, recipient):
         ''' Do the whole super thing, and then record which application
@@ -385,7 +383,8 @@ class Dispatcher(DispatcherBase):
             obj = self._oracle.get_object(dispatch=self, ghid=ghid)
         
         try:
-            self._ignore_subs_because_updating.add(ghid)
+            obj.silence()
+            # self._ignore_subs_because_updating.add(ghid)
             self._core.delete_ghid(ghid)
         except:
             # Why is it a syntax error to have else without except?
@@ -397,8 +396,10 @@ class Dispatcher(DispatcherBase):
             if obj.app_token != bytes(4):
                 del self._private_by_ghid[obj.ghid]
                 
-        finally:
-            self._ignore_subs_because_updating.remove(ghid)
+        # This is now handled by obj.silence(), except because the object is
+        # being deleted, we don't need to unsilence it.
+        # finally:
+        #     self._ignore_subs_because_updating.remove(ghid)
         
         # Todo: check to see if this actually results in deleting the object
         # upstream.
