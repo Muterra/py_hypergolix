@@ -53,6 +53,7 @@ from golix import Ghid
 # Intra-package dependencies
 from .core import _GAO
 from .core import _GAODict
+from .core import _GAOSet
 from .core import Oracle
 
 # Intra-package dependencies
@@ -158,14 +159,25 @@ class Dispatcher(DispatcherBase):
         self._active_tokens = weakref.WeakValueDictionary()
         # Defining b'\x00\x00\x00\x00' will prevent using it as a token.
         self._active_tokens[b'\x00\x00\x00\x00'] = self
+        
         # Set of all known tokens. Add b'\x00\x00\x00\x00' to prevent its use.
         # Should be made persistent across all clients for any given agent.
-        self._known_tokens = set()
+        self._known_tokens = oracle.new_object(
+            gaoclass = _GAOSet,
+            dynamic = True,
+        )
         self._known_tokens.add(b'\x00\x00\x00\x00')
         
         # Set of private objects for a given app_token. Will be passed to the
         # app immediately after registration.
         self._private_by_ghid = oracle.new_object(
+            gaoclass = _GAODict,
+            dynamic = True
+        )
+        
+        # Pending requests is long-lived async, should be GAO
+        # Lookup for pending requests. {<request address>: <target address>}
+        self._pending_requests = oracle.new_object(
             gaoclass = _GAODict,
             dynamic = True
         )
@@ -197,13 +209,6 @@ class Dispatcher(DispatcherBase):
         
         # Lookup for token -> waiting ghid -> operations
         self._pending_by_token = _JitDictDict()
-        
-        # Pending requests is long-lived async, should be GAO
-        # Lookup for pending requests. {<request address>: <target address>}
-        self._pending_requests = oracle.new_object(
-            gaoclass = _GAODict,
-            dynamic = True
-        )
         
     def get_object(self, asking_token, ghid):
         ''' Gets an object by ghid for a specific endpoint. Currently 

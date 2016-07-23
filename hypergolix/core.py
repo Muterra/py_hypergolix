@@ -1052,7 +1052,7 @@ class _GAO(metaclass=abc.ABCMeta):
     def __del__(self):
         ''' Cleanup any existing subscriptions.
         '''
-        # Suppress unsubs AtExit, because loops will be closed, inducing errors
+        # Suppress unsubs atexit, because loops will be closed, inducing errors
         global is_exiting
         if not is_exiting:
             # This relies on the indempotent nature of unsubscribe
@@ -1390,3 +1390,15 @@ class _GAOSet(_GAOMsgpackBase):
                 self._legroom, 
                 self._state.intersection(*others)
             )
+        
+    @classmethod
+    def _pack(cls, state):
+        ''' Wait, fucking seriously? Msgpack can't do sets?
+        '''
+        return super()._pack(list(state))
+        
+    @classmethod
+    def _unpack(cls, packed):
+        ''' Wait, fucking seriously? Msgpack can't do sets?
+        '''
+        return set(super()._unpack(packed))
