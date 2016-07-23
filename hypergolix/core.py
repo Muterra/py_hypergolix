@@ -49,6 +49,7 @@ import msgpack
 import abc
 import traceback
 import warnings
+import atexit
 
 from golix import FirstParty
 from golix import SecondParty
@@ -89,6 +90,16 @@ logger = logging.getLogger(__name__)
 # ###############################################
 # Lib
 # ###############################################
+
+
+# Do this to silence unsubscribing for GAOs when exiting
+global is_exiting
+is_exiting = False
+
+@atexit.register
+def _silence_unsubs_atexit(*args, **kwargs):
+    global is_exiting
+    is_exiting = True
 
 
 class _GhidProxier:
@@ -1041,14 +1052,17 @@ class _GAO(metaclass=abc.ABCMeta):
     def __del__(self):
         ''' Cleanup any existing subscriptions.
         '''
-        # TODO: suppress this (or something) on AtExit, because the unsub loop
-        # may already be closed, etc
-        # This relies on the indempotent nature of unsubscribe
-        try:
-            self._core.persister.unsubscribe(self.ghid, self._weak_touch)
-        except Exception as exc:
-            logger.error('Error while cleaning up _GAO:\n' + repr(exc) + '\n' + 
-                        ''.join(traceback.format_tb(exc.__traceback__)))
+        # Suppress unsubs AtExit, because loops will be closed, inducing errors
+        global is_exiting
+        if not is_exiting:
+            # This relies on the indempotent nature of unsubscribe
+            try:
+                self._core.persister.unsubscribe(self.ghid, self._weak_touch)
+            except Exception as exc:
+                logger.error(
+                    'Error while cleaning up _GAO:\n' + repr(exc) + '\n' + 
+                    ''.join(traceback.format_tb(exc.__traceback__))
+                )
             
             
 class _GAOMsgpackBase(_GAO):
