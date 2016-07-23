@@ -117,53 +117,6 @@ class DispatcherBase(metaclass=abc.ABCMeta):
         ack is a golix.AsymNak object.
         '''
         pass
-        
-        
-class _TestDispatcher(DispatcherBase):
-    ''' An dispatcher that ignores all dispatching for test purposes.
-    '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-        self._orphan_shares_pending = []
-        self._orphan_shares_incoming = []
-        self._orphan_shares_outgoing = []
-        self._orphan_shares_failed = []
-        
-    def dispatch_handshake(self, target):
-        ''' Receives the target *object* for a handshake (note: NOT the 
-        handshake itself) and dispatches it to the appropriate 
-        application.
-        
-        handshake is a StaticObject or DynamicObject.
-        Raises HandshakeError if unsuccessful.
-        '''
-        self._orphan_shares_incoming.append(target)
-        
-    def dispatch_handshake_ack(self, ack, target):
-        ''' Receives a handshake acknowledgement and dispatches it to
-        the appropriate application.
-        
-        ack is a golix.AsymAck object.
-        '''
-        self._orphan_shares_outgoing.append(ack)
-    
-    def dispatch_handshake_nak(self, nak, target):
-        ''' Receives a handshake nonacknowledgement and dispatches it to
-        the appropriate application.
-        
-        ack is a golix.AsymNak object.
-        '''
-        self._orphan_shares_failed.append(nak)
-        
-    def retrieve_recent_handshake(self):
-        return self._orphan_shares_incoming.pop()
-        
-    def retrieve_recent_ack(self):
-        return self._orphan_shares_outgoing.pop()
-        
-    def retrieve_recent_nak(self):
-        return self._orphan_shares_failed.pop()
 
 
 class Dispatcher(DispatcherBase):
@@ -190,7 +143,7 @@ class Dispatcher(DispatcherBase):
     which applications should have access to which APIs, but currently
     anything installed is considered trusted.
     '''
-    def __init__(self, core, *args, **kwargs):
+    def __init__(self, core, oracle, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
         # TODO: remove core from self (use composition instead of inheritance).
@@ -212,7 +165,10 @@ class Dispatcher(DispatcherBase):
         
         # Set of private objects for a given app_token. Will be passed to the
         # app immediately after registration.
-        self._private_by_ghid = _GAODict(core=core, dynamic=True)
+        self._private_by_ghid = oracle.new_object(
+            gaoclass = _GAODict,
+            dynamic = True
+        )
         
         # Lookup for api_ids -> app_tokens. Contains ONLY the apps that are 
         # currently available, because it's only used for dispatching objects
@@ -225,10 +181,11 @@ class Dispatcher(DispatcherBase):
         self._outstanding_shares = {}
         
         # State lookup information
-        self._oracle = Oracle(
-            core = self._core,
-            gao_class = _Dispatchable,
-        )
+        # self._oracle = Oracle(
+        #     core = self._core,
+        #     gao_class = _Dispatchable,
+        # )
+        self._oracle = oracle
         
         # Lookup for ghid -> tokens that specifically requested the ghid
         self._requestors_by_ghid = _JitSetDict()
@@ -241,6 +198,13 @@ class Dispatcher(DispatcherBase):
         # Lookup for token -> waiting ghid -> operations
         self._pending_by_token = _JitDictDict()
         
+        # Pending requests is long-lived async, should be GAO
+        # Lookup for pending requests. {<request address>: <target address>}
+        self._pending_requests = oracle.new_object(
+            gaoclass = _GAODict,
+            dynamic = True
+        )
+        
     def get_object(self, asking_token, ghid):
         ''' Gets an object by ghid for a specific endpoint. Currently 
         only works for non-private objects.
@@ -248,7 +212,11 @@ class Dispatcher(DispatcherBase):
         try:
             obj = self._oracle[ghid]
         except KeyError:
-            obj = self._oracle.get_object(dispatch=self, ghid=ghid)
+            obj = self._oracle.get_object(
+                gaoclass = _Dispatchable,
+                dispatch = self, 
+                ghid = ghid
+            )
         
         if obj.app_token != bytes(4) and obj.app_token != asking_token:
             raise DispatchError(
@@ -266,7 +234,11 @@ class Dispatcher(DispatcherBase):
         *args and **kwargs are passed to Oracle.new_object(), which are 
             in turn passed to the _GAO_Class (probably _Dispatchable)
         ''' 
-        obj = self._oracle.new_object(dispatch=self, *args, **kwargs)
+        obj = self._oracle.new_object(
+            gaoclass = _Dispatchable, 
+            dispatch = self, 
+            *args, **kwargs
+        )
         
         # If this is a private object, record it as such
         if obj.app_token != bytes(4):
@@ -289,7 +261,11 @@ class Dispatcher(DispatcherBase):
         try:
             obj = self._oracle[ghid]
         except KeyError:
-            obj = self._oracle.get_object(dispatch=self, ghid=ghid)
+            obj = self._oracle.get_object(
+                gaoclass = _Dispatchable,
+                dispatch = self, 
+                ghid = ghid,
+            )
                 
         # Try updating golix before local.
         # Temporarily silence updates from persister about the ghid we're 
@@ -317,7 +293,11 @@ class Dispatcher(DispatcherBase):
         try:
             obj = self._oracle[ghid]
         except KeyError:
-            obj = self._oracle.get_object(dispatch=self, ghid=ghid)
+            obj = self._oracle.get_object(
+                gaoclass = _Dispatchable,
+                dispatch = self, 
+                ghid = ghid
+            )
             
         if obj.app_token != bytes(4):
             raise DispatchError('Cannot share a private object.')
@@ -330,11 +310,15 @@ class Dispatcher(DispatcherBase):
             
             # Currently, just perform a handshake. In the future, move this 
             # to a dedicated exchange system.
-            self._core.hand_ghid(ghid, recipient)
+            request = self._core.hand_ghid(ghid, recipient)
             
         except:
             del self._outstanding_shares[ghid]
             raise
+            
+    def await_handshake_response(self, target, request):
+        # Save a lookup from the request.ghid to the target.ghid
+        self._pending_requests[request] = target
         
     def freeze_object(self, asking_token, ghid):
         ''' Converts a dynamic object to a static object, returning the
@@ -343,7 +327,11 @@ class Dispatcher(DispatcherBase):
         try:
             obj = self._oracle[ghid]
         except KeyError:
-            obj = self._oracle.get_object(dispatch=self, ghid=ghid)
+            obj = self._oracle.get_object(
+                gaoclass = _Dispatchable,
+                dispatch = self, 
+                ghid = ghid
+            )
         
         if not obj.dynamic:
             raise DispatchError('Cannot freeze a static object.')
@@ -354,7 +342,11 @@ class Dispatcher(DispatcherBase):
         
         # We're going to avoid a race condition by pulling the freezed object
         # post-facto, instead of using a cache.
-        self._oracle.get_object(dispatch=self, ghid=static_address)
+        self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            dispatch = self, 
+            ghid = static_address
+        )
         
         return static_address
         
@@ -380,7 +372,11 @@ class Dispatcher(DispatcherBase):
         try:
             obj = self._oracle[ghid]
         except KeyError:
-            obj = self._oracle.get_object(dispatch=self, ghid=ghid)
+            obj = self._oracle.get_object(
+                gaoclass = _Dispatchable,
+                dispatch = self, 
+                ghid = ghid
+            )
         
         try:
             obj.silence()
@@ -423,7 +419,11 @@ class Dispatcher(DispatcherBase):
         try:
             obj = self._oracle[ghid]
         except KeyError:
-            obj = self._oracle.get_object(dispatch=self, ghid=ghid)
+            obj = self._oracle.get_object(
+                gaoclass = _Dispatchable,
+                dispatch = self, 
+                ghid = ghid
+            )
             
         api_id = obj.api_id
         
@@ -475,12 +475,16 @@ class Dispatcher(DispatcherBase):
         # well, that's currently on them. In the future, add handle for that in
         # SHARE instead of HANDSHAKE? <-- probably good idea
     
-    def dispatch_handshake_ack(self, ack, target):
+    def dispatch_handshake_ack(self, request):
         ''' Receives a handshake acknowledgement and dispatches it to
         the appropriate application.
         
         ack is a golix.AsymAck object.
         '''
+        print(self._pending_requests._state)
+        print(bytes(request))
+        target = self._pending_requests.pop(request)
+        
         # This was added in our overriden share_object
         app_token, recipient = self._outstanding_shares[target]
         del self._outstanding_shares[target]
@@ -493,12 +497,14 @@ class Dispatcher(DispatcherBase):
             recipient = recipient
         )
     
-    def dispatch_handshake_nak(self, nak, target):
+    def dispatch_handshake_nak(self, request):
         ''' Receives a handshake nonacknowledgement and dispatches it to
         the appropriate application.
         
         ack is a golix.AsymNak object.
         '''
+        target = self._pending_requests.pop(request)
+        
         app_token, ghid, recipient = self._outstanding_shares[target]
         del self._outstanding_shares[target]
         # Now notify just the requesting app of the failed share. Note that
@@ -531,7 +537,11 @@ class Dispatcher(DispatcherBase):
             try:
                 obj = self._oracle[ghid]
             except KeyError:
-                obj = self._oracle.get_object(dispatch=self, ghid=ghid)
+                obj = self._oracle.get_object(
+                    gaoclass = _Dispatchable,
+                    dispatch = self, 
+                    ghid = ghid
+                )
             
         # The app token is defined, so contact that endpoint (and only that 
         # endpoint) directly

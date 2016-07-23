@@ -45,6 +45,8 @@ import traceback
 import logging
 
 from hypergolix.core import HGXCore
+from hypergolix.core import Oracle
+from hypergolix.dispatch import _Dispatchable
 from hypergolix.dispatch import Dispatcher
 from hypergolix.privateer import Privateer
 
@@ -67,9 +69,13 @@ from hypergolix.ipc import IPCEmbed
 
 class MockCore(HGXCore):
     def __init__(self, persister, *args, **kwargs):
-        super().__init__(persister=persister, *args, **kwargs)
-        self.link_dispatch(Dispatcher(core=self))
+        oracle = Oracle(
+            core = self,
+            # gao_class = _Dispatchable,
+        )
+        super().__init__(persister=persister, oracle=oracle, *args, **kwargs)
         self.link_privateer(Privateer(core=self))
+        self.link_dispatch(Dispatcher(core=self, oracle=oracle))
     
     
 # class WebsocketsApp(WSReqResClient):

@@ -50,7 +50,9 @@ import signal
 from golix import Ghid
 
 from .core import HGXCore
+from .core import Oracle
 from .dispatch import Dispatcher
+from .dispatch import _Dispatchable
 from .privateer import Privateer
 
 from .utils import Aengel
@@ -117,17 +119,19 @@ foreground=True, aengel=None):
 
 class _HGXCore(HGXCore):
     def __init__(self, persister, *args, **kwargs):
+        oracle = Oracle(core=self)
         super().__init__(
             persister = persister, 
+            oracle = oracle,
             *args, **kwargs
-        )
-        # Note: we now contain the only live reference to dispatch.
-        self.link_dispatch(
-            Dispatcher(core=self)
         )
         # Note: we now contain the only live reference to privateer.
         self.link_privateer(
             Privateer(core=self)
+        )
+        # Note: we now contain the only live reference to dispatch.
+        self.link_dispatch(
+            Dispatcher(core=self, oracle=oracle)
         )
     
     

@@ -41,6 +41,7 @@ __all__ = [
 
 # Global dependencies
 import collections
+# import collections.abc
 import weakref
 import threading
 import os
@@ -140,7 +141,7 @@ class HGXCore:
     
     DEFAULT_LEGROOM = 3
     
-    def __init__(self, persister, _identity=None, *args, **kwargs):
+    def __init__(self, persister, oracle, _identity=None, *args, **kwargs):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         
@@ -153,6 +154,7 @@ class HGXCore:
         # if not isinstance(persister, _PersisterBase):
         #     raise TypeError('Persister must subclass _PersisterBase.')
         self._persister = persister
+        self._oracle = oracle
         
         self._ghidproxy = _GhidProxier()
         # self._privateer = privateer
@@ -168,8 +170,6 @@ class HGXCore:
         # Target lookup for most recent frame in dynamic bindings.
         # {<dynamic ghid>: <most recent target>}
         self._dynamic_targets = {}
-        # Lookup for pending requests. {<request address>: <target address>}
-        self._pending_requests = {}
         
         # DEPRECATED AND UNUSED?
         # Lookup for shared objects. {<object address>: {<recipients>}}
@@ -194,18 +194,23 @@ class HGXCore:
             ghid = self._identity.ghid, 
             callback = self._request_listener
         )
+        
+    def link_privateer(self, privateer):
+        ''' Chicken vs egg. Should be called ASAGDFP after __init__.
+        '''
+        self._privateer = privateer
     
     def link_dispatch(self, dispatch):
-        ''' Chicken vs egg.
+        ''' Chicken vs egg. Must call AFTER linking privateer.
         '''
+        try:
+            self._privateer
+        except AttributeError as exc:
+            raise RuntimeError('Must link privateer before dispatch.') from exc
+            
         # if not isinstance(dispatch, DispatcherBase):
         #     raise TypeError('dispatcher must subclass DispatcherBase.')
         self._dispatcher = dispatch
-        
-    def link_privateer(self, privateer):
-        ''' Chicken vs egg.
-        '''
-        self._privateer = privateer
         
     @property
     def _legroom(self):
@@ -318,16 +323,12 @@ class HGXCore:
     def _handle_req_ack(self, request, source_ghid):
         ''' Handles a handshake ack after reception.
         '''
-        target = self._pending_requests[request.target]
-        del self._pending_requests[request.target]
-        self.dispatcher.dispatch_handshake_ack(request, target)
+        self.dispatcher.dispatch_handshake_ack(request.target)
             
     def _handle_req_nak(self, request, source_ghid):
         ''' Handles a handshake nak after reception.
         '''
-        target = self._pending_requests[request.target]
-        del self._pending_requests[request.target]
-        self.dispatcher.dispatch_handshake_nak(request, target)
+        self.dispatcher.dispatch_handshake_nak(request.target)
         
     def _deref_ghid(self, ghid):
         ''' Recursively walks the ghid to any references. If dynamic,
@@ -573,7 +574,7 @@ class HGXCore:
         # First, make sure we're not being asked to update something we 
         # initiated the update for.
         # TODO: fix leaky abstraction
-        obj = self._dispatcher._oracle[ghid]
+        obj = self._oracle[ghid]
         if not obj._silenced:
             # This bit trusts that the persistence provider is enforcing proper
             # monotonic state progression for dynamic bindings. Check that our
@@ -695,11 +696,18 @@ class HGXCore:
             request = handshake
         )
         
+        # Note that this must be called before publishing to the persister, or
+        # there's a race condition between them.
+        self._dispatcher.await_handshake_response(target, request.ghid)
+        
+        # TODO: move all persister operations to some dedicated something or 
+        # other. Oracle maybe?
         # Note the potential race condition here. Should catch errors with the
         # persister in case we need to resolve pending requests that didn't
         # successfully post.
-        self._pending_requests[request.ghid] = target
         self.persister.publish(request.packed)
+        
+        return request.ghid
         
     def get_ghid(self, ghid):
         ''' Gets a new local copy of the object, assuming the Agent has 
@@ -780,11 +788,10 @@ class Oracle:
     state. Might eventually be used by AgentBase. Just a quick way to 
     store and retrieve any objects based on an associated ghid.
     '''
-    def __init__(self, core, gao_class):
+    def __init__(self, core):
         ''' Sets up internal tracking.
         '''
         self._core = core
-        self._gaoclass = gao_class
         self._lookup = {}
         
     def __getitem__(self, ghid):
@@ -795,8 +802,8 @@ class Oracle:
         # mechanism, in the event that connections or updates are dropped.
         return self._lookup[ghid]
             
-    def get_object(self, ghid, *args, **kwargs):
-        obj = self._gaoclass.from_ghid(
+    def get_object(self, gaoclass, ghid, *args, **kwargs):
+        obj = gaoclass.from_ghid(
             core = self._core, 
             ghid = ghid, 
             *args, **kwargs
@@ -804,12 +811,12 @@ class Oracle:
         self._lookup[ghid] = obj
         return obj
         
-    def new_object(self, *args, **kwargs):
+    def new_object(self, gaoclass, *args, **kwargs):
         ''' Creates a new object and returns it. Passes all *args and
         **kwargs to the declared gao_class. Eliminates the need to pass
         core, or call push.
         '''
-        obj = self._gaoclass(core=self._core, *args, **kwargs)
+        obj = gaoclass(core=self._core, *args, **kwargs)
         obj.push()
         self._lookup[obj.ghid] = obj
         return obj
@@ -1044,20 +1051,31 @@ class _GAO(metaclass=abc.ABCMeta):
                         ''.join(traceback.format_tb(exc.__traceback__)))
             
             
-class _GAODict(_GAO):
-    ''' A dispatchable object. For now at least, serializes
-    1. For every change
-    2. Using msgpack
+class _GAOMsgpackBase(_GAO):
+    ''' Golix-aware messagepack base object.
     '''
-    def __init__(self, core, dynamic, _legroom=None, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         # Include these so that we can pass *args and **kwargs to the dict
-        super().__init__(core, dynamic, _legroom)
-        self._state = dict(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         # TODO: Convert this to a ComboLock (threadsafe and asyncsafe)
         # Note: must be RLock, because we need to take opslock in __setitem__
         # while calling push.
         self._opslock = threading.Lock()
-        self._statelock = threading.Lock()
+        
+    def __eq__(self, other):
+        ''' Check total equality first, and then fall back on state 
+        checking.
+        '''
+        equal = True
+        try:
+            equal &= (self.dynamic == other.dynamic)
+            equal &= (self.ghid == other.ghid)
+            equal &= (self.author == other.author)
+            equal &= (self._state == other._state)
+        except AttributeError:
+            equal &= (self._state == other)
+        
+        return equal
         
     def pull(self, *args, **kwargs):
         with self._opslock:
@@ -1137,6 +1155,18 @@ class _GAODict(_GAO):
             raise ValueError(
                 'Failed to unpack _GAODict. Incompatible serialization?'
             ) from exc
+            
+            
+class _GAODict(_GAOMsgpackBase):
+    ''' A golix-aware dictionary. For now at least, serializes:
+            1. For every change
+            2. Using msgpack
+    '''
+    def __init__(self, core, dynamic, _legroom=None, *args, **kwargs):
+        # Include these so that we can pass *args and **kwargs to the dict
+        super().__init__(core, dynamic, _legroom)
+        self._state = dict(*args, **kwargs)
+        self._statelock = threading.Lock()
         
     def apply_state(self, state):
         ''' Apply the UNPACKED state to self.
@@ -1153,6 +1183,14 @@ class _GAODict(_GAO):
         # points that call extract_state and apply_state, so we should be good
         # without the lock.
         return self._state
+        
+    def __len__(self):
+        # Straight pass-through
+        return len(self._state)
+        
+    def __iter__(self):
+        for key in self._state:
+            yield key
             
     def __getitem__(self, key):
         with self._statelock:
@@ -1178,4 +1216,163 @@ class _GAODict(_GAO):
             self.push()
             
         return result
+        
+    def items(self, *args, **kwargs):
+        # Because the return is a view object, competing use will result in
+        # python errors, so we don't really need to worry about statelock.
+        return self._state.items(*args, **kwargs)
+        
+    def keys(self, *args, **kwargs):
+        # Because the return is a view object, competing use will result in
+        # python errors, so we don't really need to worry about statelock.
+        return self._state.keys(*args, **kwargs)
+        
+    def values(self, *args, **kwargs):
+        # Because the return is a view object, competing use will result in
+        # python errors, so we don't really need to worry about statelock.
+        return self._state_values(*args, **kwargs)
+        
+    def setdefault(self, key, *args, **kwargs):
+        ''' Careful, need state lock.
+        '''
+        with self._statelock:
+            if key in self._state:
+                result = self._state.setdefault(key, *args, **kwargs)
+            else:
+                result = self._state.setdefault(key, *args, **kwargs)
+                self.push()
+        
+        return result
+        
+    def get(self, *args, **kwargs):
+        with self._statelock:
+            return self._state.get(*args, **kwargs)
+        
+    def popitem(self, *args, **kwargs):
+        with self._statelock:
+            result = self._state.popitem(*args, **kwargs)
+            self.push()
+        return result
+        
+    def clear(self, *args, **kwargs):
+        with self._statelock:
+            self._state.clear(*args, **kwargs)
+            self.push()
+        
+    def update(self, *args, **kwargs):
+        with self._statelock:
+            result = self._state.update(*args, **kwargs)
+            self.push()
+        return result
             
+            
+class _GAOSet(_GAOMsgpackBase):
+    ''' A golix-aware set. For now at least, serializes:
+            1. For every change
+            2. Using msgpack
+    '''
+    def __init__(self, core, dynamic, _legroom=None, *args, **kwargs):
+        # Include these so that we can pass *args and **kwargs to the set
+        super().__init__(core, dynamic, _legroom)
+        self._state = set(*args, **kwargs)
+        self._statelock = threading.Lock()
+        
+    def apply_state(self, state):
+        ''' Apply the UNPACKED state to self.
+        '''
+        with self._statelock:
+            to_add = state - self._state
+            to_remove = self._state - state
+            self._state -= to_remove
+            self._state |= to_add
+        
+    def extract_state(self):
+        ''' Extract self into a packable state.
+        '''
+        # with self._statelock:
+        # Both push and pull take the opslock, and they are the only entry 
+        # points that call extract_state and apply_state, so we should be good
+        # without the lock.
+        return self._state
+            
+    def __contains__(self, key):
+        with self._statelock:
+            return key in self._state
+        
+    def __len__(self):
+        # Straight pass-through
+        return len(self._state)
+        
+    def __iter__(self):
+        for key in self._state:
+            yield key
+            
+    def add(self, elem):
+        ''' Do a wee bit of checking while we're at it to avoid 
+        superfluous pushing.
+        '''
+        with self._statelock:
+            if elem not in self._state:
+                self._state.add(elem)
+                self.push()
+                
+    def remove(self, elem):
+        ''' The usual. No need to check; will keyerror before pushing if
+        no-op.
+        '''
+        with self._statelock:
+            self._state.remove(elem)
+            self.push()
+            
+    def discard(self, elem):
+        ''' Do need to check for modification to prevent superfluous 
+        pushing.
+        '''
+        with self._statelock:
+            if elem in self._state:
+                self._state.discard(elem)
+                self.push()
+            
+    def pop(self):
+        with self._statelock:
+            result = self._state.pop()
+            self.push()
+            
+        return result
+            
+    def clear(self):
+        with self._statelock:
+            self._state.clear()
+            self.push()
+            
+    def isdisjoint(self, other):
+        with self._statelock:
+            return self._state.isdisjoint(other)
+            
+    def issubset(self, other):
+        with self._statelock:
+            return self._state.issubset(other)
+            
+    def issuperset(self, other):
+        with self._statelock:
+            return self._state.issuperset(other)
+            
+    def union(self, *others):
+        # Note that union creates a NEW set.
+        with self._statelock:
+            return type(self)(
+                self._core, 
+                self._dynamic, 
+                self._legroom, 
+                self._state.union(*others)
+            )
+            
+    def intersection(self, *others):
+        # Note that intersection creates a NEW set.
+        with self._statelock:
+            return type(self)(
+                self._core, 
+                self._dynamic, 
+                self._legroom, 
+                self._state.intersection(*others)
+            )
