@@ -504,9 +504,9 @@ class _GenericPersisterTest:
         self.assertEqual(holdings_cont1_2, {bind1_2.ghid})
         
         # Test querying debindings
-        debindings_cont1_1 = self.persister.list_debinding(bind1_1.ghid)
-        self.assertEqual(debindings_cont1_1, debind1_1.ghid)
-        debindings_cont1_2 = self.persister.list_debinding(bind1_2.ghid)
+        debindings_cont1_1 = self.persister.list_debindings(bind1_1.ghid)
+        self.assertIn(debind1_1.ghid, debindings_cont1_1)
+        debindings_cont1_2 = self.persister.list_debindings(bind1_2.ghid)
         self.assertFalse(debindings_cont1_2)
         
         # --------------------------------------------------------------------

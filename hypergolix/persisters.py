@@ -230,7 +230,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         pass
     
     @abc.abstractmethod
-    def list_debinding(self, ghid):
+    def list_debindings(self, ghid):
         ''' Request a the address of any debindings of ghid, if they
         exist.
         
@@ -285,7 +285,7 @@ class MemoryPersister:
         self.unsubscribe = self.postman.unsubscribe
         # self.publish = self.core.ingest
         self.list_bindings = self.bookie.bind_status
-        self.list_debinding = self.bookie.debind_status
+        self.list_debindings = self.bookie.debind_status
         
     def publish(self, *args, **kwargs):
         # This is a temporary fix to force memorypersisters to notify during
@@ -363,7 +363,7 @@ class DiskCachePersister(MemoryPersister):
         self.unsubscribe = self.postman.unsubscribe
         # self.publish = self.core.ingest
         self.list_bindings = self.bookie.bind_status
-        self.list_debinding = self.bookie.debind_status
+        self.list_debindings = self.bookie.debind_status
 
 
 class _PersisterBridgeSession(_AutoresponderSession):
@@ -448,7 +448,7 @@ class PersisterBridgeServer(Autoresponder):
             # list binds 
             b'LB': self.list_bindings_wrapper,
             # list debindings
-            b'LD': self.list_debinding_wrapper,
+            b'LD': self.list_debindings_wrapper,
             # query (existence) 
             b'QE': self.query_wrapper,
             # disconnect 
@@ -554,19 +554,14 @@ class PersisterBridgeServer(Autoresponder):
         parser = generate_ghidlist_parser()
         return parser.pack(ghidlist)
             
-    async def list_debinding_wrapper(self, session, request_body):
+    async def list_debindings_wrapper(self, session, request_body):
         ''' Deserializes a publish request and forwards it to the 
         persister.
         '''
         ghid = Ghid.from_bytes(request_body)
-        result = self._persister.list_debinding(ghid)
-        
-        if not result:
-            result = b'\x00'
-        else:
-            result = bytes(result)
-        
-        return result
+        ghidlist = self._persister.list_debindings(ghid)
+        parser = generate_ghidlist_parser()
+        return parser.pack(ghidlist)
             
     async def query_wrapper(self, session, request_body):
         ''' Deserializes a publish request and forwards it to the 
@@ -609,7 +604,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         # list binds 
         'list_bindings': b'LB',
         # list debindings
-        'list_debinding': b'LD',
+        'list_debindings': b'LD',
         # query (existence) 
         'query': b'QE',
         # disconnect 
@@ -816,7 +811,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         parser = generate_ghidlist_parser()
         return parser.unpack(response)
     
-    def list_debinding(self, ghid):
+    def list_debindings(self, ghid):
         ''' Request a the address of any debindings of ghid, if they
         exist.
         
@@ -828,13 +823,11 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         response = self.send_threadsafe(
             session = self.any_session,
             msg = bytes(ghid),
-            request_code = self.REQUEST_CODES['list_debinding']
+            request_code = self.REQUEST_CODES['list_debindings']
         )
         
-        if response == b'\x00':
-            return None
-        else:
-            return Ghid.from_bytes(response)
+        parser = generate_ghidlist_parser()
+        return parser.unpack(response)
         
     def query(self, ghid):
         ''' Checks the persistence provider for the existence of the
@@ -1308,14 +1301,15 @@ class _MrPostman:
         # GOBD might trigger a subscription! But, we also might to need to 
         # defer it. Or, we might be removing it.
         if removed:
-            debinding_ghid = self._bookie.debind_status(obj.ghid)
-            if not debinding_ghid:
+            debinding_ghids = self._bookie.debind_status(obj.ghid)
+            if not debinding_ghids:
                 raise RuntimeError(
                     'Obj flagged removed, but bookie lacks debinding for it.'
                 )
-            self._scheduled.put(
-                _MrPostcard(obj.ghid, debinding_ghid)
-            )
+            for debinding_ghid in debinding_ghids:
+                self._scheduled.put(
+                    _MrPostcard(obj.ghid, debinding_ghid)
+                )
         elif obj.target not in self._librarian:
             self._defer_update(
                 awaiting_ghid = obj.target,
@@ -1335,14 +1329,15 @@ class _MrPostman:
     def _schedule_garq(self, obj, removed):
         # GARQ might trigger a subscription! Or we might be removing it.
         if removed:
-            debinding_ghid = self._bookie.debind_status(obj.ghid)
-            if not debinding_ghid:
+            debinding_ghids = self._bookie.debind_status(obj.ghid)
+            if not debinding_ghids:
                 raise RuntimeError(
                     'Obj flagged removed, but bookie lacks debinding for it.'
                 )
-            self._scheduled.put(
-                _MrPostcard(obj.recipient, debinding_ghid)
-            )
+            for debinding_ghid in debinding_ghids:
+                self._scheduled.put(
+                    _MrPostcard(obj.recipient, debinding_ghid)
+                )
         else:
             self._scheduled.put(
                 _MrPostcard(obj.recipient, obj.ghid)
@@ -1854,9 +1849,11 @@ class _Bookie:
         # debinds, but that a malicious actor could find a race condition and 
         # debind something FOR SOMEONE ELSE before the bookie knows about the
         # original object authorship.
-        self._debound_by_ghid = {}
+        self._debound_by_ghid = SetMap()
         
         # Lookup <recipient>: set(<request ghid>)
+        # This must remain valid at all persister instances regardless of the
+        # python runtime state
         self._requests_for_recipient = SetMap()
         
     def recipient_status(self, ghid):
@@ -1873,10 +1870,8 @@ class _Bookie:
     def debind_status(self, ghid):
         ''' Return either a ghid, or None.
         '''
-        try:
-            return self._debound_by_ghid[ghid]
-        except KeyError:
-            return None
+        # NOTE: this needs to be converted to also check for debinding validity
+        return self._debound_by_ghid.get_any(ghid)
         
     def is_bound(self, obj):
         ''' Check to see if the object has been bound.
@@ -1884,12 +1879,8 @@ class _Bookie:
         return obj.ghid in self._bound_by_ghid
             
     def is_debound(self, obj):
-        try:
-            debinding = self._debound_by_ghid[obj.ghid]
-        except KeyError:
-            return False
-        else:
-            return True
+        # NOTE: this needs to be converted to also check for debinding validity
+        return obj.ghid in self._debound_by_ghid
         
     def _add_binding(self, being_bound, doing_binding):
         # Exactly what it sounds like. Should remove this stub to reduce the
@@ -1913,11 +1904,7 @@ class _Bookie:
             
     def _remove_debinding(self, obj):
         target = obj.target
-            
-        try:
-            del self._debound_by_ghid[target]
-        except KeyError:
-            return
+        self._debound_by_ghid.discard(target, obj.ghid)
         
     def validate_gidc(self, obj):
         ''' GIDC need no state verification.
@@ -2005,7 +1992,7 @@ class _Bookie:
         '''
         # Note that the undertaker will worry about removing stuff from local
         # state. 
-        self._debound_by_ghid[obj.target] = obj.ghid
+        self._debound_by_ghid.add(obj.target, obj.ghid)
         
     def validate_garq(self, obj):
         if self.is_debound(obj):
