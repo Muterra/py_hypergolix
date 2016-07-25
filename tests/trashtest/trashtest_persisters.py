@@ -333,7 +333,12 @@ class _GenericPersisterTest:
             self.persister.publish(bind2_2.packed)
         
         # ---------------------------------------
-        # Publish debindings for those debindings and then rebind them
+        # Now our impersonation debindings should work
+        self.persister.publish(debind2_1_bad.packed)
+        self.persister.publish(debind2_2_bad.packed)
+        
+        # ---------------------------------------
+        # Publish debindings for the valid debindings
         self.persister.publish(dedebind2_1.packed)
         self.persister.publish(dedebind2_2.packed)
         with self.assertRaises(NakError, msg='Server allowed debinding replay.'):
@@ -349,6 +354,9 @@ class _GenericPersisterTest:
         self.assertNotIn(bind2_1.ghid, self.vault)
         self.assertNotIn(cont2_1.ghid, self.vault)
         
+        # ---------------------------------------
+        # Now rebind the original objects. Should succeed, and remove the 
+        # illegal impersonation bindings while we're at it.
         self.persister.publish(bind2_1.packed)
         self.persister.publish(bind2_2.packed)
         self.persister.publish(cont2_1.packed)
@@ -356,6 +364,8 @@ class _GenericPersisterTest:
         
         self.assertIn(bind2_1.ghid, self.vault)
         self.assertIn(cont2_1.ghid, self.vault)
+        self.assertNotIn(debind2_1_bad.ghid, self.vault)
+        self.assertNotIn(debind2_2_bad.ghid, self.vault)
         
         # ---------------------------------------
         # Publish debindings for those debindings' debindings (... fer srlsy?) 
@@ -550,7 +560,15 @@ class DiskPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
         vault2.restore()
         
         self.assertEqual(self.vault._catalog, vault2._catalog)
-        self.assertEqual(self.debound_by_ghid, debound_by_ghid2)
+        
+        all_debound = self.persister.bookie._debound_by_ghid.combine(
+            self.persister.bookie._debound_by_ghid_staged
+        )
+        all_debound2 = persister2.bookie._debound_by_ghid.combine(
+            persister2.bookie._debound_by_ghid_staged
+        )
+        
+        self.assertEqual(all_debound, all_debound2)
         
     
 class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
@@ -593,7 +611,7 @@ class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
 
 if __name__ == "__main__":
     logging.basicConfig(filename='logs/persisters.log', level=logging.DEBUG)
-    # from hypergolix.utils import TraceLogger
-    # with TraceLogger(interval=10):
-    #     unittest.main()
-    unittest.main()
+    from hypergolix.utils import TraceLogger
+    with TraceLogger(interval=10):
+        unittest.main()
+    # unittest.main()

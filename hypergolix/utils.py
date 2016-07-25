@@ -1726,6 +1726,16 @@ class SetMap:
                 self._mapping[key].add(value)
             except KeyError:
                 self._mapping[key] = { value }
+                
+    def update(self, key, value):
+        ''' Updates the key with the value. Value must support being
+        passed to set.update(), and the set constructor.
+        '''
+        with self._lock:
+            try:
+                self._mapping[key].update(value)
+            except KeyError:
+                self._mapping[key] = set(value)
             
     def _remove_if_empty(self, key):
         ''' Removes a key entirely if it no longer has any values. Will
@@ -1781,6 +1791,42 @@ class SetMap:
         '''
         with self._lock:
             self._mapping.clear()
+            
+    def __iter__(self):
+        ''' Send this through to the dict, bypassing the usual route, 
+        because otherwise we'll have a deadlock.
+        '''
+        with self._lock:
+            for key in self._mapping:
+                yield key
+            
+    def __eq__(self, other):
+        ''' Expand comparison to search insides.
+        '''
+        with self._lock, other._lock:
+            # First make sure both have same mapping keys.
+            if set(self._mapping) != set(other._mapping):
+                return False
+            
+            # Okay, now check each key has identical sets
+            else:
+                for this_key, this_set in self._mapping.items():
+                    if other._mapping[this_key] != this_set:
+                        return False
+                        
+        # If we successfully got through all of that, they are identical.
+        return True
+        
+    def combine(self, other):
+        ''' Returns a new SetMap with the union of both.
+        '''
+        new = type(self)()
+        # Note that the iterator will take the lock, so we don't need to.
+        for key in self:
+            new.update(key, self._mapping[key])
+        for key in other:
+            new.update(key, other._mapping[key])
+        return new
         
 
 class TraceLogger:

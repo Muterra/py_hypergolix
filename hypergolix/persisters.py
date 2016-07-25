@@ -480,7 +480,7 @@ class PersisterBridgeServer(Autoresponder):
             else:
                 return b'\x00'
                 
-                logger.info(
+                logger.warning(
                 'Exception while autoresponding to request: \n' + ''.join(
                 traceback.format_exc())
             )
@@ -938,8 +938,11 @@ class PersisterCore:
             self._enforcer.validate_gidc(obj)
             # Now make sure authorship requirements are satisfied
             self._lawyer.validate_gidc(obj)
-            # Finally make sure persistence rules are followed
-            self._bookie.validate_gidc(obj)
+            
+            # Add GC pass in case of illegal existing debindings.
+            with self._undertaker:
+                # Finally make sure persistence rules are followed
+                self._bookie.validate_gidc(obj)
         
             # Force GC pass after every mutation
             with self._undertaker:
@@ -963,8 +966,11 @@ class PersisterCore:
             self._enforcer.validate_geoc(obj)
             # Now make sure authorship requirements are satisfied
             self._lawyer.validate_geoc(obj)
-            # Finally make sure persistence rules are followed
-            self._bookie.validate_geoc(obj)
+            
+            # Add GC pass in case of illegal existing debindings.
+            with self._undertaker:
+                # Finally make sure persistence rules are followed
+                self._bookie.validate_geoc(obj)
         
             # Force GC pass after every mutation
             with self._undertaker:
@@ -988,8 +994,11 @@ class PersisterCore:
             self._enforcer.validate_gobs(obj)
             # Now make sure authorship requirements are satisfied
             self._lawyer.validate_gobs(obj)
-            # Finally make sure persistence rules are followed
-            self._bookie.validate_gobs(obj)
+            
+            # Add GC pass in case of illegal existing debindings.
+            with self._undertaker:
+                # Finally make sure persistence rules are followed
+                self._bookie.validate_gobs(obj)
         
             # Force GC pass after every mutation
             with self._undertaker:
@@ -1013,8 +1022,11 @@ class PersisterCore:
             self._enforcer.validate_gobd(obj)
             # Now make sure authorship requirements are satisfied
             self._lawyer.validate_gobd(obj)
-            # Finally make sure persistence rules are followed
-            self._bookie.validate_gobd(obj)
+            
+            # Add GC pass in case of illegal existing debindings.
+            with self._undertaker:
+                # Finally make sure persistence rules are followed
+                self._bookie.validate_gobd(obj)
         
             # Force GC pass after every mutation
             with self._undertaker:
@@ -1038,8 +1050,11 @@ class PersisterCore:
             self._enforcer.validate_gdxx(obj)
             # Now make sure authorship requirements are satisfied
             self._lawyer.validate_gdxx(obj)
-            # Finally make sure persistence rules are followed
-            self._bookie.validate_gdxx(obj)
+            
+            # Add GC pass in case of illegal existing debindings.
+            with self._undertaker:
+                # Finally make sure persistence rules are followed
+                self._bookie.validate_gdxx(obj)
         
             # Force GC pass after every mutation
             with self._undertaker:
@@ -1063,8 +1078,11 @@ class PersisterCore:
             self._enforcer.validate_garq(obj)
             # Now make sure authorship requirements are satisfied
             self._lawyer.validate_garq(obj)
-            # Finally make sure persistence rules are followed
-            self._bookie.validate_garq(obj)
+            
+            # Add GC pass in case of illegal existing debindings.
+            with self._undertaker:
+                # Finally make sure persistence rules are followed
+                self._bookie.validate_garq(obj)
         
             # Force GC pass after every mutation
             with self._undertaker:
@@ -1486,26 +1504,27 @@ class _Undertaker:
             ghid = self._staging.pop()
             try:
                 obj = self._librarian.whois(ghid)
+                
             except KeyError:
                 logger.warning(
                     'Attempt to GC an object not found in librarian.'
                 )
             
-            for primitive, gcollector in (
-            (_GidcLite, self._gc_gidc),
-            (_GeocLite, self._gc_geoc),
-            (_GobsLite, self._gc_gobs),
-            (_GobdLite, self._gc_gobd),
-            (_GdxxLite, self._gc_gdxx),
-            (_GarqLite, self._gc_garq)):
-                if isinstance(obj, primitive):
-                    gcollector(obj)
-                    break
             else:
-                # No appropriate GCer found (should we typerror?); so continue 
-                # with WHILE loop
-                continue
-                logger.error('No appropriate GC routine found!')
+                for primitive, gcollector in ((_GidcLite, self._gc_gidc),
+                                            (_GeocLite, self._gc_geoc),
+                                            (_GobsLite, self._gc_gobs),
+                                            (_GobdLite, self._gc_gobd),
+                                            (_GdxxLite, self._gc_gdxx),
+                                            (_GarqLite, self._gc_garq)):
+                    if isinstance(obj, primitive):
+                        gcollector(obj)
+                        break
+                else:
+                    # No appropriate GCer found (should we typerror?); so 
+                    # continue with WHILE loop
+                    continue
+                    logger.error('No appropriate GC routine found!')
             
         self._staging = None
         
@@ -1514,7 +1533,7 @@ class _Undertaker:
         
         Note: should triaging be order-dependent?
         '''
-        logger.info('Performing triage.')
+        logger.debug('Performing triage.')
         if self._staging is None:
             raise RuntimeError(
                 'Cannot triage outside of the undertaker\'s context manager.'
@@ -1537,9 +1556,9 @@ class _Undertaker:
             self._gc_execute(obj)
             
     def _gc_gobs(self, obj):
-        logger.info('Entering gobs GC.')
+        logger.debug('Entering gobs GC.')
         if self._bookie.is_debound(obj):
-            logger.info('Gobs is debound. Staging target and executing GC.')
+            logger.debug('Gobs is debound. Staging target and executing GC.')
             # Add our target to the list of GC checks
             self._staging.add(obj.target)
             self._gc_execute(obj)
@@ -1554,7 +1573,7 @@ class _Undertaker:
     def _gc_gdxx(self, obj):
         # Note that removing a debinding cannot result in a downstream target
         # being GCd, because it wouldn't exist.
-        if self._bookie.is_debound(obj):
+        if self._bookie.is_debound(obj) or self._bookie.is_illegal(obj):
             self._gc_execute(obj)
             
     def _gc_garq(self, obj):
@@ -1587,8 +1606,6 @@ class _Undertaker:
     def prep_gobd(self, obj):
         ''' GOBD require triage for previous targets.
         '''
-        logger.info('-------------------------------------------')
-        logger.info('Prepping for GOBD frame.')
         try:
             existing = self._librarian.whois(obj.ghid)
         except KeyError:
@@ -1598,9 +1615,7 @@ class _Undertaker:
                 logger.error('Could not find gobd to check existing target.')
         else:
             self.triage(existing.target)
-            logger.info('Triaged existing target.')
             
-        logger.info('-------------------------------------------')
         return True
         
     def prep_gdxx(self, obj):
@@ -1677,15 +1692,23 @@ class _Lawyer:
                 )
         return True
         
-    def validate_gdxx(self, obj):
+    def validate_gdxx(self, obj, target_obj=None):
         ''' Ensure author is known and valid, and consistent with the
         previous author for the binding.
+        
+        If other is not None, specifically checks it against that object
+        instead of obtaining it from librarian.
         '''
         self._validate_author(obj)
         try:
-            existing = self._librarian.whois(obj.target)
+            if target_obj is None:
+                existing = self._librarian.whois(obj.target)
+            else:
+                existing = target_obj
+                
         except KeyError:
             pass
+            
         else:
             if isinstance(existing, _GarqLite):
                 if existing.recipient != obj.author:
@@ -1775,18 +1798,26 @@ class _Enforcer:
                     
         return True
         
-    def validate_gdxx(self, obj):
+    def validate_gdxx(self, obj, target_obj=None):
         ''' Check if target is known, and if it is, validate it.
         '''
         try:
-            target = self._librarian.whois(obj.target)
+            if target_obj is None:
+                target = self._librarian.whois(obj.target)
+            else:
+                target = target_obj
         except KeyError:
-            logger.info('0x0006: Unknown debinding target.')
-            raise InvalidTarget(
-                '0x0006: Unknown debinding target. Cannot debind an unknown '
-                'resource, to prevent a malicious party from preemptively '
-                'uploading a debinding for a resource s/he did not bind.'
+            logger.warning(
+                'GDXX was validated by Enforcer, but its target was unknown '
+                'to the librarian. May indicated targeted attack.\n'
+                '    GDXX ghid:   ' + str(bytes(obj.ghid)) + 
+                '    Target ghid: ' + str(bytes(obj.target))
             )
+            # raise InvalidTarget(
+            #     '0x0006: Unknown debinding target. Cannot debind an unknown '
+            #     'resource, to prevent a malicious party from preemptively '
+            #     'uploading a debinding for a resource s/he did not bind.'
+            # )
         else:
             # NOTE: if this changes, will need to modify place_gdxx in _Bookie
             for forbidden in (_GidcLite, _GeocLite):
@@ -1831,11 +1862,17 @@ class _Bookie:
     references** to them. ONLY CONCERNED WITH LIFETIMES! Does not check
     (for example) consistent authorship.
     
-    Threadsafe.
+    (Not currently) threadsafe.
     '''
-    def __init__(self, librarian):
+    def __init__(self, librarian, lawyer):
         self._opslock = threading.Lock()
+        self._undertaker = None
         self._librarian = librarian
+        self._lawyer = lawyer
+        
+        # Lookup for debindings flagged as illegal. So long as the local state
+        # is successfully propagated upstream, this can be a local-only object.
+        self._illegal_debindings = set()
         
         # Lookup <bound ghid>: set(<binding obj>)
         # This must remain valid at all persister instances regardless of the
@@ -1850,11 +1887,17 @@ class _Bookie:
         # debind something FOR SOMEONE ELSE before the bookie knows about the
         # original object authorship.
         self._debound_by_ghid = SetMap()
+        self._debound_by_ghid_staged = SetMap()
         
         # Lookup <recipient>: set(<request ghid>)
         # This must remain valid at all persister instances regardless of the
         # python runtime state
         self._requests_for_recipient = SetMap()
+        
+    def link_undertaker(self, undertaker):
+        # We need to be able to initiate GC on illegal debindings detected 
+        # after the fact.
+        self._undertaker = weakref.proxy(undertaker)
         
     def recipient_status(self, ghid):
         ''' Return a frozenset of ghids assigned to the passed ghid as
@@ -1870,8 +1913,15 @@ class _Bookie:
     def debind_status(self, ghid):
         ''' Return either a ghid, or None.
         '''
-        # NOTE: this needs to be converted to also check for debinding validity
-        return self._debound_by_ghid.get_any(ghid)
+        total = set()
+        total.update(self._debound_by_ghid.get_any(ghid))
+        total.update(self._debound_by_ghid.get_any(ghid))
+        return total
+        
+    def is_illegal(self, obj):
+        ''' Check to see if this is an illegal debinding.
+        '''
+        return obj.ghid in self._illegal_debindings
         
     def is_bound(self, obj):
         ''' Check to see if the object has been bound.
@@ -1879,7 +1929,34 @@ class _Bookie:
         return obj.ghid in self._bound_by_ghid
             
     def is_debound(self, obj):
+        # Well we have an object and a debinding, so now let's validate them.
         # NOTE: this needs to be converted to also check for debinding validity
+        for debinding_ghid in self._debound_by_ghid_staged.get_any(obj.ghid):
+            # Get the existing debinding
+            debinding = self._librarian.whois(debinding_ghid)
+            
+            # Validate existing binding against newly-known target
+            try:
+                self._lawyer.validate_gdxx(debinding, target_obj=obj)
+                
+            # Validation failed. Remove illegal debinding.
+            except:
+                logger.warning(
+                    'Removed invalid existing binding. \n'
+                    '    Illegal debinding author: ' + 
+                    str(bytes(debinding.author)) +
+                    '    Valid object author:      ' + 
+                    str(bytes(obj.author))
+                )
+                self._illegal_debindings.add(debinding.ghid)
+                self._undertaker.triage(debinding.ghid)
+            
+            # It's valid, so move it out of staging.
+            else:
+                self._debound_by_ghid_staged.discard(obj.ghid, debinding.ghid)
+                self._debound_by_ghid.add(obj.ghid, debinding.ghid)
+            
+        # Now we can just easily check to see if it's debound_by_ghid.
         return obj.ghid in self._debound_by_ghid
         
     def _add_binding(self, being_bound, doing_binding):
@@ -1904,7 +1981,9 @@ class _Bookie:
             
     def _remove_debinding(self, obj):
         target = obj.target
+        self._illegal_debindings.discard(obj.ghid)
         self._debound_by_ghid.discard(target, obj.ghid)
+        self._debound_by_ghid_staged.discard(target, obj.ghid)
         
     def validate_gidc(self, obj):
         ''' GIDC need no state verification.
@@ -1992,7 +2071,10 @@ class _Bookie:
         '''
         # Note that the undertaker will worry about removing stuff from local
         # state. 
-        self._debound_by_ghid.add(obj.target, obj.ghid)
+        if obj.target in self._librarian:
+            self._debound_by_ghid.add(obj.target, obj.ghid)
+        else:
+            self._debound_by_ghid_staged.add(obj.target, obj.ghid)
         
     def validate_garq(self, obj):
         if self.is_debound(obj):
@@ -2109,9 +2191,13 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
             # Put this inside the except block so that we don't have to do any
             # weird fiddling to make restoration work.
             with self._restoring.mutex:
-                # Lazy-load a new one if possible.
-                self._lazy_load(ghid, exc)
-                return self._catalog[ghid]
+                # Bypass lazy-load if restoring and re-raise
+                if self._restoring:
+                    raise
+                else:
+                    # Lazy-load a new one if possible.
+                    self._lazy_load(ghid, exc)
+                    return self._catalog[ghid]
                 
     def _lazy_load(self, ghid, exc):
         ''' Does a lazy load restore of the ghid.
@@ -2142,6 +2228,10 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         have extraneous stuff in the directory. Will be passed through
         to the core for processing.
         '''
+        # Upgrade this to warning just so that the default logging level is
+        # still informed that we're restoring.
+        logger.warning('# BEGINNING LIBRARIAN RESTORATION ###################')
+        
         if self._core is None:
             raise RuntimeError(
                 'Cannot restore a librarian\'s cache without first linking to '
@@ -2196,6 +2286,10 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
             for garq in garqs:
                 self._core.ingest(garq.packed)
                 # self._core.ingest_garq(garq)
+                
+        # Upgrade this to warning just so that the default logging level is
+        # still informed that we're restoring.
+        logger.warning('# COMPLETED LIBRARIAN RESTORATION ###################')
                 
     def _attempt_load_inplace(self, candidate, gidcs, geocs, gobss, gobds, 
                             gdxxs, garqs):
@@ -2688,7 +2782,7 @@ def circus_factory(core_class=PersisterCore, core_kwargs=None,
     doorman = doorman_class(librarian=librarian, **doorman_kwargs)
     enforcer = enforcer_class(librarian=librarian, **enforcer_kwargs)
     lawyer = lawyer_class(librarian=librarian, **lawyer_kwargs)
-    bookie = bookie_class(librarian=librarian, **bookie_kwargs)
+    bookie = bookie_class(librarian=librarian, lawyer=lawyer, **bookie_kwargs)
     postman = postman_class(
         librarian = librarian,
         bookie = bookie,
@@ -2700,6 +2794,7 @@ def circus_factory(core_class=PersisterCore, core_kwargs=None,
         postman = postman,
         **undertaker_kwargs
     )
+    bookie.link_undertaker(undertaker)
     core = core_class(
         doorman = doorman,
         enforcer = enforcer,
