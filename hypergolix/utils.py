@@ -39,6 +39,10 @@ import traceback
 import asyncio
 import warnings
 import signal
+import sys
+import os
+import time
+import threading
 
 from concurrent.futures import CancelledError
 
@@ -1625,14 +1629,49 @@ class Aengel:
                 )
 
 
-
+class TruthyLock:
+    ''' Glues together a semaphore and an event, such that they can be
+    used as a threadsafe blocking conditional.
+    '''
+    def __init__(self):
+        self._opslock = threading.RLock()
+        self._mutexlock = threading.Lock()
+        self._cond = False
         
+    def __bool__(self):
+        with self._opslock:
+            return self._cond
         
-import sys
-import traceback
-import os
-import time
-import threading
+    def set(self):
+        ''' Sets the internal flag to True. Indempotent.
+        '''
+        with self._opslock:
+            self._cond = True
+        
+    def clear(self):
+        ''' Sets the internal flag to False. Indempotent.
+        '''
+        with self._opslock:
+            self._cond = False
+            
+    @property
+    def mutex(self):
+        ''' Returns the internal lock.
+        Indended to be used with the context manager to provide mutually
+        exclusive execution WITHOUT setting the condition.
+        '''
+        return self._mutexlock
+            
+    def __enter__(self):
+        with self._opslock:
+            self._mutexlock.acquire()
+            self._cond = True
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        with self._opslock:
+            self._cond = False
+            self._mutexlock.release()
+        
 
 class TraceLogger:
     ''' Log stack traces once per interval.

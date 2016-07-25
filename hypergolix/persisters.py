@@ -48,7 +48,6 @@ NakError status code conventions:
 # Control * imports.
 __all__ = [
     'MemoryPersister', 
-    'DiskPersister'
 ]
 
 # Global dependencies
@@ -59,6 +58,7 @@ import functools
 import struct
 import weakref
 import queue
+import pathlib
 
 import asyncio
 import websockets
@@ -106,6 +106,7 @@ from .utils import _DeepDeleteChainMap
 from .utils import _WeldedSetDeepChainMap
 from .utils import _block_on_result
 from .utils import _JitSetDict
+from .utils import TruthyLock
 
 # from .comms import WSAutoServer
 # from .comms import WSAutoClient
@@ -261,757 +262,6 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         NAK/failure is represented by raise NakError
         '''
         pass
-        
-
-class UnsafeMemoryPersister(_PersisterBase):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Lookup for GIDC authors, {<Ghid>: <secondparty>}
-        self._id_bases = {}
-        # Lookup for dynamic author proxies, {<Ghid>: <secondparty>}
-        self._id_proxies = {}
-        # Lookup for all valid authors, {<Ghid>: <secondparty>}
-        self._secondparties = _DeepDeleteChainMap(
-            self._id_bases,
-            self._id_proxies
-        )
-        # All objects. {<Ghid>: <packed object>}
-        # Includes proxy reference from dynamic ghids.
-        self._store = {}
-        # Dynamic states. {<Dynamic Ghid>: tuple(<current history>)}
-        # self._dynamic_states = {}
-        
-        # Forward lookup for static bindings, 
-        # {
-        #   <binding Ghid>: (<binder Ghid>, tuple(<bound Ghid>))
-        # }
-        self._targets_static = {}
-        
-        # Forward lookup for dynamic bindings, 
-        # {
-        #   <dynamic ghid>: (<binder ghid>, tuple(<current history>))
-        # }
-        self._targets_dynamic = {}
-        
-        # Forward lookup for debindings, 
-        # {
-        #   <debinding Ghid>: (<debinder Ghid>, tuple(<debound Ghid>))
-        # }
-        self._targets_debind = {}
-        
-        # Forward lookup for asymmetric requests
-        # {
-        #   <garq Ghid>: (<recipient Ghid>,)
-        # }
-        self._requests = {}
-        
-        # Forward lookup for targeted objects. Note that a ghid can only be one 
-        # thing, so a chainmap is appropriate.
-        self._targets = _DeepDeleteChainMap(
-            self._targets_static,
-            self._targets_dynamic,
-            self._targets_debind
-        )
-        
-        # Forward lookup for everything.
-        self._forward_references = _DeepDeleteChainMap(
-            self._targets_static,
-            self._targets_dynamic,
-            self._targets_debind,
-            self._requests
-        ) 
-        
-        # Reverse lookup for bindings, {<bound Ghid>: {<bound by Ghid>}}
-        self._bindings_static = {}
-        # Reverse lookup for dynamic bindings {<bound Ghid>: {<bound by Ghid>}}
-        self._bindings_dynamic = {}
-        # Reverse lookup for implicit bindings {<bound Ghid>: {<bound Ghid>}}
-        self._bindings_implicit = {}
-        # Reverse lookup for any valid bindings
-        self._bindings = _WeldedSetDeepChainMap(
-            self._bindings_static,
-            self._bindings_dynamic,
-            self._bindings_implicit
-        )
-        # Reverse lookup for debindings, {<debound Ghid>: {<debound by Ghid>}}
-        self._debindings = {}
-        # Reverse lookup for everything, same format as other bindings
-        self._reverse_references = _WeldedSetDeepChainMap(
-            self._bindings_static,
-            self._bindings_dynamic,
-            self._bindings_implicit,
-            self._debindings
-        )
-        
-        # Lookup for subscriptions, {<subscribed Ghid>: [callbacks]}
-        self._subscriptions = {}
-        # Parallel lookup for any subscription notifications that are blocking
-        # on an updated target. {<pending target>: <sub ghid, notify ghid>}
-        self._pending_notifications = {}
-        
-    def publish(self, unpacked):
-        ''' Handles publishing for an unpacked object. DOES NOT perform
-        ghid verification. ONLY USE THIS IF YOU CREATED THE UNPACKED 
-        OBJECT YOURSELF, or have already performed your own unpacking 
-        step. However, will still perform signature verification.
-        '''
-        # Select a dispatch function by its type, and raise TypeError if no
-        # valid type found.
-        for case, dispatch in (
-            (GIDC, self._dispatch_gidc),
-            (GEOC, self._dispatch_geoc),
-            (GOBS, self._dispatch_gobs),
-            (GOBD, self._dispatch_gobd),
-            (GDXX, self._dispatch_gdxx),
-            (GARQ, self._dispatch_garq)
-        ):
-                if isinstance(unpacked, case):
-                    dispatch(unpacked)
-                    break
-        else:
-            logger.debug('0x0001: Does not appear to be a Golix object.')
-            raise NakError('0x0001: Does not appear to be a Golix object.')
-        
-        return True
-        
-    def _verify_obj(self, assignee, obj):
-        ''' Ensures assignee (author/binder/recipient/etc) is known to
-        the storage provider and verifies obj.
-        '''
-        if assignee not in self._secondparties:
-            try:
-                self.get(assignee)
-            except NakError as e:
-                logger.info('0x0003: Unknown author / recipient.')
-                raise NakError(
-                    '0x0003: Unknown author / recipient.'
-                ) from e
-    
-        try:
-            # This will raise a SecurityError if verification fails.
-            self._golix_provider.verify_object(
-                second_party = self._secondparties[assignee],
-                obj = obj
-            )
-        except SecurityError as e:
-            logger.warning('0x0002: Failed to verify GEOC.')
-            raise NakError(
-                '0x0002: Failed to verify GEOC.'
-            ) from e
-            
-    def _dispatch_gidc(self, gidc):
-        ''' Does whatever is needed to preprocess a GIDC.
-        '''
-        # Note that GIDC do not require verification beyond unpacking.
-        author = gidc.ghid
-        
-        if author not in self._id_bases:
-            secondparty = SecondParty.from_identity(gidc)
-            self._id_bases[author] = secondparty
-            
-        # It doesn't matter if we already have it, it must be the same.
-        self._store[gidc.ghid] = gidc
-            
-    def _dispatch_geoc(self, geoc):
-        ''' Does whatever is needed to preprocess a GEOC.
-        '''
-        self._verify_obj(
-            assignee = geoc.author,
-            obj = geoc
-        )
-            
-        if geoc.ghid not in self._bindings:
-            logger.debug('0x0004: Unbound container')
-            raise UnboundContainer(
-                '0x0004: Attempt to upload unbound GEOC; object immediately '
-                'garbage collected.'
-            )
-            
-        # It doesn't matter if we already have it, it must be the same.
-        self._store[geoc.ghid] = geoc
-        
-        # Update any pending notifications and then clean up.
-        if geoc.ghid in self._pending_notifications:
-            self._check_for_subs(
-                subscription_ghid = self._pending_notifications[geoc.ghid][0],
-                notification_ghid = self._pending_notifications[geoc.ghid][1]
-            )
-            del self._pending_notifications[geoc.ghid]
-            
-    def _dispatch_gobs(self, gobs):
-        ''' Does whatever is needed to preprocess a GOBS.
-        '''
-        self._verify_obj(
-            assignee = gobs.binder,
-            obj = gobs
-        )
-        
-        if gobs.ghid in self._debindings:
-            logger.warning('0x0005: Already debound')
-            raise NakError(
-                '0x0005: Attempt to upload a binding for which a debinding '
-                'already exists. Remove the debinding first.'
-            )
-            
-        # Check for any KNOWN illegal targets, and fail loudly if so
-        self._check_illegal_gobs_target(gobs)
-        
-        # Check to see if someone has already uploaded an illegal binding for 
-        # this static binding (due to the race condition in target inspection).
-        # If so, force garbage collection.
-        self._check_illegal_binding(gobs.ghid)
-        
-        # Update the state of local bindings
-        # Assuming this is an atomic change, we'll always need to do
-        # both of these, or neither.
-        if gobs.target in self._bindings_static:
-            self._bindings_static[gobs.target].add(gobs.ghid)
-        else:
-            self._bindings_static[gobs.target] = { gobs.ghid }
-        # These must, by definition, be identical for any repeated ghid, so 
-        # it doesn't much matter if we already have them.
-        self._targets_static[gobs.ghid] = gobs.binder, (gobs.target,)
-        self._bindings_implicit[gobs.ghid] = { gobs.ghid }
-            
-        # It doesn't matter if we already have it, it must be the same.
-        self._store[gobs.ghid] = gobs
-            
-    def _dispatch_gobd(self, gobd):
-        ''' Does whatever is needed to preprocess a GOBD.
-        '''
-        self._verify_obj(
-            assignee = gobd.binder,
-            obj = gobd
-        )
-        
-        if gobd.ghid_dynamic in self._debindings:
-            logger.warning('0x0005: Already debound')
-            raise NakError(
-                '0x0005: Attempt to upload a binding for which a debinding '
-                'already exists. Remove the debinding first.'
-            )
-            
-        # Check for any KNOWN illegal targets, and fail loudly if so
-        self._check_illegal_gobd_target(gobd)
-        
-        # This needs to be done before updating local bindings, since it does
-        # some verification.
-        if gobd.ghid_dynamic in self._targets_dynamic:
-            self._dispatch_updated_dynamic(gobd)
-        else:
-            self._dispatch_new_dynamic(gobd)
-            
-        # Status check: we now know we have a legal binding, and that
-        # self._targets_dynamic[ghid_dynamic] exists, and that any existing
-        # **targets** have been removed and GC'd.
-        
-        old_history = set(self._targets_dynamic[gobd.ghid_dynamic][1])
-        new_history = set(gobd.history)
-        
-        # Remove implicit bindings for any expired frames and call GC_check on
-        # them.
-        # Might want to make this suppress persistence warnings.
-        for expired in old_history - new_history:
-            # Remove any explicit bindings from the dynamic ghid to the frames
-            self._bindings_dynamic[expired].remove(gobd.ghid_dynamic)
-            self._gc_check(expired)
-            
-        # Update the state of target bindings
-        if gobd.target in self._bindings_dynamic:
-            self._bindings_dynamic[gobd.target].add(gobd.ghid_dynamic)
-        else:
-            self._bindings_dynamic[gobd.target] = { gobd.ghid_dynamic }
-        
-        # Create a new state.
-        self._targets_dynamic[gobd.ghid_dynamic] = (
-            gobd.binder,
-            (gobd.ghid,) + tuple(gobd.history) + (gobd.target,)
-        )
-        self._bindings_dynamic[gobd.ghid] = { gobd.ghid_dynamic }
-            
-        # It doesn't matter if we already have it, it must be the same.
-        self._store[gobd.ghid] = gobd
-        # Overwrite any existing value, or create a new one.
-        self._store[gobd.ghid_dynamic] = gobd
-        
-        # Update any subscribers (if they exist) that an updated frame has 
-        # been issued. May need to delay until target is uploaded (race cond)
-        self._check_for_subs(
-            subscription_ghid = gobd.ghid_dynamic,
-            notification_ghid = gobd.ghid,
-            target_ghid = gobd.target
-        )
-        
-    def _dispatch_new_dynamic(self, gobd):
-        ''' Performs validation for a dynamic binding that the persister
-        is encountering for the first time. Mostly ensures that the
-        first frame seen by the persistence provider is, in fact, the
-        root frame for the binding, in order to validate the dynamic 
-        address.
-        
-        Also preps the history declaration so that subsequent operations
-        in _dispatch_gobd can be identical between new and updated 
-        bindings.
-        '''
-        # Note: golix._getlow.GOBD will perform verification of correct dynamic
-        # hash address when unpacking new bindings, so we only need to make
-        # sure that it has no history.
-        if gobd.history:
-            logger.info('0x0009: Zeroth frame has history.')
-            raise NakError(
-                '0x0009: Illegal dynamic frame. Cannot upload a frame with '
-                'history as the first frame in a persistence provider.'
-            )
-            
-        # self._dynamic_states[gobd.ghid_dynamic] = collections.deque()
-        self._targets_dynamic[gobd.ghid_dynamic] = (None, tuple())
-        self._bindings_implicit[gobd.ghid_dynamic] = { gobd.ghid_dynamic }
-        
-    def _dispatch_updated_dynamic(self, gobd):
-        ''' Performs validation for a dynamic binding from which the 
-        persister has an existing frame. Checks author consistency, 
-        historical progression, and calls garbage collection on any 
-        expired frames.
-        '''
-        # Verify consistency of binding author
-        if gobd.binder != self._targets_dynamic[gobd.ghid_dynamic][0]:
-            logger.warning('0x0007: Inconsistent dynamic author.')
-            raise NakError(
-                '0x0007: Dynamic binding author is inconsistent with an '
-                'existing dynamic binding at the same address.'
-            )
-            
-        
-        # Verify history contains existing most recent frame
-        if self._targets_dynamic[gobd.ghid_dynamic][1][0] not in gobd.history:
-            logger.warning('0x0009: Existing frame not in history.')
-            raise NakError(
-                '0x0009: Illegal dynamic frame. Attempted to upload a new '
-                'dynamic frame, but its history did not contain the most '
-                'recent frame.'
-            )
-            
-        # This is unnecessary -- it's all handled through self._targets_dynamic
-        # in the dispatch_gobd method.
-        # # Release hold on previous target. WARNING: currently this means that
-        # # updating dynamic bindings is a non-atomic change.
-        # old_frame = self._targets_dynamic[gobd.ghid_dynamic][1][0]
-        # old_target = self._store[old_frame].target
-        # # This should always be true, unless something was forcibly GC'd
-        # if old_target in self._bindings_dynamic:
-        #     self._bindings_dynamic[old_target].remove(gobd.ghid_dynamic)
-        #     self._gc_check(old_target)
-            
-    def _dispatch_gdxx(self, gdxx):
-        ''' Does whatever is needed to preprocess a GDXX.
-        
-        Also performs a garbage collection check.
-        '''
-        self._verify_obj(
-            assignee = gdxx.debinder,
-            obj = gdxx
-        )
-        
-        if gdxx.ghid in self._debindings:
-            logger.warning('0x0005: Already debound')
-            raise NakError(
-                '0x0005: Attempt to upload a debinding for which a debinding '
-                'already exists. Remove the debinding first.'
-            )
-            
-        if gdxx.target not in self._forward_references:
-            logger.info('0x0006: Invalid target')
-            raise NakError(
-                '0x0006: Invalid target for debinding. Debindings must target '
-                'static/dynamic bindings, debindings, or asymmetric requests. '
-                'This may indicate the target does not exist in local storage.'
-            )
-            
-        # Check debinder is consistent with other (de)bindings in the chain
-        if gdxx.debinder != self._forward_references[gdxx.target][0]:
-            logger.warning('0x0007: Inconsistent debinder')
-            raise NakError(
-                '0x0007: Debinding author is inconsistent with the resource '
-                'being debound.'
-            )
-            
-        # Note: if the entire rest of this is not performed atomically, errors
-        # will result.
-            
-        # Must be added to the store before updating subscribers.
-        self._store[gdxx.ghid] = gdxx
-            
-        # Update any subscribers (if they exist) that a GDXX has been issued.
-        # Must be called before removing bindings, or the subscription record
-        # will be removed.
-        self._check_for_subs(
-            subscription_ghid = gdxx.target,
-            notification_ghid = gdxx.ghid
-        )
-            
-        # Debindings can only target one thing, so it doesn't much matter if it
-        # already exists (we've already checked for replays)
-        self._debindings[gdxx.target] = { gdxx.ghid }
-        self._targets_debind[gdxx.ghid] = gdxx.debinder, (gdxx.target,)
-        self._bindings_implicit[gdxx.ghid] = { gdxx.ghid }
-        
-        # Targets will always have an implicit binding. Remove it.
-        del self._bindings_implicit[gdxx.target]
-        
-        # Check for (and possibly perform) garbage collect on the target.
-        # Cannot blindly call _gc_execute because of dynamic bindings.
-        # Note that, to correctly handle implicit bindings, this MUST come
-        # after adding the current debinding to the internal store.
-        self._gc_check(gdxx.target)
-            
-    def _dispatch_garq(self, garq):
-        ''' Does whatever is needed to preprocess a GARQ.
-        
-        Also notifies any subscribers to that recipient address.
-        '''
-        # Don't call verify, since it would error out, as GARQ are not
-        # verifiable by a third party.
-        if garq.recipient not in self._secondparties:
-            try:
-                self.get(garq.recipient)
-            except NakError as e:
-                logger.info('0x0003: Unknown author / recipient.')
-                raise NakError(
-                    '0x0003: Unknown author / recipient.'
-                ) from e
-            
-        if garq.ghid in self._debindings:
-            logger.warning('0x0005: Already debound')
-            raise NakError(
-                '0x0005: Attempt to upload a request for which a debinding '
-                'already exists. Remove the debinding first.'
-            )
-        
-        # Check to see if someone has already uploaded an illegal binding for 
-        # this request (due to the race condition in target inspection).
-        # If so, force garbage collection.
-        self._check_illegal_binding(garq.ghid)
-            
-        # Update persister state information
-        self._requests[garq.ghid] = (garq.recipient,)
-        self._bindings_implicit[garq.ghid] = { garq.ghid }
-            
-        # It doesn't matter if we already have it, it must be the same.
-        self._store[garq.ghid] = garq
-        
-        # Call the subscribers after adding, in case they request it.
-        # Also in case they error out.
-        self._check_for_subs(
-            subscription_ghid = garq.recipient,
-            notification_ghid = garq.ghid
-        )
-                
-    def _check_for_subs(self, subscription_ghid, notification_ghid, target_ghid=None):
-        ''' Check for subscriptions, and update them if any exist.
-        '''
-        if subscription_ghid in self._subscriptions:
-            # If the target isn't defined, or if it exists, clear to update
-            if not target_ghid or self.query(target_ghid):
-                for callback in self._subscriptions[subscription_ghid]:
-                    callback(notification_ghid)
-            # Otherwise it's defined and missing; wait until we get the target.
-            else:
-                self._pending_notifications[target_ghid] = \
-                    subscription_ghid, notification_ghid
-                
-    def _check_illegal_binding(self, ghid):
-        ''' Checks for an existing binding for ghid. If it exists,
-        removes the binding, and forces its garbage collection. Used to
-        overcome race condition inherent to binding.
-        
-        Should this warn?
-        '''
-        # Make sure not to check implicit bindings, or dynamic bindings will
-        # show up as illegal if/when we statically bind them
-        if ghid in self._bindings_static or ghid in self._bindings_dynamic:
-            illegal_binding = self._bindings[ghid]
-            del self._bindings[ghid]
-            self._gc_execute(illegal_binding)
-
-    def _check_illegal_gobs_target(self, gobs):
-        ''' Checks for illegal targets for GOBS objects. Only guarantees
-        a valid target if the target is already known.
-        '''
-        # Check for any KNOWN illegal targets, and fail loudly if so
-        if (gobs.target in self._targets_static or
-            gobs.target in self._targets_debind or
-            gobs.target in self._requests or
-            gobs.target in self._id_bases):
-                logger.info('0x0006: Invalid static binding target.')
-                raise NakError(
-                    '0x0006: Attempt to bind to an invalid target.'
-                )
-                
-        return True
-
-    def _check_illegal_gobd_target(self, gobd):
-        ''' Checks for illegal targets for GOBS objects. Only guarantees
-        a valid target if the target is already known.
-        '''
-        # Check for any KNOWN illegal targets, and fail loudly if so
-        if (gobd.target in self._targets_static or
-            gobd.target in self._requests or
-            gobd.target in self._id_bases):
-                logger.info('0x0006: Invalid dynamic binding target.')
-                raise NakError(
-                    '0x0006: Attempt to bind to an invalid target.'
-                )
-                
-        return True
-        
-    def ping(self):
-        ''' Queries the persistence provider for availability.
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''
-        return True
-        
-    def get(self, ghid):
-        ''' Returns an unpacked Golix object. Only use this if you 100%
-        trust the PersistenceProvider to perform all public verification
-        of objects.
-        
-        ACK/success is represented by returning the object
-        NAK/failure is represented by raise NakError
-        '''
-        try:
-            return self._store[ghid]
-        except KeyError as e:
-            logger.debug('0x0008: Ghid not found in store.')
-            raise DoesNotExist('0x0008: Ghid not found in store.') from e
-        
-    def subscribe(self, ghid, callback):
-        ''' Request that the persistence provider update the client on
-        any changes to the object addressed by ghid. Must target either:
-        
-        1. Dynamic ghid
-        2. Author identity ghid
-        
-        Upon successful subscription, the persistence provider will 
-        publish to client either of the above:
-        
-        1. New frames to a dynamic binding
-        2. Asymmetric requests with the indicated GHID as a recipient
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''    
-        if not callable(callback):
-            raise TypeError('callback must be callable.')
-            
-        if (ghid not in self._targets_dynamic and 
-            ghid not in self._secondparties):
-                logger.debug('0x0006: Invalid or unknown subscription target.')
-                raise InvalidTarget(
-                    '0x0006: Invalid or unknown target for subscription.'
-                )
-                
-        if ghid in self._subscriptions:
-            self._subscriptions[ghid].add(callback)
-        else:
-            self._subscriptions[ghid] = { callback }
-            
-        return True
-        
-    def unsubscribe(self, ghid, callback):
-        ''' Unsubscribe. Client must have an existing subscription to 
-        the passed ghid at the persistence provider.
-        
-        ACK/success is represented by: 
-            return True if subscription existed
-            return False is subscription did not exist
-        NAK/failure is represented by raise NakError
-        '''
-        try:
-            if callback not in self._subscriptions[ghid]:
-                raise RuntimeError('Callback not registered for ghid.')
-                
-            self._subscriptions[ghid].remove(callback)
-                
-            if len(self._subscriptions[ghid]) == 0:
-                del self._subscriptions[ghid]
-                
-        except KeyError as e:
-            return False
-            
-        else:
-            return True
-        
-    def list_subs(self):
-        ''' List all currently subscribed ghids for the connected 
-        client.
-        
-        ACK/success is represented by returning a list of ghids.
-        NAK/failure is represented by raise NakError
-        '''
-        return tuple(self._subscriptions)
-    
-    def list_bindings(self, ghid):
-        ''' Request a list of identities currently binding to the passed
-        ghid.
-        
-        NOTE: does not currently satisfy condition 3 in the spec (aka,
-        it is not currently preferentially listing the author binding 
-        first).
-        
-        ACK/success is represented by returning a list of ghids.
-        NAK/failure is represented by raise NakError
-        '''
-        result = []
-        # Bindings can only be static XOR dynamic, so we need not worry about
-        # set intersections. But note that the lookup dicts contain sets as 
-        # keys, so we need to extend, not append.
-        if ghid in self._bindings_static:
-            result.extend(self._bindings_static[ghid])
-        if ghid in self._bindings_dynamic:
-            result.extend(self._bindings_dynamic[ghid])
-        return result
-        
-    def list_debinding(self, ghid):
-        ''' Request a the address of any debindings of ghid, if they
-        exist.
-        
-        ACK/success is represented by returning:
-            1. The debinding GHID if it exists
-            2. False if it does not exist
-        NAK/failure is represented by raise NakError
-        '''
-        if ghid in self._debindings:
-            return tuple(self._debindings[ghid])[0]
-        else:
-            return False
-            
-    def query(self, ghid):
-        ''' Checks the persistence provider for the existence of the
-        passed ghid.
-        
-        ACK/success is represented by returning:
-            True if it exists
-            False otherwise
-        NAK/failure is represented by raise NakError
-        '''
-        if ghid in self._store:
-            return True
-        else:
-            return False
-        
-    def disconnect(self):
-        ''' Terminates all subscriptions. Not required for a disconnect, 
-        but highly recommended, and prevents an window of attack for 
-        address spoofers. Note that such an attack would only leak 
-        metadata.
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''
-        self._subscriptions = {}
-        return True
-    
-    def _gc_orphan_bindings(self):
-        ''' Removes any orphaned (target does not exist) dynamic or 
-        static bindings.
-        '''
-        pass
-        
-    def _gc_check(self, ghid):
-        ''' Checks for, and if needed, performs, garbage collection. 
-        Only checks the passed ghid.
-        '''
-        # Case 1: not even in the store. Gitouttahere.
-        if ghid not in self._store:
-            return
-            
-        # Case 2: ghid is an identity (GIDC). Basically never delete those.
-        elif ghid in self._id_bases:
-            return
-        
-        # Case 3: Still bound?
-        elif ghid in self._bindings:
-            # Case 3a: still bound; something else is blocking. Warn.
-            if len(self._bindings[ghid]) > 0:
-                warnings.warn(
-                    message = str(ghid) + ' has outstanding bindings.',
-                    category = PersistenceWarning
-                )
-            # Case 3b: the binding length is zero; unbound; also remove.
-            # This currently only happens when updating dynamic bindings.
-            else:
-                del self._bindings[ghid]
-                self._gc_execute(ghid)
-        # The resource is unbound. Perform GC.
-        else:
-            self._gc_execute(ghid)
-                
-    def _gc_execute(self, ghid):
-        ''' Performs garbage collection on ghid.
-        '''
-        # This means it's a binding or debinding
-        if ghid in self._targets:
-            # Clean up the reverse lookup, then remove any empty sets
-            for target in self._targets[ghid][1]:
-                self._reverse_references[target].remove(ghid)
-                self._reverse_references.remove_empty(target)
-                # Perform recursive garbage collection check on the target
-                self._gc_check(target)
-            
-            # Clean up the forward lookup
-            del self._targets[ghid]
-        # It cannot be both a _target and a _request
-        elif ghid in self._requests:
-            del self._requests[ghid]
-            
-        # Clean up any subscriptions.
-        if ghid in self._subscriptions:
-            del self._subscriptions[ghid]
-            
-        # Warn of state problems if still in bindings.
-        if ghid in self._bindings:
-            warnings.warn(
-                message = str(ghid) + ' has conflicted state. It was removed '
-                        'through forced garbage collection, but it still has '
-                        'outstanding bindings.'
-            )
-            
-        # And finally, clean up the store.
-        del self._store[ghid]
-        
-
-class __MemoryPersister(UnsafeMemoryPersister):
-    ''' A safe memory persister. Fully verifies everything in both 
-    directions.
-    '''
-        
-    def publish(self, packed):
-        ''' Submits a packed object to the persister.
-        
-        ACK is represented by a return True
-        NAK is represented by raise NakError
-        '''
-        # This will raise if improperly formatted.
-        try:
-            obj = self._golix_provider.unpack_object(packed)
-        except ParseError as exc:
-            msg = (repr(exc) + '\n').join(traceback.format_tb(exc.__traceback__))
-            logger.debug(msg)
-            raise NakError('0x0001: Does not appear to be a Golix object.') from exc
-        # We are now guaranteed a Golix object.
-        
-        return super().publish(obj)
-        
-    def get(self, ghid):
-        ''' Requests an object from the persistence provider, identified
-        by its ghid.
-        
-        ACK/success is represented by returning the object
-        NAK/failure is represented by raise NakError
-        '''
-        return super().get(ghid).packed
 
 
 class MemoryPersister:
@@ -1087,10 +337,6 @@ class MemoryPersister:
         # TODO: figure out something different to do here.
         self.postman._listeners = {}
         return True
-        
-
-class DiskPersister(_PersisterBase):
-    pass
 
 
 class _PersisterBridgeSession(_AutoresponderSession):
@@ -1206,13 +452,18 @@ class PersisterBridgeServer(Autoresponder):
                 return b'\x01'
             else:
                 return b'\x00'
+                
+                logger.info(
+                'Exception while autoresponding to request: \n' + ''.join(
+                traceback.format_exc())
+            )
         
         except Exception as exc:
             msg = ('Error while receiving ping.\n' + repr(exc) + '\n' + 
-                ''.join(traceback.format_tb(exc.__traceback__)))
+                ''.join(traceback.format_exc()))
             logger.error(msg)
             # return b'\x00'
-            raise exc
+            raise
             
     async def publish_wrapper(self, session, request_body):
         ''' Deserializes a publish request and forwards it to the 
@@ -2796,12 +2047,289 @@ class _Bookie:
             self._gc_execute(illegal_binding)
             
             
-class _Librarian:
+class _LibrarianCore(metaclass=abc.ABCMeta):
+    ''' Base class for caching systems common to non-volatile librarians
+    such as DiskLibrarian, S3Librarian, etc.
+    '''
+    def __init__(self):
+        # Link to core, which will be assigned after __init__
+        self._core = None
+        
+        # Operations and restoration lock
+        self._restoring = TruthyLock()
+        
+        # Lookup for ghid -> hypergolix description
+        # This may be GC'd by the python process.
+        self._catalog = {}
+        self._opslock = threading.Lock()
+        
+    def link_core(self, core):
+        # Creates a weakref proxy to core.
+        self._core = weakref.proxy(core)
+        
+    def force_gc(self, obj):
+        ''' Forces erasure of an object. Does not notify the undertaker.
+        Indempotent. Should never raise KeyError.
+        '''
+        with self._restoring.mutex:
+            try:
+                self.remove_from_cache(obj.ghid)
+            except:
+                logger.warning(
+                    'Exception while removing from cache during object GC. '
+                    'Probably a bug.\n' + ''.join(traceback.format_exc())
+                )
+            
+            try:
+                del self._catalog[obj.ghid]
+            except KeyError:
+                pass
+        
+    def store(self, obj, data):
+        ''' Starts tracking an object.
+        obj is a hypergolix representation object.
+        raw is bytes-like.
+        '''  
+        with self._restoring.mutex:
+            # Only add to cache if we are not restoring from it.
+            if not self._restoring:
+                self.add_to_cache(obj.ghid, data)
+                
+            self._catalog[obj.ghid] = obj
+        
+    def dereference(self, ghid):
+        ''' Returns the raw data associated with the ghid.
+        '''
+        with self._restoring.mutex:
+            return self.get_from_cache(ghid)
+        
+    def whois(self, ghid):
+        ''' Returns a lightweight Hypergolix description of the object.
+        '''
+        with self._restoring.mutex:
+            try:
+                return self._catalog[ghid]
+            except KeyError as exc:
+                # Lazy-load a new one if possible.
+                self._lazy_load(ghid, exc)
+                return self._catalog[ghid]
+                
+    def _lazy_load(self, ghid, exc):
+        ''' Does a lazy load restore of the ghid.
+        '''
+        if self._core is None:
+            raise RuntimeError(
+                'Core must be linked to lazy-load from cache.'
+            ) from exc
+            
+        # This will raise if missing. Connect the new_exc to the old one tho.
+        try:
+            data = self.get_from_cache(ghid)
+            
+            # I guess we might as well validate on every lazy load.
+            with self._restoring:
+                self._core.ingest(data)
+                
+        except Exception as new_exc:
+            raise new_exc from exc
+        
+    def __contains__(self, ghid):
+        # Catalog may only be accurate locally. Shelf is accurate globally.
+        return self.check_in_cache(ghid)
+    
+    def restore(self):
+        ''' Loads any existing files from the cache.  All existing 
+        files there will be attempted to be loaded, so it's best not to 
+        have extraneous stuff in the directory. Will be passed through
+        to the core for processing.
+        '''
+        if self._core is None:
+            raise RuntimeError(
+                'Cannot restore a librarian\'s cache without first linking to '
+                'its corresponding core.'
+            )
+        
+        # This prevents us from wasting time rewriting existing entries in the
+        # cache.
+        with self._restoring:
+            gidcs = []
+            geocs = []
+            gobss = []
+            gobds = []
+            gdxxs = []
+            garqs = []
+            
+            # This will mutate the lists in-place.
+            for candidate in self.walk_cache():
+                self._attempt_load_inplace(
+                    candidate, gidcs, geocs, gobss, gobds, gdxxs, garqs
+                )
+            
+            # First load all identities, so that we have authors for everything
+            for gidc in gidcs:
+                self._core.ingest_gidc(gidc)
+                
+            # Now all debindings, so that we can check state while we're at it
+            for gdxx in gdxxs:
+                self._core.ingest_gdxx(gdxx)
+                
+            # Now all bindings, so that objects aren't gc'd. Note: can't 
+            # combine into single list, because of different ingest methods
+            for gobs in gobss:
+                self._core.ingest_gobs(gobs)
+            for gobd in gobds:
+                self._core.ingest_gobd(gobd)
+                
+            # Next the objects themselves, so that any requests will have their 
+            # targets available (not that it would matter yet, buuuuut)...
+            for geoc in geocs:
+                self._core.ingest_geoc(geoc)
+                
+            # Last but not least
+            for garq in garqs:
+                self._core.ingest_garq(garq)
+                
+    def _attempt_load_inplace(self, candidate, gidcs, geocs, gobss, gobds, 
+                            gdxxs, garqs):
+        ''' Attempts to do an inplace addition to the passed lists based
+        on the loading.
+        '''
+        for loader, target in ((self._core.doorman.load_gidc, gidcs),
+                                (self._core.doorman.load_geoc, geocs),
+                                (self._core.doorman.load_gobs, gobss),
+                                (self._core.doorman.load_gobd, gobds),
+                                (self._core.doorman.load_gdxx, gdxxs),
+                                (self._core.doorman.load_garq, garqs)):
+            # Attempt this loader
+            try:
+                golix_obj = loader(packed)
+            # This loader failed. Continue to the next.
+            except MalformedGolixPrimitive:
+                continue
+            # This loader succeeded. Ingest it and then break out of the loop.
+            else:
+                obj = target.append(golix_obj)
+                break
+                
+        # HOWEVER, unlike usual, don't raise if this isn't a correct object,
+        # just don't bother adding it either.
+        
+            
+    @abc.abstractmethod
+    def add_to_cache(self, ghid, data):
+        ''' Adds the passed raw data to the cache.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def remove_from_cache(self, ghid):
+        ''' Removes the data associated with the passed ghid from the 
+        cache.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def get_from_cache(self, ghid):
+        ''' Returns the raw data associated with the ghid.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def check_in_cache(self, ghid):
+        ''' Check to see if the ghid is contained in the cache.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def walk_cache(self):
+        ''' Iterator to go through the entire cache, returning possible
+        candidates for loading. Loading will handle malformed primitives
+        without error.
+        '''
+        pass
+    
+    
+class DiskLibrarian(_LibrarianCore):
+    ''' Librarian that caches stuff to disk.
+    '''
+    def __init__(self, cache_dir):
+        ''' cache_dir should be relative to current.
+        '''
+        cache_dir = pathlib.Path(cache_dir)
+        if not cache_dir.exists():
+            raise ValueError('Path does not exist.')
+        if not cache_dir.is_dir():
+            raise ValueError('Path is not an available directory.')
+        
+        self._cachedir = cache_dir
+        super().__init__()
+        
+    def walk_cache(self):
+        ''' Iterator to go through the entire cache, returning possible
+        candidates for loading. Loading will handle malformed primitives
+        without error.
+        '''
+        pass
+            
+    def add_to_cache(self, ghid, data):
+        ''' Adds the passed raw data to the cache.
+        '''
+        pass
+        
+    def remove_from_cache(self, ghid):
+        ''' Removes the data associated with the passed ghid from the 
+        cache.
+        '''
+        pass
+        
+    def get_from_cache(self, ghid):
+        ''' Returns the raw data associated with the ghid.
+        '''
+        pass
+        
+    def check_in_cache(self, ghid):
+        ''' Check to see if the ghid is contained in the cache.
+        '''
+        pass
+        
+        
+class _Librarian(_LibrarianCore):
+    def __init__(self):
+        self._shelf = {}
+        super().__init__()
+        
+    def walk_cache(self):
+        ''' Iterator to go through the entire cache, returning possible
+        candidates for loading. Loading will handle malformed primitives
+        without error.
+        '''
+        pass
+            
+    def add_to_cache(self, ghid, data):
+        ''' Adds the passed raw data to the cache.
+        '''
+        self._shelf[ghid] = data
+        
+    def remove_from_cache(self, ghid):
+        ''' Removes the data associated with the passed ghid from the 
+        cache.
+        '''
+        del self._shelf[ghid]
+        
+    def get_from_cache(self, ghid):
+        ''' Returns the raw data associated with the ghid.
+        '''
+        return self._shelf[ghid]
+        
+    def check_in_cache(self, ghid):
+        ''' Check to see if the ghid is contained in the cache.
+        '''
+        return ghid in self._shelf
+            
+            
+class __Librarian:
     ''' Keeps objects. Should contain the only strong references to the
     objects it keeps. Threadsafe.
-    
-    TODO: convert shelf, catalog to single object with function calls 
-    instead of __getitem__ / __setitem__ / __delitem__
     '''
     def __init__(self, shelf=None, catalog=None):
         ''' Sets up internal tracking.
@@ -2861,6 +2389,11 @@ class _Librarian:
     def __contains__(self, ghid):
         # Catalog may only be accurate locally. Shelf is accurate globally.
         return ghid in self._shelf
+        
+    def link_core(self, *args, **kwargs):
+        ''' Not used for this kind of librarian.
+        '''
+        pass
         
         
 class _Enlitener:
@@ -3101,7 +2634,6 @@ class _GarqLite(_BaseLite):
         # compare it anyways just in case.
         except AttributeError as exc:
             return False
-    
             
             
 def circus_factory(core_class=PersisterCore, core_kwargs=None, 
@@ -3151,6 +2683,7 @@ def circus_factory(core_class=PersisterCore, core_kwargs=None,
         postman = postman,
         **core_kwargs
     )
+    librarian.link_core(core)
     
     return (core, doorman, enforcer, lawyer, bookie, librarian, undertaker, 
             postman)
