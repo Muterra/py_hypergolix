@@ -39,11 +39,14 @@ import warnings
 import time
 import threading
 import logging
+import pathlib
 
 # These are normal imports
 from hypergolix.persisters import MemoryPersister
+from hypergolix.persisters import DiskCachePersister
 from hypergolix.persisters import PersisterBridgeServer
 from hypergolix.persisters import PersisterBridgeClient
+from hypergolix.persisters import DiskLibrarian
 
 from hypergolix.utils import Aengel
 
@@ -82,6 +85,12 @@ def subs_notification_checker(timeout=5):
     result = SUBS_NOTIFIER.wait(timeout)
     SUBS_NOTIFIER.clear()
     return result
+    
+    
+def clear_ghidcache(cache_dir):
+    dirpath = pathlib.Path(cache_dir)
+    for fpath in [f for f in dirpath.iterdir() if f.is_file()]:
+        fpath.unlink()
 
 
 # ###############################################
@@ -521,6 +530,27 @@ class MemoryPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
         cls.persister = MemoryPersister()
         cls.vault = cls.persister.librarian
         cls.debound_by_ghid = cls.persister.bookie._debound_by_ghid
+
+    
+class DiskPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
+    @classmethod
+    def setUp(self):
+        # Do this on a per-test basis so we have a clean ghidcache for the 
+        # restoration test
+        clear_ghidcache('/ghidcache_test')
+        self.persister = DiskCachePersister('/ghidcache_test')
+        self.vault = self.persister.librarian
+        self.debound_by_ghid = self.persister.bookie._debound_by_ghid
+        
+    def test_restoration(self):
+        self.test_trash()
+        persister2 = DiskCachePersister('/ghidcache_test')
+        vault2 = persister2.librarian
+        debound_by_ghid2 = persister2.bookie._debound_by_ghid
+        vault2.restore()
+        
+        self.assertEqual(self.vault._catalog, vault2._catalog)
+        self.assertEqual(self.debound_by_ghid, debound_by_ghid2)
         
     
 class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
@@ -563,4 +593,7 @@ class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
 
 if __name__ == "__main__":
     logging.basicConfig(filename='logs/persisters.log', level=logging.DEBUG)
+    # from hypergolix.utils import TraceLogger
+    # with TraceLogger(interval=10):
+    #     unittest.main()
     unittest.main()

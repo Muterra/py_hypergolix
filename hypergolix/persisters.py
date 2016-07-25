@@ -59,6 +59,7 @@ import struct
 import weakref
 import queue
 import pathlib
+import base64
 
 import asyncio
 import websockets
@@ -337,6 +338,31 @@ class MemoryPersister:
         # TODO: figure out something different to do here.
         self.postman._listeners = {}
         return True
+        
+        
+class DiskCachePersister(MemoryPersister):
+    ''' Persister that caches to disk.
+    '''    
+    def __init__(self, cache_dir):
+        (core, doorman, enforcer, lawyer, bookie, librarian, undertaker, 
+            postman) = circus_factory(
+                librarian_class = DiskLibrarian,
+                librarian_kwargs = {'cache_dir': cache_dir}
+            )
+        self.core = core
+        self.doorman = doorman
+        self.enforcer = enforcer
+        self.lawyer = lawyer
+        self.bookie = bookie
+        self.librarian = librarian
+        self.undertaker = undertaker
+        self.postman = postman
+        
+        self.subscribe = self.postman.subscribe
+        self.unsubscribe = self.postman.unsubscribe
+        # self.publish = self.core.ingest
+        self.list_bindings = self.bookie.bind_status
+        self.list_debinding = self.bookie.debind_status
 
 
 class _PersisterBridgeSession(_AutoresponderSession):
@@ -2106,10 +2132,14 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
     def whois(self, ghid):
         ''' Returns a lightweight Hypergolix description of the object.
         '''
-        with self._restoring.mutex:
-            try:
-                return self._catalog[ghid]
-            except KeyError as exc:
+        # No need to block if it exists, especially if we're restoring.
+        try:
+            return self._catalog[ghid]
+            
+        except KeyError as exc:
+            # Put this inside the except block so that we don't have to do any
+            # weird fiddling to make restoration work.
+            with self._restoring.mutex:
                 # Lazy-load a new one if possible.
                 self._lazy_load(ghid, exc)
                 return self._catalog[ghid]
@@ -2164,47 +2194,56 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
                 self._attempt_load_inplace(
                     candidate, gidcs, geocs, gobss, gobds, gdxxs, garqs
                 )
+                
+            # Okay yes, unfortunately this will result in unpacking all of the
+            # files twice. However, we need to verify the crypto.
             
             # First load all identities, so that we have authors for everything
             for gidc in gidcs:
-                self._core.ingest_gidc(gidc)
+                self._core.ingest(gidc.packed)
+                # self._core.ingest_gidc(gidc)
                 
             # Now all debindings, so that we can check state while we're at it
             for gdxx in gdxxs:
-                self._core.ingest_gdxx(gdxx)
+                self._core.ingest(gdxx.packed)
+                # self._core.ingest_gdxx(gdxx)
                 
             # Now all bindings, so that objects aren't gc'd. Note: can't 
             # combine into single list, because of different ingest methods
             for gobs in gobss:
-                self._core.ingest_gobs(gobs)
+                self._core.ingest(gobs.packed)
+                # self._core.ingest_gobs(gobs)
             for gobd in gobds:
-                self._core.ingest_gobd(gobd)
+                self._core.ingest(gobd.packed)
+                # self._core.ingest_gobd(gobd)
                 
             # Next the objects themselves, so that any requests will have their 
             # targets available (not that it would matter yet, buuuuut)...
             for geoc in geocs:
-                self._core.ingest_geoc(geoc)
+                self._core.ingest(geoc.packed)
+                # self._core.ingest_geoc(geoc)
                 
             # Last but not least
             for garq in garqs:
-                self._core.ingest_garq(garq)
+                self._core.ingest(garq.packed)
+                # self._core.ingest_garq(garq)
                 
     def _attempt_load_inplace(self, candidate, gidcs, geocs, gobss, gobds, 
                             gdxxs, garqs):
         ''' Attempts to do an inplace addition to the passed lists based
         on the loading.
         '''
-        for loader, target in ((self._core.doorman.load_gidc, gidcs),
-                                (self._core.doorman.load_geoc, geocs),
-                                (self._core.doorman.load_gobs, gobss),
-                                (self._core.doorman.load_gobd, gobds),
-                                (self._core.doorman.load_gdxx, gdxxs),
-                                (self._core.doorman.load_garq, garqs)):
+        for loader, target in ((GIDC.unpack, gidcs),
+                                (GEOC.unpack, geocs),
+                                (GOBS.unpack, gobss),
+                                (GOBD.unpack, gobds),
+                                (GDXX.unpack, gdxxs),
+                                (GARQ.unpack, garqs)):
             # Attempt this loader
             try:
-                golix_obj = loader(packed)
+                golix_obj = loader(candidate)
             # This loader failed. Continue to the next.
-            except MalformedGolixPrimitive:
+            except ParseError:
                 continue
             # This loader succeeded. Ingest it and then break out of the loop.
             else:
@@ -2264,33 +2303,52 @@ class DiskLibrarian(_LibrarianCore):
         self._cachedir = cache_dir
         super().__init__()
         
+    def _make_path(self, ghid):
+        ''' Converts the ghid to a file path.
+        '''
+        fname = base64.urlsafe_b64encode(bytes(ghid)).decode() + '.ghid'
+        fpath = self._cachedir / fname
+        return fpath
+        
     def walk_cache(self):
         ''' Iterator to go through the entire cache, returning possible
         candidates for loading. Loading will handle malformed primitives
         without error.
         '''
-        pass
+        for child in self._cachedir.iterdir():
+            if child.is_file():
+                yield child.read_bytes()
             
     def add_to_cache(self, ghid, data):
         ''' Adds the passed raw data to the cache.
         '''
-        pass
+        fpath = self._make_path(ghid)
+        fpath.write_bytes(data)
         
     def remove_from_cache(self, ghid):
         ''' Removes the data associated with the passed ghid from the 
         cache.
         '''
-        pass
+        fpath = self._make_path(ghid)
+        try:
+            fpath.unlink()
+        except FileNotFoundError as exc:
+            raise KeyError('Ghid does not exist at persister.') from exc
         
     def get_from_cache(self, ghid):
         ''' Returns the raw data associated with the ghid.
         '''
-        pass
+        fpath = self._make_path(ghid)
+        try:
+            return fpath.read_bytes()
+        except FileNotFoundError as exc:
+            raise KeyError('Ghid does not exist at persister.') from exc
         
     def check_in_cache(self, ghid):
         ''' Check to see if the ghid is contained in the cache.
         '''
-        pass
+        fpath = self._make_path(ghid)
+        return fpath.exists()
         
         
 class _Librarian(_LibrarianCore):

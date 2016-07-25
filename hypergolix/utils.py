@@ -1634,8 +1634,8 @@ class TruthyLock:
     used as a threadsafe blocking conditional.
     '''
     def __init__(self):
-        self._opslock = threading.RLock()
-        self._mutexlock = threading.Lock()
+        self._opslock = threading.Lock()
+        self._mutexlock = threading.RLock()
         self._cond = False
         
     def __bool__(self):
