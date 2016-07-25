@@ -1671,6 +1671,116 @@ class TruthyLock:
         with self._opslock:
             self._cond = False
             self._mutexlock.release()
+            
+            
+class SetMap:
+    ''' Combines a mapping with a set. Threadsafe.
+    '''
+    def __init__(self):
+        ''' Create a lookup!
+        
+        Currently does not support pre-population during __init__().
+        '''
+        self._mapping = {}
+        self._lock = threading.Lock()
+    
+    def __getitem__(self, key):
+        ''' Pass-through to the core lookup. Will return a frozenset.
+        Raises keyerror if missing.
+        '''
+        with self._lock:
+            return frozenset(self._mapping[key])
+        
+    def get_any(self, key):
+        ''' Pass-through to the core lookup. Will return a frozenset.
+        Will never raise a keyerror; if key not in self, returns empty
+        frozenset.
+        '''
+        with self._lock:
+            try:
+                return frozenset(self._mapping[key])
+            except KeyError:
+                return frozenset()
+        
+    def __contains__(self, key):
+        ''' Check to see if the key exists.
+        '''
+        with self._lock:
+            return key in self._mapping
+        
+    def contains_within(self, key, value):
+        ''' Check to see if the key exists, AND the value exists at key.
+        '''
+        with self._lock:
+            try:
+                return value in self._mapping[key]
+            except KeyError:
+                return False
+        
+    def add(self, key, value):
+        ''' Adds the value to the set at key. Creates a new set there if 
+        none already exists.
+        '''
+        with self._lock:
+            try:
+                self._mapping[key].add(value)
+            except KeyError:
+                self._mapping[key] = { value }
+            
+    def _remove_if_empty(self, key):
+        ''' Removes a key entirely if it no longer has any values. Will
+        suppress KeyError if the key is not found.
+        '''
+        try:
+            if len(self._mapping[key]) == 0:
+                del self._mapping[key]
+        except KeyError:
+            pass
+        
+    def remove(self, key, value):
+        ''' Removes the value from the set at key. Will raise KeyError 
+        if either the key is missing, or the value is not contained at
+        the key.
+        '''
+        with self._lock:
+            try:
+                self._mapping[key].remove(value)
+            finally:
+                self._remove_if_empty(key)
+        
+    def discard(self, key, value):
+        ''' Same as remove, but will never raise KeyError.
+        '''
+        with self._lock:
+            try:
+                self._mapping[key].discard(value)
+            except KeyError:
+                pass
+            finally:
+                self._remove_if_empty(key)
+        
+    def clear(self, key):
+        ''' Clears the specified key. Raises KeyError if key is not 
+        found.
+        '''
+        with self._lock:
+            del self._mapping[key]
+            
+    def clear_any(self, key):
+        ''' Clears the specified key, if it exists. If not, suppresses
+        KeyError.
+        '''
+        with self._lock:
+            try:
+                del self._mapping[key]
+            except KeyError:
+                pass
+        
+    def clear_all(self):
+        ''' Clears the entire mapping.
+        '''
+        with self._lock:
+            self._mapping.clear()
         
 
 class TraceLogger:

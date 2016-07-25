@@ -108,6 +108,7 @@ from .utils import _WeldedSetDeepChainMap
 from .utils import _block_on_result
 from .utils import _JitSetDict
 from .utils import TruthyLock
+from .utils import SetMap
 
 # from .comms import WSAutoServer
 # from .comms import WSAutoClient
@@ -1261,6 +1262,7 @@ class _MrPostman:
         # The scheduling queue
         self._scheduled = queue.Queue()
         # Ignoring lookup: <subscribed ghid>: set(<callbacks>)
+        # TODO: ctrl+F this yields 3 results. Bug?
         self._opslock_ignore = threading.Lock()
         self._ignored = {}
         # The delayed lookup. <awaiting ghid>: set(<subscribed ghids>)
@@ -1843,35 +1845,30 @@ class _Bookie:
         # Lookup <bound ghid>: set(<binding obj>)
         # This must remain valid at all persister instances regardless of the
         # python runtime state
-        self._bound_by_ghid = {}
+        self._bound_by_ghid = SetMap()
         
         # Lookup <debound ghid>: <debinding ghid>
         # This must remain valid at all persister instances regardless of the
         # python runtime state
-        # Note that any particular object can have exactly zero or one debinds
+        # Note that any particular object can have exactly zero or one VALID 
+        # debinds, but that a malicious actor could find a race condition and 
+        # debind something FOR SOMEONE ELSE before the bookie knows about the
+        # original object authorship.
         self._debound_by_ghid = {}
-        # # Lookup <debinding ghid>: <debound ghid>
-        # self._debound_to_ghid = weakref.WeakKeyDictionary()
         
         # Lookup <recipient>: set(<request ghid>)
-        self._requests_for_recipient = {}
+        self._requests_for_recipient = SetMap()
         
     def recipient_status(self, ghid):
         ''' Return a frozenset of ghids assigned to the passed ghid as
         a recipient.
         '''
-        try:
-            return frozenset(self._requests_for_recipient[ghid])
-        except KeyError:
-            return frozenset()
+        return self._requests_for_recipient.get_any(ghid)
         
     def bind_status(self, ghid):
         ''' Return a frozenset of ghids binding the passed ghid.
         '''
-        try:
-            return frozenset(self._bound_by_ghid[ghid])
-        except KeyError:
-            return frozenset()
+        return self._bound_by_ghid.get_any(ghid)
         
     def debind_status(self, ghid):
         ''' Return either a ghid, or None.
@@ -1882,12 +1879,9 @@ class _Bookie:
             return None
         
     def is_bound(self, obj):
-        try:
-            bindings = self._bound_by_ghid[obj.ghid]
-        except KeyError:
-            return False
-        else:
-            return True
+        ''' Check to see if the object has been bound.
+        '''
+        return obj.ghid in self._bound_by_ghid
             
     def is_debound(self, obj):
         try:
@@ -1898,33 +1892,24 @@ class _Bookie:
             return True
         
     def _add_binding(self, being_bound, doing_binding):
-        try:
-            self._bound_by_ghid[being_bound].add(doing_binding)
-        except KeyError:
-            self._bound_by_ghid[being_bound] = { doing_binding }
+        # Exactly what it sounds like. Should remove this stub to reduce the
+        # number of function calls.
+        self._bound_by_ghid.add(being_bound, doing_binding)
             
     def _remove_binding(self, obj):
         being_unbound = obj.target
         
         try:
-            bindings_for_target = self._bound_by_ghid[being_unbound]
+            self._bound_by_ghid.remove(being_unbound, obj.ghid)
         except KeyError:
             logger.warning(
                 'Attempting to remove a binding, but the bookie has no record '
                 'of its existence.'
             )
-        else:
-            bindings_for_target.discard(obj.ghid)
-            if len(bindings_for_target) == 0:
-                del self._bound_by_ghid[being_unbound]
             
     def _remove_request(self, obj):
         recipient = obj.recipient
-            
-        try:
-            self._requests_for_recipient[recipient].discard(obj.ghid)
-        except KeyError:
-            return
+        self._requests_for_recipient.discard(recipient, obj.ghid)
             
     def _remove_debinding(self, obj):
         target = obj.target
@@ -2034,10 +2019,7 @@ class _Bookie:
     def place_garq(self, obj):
         ''' Add the garq to the books.
         '''
-        try:
-            self._requests_for_recipient[obj.recipient].add(obj.ghid)
-        except KeyError:
-            self._requests_for_recipient[obj.recipient] = { obj.ghid }
+        self._requests_for_recipient.add(obj.recipient, obj.ghid)
         
     def force_gc(self, obj):
         ''' Forces erasure of an object.
