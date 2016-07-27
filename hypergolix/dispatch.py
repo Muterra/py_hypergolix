@@ -565,9 +565,7 @@ class Dispatcher(DispatcherBase):
         callsheet.difference_update(self._discarders_by_ghid[ghid])
             
         if len(callsheet) == 0:
-            warnings.warn(HandshakeWarning(
-                'Agent lacks application to handle app id.'
-            ))
+            logger.warning('Agent lacks application to handle app id.')
             self._orphan_shares_incoming.add(ghid)
         else:
             for token in callsheet:
@@ -718,7 +716,7 @@ class _Dispatchable(_GAO):
         instantiation for any existing objects. Should instead be called
         directly, or through _weak_pull for any new status.
         '''
-        modified = super().pull()
+        modified = super().pull(*args, **kwargs)
         if modified:
             self._dispatch.distribute_to_endpoints(self.ghid)
         
@@ -814,3 +812,7 @@ class _Dispatchable(_GAO):
             state = (self.api_id, self.app_token, state)
         )
         self.push()
+        
+    def apply_delete(self):
+        super().apply_delete()
+        self._dispatch.distribute_to_endpoints(self.ghid, deleted=self)

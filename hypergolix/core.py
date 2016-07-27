@@ -71,6 +71,7 @@ from .exceptions import NakError
 from .exceptions import HandshakeError
 from .exceptions import HandshakeWarning
 from .exceptions import UnknownParty
+from .exceptions import DoesNotExist
 
 # from .persisters import _PersisterBase
 
@@ -563,7 +564,7 @@ class HGXCore:
         
         return dynamic
         
-    def touch_dynamic(self, ghid):
+    def touch_dynamic(self, ghid, notification=None):
         ''' Checks self.persister for a new dynamic frame for ghid, and 
         if one exists, gets its state and calls an update on obj.
         
@@ -576,9 +577,30 @@ class HGXCore:
         # the frame ghid.
         # # Is this doing what I think it's doing?
         # frame_ghid = ghid
-        unpacked_binding = self._identity.unpack_bind_dynamic(
-            self.persister.get(ghid)
-        )
+        try:
+            unpacked_binding = self._identity.unpack_bind_dynamic(
+                self.persister.get(ghid)
+            )
+            
+        # Appears to be a deletion; let's verify.
+        except DoesNotExist as exc:
+            try:
+                presumptive_deletion = self._identity.unpack_debind(
+                    self.persister.get(notification)
+                )
+                if presumptive_deletion.target == ghid:
+                    obj = self._oracle[ghid]
+                    obj.apply_delete()
+                    return None
+                else:
+                    raise ValueError(
+                        'Notification appears to delete a different binding.'
+                    )
+                
+            # Re-raise any issues from the first exc.
+            except Exception as exc2:
+                raise exc2 from exc
+            
         # Should be fixed, as per above.
         # ghid = unpacked_binding.ghid_dynamic
         # # Goddammit. It is. Why the hell are we passing frame_ghid as ghid?!
@@ -863,6 +885,7 @@ class _GAO(metaclass=abc.ABCMeta):
         will create new object on first push. If ghid is not None, then
         dynamic will be ignored.
         '''
+        self._deleted = False
         self.__opslock = threading.RLock()
         self._core = core
         self.dynamic = bool(dynamic)
@@ -978,21 +1001,30 @@ class _GAO(metaclass=abc.ABCMeta):
         ''' Extract self into a packable state.
         '''
         pass
+        
+    def apply_delete(self):
+        ''' Executes an external delete.
+        '''
+        with self.__opslock:
+            self._deleted = True
     
     def push(self):
         ''' Pushes updates to upstream. Must be called for every object
         mutation.
         '''
         with self.__opslock:
-            if self.ghid is None:
-                self.__new()
-            else:
-                if self.dynamic:
-                    self.__update()
+            if not self._deleted:
+                if self.ghid is None:
+                    self.__new()
                 else:
-                    raise TypeError('Static GAOs cannot be updated.')
+                    if self.dynamic:
+                        self.__update()
+                    else:
+                        raise TypeError('Static GAOs cannot be updated.')
+            else:
+                raise TypeError('Deleted GAOs cannot be pushed.')
         
-    def pull(self):
+    def pull(self, notification=None):
         ''' Refreshes self from upstream. Should NOT be called at object 
         instantiation for any existing objects. Should instead be called
         directly, or through _weak_touch for any new status.
@@ -1002,19 +1034,25 @@ class _GAO(metaclass=abc.ABCMeta):
         # frame (as the notification ghid)
         
         with self.__opslock:
-            if self.dynamic:
-                # State will be None if no update was applied.
-                packed_state = self._core.touch_dynamic(self.ghid)
-                if packed_state:
-                    # Don't forget to extract...
-                    self.apply_state(
-                        self._unpack(packed_state)
+            if not self._deleted:
+                if self.dynamic:
+                    # State will be None if no update was applied.
+                    packed_state = self._core.touch_dynamic(
+                        self.ghid, 
+                        notification
                     )
-                    modified = True
+                    if packed_state:
+                        # Don't forget to extract...
+                        self.apply_state(
+                            self._unpack(packed_state)
+                        )
+                        modified = True
+                    else:
+                        modified = False
                 else:
                     modified = False
             else:
-                modified = False
+                raise TypeError('Deleted GAOs cannot be pulled.')
         
         return modified
         
@@ -1038,7 +1076,7 @@ class _GAO(metaclass=abc.ABCMeta):
         # First we need to wait for the update greenlight.
         self._update_greenlight.wait()
         if notification not in self._silenced:
-            self.pull()
+            self.pull(notification)
         
     def __new(self):
         ''' Creates a new Golix object for self using self._state, 

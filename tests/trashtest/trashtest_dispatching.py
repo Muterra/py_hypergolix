@@ -38,9 +38,12 @@ import unittest
 import warnings
 import collections
 import threading
+import queue
 import time
 import logging
 import weakref
+
+from queue import Empty
 
 from golix import Ghid
 from hypergolix import HGXCore
@@ -715,7 +718,8 @@ class _TestDispatch(HGXCore):
 
 # class _TestEndpoint(_EndpointBase):
 class _TestEndpoint:
-    def __init__(self, name, dispatch, apis, app_token=None, *args, **kwargs):
+    def __init__(self, name, dispatch, apis, incoming_q, delete_q, 
+                sharesuccess_q, sharefailure_q, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__name = name
         self._assigned_objs = []
@@ -723,10 +727,15 @@ class _TestEndpoint:
         self.dispatch = dispatch
         self.app_token = self.dispatch.new_token()
         self.apis = set(apis)
+        self._incoming_q = incoming_q
+        self._delete_q = delete_q
+        self._sharesuccess_q = sharesuccess_q
+        self._sharefailure_q = sharefailure_q
         
     def notify_object_threadsafe(self, obj, state=None):
         self._assigned_objs.append(obj)
-        print('Endpoint ', self.__name, ' incoming: ', obj)
+        # Note that obj is already a ghid.
+        self._incoming_q.put(obj)
         
     # def send_update(self, obj, state=None):
     #     self._assigned_objs.append(obj)
@@ -736,15 +745,17 @@ class _TestEndpoint:
         ''' Notifies the endpoint that the object has been deleted 
         upstream.
         '''
-        print('Endpoint ', self.__name, ' received delete: ', obj)
-        
-    def notify_share_failure_threadsafe(self, obj, recipient):
-        self._failed_objs.append(obj)
-        print('Endpoint ', self.__name, ' failed: ', obj)
+        self._delete_q.put(ghid)
         
     def notify_share_success_threadsafe(self, obj, recipient):
         self._assigned_objs.append(obj)
-        print('Endpoint ', self.__name, ' success: ', obj)
+        # Note that obj is already a ghid.
+        self._sharesuccess_q.put(obj)
+        
+    def notify_share_failure_threadsafe(self, obj, recipient):
+        self._failed_objs.append(obj)
+        # Note that obj is already a ghid.
+        self._sharefailure_q.put(obj)
 
 
 # ###############################################
@@ -755,8 +766,25 @@ class _TestEndpoint:
 class TestDispatching(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.timeout = .5
+        
         cls.persister = MemoryPersister()
         cls.__api_id = bytes(64) + b'1'
+        
+        cls.incoming_q_a1e1 = queue.Queue()
+        cls.delete_q_a1e1 = queue.Queue()
+        cls.sharesuccess_q_a1e1 = queue.Queue()
+        cls.sharefailure_q_a1e1 = queue.Queue()
+        
+        cls.incoming_q_a2e1 = queue.Queue()
+        cls.delete_q_a2e1 = queue.Queue()
+        cls.sharesuccess_q_a2e1 = queue.Queue()
+        cls.sharefailure_q_a2e1 = queue.Queue()
+        
+        cls.incoming_q_a2e2 = queue.Queue()
+        cls.delete_q_a2e2 = queue.Queue()
+        cls.sharesuccess_q_a2e2 = queue.Queue()
+        cls.sharefailure_q_a2e2 = queue.Queue()
         
         cls.agent1 = _TestDispatch(persister=cls.persister)
         cls.dispatch1 = cls.agent1._dispatcher
@@ -765,6 +793,10 @@ class TestDispatching(unittest.TestCase):
             apis = [cls.__api_id],
             # app_token = b'1234',
             name = 'Agent1, ep1',
+            incoming_q = cls.incoming_q_a1e1,
+            delete_q = cls.delete_q_a1e1, 
+            sharesuccess_q = cls.sharesuccess_q_a1e1, 
+            sharefailure_q = cls.sharefailure_q_a1e1,
         )
         cls.dispatch1.register_endpoint(cls.endpoint1)
         
@@ -775,15 +807,42 @@ class TestDispatching(unittest.TestCase):
             apis = [cls.__api_id],
             # app_token = b'5678',
             name = 'Agent2, ep1',
+            incoming_q = cls.incoming_q_a2e1,
+            delete_q = cls.delete_q_a2e1, 
+            sharesuccess_q = cls.sharesuccess_q_a2e1, 
+            sharefailure_q = cls.sharefailure_q_a2e1,
         )
         cls.endpoint3 = _TestEndpoint(
             dispatch = cls.dispatch2,
             apis = [cls.__api_id],
             # app_token = b'9101',
             name = 'Agent2, ep2',
+            incoming_q = cls.incoming_q_a2e2,
+            delete_q = cls.delete_q_a2e2, 
+            sharesuccess_q = cls.sharesuccess_q_a2e2, 
+            sharefailure_q = cls.sharefailure_q_a2e2,
         )
         cls.dispatch2.register_endpoint(cls.endpoint2)
         cls.dispatch2.register_endpoint(cls.endpoint3)
+        
+    def clear_all_qs(self):
+        for q in (self.incoming_q_a1e1,
+                self.delete_q_a1e1,
+                self.sharesuccess_q_a1e1,
+                self.sharefailure_q_a1e1,
+                self.incoming_q_a2e1,
+                self.delete_q_a2e1,
+                self.sharesuccess_q_a2e1,
+                self.sharefailure_q_a2e1,
+                self.incoming_q_a2e2,
+                self.delete_q_a2e2,
+                self.sharesuccess_q_a2e2,
+                self.sharefailure_q_a2e2,):
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except:
+                    break
         
     def test_trash(self):
         pt0 = b'I am a sexy stagnant beast.'
@@ -792,6 +851,8 @@ class TestDispatching(unittest.TestCase):
         pt3 = b'Listening...'
         pt4 = b'All ears!'
 
+        # This object is private, and therefore it should be shared with nobody
+        self.clear_all_qs()
         address1 = self.dispatch1.new_object(
             asking_token = self.endpoint1.app_token,
             state = pt0,
@@ -801,7 +862,17 @@ class TestDispatching(unittest.TestCase):
             api_id = self.__api_id,
             dynamic = False
         )
+        # Instead of using a timeout in queue.get, do a single wait for both.
+        time.sleep(self.timeout)
+        with self.assertRaises(Empty, msg='Object recirculated to origin.'):
+            self.incoming_q_a1e1.get_nowait()
+        with self.assertRaises(Empty, msg='Private object was shared.'):
+            self.incoming_q_a2e1.get_nowait()
+        with self.assertRaises(Empty, msg='Private object was shared.'):
+            self.incoming_q_a2e2.get_nowait()
 
+        # This object is not private, and so can be shared
+        self.clear_all_qs()
         address2 = self.dispatch1.new_object(
             asking_token = self.endpoint1.app_token,
             state = pt1,
@@ -809,11 +880,30 @@ class TestDispatching(unittest.TestCase):
             app_token = None,
             dynamic = True
         )
+        time.sleep(self.timeout)
+        with self.assertRaises(Empty, msg='Object recirculated to origin.'):
+            self.incoming_q_a1e1.get_nowait()
         
+        # Sharing should distribute the object to both agent2 endpoints.
+        self.clear_all_qs()
         self.dispatch1.share_object(
             asking_token = self.endpoint1.app_token,
             ghid = address2, 
             recipient = self.agent2.whoami, 
+        )
+        time.sleep(self.timeout)
+        self.assertEqual(
+            self.incoming_q_a2e1.get_nowait(),
+            address2
+        )
+        self.assertEqual(
+            self.incoming_q_a2e2.get_nowait(),
+            address2
+        )
+        # Sharing should also result in a "success" response to the creator...
+        self.assertEqual(
+            self.sharesuccess_q_a1e1.get_nowait(),
+            address2
         )
         
         self.assertIn(address2, self.dispatch1._oracle)
@@ -836,6 +926,8 @@ class TestDispatching(unittest.TestCase):
             self.dispatch1._oracle[address2].state
         )
         
+        # This is another private object, and once again, should not be shared.
+        self.clear_all_qs()
         address3 = self.dispatch2.new_object(
             asking_token = self.endpoint2.app_token,
             state = pt0,
@@ -843,7 +935,17 @@ class TestDispatching(unittest.TestCase):
             api_id = self.__api_id,
             dynamic = False
         )
+        time.sleep(self.timeout)
+        with self.assertRaises(Empty, msg='Object recirculated to origin.'):
+            self.incoming_q_a2e1.get_nowait()
+        with self.assertRaises(Empty, msg='Private object was shared.'):
+            self.incoming_q_a1e1.get_nowait()
+        with self.assertRaises(Empty, msg='Private object was shared.'):
+            self.incoming_q_a2e2.get_nowait()
 
+        # This is a non-private object, and it should be immediately shared to
+        # the other agent2 endpoint.
+        self.clear_all_qs()
         address4 = self.dispatch2.new_object(
             asking_token = self.endpoint2.app_token,
             state = pt1,
@@ -851,16 +953,32 @@ class TestDispatching(unittest.TestCase):
             app_token = None,
             dynamic = True
         )
+        time.sleep(self.timeout)
+        with self.assertRaises(Empty, msg='Object recirculated to origin.'):
+            self.incoming_q_a2e1.get_nowait()
+        self.assertEqual(
+            self.incoming_q_a2e2.get_nowait(),
+            address4
+        )
         
         self.dispatch2.hold_object(
             asking_token = self.endpoint2.app_token,
             ghid = address2
         )
         
+        # Deleting a private object, so no notifications should show up.
+        self.clear_all_qs()
         self.dispatch1.delete_object(
             asking_token = self.endpoint1.app_token,
             ghid = address1
         )
+        time.sleep(self.timeout)
+        with self.assertRaises(Empty, msg='Delete recirculated to origin.'):
+            self.delete_q_a1e1.get_nowait()
+        with self.assertRaises(Empty, msg='Private object delete was shared.'):
+            self.delete_q_a2e1.get_nowait()
+        with self.assertRaises(Empty, msg='Private object delete was shared.'):
+            self.delete_q_a2e2.get_nowait()
         
         self.assertNotIn(address1, self.dispatch1._oracle)
         
@@ -880,11 +998,41 @@ class TestDispatching(unittest.TestCase):
         
         # Agent2 has two endpoints following this object so it should persist
         self.assertIn(address2, self.dispatch2._oracle)
-
-        # obj1 = self.dispatch1.new_object(pt0, dynamic=False)
-        # obj2 = self.dispatch1.new_object(pt1, dynamic=True)
         
+        # Now let's try sharing and then deleting address4, which should 
+        # propagate.
+        self.clear_all_qs()
+        self.dispatch2.share_object(
+            asking_token = self.endpoint2.app_token,
+            ghid = address4, 
+            recipient = self.agent1.whoami, 
+        )
+        time.sleep(self.timeout)
+        self.assertEqual(
+            self.incoming_q_a1e1.get_nowait(),
+            address4
+        )
+        self.assertEqual(
+            self.sharesuccess_q_a2e1.get_nowait(),
+            address4
+        )
         
+        self.clear_all_qs()
+        self.dispatch2.delete_object(
+            asking_token = self.endpoint2.app_token,
+            ghid = address4,
+        )
+        time.sleep(self.timeout)
+        with self.assertRaises(Empty, msg='Delete recirculated to origin.'):
+            self.delete_q_a2e1.get_nowait()
+        self.assertEqual(
+            self.delete_q_a1e1.get_nowait(),
+            address4
+        )
+        self.assertEqual(
+            self.delete_q_a2e2.get_nowait(),
+            address4
+        )
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired

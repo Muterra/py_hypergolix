@@ -59,6 +59,8 @@ from hypergolix.comms import WSBasicClient
 from hypergolix.ipc import IPCHost
 from hypergolix.ipc import IPCEmbed
 
+from golix import Ghid
+
 # from hypergolix.embeds import WebsocketsEmbed
 
 
@@ -98,14 +100,33 @@ class MockCore(HGXCore):
 # ###############################################
 # Testing
 # ###############################################
-
-
-def _objhandler(obj):
-    print('INCOMING UNSOLICITED OBJECT!')
-    print(obj)
         
         
 class WebsocketsIPCTrashTest(unittest.TestCase):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._notifier_1 = threading.Event()
+        self._notifier_2 = threading.Event()
+        self._timeout = 1
+        
+    def _objhandler_1(self, obj):
+        # Quick and dirty.
+        self._notifier_11.set()
+        
+    def notification_checker_1(self):
+        result = self._notifier_1.wait(self._timeout)
+        self._notifier_1.clear()
+        return result
+        
+    def _objhandler_2(self, obj):
+        # Quick and dirty.
+        self._notifier_2.set()
+        
+    def notification_checker_2(self):
+        result = self._notifier_2.wait(self._timeout)
+        self._notifier_2.clear()
+        return result
+    
     @classmethod
     def setUpClass(cls):
         cls.persister = MemoryPersister()
@@ -177,15 +198,15 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         
         # time.sleep(1)
         # Make sure we have an app token.
-        print(self.app1.app_token)
+        self.assertTrue(isinstance(self.app1.app_token, bytes))
         
         # Test whoami
         whoami = self.app1.whoami_threadsafe()
-        print('whoami', whoami)
+        self.assertTrue(isinstance(whoami, Ghid))
         
         # Test registering an api_id
-        self.app1.register_api_threadsafe(self.__api_id, _objhandler)
-        self.app2.register_api_threadsafe(self.__api_id, _objhandler)
+        self.app1.register_api_threadsafe(self.__api_id, self._objhandler_1)
+        self.app2.register_api_threadsafe(self.__api_id, self._objhandler_2)
         self.assertIn(self.__api_id, self.app1endpoint.apis)
         
         obj1 = self.app1.new_obj_threadsafe(
@@ -194,6 +215,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             dynamic = False
         )
         self.assertIn(obj1.address, self.persister.librarian)
+        self.assertTrue(self.notification_checker_2())
         
         obj2 = self.app1.new_obj_threadsafe(
             state = pt1,
@@ -201,6 +223,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             dynamic = True
         )
         self.assertIn(obj2.address, self.persister.librarian)
+        self.assertTrue(self.notification_checker_2())
         
         joint1 = self.app2.get_obj_threadsafe(obj1.address)
         self.assertEqual(obj1, joint1)
@@ -214,6 +237,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             dynamic = True
         )
         self.assertIn(obj3.address, self.persister.librarian)
+        self.assertTrue(self.notification_checker_2())
         
         self.app1.update_obj_threadsafe(obj3, pt2)
         joint3 = self.app2.get_obj_threadsafe(obj3.address)
