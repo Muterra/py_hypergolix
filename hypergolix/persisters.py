@@ -1328,15 +1328,15 @@ class _MrPostman:
                 self._scheduled.put(
                     _MrPostcard(obj.ghid, debinding_ghid)
                 )
-        elif obj.target not in self._librarian:
-            self._defer_update(
-                awaiting_ghid = obj.target,
-                subscribed_ghid = obj.ghid,
-            )
         else:
-            self._scheduled.put(
-                _MrPostcard(obj.ghid, obj.ghid)
-            )
+            notifier = _MrPostcard(obj.ghid, obj.frame_ghid)
+            if obj.target not in self._librarian:
+                self._defer_update(
+                    awaiting_ghid = obj.target,
+                    notifier = notifier,
+                )
+            else:
+                self._scheduled.put(notifier)
         
     def _schedule_gdxx(self, obj, removed):
         # GDXX will never directly trigger a subscription. If they are removing
@@ -1361,7 +1361,7 @@ class _MrPostman:
                 _MrPostcard(obj.recipient, obj.ghid)
             )
             
-    def _defer_update(self, awaiting_ghid, subscribed_ghid):
+    def _defer_update(self, awaiting_ghid, notifier):
         ''' Defer a subscription notification until the awaiting_ghid is
         received as well.
         '''
@@ -1369,13 +1369,9 @@ class _MrPostman:
         # subscribed ghid will be identical to the notification ghid.
         with self._opslock_defer:
             try:
-                self._deferred[awaiting_ghid].add(
-                    _MrPostcard(subscribed_ghid, subscribed_ghid)
-                )
+                self._deferred[awaiting_ghid].add(notifier)
             except KeyError:
-                self._deferred[awaiting_ghid] = { 
-                    _MrPostcard(subscribed_ghid, subscribed_ghid) 
-                }
+                self._deferred[awaiting_ghid] = { notifier }
             
     def _has_deferred(self, obj):
         ''' Checks to see if a subscription is waiting on the obj, and 
@@ -1455,6 +1451,8 @@ class _MrPostman:
                 break
                 
             else:
+                # We can't spin this out into a thread because some of our 
+                # delivery mechanisms want this to have an event loop.
                 self._deliver(subscription, notification)
             
     def _deliver(self, subscription, notification):
@@ -2127,6 +2125,8 @@ class _Bookie:
 class _LibrarianCore(metaclass=abc.ABCMeta):
     ''' Base class for caching systems common to non-volatile librarians
     such as DiskLibrarian, S3Librarian, etc.
+    
+    TODO: make ghid vs frame ghid usage more consistent across things.
     '''
     def __init__(self):
         # Link to core, which will be assigned after __init__
@@ -2134,6 +2134,10 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         
         # Operations and restoration lock
         self._restoring = TruthyLock()
+        
+        # Lookup for dynamic ghid -> frame ghid
+        # Must be consistent across all concurrently connected librarians
+        self._dyn_resolver = {}
         
         # Lookup for ghid -> hypergolix description
         # This may be GC'd by the python process.
@@ -2150,7 +2154,8 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         '''
         with self._restoring.mutex:
             try:
-                self.remove_from_cache(obj.ghid)
+                ghid = self._ghid_resolver(obj.ghid)
+                self.remove_from_cache(ghid)
             except:
                 logger.warning(
                     'Exception while removing from cache during object GC. '
@@ -2158,9 +2163,12 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
                 )
             
             try:
-                del self._catalog[obj.ghid]
+                del self._catalog[ghid]
             except KeyError:
                 pass
+                
+            if isinstance(obj, _GobdLite):
+                del self._dyn_resolver[obj.ghid]
         
     def store(self, obj, data):
         ''' Starts tracking an object.
@@ -2168,21 +2176,50 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         raw is bytes-like.
         '''  
         with self._restoring.mutex:
+            # We need to do some resolver work if it's a dynamic object.
+            if isinstance(obj, _GobdLite):
+                reference = obj.frame_ghid
+            else:
+                reference = obj.ghid
+            
             # Only add to cache if we are not restoring from it.
             if not self._restoring:
-                self.add_to_cache(obj.ghid, data)
+                self.add_to_cache(reference, data)
                 
-            self._catalog[obj.ghid] = obj
+            self._catalog[reference] = obj
+            
+            # Finally, only if successful should we update
+            if isinstance(obj, _GobdLite):
+                # Remove any existing frame.
+                if obj.ghid in self._dyn_resolver:
+                    old_ghid = self._ghid_resolver(obj.ghid)
+                    self.remove_from_cache(old_ghid)
+                    # Remove any existing _catalog entry
+                    self._catalog.pop(old_ghid, None)
+                # Update new frame.
+                self._dyn_resolver[obj.ghid] = obj.frame_ghid
+                
+    def _ghid_resolver(self, ghid):
+        ''' Convert a dynamic ghid into a frame ghid, or return the ghid
+        immediately if not dynamic.
+        '''
+        if ghid in self._dyn_resolver:
+            return self._dyn_resolver[ghid]
+        else:
+            return ghid
         
     def dereference(self, ghid):
         ''' Returns the raw data associated with the ghid.
         '''
         with self._restoring.mutex:
+            ghid = self._ghid_resolver(ghid)
             return self.get_from_cache(ghid)
         
     def whois(self, ghid):
         ''' Returns a lightweight Hypergolix description of the object.
         '''
+        ghid = self._ghid_resolver(ghid)
+        
         # No need to block if it exists, especially if we're restoring.
         try:
             return self._catalog[ghid]
@@ -2219,6 +2256,7 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
             raise new_exc from exc
         
     def __contains__(self, ghid):
+        ghid = self._ghid_resolver(ghid)
         # Catalog may only be accurate locally. Shelf is accurate globally.
         return self.check_in_cache(ghid)
     

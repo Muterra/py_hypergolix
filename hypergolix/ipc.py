@@ -225,8 +225,6 @@ class IPCHostEndpoint(_AutoresponderSession):
         '''
         # Note: currently we're actually sending the whole object update, not
         # just a notification of update address.
-        # print('Endpoint got send update request.')
-        # print(ghid)
         
         if isinstance(state, Ghid):
             is_link = True
@@ -251,11 +249,6 @@ class IPCHostEndpoint(_AutoresponderSession):
             # Note: for now, just don't worry about failures. See previous note
             await_reply = False
         )
-        # print('Update sent and resuming life.')
-        # if response == b'\x01':
-        #     return True
-        # else:
-        #     raise RuntimeError('Unknown error while delivering object update.')
     
     def send_delete_threadsafe(self, ghid):
         return call_coroutine_threadsafe(
@@ -277,11 +270,6 @@ class IPCHostEndpoint(_AutoresponderSession):
             # Note: for now, just don't worry about failures.
             await_reply = False
         )
-        # print('Update sent and resuming life.')
-        # if response == b'\x01':
-        #     return True
-        # else:
-        #     raise RuntimeError('Unknown error while delivering object update.')
     
     def notify_share_failure_threadsafe(self, ghid, recipient):
         return call_coroutine_threadsafe(

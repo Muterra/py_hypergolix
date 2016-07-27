@@ -316,8 +316,6 @@ class HGXCore:
                 target = source_ghid
             )
             self.cleanup_ghid(request.target)
-            # print(repr(e))
-            # traceback.print_tb(e.__traceback__)
             
         else:
             # Success. Send an ack to whomever sent the handshake
@@ -449,7 +447,7 @@ class HGXCore:
         # Add a note to _holdings that "I am my own keeper"
         self._holdings[dynamic.ghid_dynamic] = dynamic.ghid_dynamic
         
-        return dynamic.ghid_dynamic
+        return dynamic.ghid_dynamic, dynamic.ghid
         
     def update_dynamic(self, ghid_dynamic, state):
         ''' Like update_object, but does not perform type checking, and
@@ -528,6 +526,9 @@ class HGXCore:
         #     for recipient in self._shared_objects[obj.address]:
         #         self.hand_object(obj, recipient)
         
+        # Return the frame ghid
+        return dynamic.ghid
+        
     def _do_dynamic(self, state, ghid_dynamic=None, history=None, secret=None):
         ''' Actually generate a dynamic binding.
         '''
@@ -586,7 +587,7 @@ class HGXCore:
         # initiated the update for.
         # TODO: fix leaky abstraction
         obj = self._oracle[ghid]
-        if not obj._silenced:
+        if unpacked_binding.ghid not in obj._silenced:
             # This bit trusts that the persistence provider is enforcing proper
             # monotonic state progression for dynamic bindings. Check that our
             # current frame is the most recent, and if so, return immediately.
@@ -853,6 +854,8 @@ class Oracle:
 class _GAO(metaclass=abc.ABCMeta):
     ''' Base class for Golix-Aware Objects (Golix Accountability 
     Objects?). Anyways, used by core to handle plaintexts and things.
+    
+    TODO: thread safety? or async safety?
     '''
     def __init__(self, core, dynamic, _legroom=None, *args, **kwargs):
         ''' Creates a golix-aware object. If ghid is passed, will 
@@ -860,6 +863,7 @@ class _GAO(metaclass=abc.ABCMeta):
         will create new object on first push. If ghid is not None, then
         dynamic will be ignored.
         '''
+        self.__opslock = threading.RLock()
         self._core = core
         self.dynamic = bool(dynamic)
         self.ghid = None
@@ -871,23 +875,43 @@ class _GAO(metaclass=abc.ABCMeta):
             _legroom = core._legroom
         self._legroom = _legroom
         
-        self._silenced = False
+        # This probably only needs to be maxlen=2, but it's a pretty negligible
+        # footprint to add some headspace
+        self._silenced = collections.deque(maxlen=3)
+        self._update_greenlight = threading.Event()
         
         super().__init__(*args, **kwargs)
         
-    def silence(self):
-        ''' Temporarily silence update processing for the object.
-        '''
-        # TODO: add some kind of thread safety here.
-        # What about race conditions re: getting an unrelated update while 
-        # trying to push? I suppose that will necessarily result in an error 
-        # followed by a pull to restore correct state.
-        self._silenced = True
+    def halt_updates(self):
+        # TODO: this is going to create a resource leak in a race condition:
+        # if we get an update while deleting, it will just sit there waiting
+        # forever.
+        with self.__opslock:
+            self._update_greenlight.clear()
         
-    def unsilence(self):
-        ''' Unsilence update processing for the object.
+    def silence(self, notification):
+        ''' Silence update processing for the object when the update
+        notification ghid matches the frame ghid.
+        
+        Since this is only set up to silence one ghid at a time, this
+        depends upon our local persister enforcing monotonic frame 
+        progression.
         '''
-        self._silenced = False
+        with self.__opslock:
+            # Make this indempotent so we can't accidentally forget everything
+            # else
+            if notification not in self._silenced:
+                self._silenced.appendleft(notification)
+        
+    def unsilence(self, notification):
+        ''' Unsilence update processing for the object at the particular
+        notification ghid.
+        '''
+        with self.__opslock:
+            try:
+                self._silenced.remove(notification)
+            except ValueError:
+                pass
             
     @classmethod
     def from_ghid(cls, core, ghid, _legroom=None, *args, **kwargs):
@@ -895,6 +919,7 @@ class _GAO(metaclass=abc.ABCMeta):
         '''
         author, dynamic, packed_state = core.get_ghid(ghid)
         # Awwwwkward
+        # TODO: change
         args1, kwargs1 = cls._init_unpack(packed_state)
         args = list(args)
         args.extend(args1)
@@ -906,11 +931,14 @@ class _GAO(metaclass=abc.ABCMeta):
             *args, **kwargs
         )
         
-        if dynamic:
-            core.persister.subscribe(ghid, self._weak_touch)
-        
         self.ghid = ghid
         self.author = author
+        
+        if dynamic:
+            core.persister.subscribe(ghid, self._weak_touch)
+            
+        # DON'T FORGET TO SET THIS!
+        self._update_greenlight.set()
         
         return self
         
@@ -955,13 +983,14 @@ class _GAO(metaclass=abc.ABCMeta):
         ''' Pushes updates to upstream. Must be called for every object
         mutation.
         '''
-        if self.ghid is None:
-            self.__new()
-        else:
-            if self.dynamic:
-                self.__update()
+        with self.__opslock:
+            if self.ghid is None:
+                self.__new()
             else:
-                raise TypeError('Static GAOs cannot be updated.')
+                if self.dynamic:
+                    self.__update()
+                else:
+                    raise TypeError('Static GAOs cannot be updated.')
         
     def pull(self):
         ''' Refreshes self from upstream. Should NOT be called at object 
@@ -972,19 +1001,43 @@ class _GAO(metaclass=abc.ABCMeta):
         # self.ghid (as the subscription ghid) as well as the ghid for the new
         # frame (as the notification ghid)
         
-        if self.dynamic:
-            # State will be None if no update was applied.
-            packed_state = self._core.touch_dynamic(self.ghid)
-            if packed_state:
-                # Don't forget to extract...
-                self.apply_state(
-                    self._unpack(packed_state)
-                )
+        with self.__opslock:
+            if self.dynamic:
+                # State will be None if no update was applied.
+                packed_state = self._core.touch_dynamic(self.ghid)
+                if packed_state:
+                    # Don't forget to extract...
+                    self.apply_state(
+                        self._unpack(packed_state)
+                    )
+                    modified = True
+                else:
+                    modified = False
+            else:
+                modified = False
         
-    def touch(self, *args, **kwargs):
+        return modified
+        
+    def touch(self, subscription, notification):
         ''' Notifies the object to check upstream for changes.
         '''
-        if not self._silenced:
+        # While we're doing this unholy abomination of half async, half
+        # threaded, just spin this out into a thread to avoid async
+        # deadlocks (which we'll otherwise almost certainly encounter)
+        # TODO: asyncify all the things
+        worker = threading.Thread(
+            target = self.__touch,
+            daemon = True,
+            args = (subscription, notification),
+        )
+        worker.start()
+            
+    def __touch(self, subscription, notification):
+        ''' Method to be called by self.touch from within thread.
+        '''
+        # First we need to wait for the update greenlight.
+        self._update_greenlight.wait()
+        if notification not in self._silenced:
             self.pull()
         
     def __new(self):
@@ -992,15 +1045,17 @@ class _GAO(metaclass=abc.ABCMeta):
         self._dynamic, etc.
         '''
         if self.dynamic:
-            address = self._core.new_dynamic(
+            # Need both of these so we can silence the initial frame.
+            address, frame_address = self._core.new_dynamic(
                 state = self._pack(
                     self.extract_state()
                 ),
                 _legroom = self._legroom,
             )
+            # Silence any updates about this initial frame address.
+            self.silence(frame_address)
+            # Finally, subscribe to updates.
             self._core.persister.subscribe(address, self._weak_touch)
-            # If we ever decide to handle frame_ghid locally, deal with that 
-            # here.
         else:
             address = self._core.new_static(
                 state = self._pack(
@@ -1010,6 +1065,8 @@ class _GAO(metaclass=abc.ABCMeta):
         
         self.author = self._core.whoami
         self.ghid = address
+        # Successful creation. Clear us for updates.
+        self._update_greenlight.set()
         
     def __update(self):
         ''' Updates an existing golix object. Must already have checked
@@ -1020,19 +1077,26 @@ class _GAO(metaclass=abc.ABCMeta):
         OR MAY NOT BE THE ACTUAL CURRENT STATE!
         '''
         try:
-            self.silence()
-            self._core.update_dynamic(
+            # Pause updates while doing this.
+            self._update_greenlight.clear()
+            frame_ghid = self._core.update_dynamic(
                 ghid_dynamic = self.ghid,
                 state = self._pack(
                     self.extract_state()
                 ),
             )
-            self.unsilence()
+            # Make sure to never call an update for this frame.
+            self.silence(frame_ghid)
+            
         except:
             author, dynamic, packed_state = self._core.get_ghid(self.ghid)
             state = self._unpack(packed_state)
             self.apply_state(state)
             raise
+            
+        finally:
+            # Resume accepting updates.
+            self._update_greenlight.set()
             
     @property
     def _weak_touch(self):

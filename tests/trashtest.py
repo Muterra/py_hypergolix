@@ -83,4 +83,12 @@ if __name__ == '__main__':
     # Dammit unittest using argparse
     sys.argv[1:] = args.unittest_args
     from trashtest import *
-    unittest.main()
+    
+    if args.traceur:
+        # This diagnoses deadlocks
+        from hypergolix.utils import TraceLogger
+        with TraceLogger(interval=5):
+            unittest.main()
+    
+    else:
+        unittest.main()

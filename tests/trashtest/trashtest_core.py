@@ -207,11 +207,11 @@ class RawObj:
         '''
         if dynamic:
             if isinstance(state, RawObj):
-                ghid = self._dispatch._core.new_dynamic(
+                ghid, frame_ghid = self._dispatch._core.new_dynamic(
                     state = state
                 )
             else:
-                ghid = self._dispatch._core.new_dynamic(
+                ghid, frame_ghid = self._dispatch._core.new_dynamic(
                     state = self._wrap_state(state)
                 )
         else:

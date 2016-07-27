@@ -37,6 +37,7 @@ import logging
 import unittest
 import sys
 import time
+import statistics
 import collections
 import threading
 import random
@@ -112,6 +113,7 @@ def make_fixtures(debug, verbosity, log_prefix):
 
 
 def make_tests(iterations, debug, raz, des, aengel):
+    timer = collections.deque([0,0], maxlen=2)
 
     # Declare API
     request_api = bytes(64) + b'\x01'
@@ -127,6 +129,7 @@ def make_tests(iterations, debug, raz, des, aengel):
     roundtrip_flag = threading.Event()
     roundtrip_check = collections.deque()
     def rt_notifier(obj):
+        timer.appendleft(time.monotonic())
         roundtrip_flag.set()
         roundtrip_check.append(obj.state)
     def rt_waiter(timeout=1):
@@ -140,6 +143,8 @@ def make_tests(iterations, debug, raz, des, aengel):
     class DemoReplicatorTest(unittest.TestCase):
         @classmethod
         def setUpClass(cls):
+            cls.timer = timer
+            
             cls.razlink = HypergolixLink(
                 ipc_port = 6023, 
                 debug = debug, 
@@ -155,6 +160,11 @@ def make_tests(iterations, debug, raz, des, aengel):
             cls.des = cls.deslink.whoami_threadsafe()
             
         def setUp(self):
+            self.assertNotEqual(self.raz, self.des)
+            self.assertNotEqual(
+                self.razlink.whoami_threadsafe(), 
+                self.deslink.whoami_threadsafe()
+            )
             self.razlink.new_token_threadsafe()
             self.deslink.new_token_threadsafe()
     
@@ -168,7 +178,7 @@ def make_tests(iterations, debug, raz, des, aengel):
             obj.share_threadsafe(self.des)
             return obj
         
-        # All requests go from Raz -> Des
+        # All responses go from Des -> Raz
         def request_handler(self, obj):
             # Just to prevent GC
             requests_incoming.appendleft(obj)
@@ -177,13 +187,15 @@ def make_tests(iterations, debug, raz, des, aengel):
                 dynamic = True,
                 api_id = response_api
             )
-            reply.share_threadsafe(recipient=self.raz)
-            # Just to prevent GC
-            responses_outgoing.appendleft(reply)
             
             def state_mirror(source_obj):
                 reply.update_threadsafe(source_obj.state)
             obj.append_threadsafe_callback(state_mirror)
+            
+            reply.share_threadsafe(recipient=self.raz)
+            
+            # Just to prevent GC
+            responses_outgoing.appendleft(reply)
             
         # All requests go from Raz -> Des. All responses go from Des -> Raz.
         def response_handler(self, obj):
@@ -195,24 +207,32 @@ def make_tests(iterations, debug, raz, des, aengel):
             ''' Yknow, pretend to make an app and shit. Basically, an 
             automated version of echo-101/demo-4.py
             '''
-            self.razlink.register_api_threadsafe(request_api, self.request_handler)
+            # self.razlink.register_api_threadsafe(request_api, self.request_handler)
             self.razlink.register_api_threadsafe(response_api, self.response_handler)
             self.deslink.register_api_threadsafe(request_api, self.request_handler)
-            self.deslink.register_api_threadsafe(response_api, self.response_handler)
+            # self.deslink.register_api_threadsafe(response_api, self.response_handler)
             
             msg = b'hello'
             obj = self.make_request(msg)
             
             time.sleep(1)
+            times = []
             
             for ii in range(iterations):
                 with self.subTest(i=ii):
                     msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
                     msg = msg.encode('utf-8')
+                    # Zero out the timer first
+                    self.timer.extendleft([0,0,time.monotonic()])
                     obj.update_threadsafe(msg)
                     self.assertTrue(rt_waiter())
                     self.assertTrue(rt_checker(msg))
+                    times.append(self.timer[0] - self.timer[1])
                     
+            print('Max time: ', max(times))
+            print('Min time: ', min(times))
+            print('Mean time:', statistics.mean(times))
+            print('Med time: ', statistics.median(times))
     
     return DemoReplicatorTest
     

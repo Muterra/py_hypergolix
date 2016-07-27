@@ -384,7 +384,7 @@ class Dispatcher(DispatcherBase):
             )
         
         try:
-            obj.silence()
+            obj.halt_updates()
             # self._ignore_subs_because_updating.add(ghid)
             self._core.delete_ghid(ghid)
         except:
@@ -486,8 +486,6 @@ class Dispatcher(DispatcherBase):
         
         ack is a golix.AsymAck object.
         '''
-        print(self._pending_requests._state)
-        print(bytes(request))
         target = self._pending_requests.pop(request)
         
         # This was added in our overriden share_object
@@ -720,19 +718,9 @@ class _Dispatchable(_GAO):
         instantiation for any existing objects. Should instead be called
         directly, or through _weak_pull for any new status.
         '''
-        # Note that, when used as a subs handler, we'll be passed our own 
-        # self.ghid (as the subscription ghid) as well as the ghid for the new
-        # frame (as the notification ghid)
-        
-        if self.dynamic:
-            # State will be None if no update was applied.
-            packed_state = self._core.touch_dynamic(self.ghid)
-            if packed_state:
-                # Don't forget to extract...
-                self.apply_state(
-                    self._unpack(packed_state)
-                )
-                self._dispatch.distribute_to_endpoints(self.ghid)
+        modified = super().pull()
+        if modified:
+            self._dispatch.distribute_to_endpoints(self.ghid)
         
     @classmethod
     def _init_unpack(cls, packed):

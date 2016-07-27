@@ -644,8 +644,7 @@ class DispatchObj(RawObj):
                 
         # If this is an attempted update, just check to make sure they match.
         elif self.api_id2 != value:
-            print(self.api_id2)
-            print(value)
+            logger.error(str(self.api_id2) + ' != ' + str(value))
             raise RuntimeError(
                 'Attempting to change api_id during update is not allowed.'
             )
@@ -749,9 +748,6 @@ class DispatchObj(RawObj):
             msgpack.exceptions.UnpackValueError,
             KeyError
         ) as e:
-            # print(repr(e))
-            # traceback.print_tb(e.__traceback__)
-            # print(state)
             raise HandshakeError(
                 'Handshake does not appear to conform to the hypergolix '
                 'handshake procedure.'
@@ -822,19 +818,15 @@ class IPCPackerMixIn:
             unpacked_msg = msgpack.unpackb(data, encoding='utf-8')
             
         # MsgPack errors mean that we don't have a properly formatted handshake
-        except (
-            msgpack.exceptions.BufferFull,
-            msgpack.exceptions.ExtraData,
-            msgpack.exceptions.OutOfData,
-            msgpack.exceptions.UnpackException,
-            msgpack.exceptions.UnpackValueError,
-        ) as e:
-            print(repr(e))
-            traceback.print_tb(e.__traceback__)
-            # print(state)
+        except (msgpack.exceptions.BufferFull,
+                msgpack.exceptions.ExtraData,
+                msgpack.exceptions.OutOfData,
+                msgpack.exceptions.UnpackException,
+                msgpack.exceptions.UnpackValueError) as exc:
+            logger.error(''.join(traceback.format_exc()))
             raise ValueError(
                 'Unable to unpack object definition. Different serialization?'
-            ) from e
+            ) from exc
             
         if unpacked_msg['address'] is not None:
             unpacked_msg['address'] = Ghid.from_bytes(unpacked_msg['address'])
@@ -1854,7 +1846,11 @@ class TraceLogger:
         while not self.stop_requested.is_set():
             time.sleep(self.interval)
             traces = self.get_traces()
-            logger.info(traces)
+            logger.info(
+                '#####################################################\n' + 
+                'TraceLogger frame:\n' +
+                traces
+            )
     
     def stop(self):
         self.stop_requested.set()
