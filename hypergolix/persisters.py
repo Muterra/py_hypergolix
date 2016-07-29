@@ -283,6 +283,7 @@ class MemoryPersister:
         
         self.subscribe = self.postman.subscribe
         self.unsubscribe = self.postman.unsubscribe
+        self.silence_notification = self.postman.silence_notification
         # self.publish = self.core.ingest
         self.list_bindings = self.bookie.bind_status
         self.list_debindings = self.bookie.debind_status
@@ -1272,13 +1273,20 @@ class _MrPostman:
         
         # The scheduling queue
         self._scheduled = queue.Queue()
-        # Ignoring lookup: <subscribed ghid>: set(<callbacks>)
-        # TODO: ctrl+F this yields 3 results. Bug?
+        # Ignoring lookup: <callback>: set(<_MrPostcards>)
         self._opslock_ignore = threading.Lock()
-        self._ignored = {}
+        self._ignored = SetMap()
         # The delayed lookup. <awaiting ghid>: set(<subscribed ghids>)
         self._opslock_defer = threading.Lock()
         self._deferred = {}
+        
+    def silence_notification(self, callback, subscription, notification):
+        ''' Silences callbacks for specific subscription, notification
+        pairs.
+        '''
+        with self._opslock_ignore:
+            ignorable = _MrPostcard(subscription, notification)
+            self._ignored.add(callback, ignorable)
         
     def schedule(self, obj, removed=False):
         ''' Schedules update delivery for the passed object.
@@ -1386,16 +1394,6 @@ class _MrPostman:
                 del self._deferred[obj.ghid]
                 return subscribed_ghids
         
-    def ignore_next_update(self, ghid, callback):
-        ''' Tells the postman to ignore the next update received for the
-        passed ghid at the callback.
-        '''
-        with self._opslock_ignore:
-            try:
-                self._ignored[ghid].add(callback)
-            except KeyError:
-                self._ignored[ghid] = { callback }
-        
     def subscribe(self, ghid, callback):
         ''' Tells the postman that the watching_session would like to be
         updated about ghid.
@@ -1468,8 +1466,13 @@ class _MrPostman:
         except KeyError:
             callbacks = frozenset()
                 
+        postcard = _MrPostcard(subscription, notification)
+                
         for callback in callbacks:
-            callback(subscription, notification)
+            if self._ignored.contains_within(callback, postcard):
+                self._ignored.discard(callback, postcard)
+            else:
+                callback(*postcard)
         
         
 class _Undertaker:

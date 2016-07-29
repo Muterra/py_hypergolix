@@ -41,6 +41,8 @@ import statistics
 import collections
 import threading
 import random
+import datetime
+import pathlib
 
 
 import IPython
@@ -58,25 +60,13 @@ from golix import Ghid
 # ###############################################
 
 
-def make_fixtures(debug, verbosity, log_prefix):
-    if log_prefix:
-        fname_raz = log_prefix + '_raz.log'
-        fname_des = log_prefix + '_des.log'
-        fname_server = log_prefix + '_server.log'
-        
-    else:
-        fname_raz = None
-        fname_des = None
-        fname_server = None
-        
+def make_fixtures(debug):
     aengel = Aengel()
         
     hgxserver = _hgx_server(
         host = 'localhost',
         port = 6022,
         debug = debug,
-        verbosity = verbosity,
-        logfile = fname_server,
         traceur = False,
         foreground = False,
         aengel = aengel,
@@ -86,8 +76,6 @@ def make_fixtures(debug, verbosity, log_prefix):
         port = 6022,
         ipc_port = 6023,
         debug = debug,
-        verbosity = verbosity,
-        logfile = fname_raz,
         traceur = False,
         foreground = False,
         aengel = aengel,
@@ -97,8 +85,6 @@ def make_fixtures(debug, verbosity, log_prefix):
         port = 6022,
         ipc_port = 6024,
         debug = debug,
-        verbosity = verbosity,
-        logfile = fname_des,
         traceur = False,
         foreground = False,
         aengel = aengel,
@@ -175,6 +161,7 @@ def make_tests(iterations, debug, raz, des, aengel):
                 dynamic = True,
                 api_id = request_api
             )
+            time.sleep(.1)
             obj.share_threadsafe(self.des)
             return obj
         
@@ -215,7 +202,7 @@ def make_tests(iterations, debug, raz, des, aengel):
             msg = b'hello'
             obj = self.make_request(msg)
             
-            time.sleep(1)
+            time.sleep(1.5)
             times = []
             
             for ii in range(iterations):
@@ -228,6 +215,8 @@ def make_tests(iterations, debug, raz, des, aengel):
                     self.assertTrue(rt_waiter())
                     self.assertTrue(rt_checker(msg))
                     times.append(self.timer[0] - self.timer[1])
+                    # Max update frequencies can cause problems yo
+                    time.sleep(.25)
                     
             print('Max time: ', max(times))
             print('Min time: ', min(times))
@@ -256,11 +245,11 @@ if __name__ == '__main__':
         help = 'Set debug mode. Automatically sets verbosity to debug.'
     )
     parser.add_argument(
-        '--logfile', 
+        '--logdir', 
         action = 'store',
         default = None, 
         type = str,
-        help = 'Log to a specified file, relative to current directory.',
+        help = 'Log to a specified directory, relative to current path.',
     )
     parser.add_argument(
         '--verbosity', 
@@ -280,12 +269,37 @@ if __name__ == '__main__':
     sys.argv[1:] = args.unittest_args
     
     # Okay, let's set up the tests
-    server, raz, des, aengel = make_fixtures(
-        args.debug, 
-        args.verbosity, 
-        args.logfile
-    )    
+    server, raz, des, aengel = make_fixtures(args.debug)    
     apptest = make_tests(args.iters, args.debug, raz, des, aengel)
+    
+    log_dir = args.logdir
+    if log_dir:
+        ii = 0
+        # Note that double slashes don't cause problems.
+        prefix = log_dir + '/' + 'trashdemo'
+        date = str(datetime.date.today())
+        ext = '.pylog'
+        while pathlib.Path(prefix + '_' + date + '_' + str(ii) + ext).exists():
+            ii += 1
+        logname = prefix + '_' + date + '_' + str(ii) + ext
+        print('USING LOGFILE: ' + logname)
+        
+    else:
+        logname = None
+    
+    if logname:
+        loghandler = logging.FileHandler(logname)
+        loghandler.setFormatter(
+            logging.Formatter(
+                '%(threadName)-7s %(name)-12s: %(levelname)-8s %(message)s'
+            )
+        )
+        # Add to root logger
+        logging.getLogger('').addHandler(loghandler)
+        
+    # Silence the froth
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    logging.getLogger('websockets').setLevel(logging.WARNING)
     
     # And finally, run them
     suite = unittest.TestSuite()

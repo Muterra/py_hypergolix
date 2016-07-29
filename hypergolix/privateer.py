@@ -39,6 +39,8 @@ __all__ = [
     'Privateer', 
 ]
 
+from .utils import TraceLogger
+
 # External dependencies
 import threading
 import collections
@@ -81,6 +83,9 @@ class Privateer:
             self._secrets_persistent, 
             self._secrets_staging,
         )
+        
+        # Just here for diagnosing a testing problem
+        self._committment_problems = {}
         
     def get(self, ghid):
         ''' Get a secret for a ghid, regardless of status.
@@ -148,6 +153,12 @@ class Privateer:
                 else:
                     # It doesn't exist, so commit it directly.
                     self._secrets_persistent[ghid] = secret
+                    
+                # Just keep track of shit for this fucking error
+                self._committment_problems[ghid] = TraceLogger.dump_my_trace()
+                    
+    def last_commit(self, ghid):
+        return self._committment_problems[ghid]
             
     def _compare_staged_to_persistent(self, ghid):
         try:

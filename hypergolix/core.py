@@ -109,10 +109,11 @@ class _GhidProxier:
     
     Threadsafe.
     '''
-    def __init__(self):
+    def __init__(self, oracle):
         # The usual.
-        self._refs = weakref.WeakKeyDictionary()
-        self._modlock = threading.RLock()
+        self._refs = {}
+        self._oracle = oracle
+        self._modlock = threading.Lock()
         
     def chain(self, proxy, target):
         ''' Set, or update, a ghid proxy.
@@ -120,31 +121,33 @@ class _GhidProxier:
         Ghids must only ever have a single proxy. Calling chain on an 
         existing proxy will update the target.
         '''
-        if not isinstance(target, weakref.ProxyTypes):
-            target = weakref.proxy(target)
+        if not isinstance(proxy, Ghid):
+            raise TypeError('Proxy must be Ghid.')
             
-        if isinstance(proxy, weakref.ProxyTypes):
-            # Well this is a total hack to dereference the proxy, but oh well
-            proxy = proxy.__repr__.__self__
+        if not isinstance(target, Ghid):
+            raise TypeError('Target must be ghid.')
         
         with self._modlock:
             self._refs[proxy] = target
-        
+            
     def resolve(self, ghid):
+        ''' Protect the entry point with a global lock, but don't leave
+        the recursive bit alone.
+        '''
+        if not isinstance(ghid, Ghid):
+            raise TypeError('Can only resolve a ghid.')
+            
+        with self._modlock:
+            return self._resolve(ghid)
+        
+    def _resolve(self, ghid):
         ''' Recursively resolves the container ghid for a proxy (or a 
         container).
         '''
-        # Is this seriously fucking necessary?
-        if isinstance(ghid, weakref.ProxyTypes):
-            # Well this is a total hack to dereference the proxy, but oh well
-            ghid = ghid.__repr__.__self__
-            
-        # Note that _modlock must be reentrant
-        with self._modlock:
-            try:
-                return self.resolve(self._refs[ghid])
-            except KeyError:
-                return ghid
+        try:
+            return self._resolve(self._refs[ghid])
+        except KeyError:
+            return ghid
 
 
 class HGXCore:
@@ -163,12 +166,14 @@ class HGXCore:
         '''
         super().__init__(*args, **kwargs)
         
+        self._opslock = threading.Lock()
+        
         # if not isinstance(persister, _PersisterBase):
         #     raise TypeError('Persister must subclass _PersisterBase.')
         self._persister = persister
         self._oracle = oracle
         
-        self._ghidproxy = _GhidProxier()
+        self._ghidproxy = _GhidProxier(oracle)
         # self._privateer = privateer
         # self._privateer = _Privateer()
         
@@ -388,29 +393,40 @@ class HGXCore:
         return self._dispatcher
         
     def _make_static(self, data, secret=None):
-        if secret is None:
-            secret = self._identity.new_secret()
-        container = self._identity.make_container(
-            secret = secret,
-            plaintext = data
-        )
-        self._privateer.stage(container.ghid, secret)
-        self._privateer.commit(container.ghid)
+        with self._opslock:
+            if secret is None:
+                secret = self._identity.new_secret()
+            container = self._identity.make_container(
+                secret = secret,
+                plaintext = data
+            )
+            try:
+                self._privateer.stage(container.ghid, secret)
+                self._privateer.commit(container.ghid)
+            except:
+                print('#############################################')
+                print('ERROR WHILE STAGING AND COMMITTING SECRET.')
+                print('Previously staged with traceback: ')
+                print(self._privateer.last_commit(container.ghid))
+                print('#############################################')
+                raise
         return container
         
     def _make_bind(self, ghid):
-        binding = self._identity.make_bind_static(
-            target = ghid
-        )
-        self._holdings[ghid] = binding.ghid
+        with self._opslock:
+            binding = self._identity.make_bind_static(
+                target = ghid
+            )
+            self._holdings[ghid] = binding.ghid
         return binding
         
     def _do_debind(self, ghid):
         ''' Creates a debinding and removes the object from persister.
         '''
-        debind = self._identity.make_debind(
-            target = ghid
-        )
+        with self._opslock:
+            debind = self._identity.make_debind(
+                target = ghid
+            )
         self.persister.publish(debind.packed)
         
     def new_static(self, state):
@@ -541,17 +557,18 @@ class HGXCore:
             container = self._make_static(state, secret)
             target = container.ghid
             
-        dynamic = self._identity.make_bind_dynamic(
-            target = target,
-            ghid_dynamic = ghid_dynamic,
-            history = history
-        )
-        
-        # Don't forget to update our proxy!
-        self._ghidproxy.chain(
-            proxy = dynamic.ghid_dynamic,
-            target = target,
-        )
+        with self._opslock:
+            dynamic = self._identity.make_bind_dynamic(
+                target = target,
+                ghid_dynamic = ghid_dynamic,
+                history = history
+            )
+            
+            # Don't forget to update our proxy!
+            self._ghidproxy.chain(
+                proxy = dynamic.ghid_dynamic,
+                target = target,
+            )
         
         # Note: the dispatcher worries about ghid lifetimes (and therefore 
         # also secret lifetimes).
@@ -589,7 +606,7 @@ class HGXCore:
                     self.persister.get(notification)
                 )
                 if presumptive_deletion.target == ghid:
-                    obj = self._oracle[ghid]
+                    obj = self._oracle.get_object(gaoclass=_GAO, ghid=ghid)
                     obj.apply_delete()
                     return None
                 else:
@@ -608,7 +625,7 @@ class HGXCore:
         # First, make sure we're not being asked to update something we 
         # initiated the update for.
         # TODO: fix leaky abstraction
-        obj = self._oracle[ghid]
+        obj = self._oracle.get_object(gaoclass=_GAO, ghid=ghid)
         if unpacked_binding.ghid not in obj._silenced:
             # This bit trusts that the persistence provider is enforcing proper
             # monotonic state progression for dynamic bindings. Check that our
@@ -720,15 +737,16 @@ class HGXCore:
         # TODO: make sure that the ghidproxy has already resolved the container
         container_ghid = self._ghidproxy.resolve(target)
         
-        handshake = self._identity.make_handshake(
-            target = target,
-            secret = self._privateer.get(container_ghid)
-        )
-        
-        request = self._identity.make_request(
-            recipient = contact,
-            request = handshake
-        )
+        with self._opslock:
+            handshake = self._identity.make_handshake(
+                target = target,
+                secret = self._privateer.get(container_ghid)
+            )
+            
+            request = self._identity.make_request(
+                recipient = contact,
+                request = handshake
+            )
         
         # Note that this must be called before publishing to the persister, or
         # there's a race condition between them.
@@ -825,35 +843,40 @@ class Oracle:
     def __init__(self, core):
         ''' Sets up internal tracking.
         '''
+        self._opslock = threading.Lock()
         self._core = core
         self._lookup = {}
-        
-    def __getitem__(self, ghid):
-        ''' Returns the raw data associated with the ghid. If the ghid
-        is unavailable, attempts to retrieve it from core.
-        '''
-        # Note: should probably add some kind of explicit cache refresh 
-        # mechanism, in the event that connections or updates are dropped.
-        return self._lookup[ghid]
             
-    def get_object(self, gaoclass, ghid, *args, **kwargs):
-        obj = gaoclass.from_ghid(
-            core = self._core, 
-            ghid = ghid, 
-            *args, **kwargs
-        )
-        self._lookup[ghid] = obj
-        return obj
+    def get_object(self, gaoclass, ghid, **kwargs):
+        with self._opslock:
+            try:
+                obj = self._lookup[ghid]
+                if not isinstance(obj, gaoclass):
+                    raise TypeError(
+                        'Object has already been resolved, and is not the '
+                        'correct GAO class.'
+                    )
+                    
+            except KeyError:
+                obj = gaoclass.from_ghid(
+                    core = self._core, 
+                    ghid = ghid, 
+                    **kwargs
+                )
+                self._lookup[ghid] = obj
+                
+            return obj
         
-    def new_object(self, gaoclass, *args, **kwargs):
+    def new_object(self, gaoclass, **kwargs):
         ''' Creates a new object and returns it. Passes all *args and
         **kwargs to the declared gao_class. Eliminates the need to pass
         core, or call push.
         '''
-        obj = gaoclass(core=self._core, *args, **kwargs)
-        obj.push()
-        self._lookup[obj.ghid] = obj
-        return obj
+        with self._opslock:
+            obj = gaoclass(core=self._core, **kwargs)
+            obj.push()
+            self._lookup[obj.ghid] = obj
+            return obj
         
     def forget(self, ghid):
         ''' Removes the object from the cache. Next time an application
@@ -861,14 +884,16 @@ class Oracle:
         
         Indempotent; will not raise KeyError if called more than once.
         '''
-        try:
-            del self._lookup[ghid]
-        except KeyError:
-            pass
+        with self._opslock:
+            try:
+                del self._lookup[ghid]
+            except KeyError:
+                pass
             
     def __contains__(self, ghid):
-        ''' Very quick proxy to self._lookup. Does not check for global
-        access; that's mostly up to privateer.
+        ''' Checks for the ghid in cache (but does not check for global
+        availability; that would require checking the persister for its
+        existence and the privateer for access).
         '''
         return ghid in self._lookup
     
@@ -885,13 +910,14 @@ class _GAO(metaclass=abc.ABCMeta):
         will create new object on first push. If ghid is not None, then
         dynamic will be ignored.
         '''
-        self._deleted = False
         self.__opslock = threading.RLock()
+        self.__updater = None
+        
+        self._deleted = False
         self._core = core
         self.dynamic = bool(dynamic)
         self.ghid = None
         self.author = None
-        self.__updater = None
         # self._frame_ghid = None
         
         if _legroom is None:

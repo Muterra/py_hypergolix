@@ -82,6 +82,8 @@ class LooperTrooperTest(unittest.TestCase):
             self.assertTrue(looper._sum >= 5050)
             self.assertEqual(looper._counter, 0)
             
+        looper.stop_threadsafe()
+            
         # pass
         # self.server._halt()
         

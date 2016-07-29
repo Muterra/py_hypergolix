@@ -958,7 +958,7 @@ class ClientTrashTest(unittest.TestCase):
         
 
 if __name__ == "__main__":
-    logging.basicConfig(filename='logs/core.log', level=logging.DEBUG)
+    logging.basicConfig(filename='logs/core.pylog', level=logging.DEBUG)
     # from hypergolix.utils import TraceLogger
     # with TraceLogger(interval=10):
     #     unittest.main()

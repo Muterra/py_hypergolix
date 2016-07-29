@@ -84,8 +84,7 @@ logger = logging.getLogger(__name__)
 # ###############################################
 
 
-def _hgx_server(host, port, debug, verbosity, logfile, traceur, 
-foreground=True, aengel=None):
+def _hgx_server(host, port, debug, traceur, foreground=True, aengel=None):
     ''' Simple persistence server.
     Expected defaults:
     host:       'localhost'
@@ -153,8 +152,8 @@ def HypergolixLink(ipc_port=7772, debug=False, aengel=None, *args, **kwargs):
     return acomms
     
     
-def HGXService(host, port, ipc_port, debug, verbosity, logfile, traceur, 
-foreground=True, aengel=None):
+def HGXService(host, port, ipc_port, debug, traceur, foreground=True, 
+                aengel=None):
     ''' Expected defaults:
     host:       'localhost'
     port:       7770
@@ -164,25 +163,10 @@ foreground=True, aengel=None):
     verbosity:  'warning'
     traceur:    False
     '''
-    if debug:
-        log_level = logging.DEBUG
-        debug = True
-    else:
-        log_level = {
-            'debug': logging.DEBUG,
-            'info': logging.INFO,
-            'warning': logging.WARNING,
-            'error': logging.ERROR,
-        }[verbosity.lower()]
-        debug = False
         
+    debug = bool(debug)
     # Note: this isn't currently used.
     traceur = bool(traceur)
-        
-    if logfile:
-        logging.basicConfig(filename=logfile, level=log_level)
-    else:
-        logging.basicConfig(level=log_level)
     
     # # Override the module-level logger definition to root
     # logger = logging.getLogger()
@@ -271,7 +255,8 @@ if __name__ == '__main__':
         default = 'warning', 
         type = str,
         help = 'Specify the logging level. '
-                '"debug" -> most verbose, '
+                '"extreme" -> ultramaxx verbose,'
+                '"debug" -> normal most verbose, '
                 '"info" -> somewhat verbose, '
                 '"warning" -> default python verbosity, '
                 '"error" -> quiet.',
@@ -283,13 +268,40 @@ if __name__ == '__main__':
                 'Implies verbosity of debug.'
     )
 
-    args = parser.parse_args()    
+    args = parser.parse_args()
+    
+    if args.debug:
+        log_level = logging.DEBUG
+    else:
+        log_level = {
+            'extreme': logging.DEBUG,
+            'debug': logging.DEBUG,
+            'info': logging.INFO,
+            'warning': logging.WARNING,
+            'error': logging.ERROR,
+        }[args.verbosity.lower()]
+    logging.getLogger('hypergolix').setLevel(log_level)
+        
+    if args.verbosity.lower() == 'extreme':
+        logging.getLogger('websockets').setLevel(logging.DEBUG)
+        logging.getLogger('asyncio').setLevel(logging.DEBUG)
+    else:
+        logging.getLogger('websockets').setLevel(logging.WARNING)
+        logging.getLogger('asyncio').setLevel(logging.WARNING)
+    
+    if args.logfile:
+        loghandler = logging.FileHandler(logfile)
+        loghandler.setFormatter(
+            logging.Formatter(
+                '%(threadName)-7s %(name)-12s: %(levelname)-8s %(message)s'
+            )
+        )
+        logging.getLogger('hypergolix').addHandler(loghandler)
+    
     HGXService(
         args.host, 
         args.port, 
         args.ipc_port, 
         args.debug, 
-        args.verbosity, 
-        args.logfile, 
         args.traceur
     )

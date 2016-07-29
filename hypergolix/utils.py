@@ -1463,9 +1463,14 @@ class LooperTrooper(metaclass=abc.ABCMeta):
     def stop_threadsafe(self):
         ''' Stops the loop EXTERNALLY.
         '''
+        self.stop_threadsafe_nowait()
+        self._shutdown_complete_flag.wait()
+    
+    def stop_threadsafe_nowait(self):
+        ''' Stops the loop EXTERNALLY.
+        '''
         if not self._loop.is_closed():
             self._loop.call_soon_threadsafe(self._shutdown_init_flag.set)
-        self._shutdown_complete_flag.wait()
         
     async def catch_interrupt(self):
         ''' Workaround for Windows not passing signals well for doing
@@ -1564,6 +1569,8 @@ class Aengel:
         # I would really prefer this to be an orderedset, but oh well.
         # That would actually break weakref proxies anyways.
         self._guardlings = collections.deque()
+        self._dead = False
+        self._stoplock = threading.Lock()
         
         if guardlings is not None:
             for guardling in guardlings:
@@ -1610,15 +1617,19 @@ class Aengel:
     def stop(self, *args, **kwargs):
         ''' Call stop_threadsafe on all guardlings.
         '''
-        for guardling in self._guardlings:
-            try:
-                guardling.stop_threadsafe()
-            except:
-                # This is very precarious. Swallow all exceptions.
-                logger.error(
-                    'Swallowed exception while closing ' + repr(guardling) + 
-                    '.\n' + ''.join(traceback.format_exc())
-                )
+        with self._stoplock:
+            if not self._dead:
+                for guardling in self._guardlings:
+                    try:
+                        guardling.stop_threadsafe_nowait()
+                    except:
+                        # This is very precarious. Swallow all exceptions.
+                        logger.error(
+                            'Swallowed exception while closing ' + 
+                            repr(guardling) + '.\n' + 
+                            ''.join(traceback.format_exc())
+                        )
+                self._dead = True
 
 
 class TruthyLock:
@@ -1691,6 +1702,13 @@ class SetMap:
         with self._lock:
             try:
                 return frozenset(self._mapping[key])
+            except KeyError:
+                return frozenset()
+                
+    def pop_any(self, key):
+        with self._lock:
+            try:
+                return frozenset(self._mapping.pop(key))
             except KeyError:
                 return frozenset()
         
@@ -1856,16 +1874,28 @@ class TraceLogger:
         self.stop_requested.set()
         self.thread.join()
             
-    def get_traces(self):
+    @classmethod
+    def get_traces(cls):
         code = []
         for thread_id, stack in sys._current_frames().items():
             # Don't dump the trace for the TraceLogger!
             if thread_id != threading.get_ident():
-                code.extend(self._dump_thread(thread_id, stack))
+                code.extend(cls._dump_thread(thread_id, stack))
                     
         return '\n'.join(code)
         
-    def _dump_thread(self, thread_id, stack):
+    @classmethod
+    def dump_my_trace(cls):
+        code = []
+        for thread_id, stack in sys._current_frames().items():
+            # Don't dump the trace for the TraceLogger!
+            if thread_id == threading.get_ident():
+                code.extend(cls._dump_thread(thread_id, stack))
+                    
+        return '\n'.join(code)
+        
+    @classmethod
+    def _dump_thread(cls, thread_id, stack):
         code = []
         code.append("\n# Thread ID: %s" % thread_id)
         for filename, lineno, name, line in traceback.extract_stack(stack):

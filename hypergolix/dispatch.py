@@ -200,6 +200,7 @@ class Dispatcher(DispatcherBase):
         self._oracle = oracle
         
         # Lookup for ghid -> tokens that specifically requested the ghid
+        # TODO: change this to "tokens that have a copy of the ghid"
         self._requestors_by_ghid = _JitSetDict()
         self._discarders_by_ghid = _JitSetDict()
         
@@ -214,14 +215,11 @@ class Dispatcher(DispatcherBase):
         ''' Gets an object by ghid for a specific endpoint. Currently 
         only works for non-private objects.
         '''
-        try:
-            obj = self._oracle[ghid]
-        except KeyError:
-            obj = self._oracle.get_object(
-                gaoclass = _Dispatchable,
-                dispatch = self, 
-                ghid = ghid
-            )
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            dispatch = self,
+            ghid = ghid,
+        )
         
         if obj.app_token != bytes(4) and obj.app_token != asking_token:
             raise DispatchError(
@@ -263,14 +261,11 @@ class Dispatcher(DispatcherBase):
         endpoint, to prevent issuing that endpoint a notification in 
         return.
         '''
-        try:
-            obj = self._oracle[ghid]
-        except KeyError:
-            obj = self._oracle.get_object(
-                gaoclass = _Dispatchable,
-                dispatch = self, 
-                ghid = ghid,
-            )
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            dispatch = self, 
+            ghid = ghid,
+        )
                 
         # Try updating golix before local.
         # Temporarily silence updates from persister about the ghid we're 
@@ -294,15 +289,11 @@ class Dispatcher(DispatcherBase):
         ''' Do the whole super thing, and then record which application
         initiated the request, and who the recipient was.
         '''
-        # First make sure we actually know the object
-        try:
-            obj = self._oracle[ghid]
-        except KeyError:
-            obj = self._oracle.get_object(
-                gaoclass = _Dispatchable,
-                dispatch = self, 
-                ghid = ghid
-            )
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            dispatch = self, 
+            ghid = ghid
+        )
             
         if obj.app_token != bytes(4):
             raise DispatchError('Cannot share a private object.')
@@ -329,14 +320,11 @@ class Dispatcher(DispatcherBase):
         ''' Converts a dynamic object to a static object, returning the
         static ghid.
         '''
-        try:
-            obj = self._oracle[ghid]
-        except KeyError:
-            obj = self._oracle.get_object(
-                gaoclass = _Dispatchable,
-                dispatch = self, 
-                ghid = ghid
-            )
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            dispatch = self, 
+            ghid = ghid
+        )
         
         if not obj.dynamic:
             raise DispatchError('Cannot freeze a static object.')
@@ -374,14 +362,11 @@ class Dispatcher(DispatcherBase):
         subsequently unavailable to other applications using it.
         '''
         # First we need to cache the object so we can call updates.
-        try:
-            obj = self._oracle[ghid]
-        except KeyError:
-            obj = self._oracle.get_object(
-                gaoclass = _Dispatchable,
-                dispatch = self, 
-                ghid = ghid
-            )
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            dispatch = self, 
+            ghid = ghid
+        )
         
         try:
             obj.halt_updates()
@@ -421,14 +406,11 @@ class Dispatcher(DispatcherBase):
         '''
         # This is sorta an accidental check that we're actually tracking the
         # object. Could make it explicit I suppose.
-        try:
-            obj = self._oracle[ghid]
-        except KeyError:
-            obj = self._oracle.get_object(
-                gaoclass = _Dispatchable,
-                dispatch = self, 
-                ghid = ghid
-            )
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            dispatch = self, 
+            ghid = ghid
+        )
             
         api_id = obj.api_id
         
@@ -537,14 +519,11 @@ class Dispatcher(DispatcherBase):
             obj = deleted
         else:
             # Not deleted? Grab the object.
-            try:
-                obj = self._oracle[ghid]
-            except KeyError:
-                obj = self._oracle.get_object(
-                    gaoclass = _Dispatchable,
-                    dispatch = self, 
-                    ghid = ghid
-                )
+            obj = self._oracle.get_object(
+                gaoclass = _Dispatchable,
+                dispatch = self, 
+                ghid = ghid
+            )
             
         # The app token is defined, so contact that endpoint (and only that 
         # endpoint) directly

@@ -219,7 +219,7 @@ class WSBasicTrashTest(unittest.TestCase):
                 self.assertEqual(msg, val_checker.pop())
                 
     def tearDown(self):
-        time.sleep(.75)
+        time.sleep(1)
         self.client1.stop_threadsafe()
         self.client2.stop_threadsafe()
         self.server.stop_threadsafe()
@@ -367,7 +367,7 @@ if __name__ == "__main__":
     # log_handler = logging.StreamHandler()
     # log_handler.setLevel(logging.DEBUG)
     # logger.addHandler(log_handler)
-    logging.basicConfig(filename='logs/comms.log', level=logging.DEBUG)
+    logging.basicConfig(filename='logs/comms.pylog', level=logging.DEBUG)
     
     unittest.main()
     # with open('std.py', 'w') as f:

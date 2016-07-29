@@ -275,5 +275,5 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         cls.aengel.stop()
 
 if __name__ == "__main__":
-    logging.basicConfig(filename='logs/ipchosts.log', level=logging.DEBUG)
+    logging.basicConfig(filename='logs/ipchosts.pylog', level=logging.DEBUG)
     unittest.main()

@@ -188,7 +188,10 @@ class IPCHostEndpoint(_AutoresponderSession):
             is_link = False
             
         # TODO: some kind of try/catch here?
-        obj = self.dispatch._oracle[ghid]
+        obj = self.dispatch.get_object(
+            asking_token = self.app_token,
+            ghid = ghid,
+        )
             
         author = obj.author
         dynamic = obj.dynamic

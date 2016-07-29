@@ -921,10 +921,17 @@ class TestDispatching(unittest.TestCase):
         )
         
         self.assertIn(address2, self.dispatch1._oracle)
-        self.assertEqual(
-            self.dispatch1._oracle[frozen2].state, 
-            self.dispatch1._oracle[address2].state
-        )
+        o1 = self.dispatch1._oracle.get_object(
+                ghid = frozen2,
+                gaoclass = _Dispatchable,
+                dispatch = self.dispatch1,
+            )
+        o2 = self.dispatch1._oracle.get_object(
+                ghid = address2,
+                gaoclass = _Dispatchable,
+                dispatch = self.dispatch1,
+            )
+        self.assertEqual(o1.state, o2.state)
         
         # This is another private object, and once again, should not be shared.
         self.clear_all_qs()
@@ -1049,7 +1056,7 @@ class TestDispatching(unittest.TestCase):
         
 
 if __name__ == "__main__":
-    logging.basicConfig(filename='logs/dispatch.log', level=logging.DEBUG)
+    logging.basicConfig(filename='logs/dispatch.pylog', level=logging.DEBUG)
     # from hypergolix.utils import TraceLogger
     # with TraceLogger(interval=10):
     #     unittest.main()

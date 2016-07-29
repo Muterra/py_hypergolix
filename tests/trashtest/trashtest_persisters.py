@@ -613,7 +613,7 @@ class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
         
 
 if __name__ == "__main__":
-    logging.basicConfig(filename='logs/persisters.log', level=logging.DEBUG)
+    logging.basicConfig(filename='logs/persisters.pylog', level=logging.DEBUG)
     from hypergolix.utils import TraceLogger
     with TraceLogger(interval=10):
         unittest.main()

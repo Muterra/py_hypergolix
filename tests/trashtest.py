@@ -36,6 +36,8 @@ import argparse
 import logging
 import unittest
 import sys
+import pathlib
+import datetime
 
 # ###############################################
 # Testing
@@ -72,17 +74,29 @@ if __name__ == '__main__':
     # logger = logging.getLogger()
     # For now, log to console
     # log_handler = logging.StreamHandler()
+    ii = 0
+    prefix = 'logs/full'
+    date = str(datetime.date.today())
+    ext = '.pylog'
+    while pathlib.Path(prefix + '_' + date + '_' + str(ii) + ext).exists():
+        ii += 1
+    fname = prefix + '_' + date + '_' + str(ii) + ext
+    
     if args.debug or args.traceur:
-        logging.basicConfig(filename='logs/full.log', level=logging.DEBUG)
+        logging.basicConfig(filename=fname, level=logging.DEBUG)
         # log_handler.setLevel(logging.DEBUG)
     else:
-        logging.basicConfig(filename='logs/full.log', level=logging.WARNING)
+        logging.basicConfig(filename=fname, level=logging.WARNING)
         # log_handler.setLevel(logging.WARNING)
     # logger.addHandler(log_handler)
     
     # Dammit unittest using argparse
     sys.argv[1:] = args.unittest_args
     from trashtest import *
+    
+    # Silence the froth
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    logging.getLogger('websockets').setLevel(logging.WARNING)
     
     if args.traceur:
         # This diagnoses deadlocks
