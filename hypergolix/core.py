@@ -109,10 +109,11 @@ class _GhidProxier:
     
     Threadsafe.
     '''
-    def __init__(self, oracle):
+    def __init__(self, core, oracle):
         # The usual.
         self._refs = {}
         self._oracle = oracle
+        self._core = weakref.proxy(core)
         self._modlock = threading.Lock()
         
     def chain(self, proxy, target):
@@ -138,7 +139,14 @@ class _GhidProxier:
             raise TypeError('Can only resolve a ghid.')
             
         with self._modlock:
-            return self._resolve(ghid)
+            resolved = self._resolve(ghid)
+            
+        # # Now let's ensure that this has, in fact, resolved a STATIC ghid
+        # obj = self._oracle.get_object(gaoclass=_GAO, ghid=resolved)
+        # if obj.dynamic:
+        #     raise RuntimeError('Object not fully resolved.')
+        
+        return resolved
         
     def _resolve(self, ghid):
         ''' Recursively resolves the container ghid for a proxy (or a 
@@ -173,7 +181,7 @@ class HGXCore:
         self._persister = persister
         self._oracle = oracle
         
-        self._ghidproxy = _GhidProxier(oracle)
+        self._ghidproxy = _GhidProxier(core=self, oracle=oracle)
         # self._privateer = privateer
         # self._privateer = _Privateer()
         
@@ -896,9 +904,50 @@ class Oracle:
         existence and the privateer for access).
         '''
         return ghid in self._lookup
+        
+        
+class _GAOBase(metaclass=abc.ABCMeta):
+    ''' Defines the interface for _GAOs. Mostly here for documentation
+    (and, eventually, maybe testing) purposes.
+    '''
+    @abc.abstractmethod
+    def apply_state(self, state):
+        ''' Apply the UNPACKED state to self.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def extract_state(self):
+        ''' Extract self into a packable state.
+        '''
+        pass
+        
+    @abc.abstractmethod
+    def apply_delete(self):
+        ''' Executes an external delete.
+        '''
+        pass
+        
+    @staticmethod
+    @abc.abstractmethod
+    def _pack(state):
+        ''' Packs state into a bytes object. May be overwritten in subs
+        to pack more complex objects. Should always be a staticmethod or
+        classmethod.
+        '''
+        pass
+        
+    @staticmethod
+    @abc.abstractmethod
+    def _unpack(packed):
+        ''' Unpacks state from a bytes object. May be overwritten in 
+        subs to unpack more complex objects. Should always be a 
+        staticmethod or classmethod.
+        '''
+        pass
     
     
-class _GAO(metaclass=abc.ABCMeta):
+class _GAO(_GAOBase):
     ''' Base class for Golix-Aware Objects (Golix Accountability 
     Objects?). Anyways, used by core to handle plaintexts and things.
     
@@ -912,6 +961,7 @@ class _GAO(metaclass=abc.ABCMeta):
         '''
         self.__opslock = threading.RLock()
         self.__updater = None
+        self.__state = None
         
         self._deleted = False
         self._core = core
@@ -967,12 +1017,7 @@ class _GAO(metaclass=abc.ABCMeta):
         ''' Loads the GAO from an existing ghid.
         '''
         author, dynamic, packed_state = core.get_ghid(ghid)
-        # Awwwwkward
-        # TODO: change
-        args1, kwargs1 = cls._init_unpack(packed_state)
-        args = list(args)
-        args.extend(args1)
-        kwargs.update(kwargs1)
+        
         self = cls(
             core = core, 
             dynamic = dynamic, 
@@ -983,6 +1028,9 @@ class _GAO(metaclass=abc.ABCMeta):
         self.ghid = ghid
         self.author = author
         
+        unpacked_state = self._unpack(packed_state)
+        self.apply_state(unpacked_state)
+        
         if dynamic:
             core.persister.subscribe(ghid, self._weak_touch)
             
@@ -990,15 +1038,6 @@ class _GAO(metaclass=abc.ABCMeta):
         self._update_greenlight.set()
         
         return self
-        
-    @staticmethod
-    def _init_unpack(packed):
-        ''' Unpacks an initial state in from_ghid into *args, **kwargs.
-        Should always be staticmethod or classmethod.
-        
-        TODO: make this less awkward.
-        '''
-        return tuple(), {}
         
     @staticmethod
     def _pack(state):
@@ -1016,17 +1055,15 @@ class _GAO(metaclass=abc.ABCMeta):
         '''
         return packed
         
-    @abc.abstractmethod
     def apply_state(self, state):
         ''' Apply the UNPACKED state to self.
         '''
-        pass
+        self.__state = state
         
-    @abc.abstractmethod
     def extract_state(self):
         ''' Extract self into a packable state.
         '''
-        pass
+        return self.__state
         
     def apply_delete(self):
         ''' Executes an external delete.
@@ -1244,14 +1281,6 @@ class _GAOMsgpackBase(_GAO):
             return Ghid.from_bytes(packed)
         else:
             return msgpack.ExtType(code, data)
-        
-    @classmethod
-    def _init_unpack(cls, packed):
-        ''' Unpacks an initial state in from_ghid into *args, **kwargs.
-        Should always be staticmethod or classmethod.
-        '''
-        dispatchablestate = cls._unpack(packed)
-        return (dispatchablestate,), {}
         
     @classmethod
     def _pack(cls, state):

@@ -305,7 +305,9 @@ class MemoryPersister:
         try:
             return self.librarian.dereference(ghid)
         except KeyError as exc:
-            raise DoesNotExist('0x0008: Ghid not found at persister.') from exc
+            raise DoesNotExist(
+                '0x0008: Not found at persister: ' + str(bytes(ghid))
+            ) from exc
         
     def list_subs(self):
         ''' List all currently subscribed ghids for the connected 
@@ -736,7 +738,10 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
             )
             
             if response != b'\x01':
-                raise RuntimeError('Unknown response code while subscribing.')
+                raise RuntimeError(
+                    'Unknown response code while subscribing to ' + 
+                    str(bytes(ghid))
+                )
                 
         self._subscriptions[ghid].add(callback)
         return True
@@ -750,7 +755,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         NAK/failure is represented by raise NakError
         '''
         if ghid not in self._subscriptions:
-            raise ValueError('Not currently subscribed to ghid.')
+            raise ValueError('Not currently subscribed to ' + str(bytes(ghid)))
             
         self._subscriptions[ghid].discard(callback)
         
@@ -771,9 +776,9 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
                 pass
             else:
                 raise RuntimeError(
-                    'Unknown response code while unsubscribing from address. ' 
-                    'The persister might still send updates, but the callback '
-                    'has been removed.'
+                    'Unknown response code while unsubscribing from ' + 
+                    str(bytes(ghid)) + '\nThe persister might still send '
+                    'updates, but the callback has been removed.'
                 )
                 
         return True
@@ -1134,7 +1139,7 @@ class _Doorman:
             author = self._librarian.whois(obj.author)
         except KeyError as exc:
             raise InvalidIdentity(
-                '0x0003: Unknown author / recipient.'
+                '0x0003: Unknown author / recipient: ' + str(bytes(obj.author))
             ) from exc
             
         try:
@@ -1162,7 +1167,7 @@ class _Doorman:
             author = self._librarian.whois(obj.binder)
         except KeyError as exc:
             raise InvalidIdentity(
-                '0x0003: Unknown author / recipient.'
+                '0x0003: Unknown author / recipient: ' + str(bytes(obj.binder))
             ) from exc
             
         try:
@@ -1190,7 +1195,7 @@ class _Doorman:
             author = self._librarian.whois(obj.binder)
         except KeyError as exc:
             raise InvalidIdentity(
-                '0x0003: Unknown author / recipient.'
+                '0x0003: Unknown author / recipient: ' + str(bytes(obj.binder))
             ) from exc
             
         try:
@@ -1218,7 +1223,8 @@ class _Doorman:
             author = self._librarian.whois(obj.debinder)
         except KeyError as exc:
             raise InvalidIdentity(
-                '0x0003: Unknown author / recipient.'
+                '0x0003: Unknown author / recipient: ' + 
+                str(bytes(obj.debinder))
             ) from exc
             
         try:
@@ -1418,7 +1424,9 @@ class _MrPostman:
         try:
             self._listeners[ghid].discard(callback)
         except KeyError:
-            logger.debug('KeyError while unsubscribing.')
+            logger.debug(
+                'KeyError while unsubscribing from ' + str(bytes(ghid))
+            )
             
     def do_mail_run(self):
         ''' Executes the actual mail run, clearing out the _scheduled
@@ -1650,7 +1658,7 @@ class _Lawyer:
         except KeyError as exc:
             logger.info('0x0003: Unknown author / recipient.')
             raise InvalidIdentity(
-                '0x0003: Unknown author / recipient.'
+                '0x0003: Unknown author / recipient: ' + str(bytes(obj.author))
             ) from exc
         else:
             if not isinstance(author, _GidcLite):
@@ -1687,9 +1695,15 @@ class _Lawyer:
             pass
         else:
             if existing.author != obj.author:
-                logger.info('0x0007: Inconsistent binding author.')
+                logger.info(
+                    '0x0007: Inconsistent binding author. \n'
+                    '    Existing author:  ' + str(bytes(existing.author)) +
+                    '\n    Attempted author: ' + str(bytes(obj.author))
+                )
                 raise InconsistentAuthor(
-                    '0x0007: Inconsistent binding author.'
+                    '0x0007: Inconsistent binding author. \n'
+                    '    Existing author:  ' + str(bytes(existing.author)) +
+                    '\n    Attempted author: ' + str(bytes(obj.author))
                 )
         return True
         
@@ -1713,16 +1727,32 @@ class _Lawyer:
         else:
             if isinstance(existing, _GarqLite):
                 if existing.recipient != obj.author:
-                    logger.info('0x0007: Inconsistent debinding author.')
+                    logger.info(
+                        '0x0007: Inconsistent debinding author. \n'
+                        '    Existing recipient:  ' + 
+                        str(bytes(existing.recipient)) +
+                        '\n    Attempted debinder: ' + str(bytes(obj.author))
+                    )
                     raise InconsistentAuthor(
-                        '0x0007: Inconsistent debinding author.'
+                        '0x0007: Inconsistent debinding author. \n'
+                        '    Existing recipient:  ' + 
+                        str(bytes(existing.recipient)) +
+                        '\n    Attempted debinder: ' + str(bytes(obj.author))
                     )
                 
             else:
                 if existing.author != obj.author:
-                    logger.info('0x0007: Inconsistent debinding author.')
+                    logger.info(
+                        '0x0007: Inconsistent debinding author. \n'
+                        '    Existing binder:   ' + 
+                        str(bytes(existing.author)) +
+                        '\n    Attempted debinder: ' + str(bytes(obj.author))
+                    )
                     raise InconsistentAuthor(
-                        '0x0007: Inconsistent debinding author.'
+                        '0x0007: Inconsistent debinding author. \n'
+                        '    Existing binder:   ' + 
+                        str(bytes(existing.author)) +
+                        '\n    Attempted debinder: ' + str(bytes(obj.author))
                     )
         return True
         
@@ -1732,9 +1762,13 @@ class _Lawyer:
         try:
             recipient = self._librarian.whois(obj.recipient)
         except KeyError as exc:
-            logger.info('0x0003: Unknown author / recipient.')
+            logger.info(
+                '0x0003: Unknown author / recipient: ' + 
+                str(bytes(obj.recipient))
+            )
             raise InvalidIdentity(
-                '0x0003: Unknown author / recipient.'
+                '0x0003: Unknown author / recipient: ' + 
+                str(bytes(obj.recipient))
             ) from exc
         else:
             if not isinstance(recipient, _GidcLite):
@@ -2206,6 +2240,9 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         ''' Convert a dynamic ghid into a frame ghid, or return the ghid
         immediately if not dynamic.
         '''
+        if not isinstance(ghid, Ghid):
+            raise TypeError('Ghid must be a Ghid.')
+            
         if ghid in self._dyn_resolver:
             return self._dyn_resolver[ghid]
         else:
@@ -2400,9 +2437,13 @@ class DiskLibrarian(_LibrarianCore):
         '''
         cache_dir = pathlib.Path(cache_dir)
         if not cache_dir.exists():
-            raise ValueError('Path does not exist.')
+            raise ValueError(
+                'Path does not exist: ' + cache_dir.as_posix()
+            )
         if not cache_dir.is_dir():
-            raise ValueError('Path is not an available directory.')
+            raise ValueError(
+                'Path is not an available directory: ' + cache_dir.as_posix()
+            )
         
         self._cachedir = cache_dir
         super().__init__()
@@ -2437,7 +2478,9 @@ class DiskLibrarian(_LibrarianCore):
         try:
             fpath.unlink()
         except FileNotFoundError as exc:
-            raise KeyError('Ghid does not exist at persister.') from exc
+            raise KeyError(
+                'Ghid does not exist at persister: ' + str(bytes(ghid))
+            ) from exc
         
     def get_from_cache(self, ghid):
         ''' Returns the raw data associated with the ghid.
@@ -2446,7 +2489,9 @@ class DiskLibrarian(_LibrarianCore):
         try:
             return fpath.read_bytes()
         except FileNotFoundError as exc:
-            raise KeyError('Ghid does not exist at persister.') from exc
+            raise KeyError(
+                'Ghid does not exist at persister: ' + str(bytes(ghid))
+            ) from exc
         
     def check_in_cache(self, ghid):
         ''' Check to see if the ghid is contained in the cache.
@@ -2487,75 +2532,6 @@ class _Librarian(_LibrarianCore):
         ''' Check to see if the ghid is contained in the cache.
         '''
         return ghid in self._shelf
-            
-            
-class __Librarian:
-    ''' Keeps objects. Should contain the only strong references to the
-    objects it keeps. Threadsafe.
-    '''
-    def __init__(self, shelf=None, catalog=None):
-        ''' Sets up internal tracking.
-        '''
-        if shelf is None:
-            shelf = {}
-        if catalog is None:
-            catalog = {}
-            
-        # Lookup for ghid -> raw bytes
-        # This must be valid across all instances at the persister.
-        self._shelf = shelf
-        # Lookup for ghid -> hypergolix description
-        # This may be GC'd by the python process.
-        self._catalog = catalog
-        # Operations lock
-        self._opslock = threading.Lock()
-        
-    def force_gc(self, obj):
-        ''' Forces erasure of an object. Does not notify the undertaker.
-        Indempotent. Should never raise KeyError.
-        '''
-        with self._opslock:
-            try:
-                del self._shelf[obj.ghid]
-            except KeyError:
-                logger.warning(
-                    'Attempted to GC a non-existent object. Probably a bug.'
-                )
-            
-            try:
-                del self._catalog[obj.ghid]
-            except KeyError:
-                pass
-        
-    def store(self, obj, raw):
-        ''' Starts tracking an object.
-        obj is a hypergolix representation object.
-        raw is bytes-like.
-        '''  
-        with self._opslock:
-            self._shelf[obj.ghid] = raw
-            self._catalog[obj.ghid] = obj
-        
-    def dereference(self, ghid):
-        ''' Returns the raw data associated with the ghid.
-        '''
-        return self._shelf[ghid]
-        
-    def whois(self, ghid):
-        ''' Returns a lightweight Hypergolix description of the object.
-        
-        TODO: incorporate lazy-loading in case of catalog GCing.
-        '''
-        return self._catalog[ghid]
-        
-    def __contains__(self, ghid):
-        # Catalog may only be accurate locally. Shelf is accurate globally.
-        return ghid in self._shelf
-        
-    def link_core(self, *args, **kwargs):
-        ''' Not used for this kind of librarian.
-        '''
-        pass
         
         
 class _Enlitener:

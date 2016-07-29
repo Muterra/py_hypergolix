@@ -682,10 +682,10 @@ _DispatchableState = collections.namedtuple(
 class _Dispatchable(_GAO):
     ''' A dispatchable object.
     '''
-    def __init__(self, dispatch, api_id, app_token, state, *args, **kwargs):
+    def __init__(self, dispatch, api_id=None, app_token=None, state=None, 
+                *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._dispatch = dispatch
-        api_id, app_token = self._normalize_api_and_token(api_id, app_token)
         self.state = state
         self.api_id = api_id
         self.app_token = app_token
@@ -698,18 +698,6 @@ class _Dispatchable(_GAO):
         modified = super().pull(*args, **kwargs)
         if modified:
             self._dispatch.distribute_to_endpoints(self.ghid)
-        
-    @classmethod
-    def _init_unpack(cls, packed):
-        ''' Unpacks an initial state in from_ghid into *args, **kwargs.
-        Should always be staticmethod or classmethod.
-        '''
-        dispatchablestate = cls._unpack(packed)
-        return tuple(), {
-            'api_id': dispatchablestate[0],
-            'app_token': dispatchablestate[1],
-            'state': dispatchablestate[2],
-        }
         
     @staticmethod
     def _pack(state):
@@ -743,6 +731,8 @@ class _Dispatchable(_GAO):
     def apply_state(self, state):
         ''' Apply the UNPACKED state to self.
         '''
+        # TODO: make sure this doesn't accidentally change api_id or app_token
+        # Maybe set the _attributes directly or something as well?
         self.api_id = state[0]
         self.app_token = state[1]
         self.state = state[2]
@@ -751,32 +741,54 @@ class _Dispatchable(_GAO):
         ''' Extract self into a packable state.
         '''
         return _DispatchableState(self.api_id, self.app_token, self.state)
-            
-    @staticmethod
-    def _normalize_api_and_token(api_id, app_token):
-        ''' Converts app_token and api_id into appropriate values from 
-        what may or may not be None.
-        '''
-        undefined = (app_token is None and api_id is None)
         
-        if undefined:
-            raise DispatchError(
-                'Cannot leave both app_token and api_id undefined.'
+    @property
+    def api_id(self):
+        # Warn if both api_id and app_token are undefined
+        # Is this the appropriate time to check this?
+        if self._api_id == bytes(65) and self._app_token == bytes(4):
+            warnings.warn(
+                'Leaving both api_id and app_token undefined will result in '
+                'an inaccessible object.'
             )
             
-        if app_token is None:
-            app_token = bytes(4)
+        return self._api_id
+        
+    @api_id.setter
+    def api_id(self, value):
+        if value is None:
+            value = bytes(65)
         else:
-            # Todo: "type" check app_token.
-            pass
+            value = bytes(value)
+            if len(value) != 65:
+                raise ValueError('API IDs must be 65 bytes long.')
             
-        if api_id is None:
-            # Todo: "type" check api_id.
-            api_id = bytes(65)
+        self._api_id = value
+        
+    @property
+    def app_token(self):
+        # Warn if both api_id and app_token are undefined
+        # Is this the appropriate time to check this?
+        if self._api_id == bytes(65) and self._app_token == bytes(4):
+            warnings.warn(
+                'Leaving both api_id and app_token undefined will result in '
+                'an inaccessible object.'
+            )
+            
+        return self._app_token
+        
+    @app_token.setter
+    def app_token(self, value):
+        # Warn if both api_id and app_token are undefined
+        # Is this the appropriate time to check this?
+        if value is None:
+            value = bytes(4)
         else:
-            pass
+            value = bytes(value)
+            if len(value) != 4:
+                raise ValueError('App tokens must be 4 bytes long.')
             
-        return api_id, app_token
+        self._app_token = value
         
     def update(self, state):
         ''' Wrapper to apply state that reuses api_id and app_token, and

@@ -430,7 +430,7 @@ class RawObj:
         super().__setattr__('_deleted', True)
         super().__setattr__('_is_dynamic', None)
         super().__setattr__('_author', None)
-        super().__setattr__('_address', None)
+        # super().__setattr__('_address', None)
         super().__setattr__('_dispatch', None)
         
     @property
