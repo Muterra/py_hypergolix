@@ -1292,7 +1292,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         the object.
         '''
         ghid = Ghid.from_bytes(request_body)
-        self._objs_by_ghid[ghid]._delete()
+        await self._objs_by_ghid[ghid]._delete()
         return b'\x01'
 
     async def notify_share_failure_wrapper(self, session, request_body):

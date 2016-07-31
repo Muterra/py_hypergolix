@@ -68,7 +68,7 @@ if __name__ == '__main__':
     )
     parser.add_argument('unittest_args', nargs='*')
 
-    args = parser.parse_args()
+    args, unittest_args = parser.parse_known_args()
     
     # Override the module-level logger definition to root
     # logger = logging.getLogger()
@@ -91,7 +91,7 @@ if __name__ == '__main__':
     # logger.addHandler(log_handler)
     
     # Dammit unittest using argparse
-    sys.argv[1:] = args.unittest_args
+    # sys.argv[1:] = args.unittest_args
     from trashtest import *
     
     # Silence the froth
@@ -102,7 +102,7 @@ if __name__ == '__main__':
         # This diagnoses deadlocks
         from hypergolix.utils import TraceLogger
         with TraceLogger(interval=5):
-            unittest.main()
+            unittest.main(argv=sys.argv[:1] + unittest_args)
     
     else:
-        unittest.main()
+        unittest.main(argv=sys.argv[:1] + unittest_args)
