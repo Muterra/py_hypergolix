@@ -51,6 +51,8 @@ from hypergolix import HGXCore
 from hypergolix.core import Oracle
 from hypergolix.core import _GhidProxier
 
+from hypergolix.utils import SetMap
+
 from hypergolix.privateer import Privateer
 from hypergolix.persisters import MemoryPersister
 from hypergolix.dispatch import Dispatcher
@@ -703,7 +705,13 @@ class _TEFixture:
     
 class _TestEmbed(Dispatcher, _TEFixture):
     # This is a little gross, but we gotta combine 'em somehow
-    pass
+    def __init__(self, *args, **kwargs):
+        super().__init__(
+            all_tokens = set([b'\x00\x00\x00\x00']),
+            startup_objs = SetMap(),
+            pending_reqs = {},
+            *args, **kwargs
+        )
 
 
 class _TestDispatch(HGXCore):

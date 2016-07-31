@@ -54,6 +54,7 @@ from hypergolix.privateer import Privateer
 from hypergolix.persisters import MemoryPersister
 
 from hypergolix.utils import Aengel
+from hypergolix.utils import SetMap
 from hypergolix.comms import Autocomms
 from hypergolix.comms import WSBasicServer
 from hypergolix.comms import WSBasicClient
@@ -84,7 +85,13 @@ class MockCore(HGXCore):
         self.link_oracle(oracle)
         self.link_persister(persister)
         self.link_privateer(Privateer(core=self))
-        self.link_dispatch(Dispatcher(core=self, oracle=oracle))
+        self.link_dispatch(Dispatcher(
+            core = self, 
+            oracle = oracle,
+            all_tokens = set([b'\x00\x00\x00\x00']),
+            startup_objs = SetMap(),
+            pending_reqs = {},
+        ))
     
     
 # class WebsocketsApp(WSReqResClient):

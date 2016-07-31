@@ -51,12 +51,16 @@ from golix import FirstParty
 from .core import HGXCore
 from .core import Oracle
 from .core import _GhidProxier
+from .core import _GAOSet
+from .core import _GAODict
+
 from .dispatch import Dispatcher
 from .dispatch import _Dispatchable
 from .privateer import Privateer
 
 from .utils import Aengel
 from .utils import threading_autojoin
+from .utils import SetMap
 
 from .comms import Autocomms
 from .comms import WSBasicClient
@@ -109,7 +113,39 @@ class AgentBootstrap:
         self.core.link_persister(self.persister)
         self.privateer = Privateer(self.core)
         self.core.link_privateer(self.privateer)
-        self.dispatch = Dispatcher(self.core, self.oracle)
+        
+        if bootstrap is None:
+            # Dispatch bootstrap:
+            
+            # Set of all known tokens. Add b'\x00\x00\x00\x00' to prevent its 
+            # use. Persistent across all clients for any given agent.
+            all_tokens = self.oracle.new_object(
+                gaoclass = _GAOSet,
+                dynamic = True,
+            )
+            all_tokens.add(b'\x00\x00\x00\x00')
+            
+            # SetMap of all objects to be sent to an app upon app startup.
+            # TODO: make this distributed state object.
+            startup_objs = SetMap()
+            
+            # Dict-like mapping of all pending requests.
+            # Used to lookup {<request address>: <target address>}
+            pending_reqs = self.oracle.new_object(
+                gaoclass = _GAODict,
+                dynamic = True
+            )
+            
+        else:
+            raise NotImplementedError('Not just yet buddy-o!')
+        
+        self.dispatch = Dispatcher(
+            self.core, 
+            self.oracle,
+            all_tokens,
+            startup_objs,
+            pending_reqs,
+        )
         self.core.link_dispatch(self.dispatch)
         
     def _new_bootstrap_container(self):

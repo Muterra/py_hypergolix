@@ -144,15 +144,22 @@ class Dispatcher(DispatcherBase):
     which applications should have access to which APIs, but currently
     anything installed is considered trusted.
     '''
-    def __init__(self, core, oracle, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, core, oracle, all_tokens, startup_objs, pending_reqs):
+        ''' Some notes re: objects being passed in:
         
-        # TODO: remove core from self (use composition instead of inheritance).
-        # TODO: weakref? Need to be able to GC. Note: weakref would break 
-        # _TestDispatch in trashtest_dispatching.
+        all_tokens must be set-like, and must already contain a key for 
+            b'\x00\x00\x00\x00'. It's the list of all known tokens for 
+            the agent.
+        startup_objs must be SetMap-like. It's the list of all objects 
+            to be passed to a given app token.
+            TODO: make startup_objs actually that.
+        pending_reqs must be dict-like. It's the lookup for the request
+            address: target address.
+        '''
         self._core = core
-        # Note: worthwhile to pass _oracle as arg? Dunno yet.
-        # self._oracle = oracle
+        self._oracle = oracle
+        
+        # First init local state.
         
         # Lookup for app_tokens -> endpoints. Will be specific to the current
         # state of this particular client for this agent.
@@ -160,27 +167,11 @@ class Dispatcher(DispatcherBase):
         # Defining b'\x00\x00\x00\x00' will prevent using it as a token.
         self._active_tokens[b'\x00\x00\x00\x00'] = self
         
-        # Set of all known tokens. Add b'\x00\x00\x00\x00' to prevent its use.
-        # Should be made persistent across all clients for any given agent.
-        self._known_tokens = oracle.new_object(
-            gaoclass = _GAOSet,
-            dynamic = True,
-        )
-        self._known_tokens.add(b'\x00\x00\x00\x00')
+        # Now init distributed state.
         
-        # Set of private objects for a given app_token. Will be passed to the
-        # app immediately after registration.
-        self._private_by_ghid = oracle.new_object(
-            gaoclass = _GAODict,
-            dynamic = True
-        )
-        
-        # Pending requests is long-lived async, should be GAO
-        # Lookup for pending requests. {<request address>: <target address>}
-        self._pending_requests = oracle.new_object(
-            gaoclass = _GAODict,
-            dynamic = True
-        )
+        self._all_known_tokens = all_tokens
+        self._startup_by_token = startup_objs
+        self._pending_requests = pending_reqs
         
         # Lookup for api_ids -> app_tokens. Contains ONLY the apps that are 
         # currently available, because it's only used for dispatching objects
@@ -191,13 +182,6 @@ class Dispatcher(DispatcherBase):
         self._outstanding_handshakes = {}
         # Lookup for handshake ghid -> app_token, recipient
         self._outstanding_shares = {}
-        
-        # State lookup information
-        # self._oracle = Oracle(
-        #     core = self._core,
-        #     gao_class = _Dispatchable,
-        # )
-        self._oracle = oracle
         
         # Lookup for ghid -> tokens that specifically requested the ghid
         # TODO: change this to "tokens that have a copy of the ghid"
@@ -243,9 +227,10 @@ class Dispatcher(DispatcherBase):
             *args, **kwargs
         )
         
-        # If this is a private object, record it as such
+        # If this is a private object, record it as an object to be passed 
+        # during app startup
         if obj.app_token != bytes(4):
-            self._private_by_ghid[obj.ghid] = obj.app_token
+            self._startup_by_token.add(obj.app_token, obj.ghid)
         
         # Note: should we add some kind of mechanism to defer passing to other 
         # endpoints until we update the one that actually requested the obj?
@@ -378,9 +363,9 @@ class Dispatcher(DispatcherBase):
         else:
             self._oracle.forget(ghid)
             
-            # If this is a private object, remove it from record
+            # If this is a private object, remove it from startup object record
             if obj.app_token != bytes(4):
-                del self._private_by_ghid[obj.ghid]
+                self._startup_by_token.discard(obj.app_token, obj.ghid)
                 
         # This is now handled by obj.silence(), except because the object is
         # being deleted, we don't need to unsilence it.
@@ -528,8 +513,9 @@ class Dispatcher(DispatcherBase):
         # The app token is defined, so contact that endpoint (and only that 
         # endpoint) directly
         # Bypass if someone is sending us an app token we don't know about
-        if obj.app_token != bytes(4) and obj.app_token in self._known_tokens:
-            callsheet.add(obj.app_token)
+        if (obj.app_token != bytes(4) and 
+            obj.app_token in self._all_known_tokens):
+                callsheet.add(obj.app_token)
             
         # It's not defined, so get everyone that uses that api_id
         else:
@@ -571,7 +557,7 @@ class Dispatcher(DispatcherBase):
         the application is locally installed and running. Try to use it,
         and if we can't, warn and stash the object.
         '''
-        if app_token not in self._known_tokens:
+        if app_token not in self._all_known_tokens:
             raise DispatchError(
                 'Agent lacks application with matching token. WARNING: object '
                 'may have been discarded as a result!'
@@ -626,7 +612,7 @@ class Dispatcher(DispatcherBase):
         '''
         app_token = endpoint.app_token
         # This cannot be used to create new app tokens!
-        if app_token not in self._known_tokens:
+        if app_token not in self._all_known_tokens:
             raise ValueError('Endpoint app token is unknown to dispatcher.')
         
         if app_token in self._active_tokens:
@@ -665,11 +651,11 @@ class Dispatcher(DispatcherBase):
         # Use a dummy api_id to force the while condition to be true initially
         token = b'\x00\x00\x00\x00'
         # Birthday paradox be damned; we can actually *enforce* uniqueness
-        while token in self._known_tokens:
+        while token in self._all_known_tokens:
             token = os.urandom(4)
         # Do this right away to prevent race condition (todo: also use lock?)
         # Todo: something to make sure the token is actually being used?
-        self._known_tokens.add(token)
+        self._all_known_tokens.add(token)
         return token
             
             
