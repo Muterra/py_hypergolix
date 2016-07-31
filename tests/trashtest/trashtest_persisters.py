@@ -61,7 +61,6 @@ from hypergolix.exceptions import PersistenceWarning
 from golix import Ghid
 from golix import ThirdParty
 from golix import SecondParty
-from golix import FirstParty
 
 # ###############################################
 # Test fixtures
@@ -69,14 +68,13 @@ from golix import FirstParty
 
 # logging.basicConfig(filename='persister_refactor.py', level=logging.INFO)
 
+from _fixtures.identities import TEST_AGENT1
+from _fixtures.identities import TEST_AGENT2
+from _fixtures.identities import TEST_AGENT3
 
-TEST_AGENT1 = FirstParty()
-TEST_AGENT2 = FirstParty()
-TEST_AGENT3 = FirstParty()
-
-TEST_READER1 = TEST_AGENT1.second_party
-TEST_READER2 = TEST_AGENT2.second_party
-TEST_READER3 = TEST_AGENT3.second_party
+from _fixtures.identities import TEST_READER1
+from _fixtures.identities import TEST_READER2
+from _fixtures.identities import TEST_READER3
 
 SUBS_NOTIFIER = threading.Event()
 

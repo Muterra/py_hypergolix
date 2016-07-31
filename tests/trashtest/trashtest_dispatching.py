@@ -46,7 +46,6 @@ import weakref
 from queue import Empty
 
 from golix import Ghid
-from golix import FirstParty
 
 from hypergolix import HGXCore
 from hypergolix.core import Oracle
@@ -61,6 +60,10 @@ from hypergolix.dispatch import _Dispatchable
 # ###############################################
 # Cheap, trashy test fixtures
 # ###############################################
+
+
+from _fixtures.identities import TEST_AGENT1
+from _fixtures.identities import TEST_AGENT2
         
 
 # This has no place here, but I'm not yet ready to rewrite legacy trashtests.        
@@ -704,8 +707,8 @@ class _TestEmbed(Dispatcher, _TEFixture):
 
 
 class _TestDispatch(HGXCore):
-    def __init__(self, persister):
-        super().__init__(FirstParty())
+    def __init__(self, persister, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         persister.publish(self._identity.second_party.packed)
         
         oracle = Oracle(core=self)
@@ -786,7 +789,10 @@ class TestDispatching(unittest.TestCase):
         cls.sharesuccess_q_a2e2 = queue.Queue()
         cls.sharefailure_q_a2e2 = queue.Queue()
         
-        cls.agent1 = _TestDispatch(persister=cls.persister)
+        cls.agent1 = _TestDispatch(
+            persister = cls.persister, 
+            identity = TEST_AGENT1,
+        )
         cls.dispatch1 = cls.agent1._dispatch
         cls.endpoint1 = _TestEndpoint(
             dispatch = cls.dispatch1,
@@ -800,7 +806,10 @@ class TestDispatching(unittest.TestCase):
         )
         cls.dispatch1.register_endpoint(cls.endpoint1)
         
-        cls.agent2 = _TestDispatch(persister=cls.persister)
+        cls.agent2 = _TestDispatch(
+            persister = cls.persister,
+            identity = TEST_AGENT2,
+        )
         cls.dispatch2 = cls.agent2._dispatch
         cls.endpoint2 = _TestEndpoint(
             dispatch = cls.dispatch2,

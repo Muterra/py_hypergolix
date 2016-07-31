@@ -61,7 +61,6 @@ from hypergolix.ipc import IPCHost
 from hypergolix.ipc import IPCEmbed
 
 from golix import Ghid
-from golix import FirstParty
 
 # from hypergolix.embeds import WebsocketsEmbed
 
@@ -71,9 +70,13 @@ from golix import FirstParty
 # ###############################################
 
 
+from _fixtures.identities import TEST_AGENT1
+from _fixtures.identities import TEST_AGENT2
+
+
 class MockCore(HGXCore):
     def __init__(self, persister, *args, **kwargs):
-        super().__init__(FirstParty())
+        super().__init__(*args, **kwargs)
         persister.publish(self._identity.second_party.packed)
         
         oracle = Oracle(core=self)
@@ -136,7 +139,10 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         cls.persister = MemoryPersister()
         cls.aengel = Aengel()
         
-        cls.alice_core = MockCore(persister=cls.persister)
+        cls.alice_core = MockCore(
+            persister = cls.persister, 
+            identity = TEST_AGENT1
+        )
         cls.alice = Autocomms(
             autoresponder_class = IPCHost,
             autoresponder_kwargs = {'dispatch': cls.alice_core._dispatch},
@@ -149,7 +155,10 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             aengel = cls.aengel,
         )
         
-        cls.bob_core = MockCore(persister=cls.persister)
+        cls.bob_core = MockCore(
+            persister = cls.persister,
+            identity = TEST_AGENT2
+        )
         cls.bob = Autocomms(
             autoresponder_class = IPCHost,
             autoresponder_kwargs = {'dispatch': cls.bob_core._dispatch},

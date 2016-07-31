@@ -61,12 +61,15 @@ from golix.utils import _dummy_ghid
 from golix import Ghid
 from golix import ThirdParty
 from golix import SecondParty
-from golix import FirstParty
 
 
 # ###############################################
 # Really shitty test fixtures
 # ###############################################
+
+
+from _fixtures.identities import TEST_AGENT1
+from _fixtures.identities import TEST_AGENT2
         
         
 class _TestDispatcher(DispatcherBase):
@@ -768,8 +771,8 @@ class _TD(_TestEmbed, _TestDispatcher):
         
 
 class _TestClient(HGXCore):
-    def __init__(self):
-        super().__init__(FirstParty())
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         oracle = Oracle(core=self)
         persister = MemoryPersister()
         persister.publish(self._identity.second_party.packed)
@@ -785,8 +788,8 @@ class _TestClient(HGXCore):
 
 
 class _TestAgent_SharedPersistence(HGXCore):
-    def __init__(self, persister):
-        super().__init__(FirstParty())
+    def __init__(self, persister, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         persister.publish(self._identity.second_party.packed)
         
         oracle = Oracle(core=self)
@@ -817,10 +820,12 @@ class AgentTrashTest(unittest.TestCase):
     def setUpClass(cls):
         cls.persister = MemoryPersister()
         cls.agent1 = _TestAgent_SharedPersistence(
-            persister = cls.persister
+            persister = cls.persister,
+            identity = TEST_AGENT1,
         )
         cls.agent2 = _TestAgent_SharedPersistence(
-            persister = cls.persister
+            persister = cls.persister,
+            identity = TEST_AGENT2,
         )
         cls.dispatch1 = cls.agent1._dispatch
         cls.dispatch2 = cls.agent2._dispatch
@@ -930,8 +935,8 @@ class AgentTrashTest(unittest.TestCase):
 class ClientTrashTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.agent1 = _TestClient()
-        cls.agent2 = _TestClient()
+        cls.agent1 = _TestClient(TEST_AGENT1)
+        cls.agent2 = _TestClient(TEST_AGENT2)
         
     def test_alone(self):
         pt1 = b'Hello, world?'
