@@ -46,6 +46,7 @@ import logging
 
 from hypergolix.core import HGXCore
 from hypergolix.core import Oracle
+from hypergolix.core import _GhidProxier
 from hypergolix.dispatch import _Dispatchable
 from hypergolix.dispatch import Dispatcher
 from hypergolix.privateer import Privateer
@@ -60,6 +61,7 @@ from hypergolix.ipc import IPCHost
 from hypergolix.ipc import IPCEmbed
 
 from golix import Ghid
+from golix import FirstParty
 
 # from hypergolix.embeds import WebsocketsEmbed
 
@@ -71,11 +73,13 @@ from golix import Ghid
 
 class MockCore(HGXCore):
     def __init__(self, persister, *args, **kwargs):
-        oracle = Oracle(
-            core = self,
-            # gao_class = _Dispatchable,
-        )
-        super().__init__(persister=persister, oracle=oracle, *args, **kwargs)
+        super().__init__(FirstParty())
+        persister.publish(self._identity.second_party.packed)
+        
+        oracle = Oracle(core=self)
+        self.link_proxy(_GhidProxier(self, oracle))
+        self.link_oracle(oracle)
+        self.link_persister(persister)
         self.link_privateer(Privateer(core=self))
         self.link_dispatch(Dispatcher(core=self, oracle=oracle))
     
@@ -135,7 +139,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         cls.alice_core = MockCore(persister=cls.persister)
         cls.alice = Autocomms(
             autoresponder_class = IPCHost,
-            autoresponder_kwargs = {'dispatch': cls.alice_core._dispatcher},
+            autoresponder_kwargs = {'dispatch': cls.alice_core._dispatch},
             connector_class = WSBasicServer,
             connector_kwargs = {
                 'host': 'localhost',
@@ -148,7 +152,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         cls.bob_core = MockCore(persister=cls.persister)
         cls.bob = Autocomms(
             autoresponder_class = IPCHost,
-            autoresponder_kwargs = {'dispatch': cls.bob_core._dispatcher},
+            autoresponder_kwargs = {'dispatch': cls.bob_core._dispatch},
             connector_class = WSBasicServer,
             connector_kwargs = {
                 'host': 'localhost',
@@ -245,7 +249,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         
         # Note that this is calling bob's DISPATCH whoami, NOT an app whoami.
         self.app1.share_obj_threadsafe(obj3, self.bob_core.whoami)
-        self.assertIn(obj3.address, self.bob_core._dispatcher._orphan_shares_incoming)
+        self.assertIn(obj3.address, self.bob_core._dispatch._orphan_shares_incoming)
         
         frozen3 = self.app1.freeze_obj_threadsafe(obj3)
         self.assertEqual(frozen3.state, obj3.state)
@@ -254,7 +258,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         self.assertIn(obj3.address, self.alice_core._holdings)
         
         self.app2.discard_obj_threadsafe(joint3)
-        self.assertIn(self.app2endpoint.app_token, self.alice_core._dispatcher._discarders_by_ghid[obj3.address])
+        self.assertIn(self.app2endpoint.app_token, self.alice_core._dispatch._discarders_by_ghid[obj3.address])
         self.assertTrue(joint3._inoperable)
         
         self.app1.delete_obj_threadsafe(obj1)

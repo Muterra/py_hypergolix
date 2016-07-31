@@ -46,8 +46,11 @@ import weakref
 from queue import Empty
 
 from golix import Ghid
+from golix import FirstParty
+
 from hypergolix import HGXCore
 from hypergolix.core import Oracle
+from hypergolix.core import _GhidProxier
 
 from hypergolix.privateer import Privateer
 from hypergolix.persisters import MemoryPersister
@@ -701,17 +704,14 @@ class _TestEmbed(Dispatcher, _TEFixture):
 
 
 class _TestDispatch(HGXCore):
-    def __init__(self, *args, **kwargs):
-        oracle = Oracle(
-            core = self,
-            # gao_class = _Dispatchable,
-        )
-        super().__init__(
-            oracle = oracle,
-            # dispatcher = self, 
-            # privateer = Privateer(),
-            *args, **kwargs
-        )
+    def __init__(self, persister):
+        super().__init__(FirstParty())
+        persister.publish(self._identity.second_party.packed)
+        
+        oracle = Oracle(core=self)
+        self.link_proxy(_GhidProxier(self, oracle))
+        self.link_oracle(oracle)
+        self.link_persister(persister)
         self.link_privateer(Privateer(core=self))
         self.link_dispatch(_TestEmbed(core=self, oracle=oracle))
 
@@ -787,7 +787,7 @@ class TestDispatching(unittest.TestCase):
         cls.sharefailure_q_a2e2 = queue.Queue()
         
         cls.agent1 = _TestDispatch(persister=cls.persister)
-        cls.dispatch1 = cls.agent1._dispatcher
+        cls.dispatch1 = cls.agent1._dispatch
         cls.endpoint1 = _TestEndpoint(
             dispatch = cls.dispatch1,
             apis = [cls.__api_id],
@@ -801,7 +801,7 @@ class TestDispatching(unittest.TestCase):
         cls.dispatch1.register_endpoint(cls.endpoint1)
         
         cls.agent2 = _TestDispatch(persister=cls.persister)
-        cls.dispatch2 = cls.agent2._dispatcher
+        cls.dispatch2 = cls.agent2._dispatch
         cls.endpoint2 = _TestEndpoint(
             dispatch = cls.dispatch2,
             apis = [cls.__api_id],

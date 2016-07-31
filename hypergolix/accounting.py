@@ -33,7 +33,7 @@ hypergolix: A python Golix client.
 # Control * imports. Therefore controls what is available to toplevel
 # package through __init__.py
 __all__ = [
-    'AgentAccount',
+    'AgentBootstrap',
 ]
 
 # Global dependencies
@@ -43,7 +43,31 @@ from Crypto.Protocol.KDF import scrypt
 from Crypto.Hash import SHA512
 from Crypto.Protocol.KDF import HKDF
 
+from golix import Ghid
+from golix import FirstParty
+
 # Intra-package dependencies
+
+from .core import HGXCore
+from .core import Oracle
+from .core import _GhidProxier
+from .dispatch import Dispatcher
+from .dispatch import _Dispatchable
+from .privateer import Privateer
+
+from .utils import Aengel
+from .utils import threading_autojoin
+
+from .comms import Autocomms
+from .comms import WSBasicClient
+from .comms import WSBasicServer
+
+from .persisters import PersisterBridgeClient
+from .persisters import PersisterBridgeServer
+from .persisters import MemoryPersister
+
+from .ipc import IPCHost
+from .ipc import IPCEmbed
 
 
 # ###############################################
@@ -60,43 +84,33 @@ logger = logging.getLogger(__name__)
 # ###############################################
 
 
-class AgentAccount:
-    ''' Agent accounts include various utility functions for agent 
-    persistence across multiple devices and/or logins.
+class AgentBootstrap:
+    ''' Agent bootstraps create and assemble the individual components
+    needed to run the hypergolix service from a username and password.
     
-    Must be paired (also classed with) AgentBase and DispatcherBase.
-    Will not work without them.
+    Also binds everything within a single namespace, etc etc.
     '''
-    def __init__(self, _preexisting=None, *args, **kwargs):
-        '''
-        _preexisting isinstance tuple
-            _preexisting[0] isinstance golix.Ghid
-            _preexisting[1] isinstance golix.Secret
-        '''
-        super().__init__(_preexisting=_preexisting, *args, **kwargs)
+    def __init__(self, persister, credential, bootstrap=None, aengel=None):
+        ''' Creates everything and puts it into a singular namespace.
         
-        if _preexisting is None:
-            self._bootstrap = AgentBootstrap(
-                agent = self,
-                obj = self._new_bootstrap_container()
-            )
-            # Default for legroom. Currently hard-coded and not overrideable.
-            self._bootstrap['legroom'] = self.DEFAULT_LEGROOM
-            
-        else:
-            # Get bootstrap
-            bootstrap_ghid = _preexisting[0]
-            bootstrap_secret = _preexisting[1]
-            self._set_secret_pending(
-                ghid = bootstrap_ghid,
-                secret = bootstrap_secret
-            )
-            bootstrap_obj = self.get_object(bootstrap_ghid)
-            bootstrap = AgentBootstrap.from_existing(
-                obj = bootstrap_obj,
-                agent = self
-            )
-            self._bootstrap = bootstrap
+        If bootstrap (ghid) is passed, we'll use the credential to 
+        extract an identity. If bootstrap_ghid is not passed, will use 
+        the credential to create one.
+        '''
+        identity = FirstParty()
+        persister.publish(identity.second_party.packed)
+        self.persister = persister
+        
+        self.core = HGXCore(identity)
+        self.oracle = Oracle(self.core)
+        self.proxy = _GhidProxier(self.core, self.oracle)
+        self.core.link_proxy(self.proxy)
+        self.core.link_oracle(self.oracle)
+        self.core.link_persister(self.persister)
+        self.privateer = Privateer(self.core)
+        self.core.link_privateer(self.privateer)
+        self.dispatch = Dispatcher(self.core, self.oracle)
+        self.core.link_dispatch(self.dispatch)
         
     def _new_bootstrap_container(self):
         ''' Creates a new container to use for the bootstrap object.
@@ -105,18 +119,8 @@ class AgentAccount:
         padding = os.urandom(padding_size)
         return self.new_object(padding, dynamic=True)
         
-    @property
-    def _legroom(self):
-        ''' Get the legroom from our bootstrap. If it hasn't been 
-        created yet (aka within __init__), return the class default.
-        '''
-        try:
-            return self._bootstrap['legroom']
-        except (AttributeError, KeyError):
-            # Default to the parent implementation
-            return super()._legroom
-        
-    def register(self, password):
+    @classmethod
+    def register(cls, password):
         ''' Save the agent's identity to a GEOC object.
         
         THIS NEEDS TO BE A DYNAMIC BINDING SO IT CAN UPDATE THE KEY TO
@@ -134,6 +138,30 @@ class AgentAccount:
         # guess that our end-product GEOC is a saved Agent
         padding = None
         # Put it all into a GEOC.
+        secret = Secret(
+            cipher = 1,
+            key = combined[:32],
+            seed = combined[32:48]
+        )
+        
+    @classmethod
+    def login(cls, bootstrap_ghid, password):
+        ''' Load an Agent from an identity contained within a GEOC.
+        '''
+        pass
+        
+class Credential:
+    ''' Handles password expansion into a master key, master key into
+    purposeful Secrets, etc.
+    '''
+    def __init__(self, ghid, password):
+        self.master = self._password_expansion(ghid, password)
+            
+    @staticmethod
+    def _password_expansion(ghid, password):
+        ''' Expands the author's ghid and password into a master key for
+        use in generating specific keys.
+        '''
         # Scrypt the password. Salt against the author GHID, which we know
         # (when reloading) from the author of the file!
         # Use 2**14 for t<=100ms, 2**20 for t<=5s
@@ -145,66 +173,8 @@ class AgentAccount:
             r = 8,
             p = 1
         )
-        secret = Secret(
-            cipher = 1,
-            key = combined[:32],
-            seed = combined[32:48]
-        )
         
-    @classmethod
-    def login(cls, password, data, persister, dispatcher):
-        ''' Load an Agent from an identity contained within a GEOC.
+    def _derive_secret(self, salt):
+        ''' Derives a Secret from the master key.
         '''
         pass
-
-
-class AgentBootstrap(dict):
-    ''' Threadsafe. Handles all of the stuff needed to actually build an
-    agent and keep consistent state across devices / logins.
-    '''
-    def __init__(self, agent, obj):
-        self._mutlock = threading.Lock()
-        self._agent = agent
-        self._obj = obj
-        self._def = None
-        
-    @classmethod
-    def from_existing(cls, agent, obj):
-        self = cls(agent, obj)
-        self._def = obj.state
-        super().update(msgpack.unpackb(obj.state))
-        
-    def __setitem__(self, key, value):
-        with self._mutlock:
-            super().__setitem__(key, value)
-            self._update_def()
-        
-    def __getitem__(self, key):
-        ''' For now, this is actually just unpacking self._def and 
-        returning the value for that. In the future, when we have some
-        kind of callback mechanism in dynamic objects, we'll probably
-        cache and stuff.
-        '''
-        with self._mutlock:
-            tmp = msgpack.unpackb(self._def)
-            return tmp[key]
-        
-    def __delitem__(self, key):
-        with self._mutlock:
-            super().__delitem__(key)
-            self._update_def()
-        
-    def pop(*args, **kwargs):
-        raise TypeError('AgentBootstrap does not support popping.')
-        
-    def popitem(*args, **kwargs):
-        raise TypeError('AgentBootstrap does not support popping.')
-        
-    def update(*args, **kwargs):
-        with self._mutlock:
-            super().update(*args, **kwargs)
-            self._update_def()
-        
-    def _update_def(self):
-        self._def = msgpack.packb(self)
-        self._agent.update_object(self._obj, self._def)

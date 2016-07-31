@@ -49,6 +49,8 @@ import signal
 
 from golix import Ghid
 
+from .accounting import AgentBootstrap
+
 from .core import HGXCore
 from .core import Oracle
 from .dispatch import Dispatcher
@@ -114,24 +116,6 @@ def _hgx_server(host, port, debug, traceur, foreground=True, aengel=None):
     if foreground:
         threading_autojoin()
     return backend, server
-
-
-class _HGXCore(HGXCore):
-    def __init__(self, persister, *args, **kwargs):
-        oracle = Oracle(core=self)
-        super().__init__(
-            persister = persister, 
-            oracle = oracle,
-            *args, **kwargs
-        )
-        # Note: we now contain the only live reference to privateer.
-        self.link_privateer(
-            Privateer(core=self)
-        )
-        # Note: we now contain the only live reference to dispatch.
-        self.link_dispatch(
-            Dispatcher(core=self, oracle=oracle)
-        )
     
     
 def HypergolixLink(ipc_port=7772, debug=False, aengel=None, *args, **kwargs):
@@ -154,7 +138,11 @@ def HypergolixLink(ipc_port=7772, debug=False, aengel=None, *args, **kwargs):
     
 def HGXService(host, port, ipc_port, debug, traceur, foreground=True, 
                 aengel=None):
-    ''' Expected defaults:
+    ''' This is where all of the UX goes for the service itself. From 
+    here, we build a credential, then a bootstrap, and then persisters,
+    IPC, etc.
+    
+    Expected defaults:
     host:       'localhost'
     port:       7770
     ipc_port:   7772
@@ -191,12 +179,15 @@ def HGXService(host, port, ipc_port, debug, traceur, foreground=True,
         debug = debug,
         aengel = aengel,
     )
-    core = _HGXCore(
-        persister = persister,
-    )
+    
+    # TODO: make the bootstrap work without the persister for init, and
+    # then have an add_persister method
+    core = AgentBootstrap(persister, credential=None, aengel=aengel)
+    
+    # TODO: make the bootstrap have an add_ipc method.
     ipc = Autocomms(
         autoresponder_class = IPCHost,
-        autoresponder_kwargs = {'dispatch': core._dispatcher},
+        autoresponder_kwargs = {'dispatch': core.dispatch},
         connector_class = WSBasicServer,
         connector_kwargs = {
             'host': 'localhost',

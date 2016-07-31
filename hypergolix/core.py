@@ -51,7 +51,6 @@ import traceback
 import warnings
 import atexit
 
-from golix import FirstParty
 from golix import SecondParty
 from golix import Ghid
 from golix import Secret
@@ -141,10 +140,15 @@ class _GhidProxier:
         with self._modlock:
             resolved = self._resolve(ghid)
             
-        # # Now let's ensure that this has, in fact, resolved a STATIC ghid
-        # obj = self._oracle.get_object(gaoclass=_GAO, ghid=resolved)
-        # if obj.dynamic:
-        #     raise RuntimeError('Object not fully resolved.')
+        # Instumentation: temporarily ensure that this has, in fact, resolved 
+        # to a STATIC ghid
+        try:
+            obj = self._oracle._lookup[resolved]
+        except KeyError:
+            logger.warning('Could not check object resolution finality.')
+        else:
+            if obj.dynamic:
+                raise RuntimeError('Object not fully resolved.')
         
         return resolved
         
@@ -164,7 +168,7 @@ class HGXCore:
     
     DEFAULT_LEGROOM = 3
     
-    def __init__(self, persister, oracle, _identity=None, *args, **kwargs):
+    def __init__(self, identity):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         
@@ -172,18 +176,17 @@ class HGXCore:
         dispatcher isinstance DispatcherBase
         _identity isinstance golix.FirstParty
         '''
-        super().__init__(*args, **kwargs)
-        
         self._opslock = threading.Lock()
         
         # if not isinstance(persister, _PersisterBase):
         #     raise TypeError('Persister must subclass _PersisterBase.')
-        self._persister = persister
-        self._oracle = oracle
+        self._identity = identity
         
-        self._ghidproxy = _GhidProxier(core=self, oracle=oracle)
-        # self._privateer = privateer
-        # self._privateer = _Privateer()
+        self._oracle = None
+        self._privateer = None
+        self._dispatch = None
+        self._ghidproxy = None
+        self._persister = None
         
         self._contacts = {}
         # Bindings lookup: {<target ghid>: <binding ghid>}
@@ -200,20 +203,21 @@ class HGXCore:
         # Lookup for shared objects. {<object address>: {<recipients>}}
         self._shared_objects = {}
         
-        # # Automatic type checking using max. Can't have smaller than 1.
-        # self._legroom = max(1, _legroom)
+    def link_proxy(self, proxy):
+        ''' Chicken vs egg. Should be called ASAGDFP after __init__.
+        '''
+        self._ghidproxy = proxy
         
-        # In this case, we need to create our own bootstrap.
-        if _identity is None:
-            self._identity = FirstParty()
-            self._persister.publish(self._identity.second_party.packed)
-            
-        else:
-            # Could do type checking here but currently no big deal?
-            # This would also be a good spot to make sure our identity already
-            # exists at the persister.
-            self._identity = _identity
-            
+    def link_oracle(self, oracle):
+        ''' Chicken vs egg. Call immediately after linking proxy.
+        '''
+        self._oracle = oracle
+        
+    def link_persister(self, persister):
+        ''' Chicken vs egg. Should call immediately after linking proxy
+        and oracle.
+        '''
+        self._persister = persister
         # Now subscribe to my identity at the persister.
         self._persister.subscribe(
             ghid = self._identity.ghid, 
@@ -221,7 +225,7 @@ class HGXCore:
         )
         
     def link_privateer(self, privateer):
-        ''' Chicken vs egg. Should be called ASAGDFP after __init__.
+        ''' Chicken vs egg. Call immediately after linking oracle.
         '''
         self._privateer = privateer
     
@@ -235,7 +239,7 @@ class HGXCore:
             
         # if not isinstance(dispatch, DispatcherBase):
         #     raise TypeError('dispatcher must subclass DispatcherBase.')
-        self._dispatcher = dispatch
+        self._dispatch = dispatch
         
     @property
     def _legroom(self):
@@ -322,7 +326,7 @@ class HGXCore:
         )
         
         try:
-            self.dispatcher.dispatch_handshake(request.target)
+            self.dispatch.dispatch_handshake(request.target)
             
         except HandshakeError as e:
             # Erfolglos. Send a nak to whomever sent the handshake
@@ -346,12 +350,12 @@ class HGXCore:
     def _handle_req_ack(self, request, source_ghid):
         ''' Handles a handshake ack after reception.
         '''
-        self.dispatcher.dispatch_handshake_ack(request.target)
+        self.dispatch.dispatch_handshake_ack(request.target)
             
     def _handle_req_nak(self, request, source_ghid):
         ''' Handles a handshake nak after reception.
         '''
-        self.dispatcher.dispatch_handshake_nak(request.target)
+        self.dispatch.dispatch_handshake_nak(request.target)
         
     def _deref_ghid(self, ghid):
         ''' Recursively walks the ghid to any references. If dynamic,
@@ -397,8 +401,8 @@ class HGXCore:
         return self._persister
         
     @property
-    def dispatcher(self):
-        return self._dispatcher
+    def dispatch(self):
+        return self._dispatch
         
     def _make_static(self, data, secret=None):
         with self._opslock:
@@ -758,7 +762,7 @@ class HGXCore:
         
         # Note that this must be called before publishing to the persister, or
         # there's a race condition between them.
-        self._dispatcher.await_handshake_response(target, request.ghid)
+        self._dispatch.await_handshake_response(target, request.ghid)
         
         # TODO: move all persister operations to some dedicated something or 
         # other. Oracle maybe?

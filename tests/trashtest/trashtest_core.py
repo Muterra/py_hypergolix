@@ -49,6 +49,7 @@ from hypergolix.privateer import Privateer
 from hypergolix import HGXCore
 from hypergolix.core import Oracle
 from hypergolix.core import _GAO
+from hypergolix.core import _GhidProxier
 
 from hypergolix.exceptions import NakError
 from hypergolix.exceptions import PersistenceWarning
@@ -56,7 +57,7 @@ from hypergolix.exceptions import PersistenceWarning
 # This is a semi-normal import
 from golix.utils import _dummy_ghid
 
-# These are abnormal imports
+# These are fixture imports
 from golix import Ghid
 from golix import ThirdParty
 from golix import SecondParty
@@ -768,11 +769,14 @@ class _TD(_TestEmbed, _TestDispatcher):
 
 class _TestClient(HGXCore):
     def __init__(self):
-        oracle = Oracle(
-            core = self,
-            # gao_class = GAOFix,
-        )
-        super().__init__(persister=MemoryPersister(), oracle=oracle)
+        super().__init__(FirstParty())
+        oracle = Oracle(core=self)
+        persister = MemoryPersister()
+        persister.publish(self._identity.second_party.packed)
+        
+        self.link_proxy(_GhidProxier(self, oracle))
+        self.link_oracle(oracle)
+        self.link_persister(persister)
         self.link_privateer(Privateer(core=self))
         self.link_dispatch(_TD(core=self, oracle=oracle))
         
@@ -781,12 +785,14 @@ class _TestClient(HGXCore):
 
 
 class _TestAgent_SharedPersistence(HGXCore):
-    def __init__(self, *args, **kwargs):
-        oracle = Oracle(
-            core = self,
-            # gao_class = GAOFix,
-        )
-        super().__init__(oracle=oracle, *args, **kwargs)
+    def __init__(self, persister):
+        super().__init__(FirstParty())
+        persister.publish(self._identity.second_party.packed)
+        
+        oracle = Oracle(core=self)
+        self.link_proxy(_GhidProxier(self, oracle))
+        self.link_oracle(oracle)
+        self.link_persister(persister)
         self.link_privateer(Privateer(core=self))
         self.link_dispatch(_TD(core=self, oracle=oracle))
         
@@ -816,8 +822,8 @@ class AgentTrashTest(unittest.TestCase):
         cls.agent2 = _TestAgent_SharedPersistence(
             persister = cls.persister
         )
-        cls.dispatcher1 = cls.agent1._dispatcher
-        cls.dispatcher2 = cls.agent2._dispatcher
+        cls.dispatch1 = cls.agent1._dispatch
+        cls.dispatch2 = cls.agent2._dispatch
         
     def test_alone(self):
         pt1 = b'Hello, world?'
@@ -826,38 +832,38 @@ class AgentTrashTest(unittest.TestCase):
         pt4 = b'All ears!'
         
         # Create, test, and delete a static object
-        obj1 = self.agent1._dispatcher.new_object(pt1, dynamic=False)
+        obj1 = self.agent1._dispatch.new_object(pt1, dynamic=False)
         self.assertEqual(obj1.state, pt1)
         
-        self.agent1._dispatcher.delete_object(obj1)
+        self.agent1._dispatch.delete_object(obj1)
         with self.assertRaises(NakError, msg='Agent failed to delete.'):
             self.persister.get(obj1.address)
         
         # Create, test, update, test, and delete a dynamic object
-        obj2 = self.agent1._dispatcher.new_object(pt1, dynamic=True)
+        obj2 = self.agent1._dispatch.new_object(pt1, dynamic=True)
         self.assertEqual(obj2.state, pt1)
         
-        self.agent1._dispatcher.update_object(obj2, state=pt2)
+        self.agent1._dispatch.update_object(obj2, state=pt2)
         self.assertEqual(obj2.state, pt2)
         
-        self.agent1._dispatcher.delete_object(obj2)
+        self.agent1._dispatch.delete_object(obj2)
         with self.assertRaises(NakError, msg='Agent failed to delete.'):
             self.persister.get(obj2.address)
         
         # Test dynamic linking
-        obj3 = self.agent1._dispatcher.new_object(pt3, dynamic=False)
-        obj4 = self.agent1._dispatcher.new_object(state=obj3.address, dynamic=True)
-        obj5 = self.agent1._dispatcher.new_object(state=obj4.address, dynamic=True)
+        obj3 = self.agent1._dispatch.new_object(pt3, dynamic=False)
+        obj4 = self.agent1._dispatch.new_object(state=obj3.address, dynamic=True)
+        obj5 = self.agent1._dispatch.new_object(state=obj4.address, dynamic=True)
         
         # self.assertEqual(obj3.state, pt3)
         # self.assertEqual(obj4.state, pt3)
         # self.assertEqual(obj5.state, pt3)
         
-        obj6 = self.agent1._dispatcher.freeze_object(obj4)
+        obj6 = self.agent1._dispatch.freeze_object(obj4)
         # Note: at some point that was producing incorrect bindings and didn't
         # error out at the persister. Is that still a problem, or has it been 
         # resolved?
-        self.agent1._dispatcher.update_object(obj4, pt4)
+        self.agent1._dispatch.update_object(obj4, pt4)
         
         # self.assertEqual(obj6.state, pt3)
         # self.assertEqual(obj4.state, pt4)
@@ -870,28 +876,28 @@ class AgentTrashTest(unittest.TestCase):
         pt1 = b'Hello, world?'
         pt2 = b'Hiyaback!'
         
-        obj1 = self.agent1._dispatcher.new_object(pt1, dynamic=True)
-        obj1s1 = self.agent1._dispatcher.freeze_object(obj1)
+        obj1 = self.agent1._dispatch.new_object(pt1, dynamic=True)
+        obj1s1 = self.agent1._dispatch.freeze_object(obj1)
         
-        self.agent1._dispatcher.hand_object(obj1s1, contact2)
+        self.agent1._dispatch.hand_object(obj1s1, contact2)
         # This is still using the old object-based stuff so ignore it for now
         # self.assertIn(obj1s1.address, self.agent2._secrets)
         # self.assertEqual(
         #     self.agent1._secrets[obj1s1.address], 
         #     self.agent2._secrets[obj1s1.address]
         # )
-        obj1s1_shared = self.dispatcher2.retrieve_recent_handshake()
+        obj1s1_shared = self.dispatch2.retrieve_recent_handshake()
         self.assertEqual(
             obj1s1_shared, obj1s1.address
         )
         
         # Test handshakes using dynamic objects
-        self.agent1._dispatcher.hand_object(obj1, contact2)
+        self.agent1._dispatch.hand_object(obj1, contact2)
         # Same note as above.
         # self.assertIn(obj1.address, self.agent2._historian)
         # # Make sure this doesn't error, checking that it's in secrets
         # self.agent2._get_secret(obj1.address)
-        obj1_shared = self.dispatcher2.retrieve_recent_handshake()
+        obj1_shared = self.dispatch2.retrieve_recent_handshake()
         self.assertEqual(
             obj1.address,
             obj1_shared
@@ -934,17 +940,17 @@ class ClientTrashTest(unittest.TestCase):
         pt4 = b'All ears!'
         
         # Create, test, and delete a static object
-        obj1 = self.agent1._dispatcher.new_object(pt1, dynamic=False)
-        self.agent1._dispatcher.delete_object(obj1)
-        obj2 = self.agent1._dispatcher.new_object(pt1, dynamic=True)
-        self.agent1._dispatcher.update_object(obj2, state=pt2)
-        self.agent1._dispatcher.delete_object(obj2)
+        obj1 = self.agent1._dispatch.new_object(pt1, dynamic=False)
+        self.agent1._dispatch.delete_object(obj1)
+        obj2 = self.agent1._dispatch.new_object(pt1, dynamic=True)
+        self.agent1._dispatch.update_object(obj2, state=pt2)
+        self.agent1._dispatch.delete_object(obj2)
         # Test dynamic linking
-        obj3 = self.agent1._dispatcher.new_object(pt3, dynamic=False)
-        obj4 = self.agent1._dispatcher.new_object(state=obj3.address, dynamic=True)
-        obj5 = self.agent1._dispatcher.new_object(state=obj4.address, dynamic=True)
-        obj6 = self.agent1._dispatcher.freeze_object(obj4)
-        self.agent1._dispatcher.update_object(obj4, pt4)
+        obj3 = self.agent1._dispatch.new_object(pt3, dynamic=False)
+        obj4 = self.agent1._dispatch.new_object(state=obj3.address, dynamic=True)
+        obj5 = self.agent1._dispatch.new_object(state=obj4.address, dynamic=True)
+        obj6 = self.agent1._dispatch.freeze_object(obj4)
+        self.agent1._dispatch.update_object(obj4, pt4)
             
         
         # --------------------------------------------------------------------
