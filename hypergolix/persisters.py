@@ -264,22 +264,283 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         NAK/failure is represented by raise NakError
         '''
         pass
+        
+        
+class PersistenceCore:
+    ''' Provides the core functions for storing Golix objects. Required 
+    for the hypergolix service to start.
+    
+    Can coordinate with both "upstream" and "downstream" persisters.
+    Other persisters should pass through the "ingestive tract". Local
+    objects can be published directly through calling the ingest_<type> 
+    methods.
+    '''
+    def __init__(self, doorman, enforcer, lawyer, bookie, librarian, postman, 
+                undertaker):
+        self._opslock = threading.Lock()
+        
+        doorman.link_librarian(librarian)
+        self.doorman = doorman
+        
+        self.enlitener = _Enlitener
+        
+        enforcer.link_librarian(librarian)
+        self.enforcer = enforcer
+        
+        lawyer.link_librarian(librarian)
+        self.lawyer = lawyer
+        
+        bookie.link_librarian(librarian)
+        bookie.link_lawyer(lawyer)
+        bookie.link_undertaker(undertaker)
+        self.bookie = bookie
+        
+        postman.link_librarian(librarian)
+        postman.link_bookie(bookie)
+        self.postman = postman
+        
+        undertaker.link_librarian(librarian)
+        undertaker.link_bookie(bookie)
+        undertaker.link_postman(postman)
+        self.undertaker = undertaker
+        
+        librarian.link_core(self)
+        self.librarian = librarian
+    
+    def add_upstream_persister(self, persister):
+        ''' Adds an upstream persister.
+        
+        PersistenceCore will attempt to have a constantly consistent 
+        state with upstream persisters. That means that any local 
+        resources will either be subscribed to upstream, or checked for
+        updates before ingestion by the Hypergolix service.
+        '''
+        raise NotImplementedError()
+        
+    def add_downstream_persister(self, persister):
+        ''' Adds a downstream persister.
+        
+        PersistenceCore will not attempt to keep a consistent state with
+        downstream persisters. Instead, it will simply push updates to
+        local objects downstream. It will not, however, look to them for
+        updates.
+        '''
+        raise NotImplementedError()
+        
+    def ingest(self, packed):
+        ''' Called on an untrusted and unknown object. May be bypassed
+        by locally-created, trusted objects (by calling the individual 
+        ingest methods directly). Parses, validates, and stores the 
+        object, and returns True; or, raises an error.
+        '''
+        for loader, ingester in (
+        (self.doorman.load_gidc, self.ingest_gidc),
+        (self.doorman.load_geoc, self.ingest_geoc),
+        (self.doorman.load_gobs, self.ingest_gobs),
+        (self.doorman.load_gobd, self.ingest_gobd),
+        (self.doorman.load_gdxx, self.ingest_gdxx),
+        (self.doorman.load_garq, self.ingest_garq)):
+            # Attempt this loader
+            try:
+                golix_obj = loader(packed)
+            # This loader failed. Continue to the next.
+            except MalformedGolixPrimitive:
+                continue
+            # This loader succeeded. Ingest it and then break out of the loop.
+            else:
+                obj = ingester(golix_obj)
+                break
+        # Running into the else means we could not find a loader.
+        else:
+            raise MalformedGolixPrimitive(
+                '0x0001: Packed bytes do not appear to be a Golix primitive.'
+            )
+                    
+        # Note that we don't need to call postman from the individual ingest
+        # methods, because they will only be called directly for locally-built
+        # objects, which will be distributed by the dispatcher.
+        self.postman.schedule(obj)
+                    
+        return obj
+        
+    def ingest_gidc(self, obj):
+        raw = obj.packed
+        obj = self.enlitener._convert_gidc(obj)
+        
+        # Take the lock first, since this will mutate state
+        with self._opslock:
+            # First need to enforce target selection
+            self.enforcer.validate_gidc(obj)
+            # Now make sure authorship requirements are satisfied
+            self.lawyer.validate_gidc(obj)
+            
+            # Add GC pass in case of illegal existing debindings.
+            with self.undertaker:
+                # Finally make sure persistence rules are followed
+                self.bookie.validate_gidc(obj)
+        
+            # Force GC pass after every mutation
+            with self.undertaker:
+                # And now prep the undertaker for any necessary GC
+                self.undertaker.prep_gidc(obj)
+                # Everything is validated. Place with the bookie first, so that 
+                # it has access to the old librarian state
+                self.bookie.place_gidc(obj)
+                # And finally add it to the librarian
+                self.librarian.store(obj, raw)
+        
+        return obj
+        
+    def ingest_geoc(self, obj):
+        raw = obj.packed
+        obj = self.enlitener._convert_geoc(obj)
+        
+        # Take the lock first, since this will mutate state
+        with self._opslock:
+            # First need to enforce target selection
+            self.enforcer.validate_geoc(obj)
+            # Now make sure authorship requirements are satisfied
+            self.lawyer.validate_geoc(obj)
+            
+            # Add GC pass in case of illegal existing debindings.
+            with self.undertaker:
+                # Finally make sure persistence rules are followed
+                self.bookie.validate_geoc(obj)
+        
+            # Force GC pass after every mutation
+            with self.undertaker:
+                # And now prep the undertaker for any necessary GC
+                self.undertaker.prep_geoc(obj)
+                # Everything is validated. Place with the bookie first, so that 
+                # it has access to the old librarian state
+                self.bookie.place_geoc(obj)
+                # And finally add it to the librarian
+                self.librarian.store(obj, raw)
+        
+        return obj
+        
+    def ingest_gobs(self, obj):
+        raw = obj.packed
+        obj = self.enlitener._convert_gobs(obj)
+        
+        # Take the lock first, since this will mutate state
+        with self._opslock:
+            # First need to enforce target selection
+            self.enforcer.validate_gobs(obj)
+            # Now make sure authorship requirements are satisfied
+            self.lawyer.validate_gobs(obj)
+            
+            # Add GC pass in case of illegal existing debindings.
+            with self.undertaker:
+                # Finally make sure persistence rules are followed
+                self.bookie.validate_gobs(obj)
+        
+            # Force GC pass after every mutation
+            with self.undertaker:
+                # And now prep the undertaker for any necessary GC
+                self.undertaker.prep_gobs(obj)
+                # Everything is validated. Place with the bookie first, so that 
+                # it has access to the old librarian state
+                self.bookie.place_gobs(obj)
+                # And finally add it to the librarian
+                self.librarian.store(obj, raw)
+        
+        return obj
+        
+    def ingest_gobd(self, obj):
+        raw = obj.packed
+        obj = self.enlitener._convert_gobd(obj)
+        
+        # Take the lock first, since this will mutate state
+        with self._opslock:
+            # First need to enforce target selection
+            self.enforcer.validate_gobd(obj)
+            # Now make sure authorship requirements are satisfied
+            self.lawyer.validate_gobd(obj)
+            
+            # Add GC pass in case of illegal existing debindings.
+            with self.undertaker:
+                # Finally make sure persistence rules are followed
+                self.bookie.validate_gobd(obj)
+        
+            # Force GC pass after every mutation
+            with self.undertaker:
+                # And now prep the undertaker for any necessary GC
+                self.undertaker.prep_gobd(obj)
+                # Everything is validated. Place with the bookie first, so that 
+                # it has access to the old librarian state
+                self.bookie.place_gobd(obj)
+                # And finally add it to the librarian
+                self.librarian.store(obj, raw)
+        
+        return obj
+        
+    def ingest_gdxx(self, obj):
+        raw = obj.packed
+        obj = self.enlitener._convert_gdxx(obj)
+        
+        # Take the lock first, since this will mutate state
+        with self._opslock:
+            # First need to enforce target selection
+            self.enforcer.validate_gdxx(obj)
+            # Now make sure authorship requirements are satisfied
+            self.lawyer.validate_gdxx(obj)
+            
+            # Add GC pass in case of illegal existing debindings.
+            with self.undertaker:
+                # Finally make sure persistence rules are followed
+                self.bookie.validate_gdxx(obj)
+        
+            # Force GC pass after every mutation
+            with self.undertaker:
+                # And now prep the undertaker for any necessary GC
+                self.undertaker.prep_gdxx(obj)
+                # Everything is validated. Place with the bookie first, so that 
+                # it has access to the old librarian state
+                self.bookie.place_gdxx(obj)
+                # And finally add it to the librarian
+                self.librarian.store(obj, raw)
+        
+        return obj
+        
+    def ingest_garq(self, obj):
+        raw = obj.packed
+        obj = self.enlitener._convert_garq(obj)
+        
+        # Take the lock first, since this will mutate state
+        with self._opslock:
+            # First need to enforce target selection
+            self.enforcer.validate_garq(obj)
+            # Now make sure authorship requirements are satisfied
+            self.lawyer.validate_garq(obj)
+            
+            # Add GC pass in case of illegal existing debindings.
+            with self.undertaker:
+                # Finally make sure persistence rules are followed
+                self.bookie.validate_garq(obj)
+        
+            # Force GC pass after every mutation
+            with self.undertaker:
+                # And now prep the undertaker for any necessary GC
+                self.undertaker.prep_garq(obj)
+                # Everything is validated. Place with the bookie first, so that 
+                # it has access to the old librarian state
+                self.bookie.place_garq(obj)
+                # And finally add it to the librarian
+                self.librarian.store(obj, raw)
+        
+        return obj
 
 
-class MemoryPersister:
+class MemoryPersister(PersistenceCore):
     ''' Basic in-memory persister.
+    
+    This is a deprecated legacy thing we're keeping around so that we 
+    don't need to completely re-write our already inadequate test suite.
     '''    
     def __init__(self):
-        (core, doorman, enforcer, lawyer, bookie, librarian, undertaker, 
-            postman) = circus_factory()
-        self.core = core
-        self.doorman = doorman
-        self.enforcer = enforcer
-        self.lawyer = lawyer
-        self.bookie = bookie
-        self.librarian = librarian
-        self.undertaker = undertaker
-        self.postman = postman
+        super().__init__(_Doorman(), _Enforcer(), _Lawyer(), _Bookie(), 
+                        _Librarian(), _MrPostman(), _Undertaker())
         
         self.subscribe = self.postman.subscribe
         self.unsubscribe = self.postman.unsubscribe
@@ -291,7 +552,7 @@ class MemoryPersister:
     def publish(self, *args, **kwargs):
         # This is a temporary fix to force memorypersisters to notify during
         # publishing. Ideally, this would happen immediately after returning.
-        self.core.ingest(*args, **kwargs)
+        self.ingest(*args, **kwargs)
         self.postman.do_mail_run()
         
     def ping(self):
@@ -346,24 +607,18 @@ class MemoryPersister:
         
 class DiskCachePersister(MemoryPersister):
     ''' Persister that caches to disk.
+    Replicate MemoryPersister, just replace Librarian.
+    
+    Same note re: deprecated.
     '''    
     def __init__(self, cache_dir):
-        (core, doorman, enforcer, lawyer, bookie, librarian, undertaker, 
-            postman) = circus_factory(
-                librarian_class = DiskLibrarian,
-                librarian_kwargs = {'cache_dir': cache_dir}
-            )
-        self.core = core
-        self.doorman = doorman
-        self.enforcer = enforcer
-        self.lawyer = lawyer
-        self.bookie = bookie
-        self.librarian = librarian
-        self.undertaker = undertaker
-        self.postman = postman
+        super().__init__(_Doorman(), _Enforcer(), _Lawyer(), _Bookie(), 
+                        DiskLibrarian(cache_dir=cache_dir), _MrPostman(), 
+                        _Undertaker())
         
         self.subscribe = self.postman.subscribe
         self.unsubscribe = self.postman.unsubscribe
+        self.silence_notification = self.postman.silence_notification
         # self.publish = self.core.ingest
         self.list_bindings = self.bookie.bind_status
         self.list_debindings = self.bookie.debind_status
@@ -875,232 +1130,6 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
             return True
         else:
             raise RuntimeError('Unknown status code during disconnection.')
-            
-            
-class PersisterCore:
-    ''' Core functions for persistence. Not to be confused with the 
-    persister commands, which wrap the core.
-    
-    Other persisters should pass through the "ingestive tract". Local
-    objects can be published directly through calling the ingest_<type> 
-    methods.
-    '''
-    def __init__(self, doorman, enforcer, lawyer, bookie, librarian, 
-                    undertaker, postman):
-        self._opslock = threading.Lock()
-        
-        self._librarian = librarian
-        self._bookie = bookie
-        self._enforcer = enforcer
-        self._lawyer = lawyer
-        self._doorman = doorman
-        self._postman = postman
-        self._undertaker = undertaker
-        self._enlitener = _Enlitener
-        
-    def ingest(self, packed):
-        ''' Called on an untrusted and unknown object. May be bypassed
-        by locally-created, trusted objects (by calling the individual 
-        ingest methods directly). Parses, validates, and stores the 
-        object, and returns True; or, raises an error.
-        '''
-        for loader, ingester in (
-        (self._doorman.load_gidc, self.ingest_gidc),
-        (self._doorman.load_geoc, self.ingest_geoc),
-        (self._doorman.load_gobs, self.ingest_gobs),
-        (self._doorman.load_gobd, self.ingest_gobd),
-        (self._doorman.load_gdxx, self.ingest_gdxx),
-        (self._doorman.load_garq, self.ingest_garq)):
-            # Attempt this loader
-            try:
-                golix_obj = loader(packed)
-            # This loader failed. Continue to the next.
-            except MalformedGolixPrimitive:
-                continue
-            # This loader succeeded. Ingest it and then break out of the loop.
-            else:
-                obj = ingester(golix_obj)
-                break
-        # Running into the else means we could not find a loader.
-        else:
-            raise MalformedGolixPrimitive(
-                '0x0001: Packed bytes do not appear to be a Golix primitive.'
-            )
-                    
-        # Note that we don't need to call postman from the individual ingest
-        # methods, because they will only be called directly for locally-built
-        # objects, which will be distributed by the dispatcher.
-        self._postman.schedule(obj)
-                    
-        return obj
-        
-    def ingest_gidc(self, obj):
-        raw = obj.packed
-        obj = self._enlitener._convert_gidc(obj)
-        
-        # Take the lock first, since this will mutate state
-        with self._opslock:
-            # First need to enforce target selection
-            self._enforcer.validate_gidc(obj)
-            # Now make sure authorship requirements are satisfied
-            self._lawyer.validate_gidc(obj)
-            
-            # Add GC pass in case of illegal existing debindings.
-            with self._undertaker:
-                # Finally make sure persistence rules are followed
-                self._bookie.validate_gidc(obj)
-        
-            # Force GC pass after every mutation
-            with self._undertaker:
-                # And now prep the undertaker for any necessary GC
-                self._undertaker.prep_gidc(obj)
-                # Everything is validated. Place with the bookie first, so that 
-                # it has access to the old librarian state
-                self._bookie.place_gidc(obj)
-                # And finally add it to the librarian
-                self._librarian.store(obj, raw)
-        
-        return obj
-        
-    def ingest_geoc(self, obj):
-        raw = obj.packed
-        obj = self._enlitener._convert_geoc(obj)
-        
-        # Take the lock first, since this will mutate state
-        with self._opslock:
-            # First need to enforce target selection
-            self._enforcer.validate_geoc(obj)
-            # Now make sure authorship requirements are satisfied
-            self._lawyer.validate_geoc(obj)
-            
-            # Add GC pass in case of illegal existing debindings.
-            with self._undertaker:
-                # Finally make sure persistence rules are followed
-                self._bookie.validate_geoc(obj)
-        
-            # Force GC pass after every mutation
-            with self._undertaker:
-                # And now prep the undertaker for any necessary GC
-                self._undertaker.prep_geoc(obj)
-                # Everything is validated. Place with the bookie first, so that 
-                # it has access to the old librarian state
-                self._bookie.place_geoc(obj)
-                # And finally add it to the librarian
-                self._librarian.store(obj, raw)
-        
-        return obj
-        
-    def ingest_gobs(self, obj):
-        raw = obj.packed
-        obj = self._enlitener._convert_gobs(obj)
-        
-        # Take the lock first, since this will mutate state
-        with self._opslock:
-            # First need to enforce target selection
-            self._enforcer.validate_gobs(obj)
-            # Now make sure authorship requirements are satisfied
-            self._lawyer.validate_gobs(obj)
-            
-            # Add GC pass in case of illegal existing debindings.
-            with self._undertaker:
-                # Finally make sure persistence rules are followed
-                self._bookie.validate_gobs(obj)
-        
-            # Force GC pass after every mutation
-            with self._undertaker:
-                # And now prep the undertaker for any necessary GC
-                self._undertaker.prep_gobs(obj)
-                # Everything is validated. Place with the bookie first, so that 
-                # it has access to the old librarian state
-                self._bookie.place_gobs(obj)
-                # And finally add it to the librarian
-                self._librarian.store(obj, raw)
-        
-        return obj
-        
-    def ingest_gobd(self, obj):
-        raw = obj.packed
-        obj = self._enlitener._convert_gobd(obj)
-        
-        # Take the lock first, since this will mutate state
-        with self._opslock:
-            # First need to enforce target selection
-            self._enforcer.validate_gobd(obj)
-            # Now make sure authorship requirements are satisfied
-            self._lawyer.validate_gobd(obj)
-            
-            # Add GC pass in case of illegal existing debindings.
-            with self._undertaker:
-                # Finally make sure persistence rules are followed
-                self._bookie.validate_gobd(obj)
-        
-            # Force GC pass after every mutation
-            with self._undertaker:
-                # And now prep the undertaker for any necessary GC
-                self._undertaker.prep_gobd(obj)
-                # Everything is validated. Place with the bookie first, so that 
-                # it has access to the old librarian state
-                self._bookie.place_gobd(obj)
-                # And finally add it to the librarian
-                self._librarian.store(obj, raw)
-        
-        return obj
-        
-    def ingest_gdxx(self, obj):
-        raw = obj.packed
-        obj = self._enlitener._convert_gdxx(obj)
-        
-        # Take the lock first, since this will mutate state
-        with self._opslock:
-            # First need to enforce target selection
-            self._enforcer.validate_gdxx(obj)
-            # Now make sure authorship requirements are satisfied
-            self._lawyer.validate_gdxx(obj)
-            
-            # Add GC pass in case of illegal existing debindings.
-            with self._undertaker:
-                # Finally make sure persistence rules are followed
-                self._bookie.validate_gdxx(obj)
-        
-            # Force GC pass after every mutation
-            with self._undertaker:
-                # And now prep the undertaker for any necessary GC
-                self._undertaker.prep_gdxx(obj)
-                # Everything is validated. Place with the bookie first, so that 
-                # it has access to the old librarian state
-                self._bookie.place_gdxx(obj)
-                # And finally add it to the librarian
-                self._librarian.store(obj, raw)
-        
-        return obj
-        
-    def ingest_garq(self, obj):
-        raw = obj.packed
-        obj = self._enlitener._convert_garq(obj)
-        
-        # Take the lock first, since this will mutate state
-        with self._opslock:
-            # First need to enforce target selection
-            self._enforcer.validate_garq(obj)
-            # Now make sure authorship requirements are satisfied
-            self._lawyer.validate_garq(obj)
-            
-            # Add GC pass in case of illegal existing debindings.
-            with self._undertaker:
-                # Finally make sure persistence rules are followed
-                self._bookie.validate_garq(obj)
-        
-            # Force GC pass after every mutation
-            with self._undertaker:
-                # And now prep the undertaker for any necessary GC
-                self._undertaker.prep_garq(obj)
-                # Everything is validated. Place with the bookie first, so that 
-                # it has access to the old librarian state
-                self._bookie.place_garq(obj)
-                # And finally add it to the librarian
-                self._librarian.store(obj, raw)
-        
-        return obj
         
         
 class _Doorman:
@@ -1108,9 +1137,13 @@ class _Doorman:
     (aka locally-created) objects. Only called from within the typeless
     PersisterCore.ingest() method.
     '''
-    def __init__(self, librarian):
-        self._librarian = librarian
+    def __init__(self):
+        self._librarian = None
         self._golix = ThirdParty()
+        
+    def link_librarian(self, librarian):
+        # Called to link to the librarian.
+        self._librarian = weakref.proxy(librarian)
         
     def load_gidc(self, packed):
         try:
@@ -1267,9 +1300,9 @@ class _MrPostman:
     Question: should the distributed state management of GARQ recipients
     be managed here, or in the bookie (where it currently is)?
     '''
-    def __init__(self, librarian, bookie):
-        self._bookie = bookie
-        self._librarian = librarian
+    def __init__(self):
+        self._bookie = None
+        self._librarian = None
         
         self._out_for_delivery = threading.Event()
         
@@ -1285,6 +1318,14 @@ class _MrPostman:
         # The delayed lookup. <awaiting ghid>: set(<subscribed ghids>)
         self._opslock_defer = threading.Lock()
         self._deferred = {}
+        
+    def link_librarian(self, librarian):
+        # Call before using.
+        self._librarian = weakref.proxy(librarian)
+        
+    def link_bookie(self, bookie):
+        # Call before using.
+        self._bookie = weakref.proxy(bookie)
         
     def silence_notification(self, callback, subscription, notification):
         ''' Silences callbacks for specific subscription, notification
@@ -1494,11 +1535,23 @@ class _Undertaker:
     for it and call it a day? We'd need to make some kind of call to the
     bookie to handle that.
     '''
-    def __init__(self, librarian, bookie, postman):
-        self._librarian = librarian
-        self._bookie = bookie
-        self._postman = postman
+    def __init__(self):
+        self._librarian = None
+        self._bookie = None
+        self._postman = None
         self._staging = None
+        
+    def link_librarian(self, librarian):
+        # Call before using.
+        self._librarian = weakref.proxy(librarian)
+        
+    def link_bookie(self, bookie):
+        # Call before using.
+        self._bookie = weakref.proxy(bookie)
+        
+    def link_postman(self, postman):
+        # Call before using.
+        self._postman = weakref.proxy(postman)
         
     def __enter__(self):
         # Create a new staging object.
@@ -1646,11 +1699,15 @@ class _Lawyer:
     
     Threadsafe.
     '''
-    def __init__(self, librarian):
+    def __init__(self):
         # Lookup for all known identity ghids
         # This must remain valid at all persister instances regardless of the
         # python runtime state
-        self._librarian = librarian
+        self._librarian = None
+        
+    def link_librarian(self, librarian):
+        # Call before using.
+        self._librarian = weakref.proxy(librarian)
         
     def _validate_author(self, obj):
         try:
@@ -1783,8 +1840,12 @@ class _Lawyer:
 class _Enforcer:
     ''' Enforces valid target selections.
     '''
-    def __init__(self, librarian):
-        self._librarian = librarian
+    def __init__(self):
+        self._librarian = None
+        
+    def link_librarian(self, librarian):
+        # Call before using.
+        self._librarian = weakref.proxy(librarian)
         
     def validate_gidc(self, obj):
         ''' GIDC need no target verification.
@@ -1899,11 +1960,11 @@ class _Bookie:
     
     (Not currently) threadsafe.
     '''
-    def __init__(self, librarian, lawyer):
+    def __init__(self):
         self._opslock = threading.Lock()
         self._undertaker = None
-        self._librarian = librarian
-        self._lawyer = lawyer
+        self._librarian = None
+        self._lawyer = None
         
         # Lookup for debindings flagged as illegal. So long as the local state
         # is successfully propagated upstream, this can be a local-only object.
@@ -1928,6 +1989,14 @@ class _Bookie:
         # This must remain valid at all persister instances regardless of the
         # python runtime state
         self._requests_for_recipient = SetMap()
+        
+    def link_librarian(self, librarian):
+        # Call before using.
+        self._librarian = weakref.proxy(librarian)
+        
+    def link_lawyer(self, lawyer):
+        # Call before using.
+        self._lawyer = weakref.proxy(lawyer)
         
     def link_undertaker(self, undertaker):
         # We need to be able to initiate GC on illegal debindings detected 
@@ -2772,57 +2841,3 @@ class _GarqLite(_BaseLite):
         # compare it anyways just in case.
         except AttributeError as exc:
             return False
-            
-            
-def circus_factory(core_class=PersisterCore, core_kwargs=None, 
-                    doorman_class=_Doorman, doorman_kwargs=None, 
-                    enforcer_class=_Enforcer, enforcer_kwargs=None,
-                    lawyer_class=_Lawyer, lawyer_kwargs=None,
-                    bookie_class=_Bookie, bookie_kwargs=None,
-                    librarian_class=_Librarian, librarian_kwargs=None,
-                    undertaker_class=_Undertaker, undertaker_kwargs=None,
-                    postman_class=_MrPostman, postman_kwargs=None):
-    ''' Generate a PersisterCore, and its associated circus, correctly
-    linking all of the objects in the process. Returns their instances
-    in the same order they were passed.
-    '''
-    core_kwargs = core_kwargs or {}
-    doorman_kwargs = doorman_kwargs or {}
-    enforcer_kwargs = enforcer_kwargs or {}
-    lawyer_kwargs = lawyer_kwargs or {}
-    bookie_kwargs = bookie_kwargs or {}
-    librarian_kwargs = librarian_kwargs or {}
-    undertaker_kwargs = undertaker_kwargs or {}
-    postman_kwargs = postman_kwargs or {}
-    
-    librarian = librarian_class(**librarian_kwargs)
-    doorman = doorman_class(librarian=librarian, **doorman_kwargs)
-    enforcer = enforcer_class(librarian=librarian, **enforcer_kwargs)
-    lawyer = lawyer_class(librarian=librarian, **lawyer_kwargs)
-    bookie = bookie_class(librarian=librarian, lawyer=lawyer, **bookie_kwargs)
-    postman = postman_class(
-        librarian = librarian,
-        bookie = bookie,
-        **postman_kwargs
-    )
-    undertaker = undertaker_class(
-        librarian = librarian,
-        bookie = bookie,
-        postman = postman,
-        **undertaker_kwargs
-    )
-    bookie.link_undertaker(undertaker)
-    core = core_class(
-        doorman = doorman,
-        enforcer = enforcer,
-        lawyer = lawyer,
-        bookie = bookie,
-        librarian = librarian,
-        undertaker = undertaker,
-        postman = postman,
-        **core_kwargs
-    )
-    librarian.link_core(core)
-    
-    return (core, doorman, enforcer, lawyer, bookie, librarian, undertaker, 
-            postman)

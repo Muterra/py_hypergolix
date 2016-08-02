@@ -61,10 +61,6 @@ from golix._getlow import GOBD
 from golix._getlow import GARQ
 from golix._getlow import GDXX
 
-from golix.utils import AsymHandshake
-from golix.utils import AsymAck
-from golix.utils import AsymNak
-
 # Intra-package dependencies
 from .exceptions import NakError
 from .exceptions import HandshakeError
@@ -108,12 +104,21 @@ class _GhidProxier:
     
     Threadsafe.
     '''
-    def __init__(self, core, oracle):
+    def __init__(self, core, persister):
         # The usual.
         self._refs = {}
-        self._oracle = oracle
+        self._librarian = persister.librarian
         self._core = weakref.proxy(core)
         self._modlock = threading.Lock()
+        
+    def is_proxy(self, ghid):
+        ''' Return True if the ghid is known as a proxy, False if the 
+        ghid is not known as a proxy.
+        
+        False doesn't guarantee that it's not a proxy, but True 
+        guarantees that it is.
+        '''
+        return ghid in self._refs
         
     def chain(self, proxy, target):
         ''' Set, or update, a ghid proxy.
@@ -133,33 +138,178 @@ class _GhidProxier:
     def resolve(self, ghid):
         ''' Protect the entry point with a global lock, but don't leave
         the recursive bit alone.
+        
+        TODO: make this guarantee, through using the persister's 
+        librarian, that the resolved ghid IS, in fact, a container.
+        
+        TODO: consider adding a depth limit to resolution.
         '''
         if not isinstance(ghid, Ghid):
             raise TypeError('Can only resolve a ghid.')
             
         with self._modlock:
-            resolved = self._resolve(ghid)
-            
-        # Instumentation: temporarily ensure that this has, in fact, resolved 
-        # to a STATIC ghid
-        try:
-            obj = self._oracle._lookup[resolved]
-        except KeyError:
-            logger.warning('Could not check object resolution finality.')
-        else:
-            if obj.dynamic:
-                raise RuntimeError('Object not fully resolved.')
-        
-        return resolved
+            return = self._resolve(ghid)
         
     def _resolve(self, ghid):
         ''' Recursively resolves the container ghid for a proxy (or a 
         container).
         '''
+        # First check our local cache of aliases
         try:
             return self._resolve(self._refs[ghid])
+            
+        # We don't know the local cache, so let's check librarian to make sure
+        # it's not a dynamic address.
         except KeyError:
-            return ghid
+            obj = self._librarian.whois(ghid)
+            
+            if isinstance(obj, _GobdLite):
+                # Don't call chain, because we'd hit a modlock.
+                self._refs[ghid] = obj.target
+                return self._resolve(obj.target)
+                
+            else:
+                return ghid
+            
+            
+class GolixCore:
+    ''' Wrapper around Golix library that automates much of the state
+    management, holds the Agent's identity, etc etc.
+    '''
+    DEFAULT_LEGROOM = 3
+    
+    def __init__(self, identity):
+        ''' Create a new agent. Persister should subclass _PersisterBase
+        (eventually this requirement may be changed).
+        
+        persister isinstance _PersisterBase
+        dispatcher isinstance DispatcherBase
+        _identity isinstance golix.FirstParty
+        '''
+        self._opslock = threading.Lock()
+        
+        # if not isinstance(persister, _PersisterBase):
+        #     raise TypeError('Persister must subclass _PersisterBase.')
+        self._identity = identity
+        
+        self._librarian = None
+        self._oracle = None
+        self._dispatch = None
+        self._ghidproxy = None
+        self._persister = None
+        
+    def link_proxy(self, proxy):
+        ''' Chicken vs egg. Should be called ASAGDFP after __init__.
+        '''
+        self._ghidproxy = proxy
+        
+    def link_oracle(self, oracle):
+        ''' Chicken vs egg. Call immediately after linking proxy.
+        '''
+        self._oracle = oracle
+        
+    def link_persister(self, persister):
+        ''' Chicken vs egg. Should call immediately after linking proxy
+        and oracle.
+        '''
+        self._persister = persister
+        self._librarian = persister.librarian
+    
+    def link_dispatch(self, dispatch):
+        ''' Chicken vs egg. Must call AFTER linking persister.
+        '''
+        # if not isinstance(dispatch, DispatcherBase):
+        #     raise TypeError('dispatcher must subclass DispatcherBase.')
+        self._dispatch = dispatch
+        
+    @property
+    def _legroom(self):
+        ''' Get the legroom from our bootstrap. If it hasn't been 
+        created yet (aka within __init__), return the class default.
+        '''
+        return self.DEFAULT_LEGROOM
+        
+    @property
+    def whoami(self):
+        ''' Return the Agent's Ghid.
+        '''
+        return self._identity.ghid
+        
+    def open_request(self, request):
+        ''' Just like it says on the label...
+        Note that the request is PACKED, not unpacked.
+        '''
+        # TODO: have this interface with rolodex.
+        with self._opslock:
+            unpacked = self._identity.unpack_request(request)
+            
+        requestor = SecondParty.from_packed(
+            self._librarian.dereference(unpacked.author)
+        )
+        payload = self._identity.receive_request(requestor, unpacked)
+        return payload
+        
+    def make_request(self, recipient, payload):
+        # Just like it says on the label...
+        recipient = SecondParty.from_packed(
+            self._librarian.dereference(recipient)
+        )
+        with self._opslock:
+            return self._identity.make_request(
+                recipient = recipient,
+                request = payload,
+            )
+        
+    def open_container(self, container, secret):
+        # Wrapper around golix.FirstParty.receive_container.
+        author = SecondParty.from_packed(
+            self._librarian.dereference(container.author)
+        )
+        with self._opslock:
+            return self._identity.receive_container(
+                author = author,
+                secret = secret,
+                container = container
+            )
+        
+    def make_container(self, data, secret):
+        # Simple wrapper around golix.FirstParty.make_container
+        with self._opslock:
+            return self._identity.make_container(
+                secret = secret,
+                plaintext = data
+            )
+
+    def make_binding_stat(self, target):
+        # Note that this requires no open() method, as bindings are verified by
+        # the local persister.
+        with self._opslock:
+            return self._identity.make_bind_static(target)
+        
+    def make_binding_dyn(self, target, ghid=None, history=None):
+        # Make a new binding!
+        if (ghid is None and history is None):
+            pass
+            
+        # Update an existing binding!
+        elif (ghid is not None and history is not None):
+            pass
+            
+        # Error!
+        else:
+            raise ValueError('Mixed def of ghid/history while dyn binding.')
+            
+        with self._opslock:
+            return self._identity.make_bind_dynamic(
+                target = target,
+                ghid_dynamic = ghid_dynamic,
+                history = history
+            )
+        
+    def make_debinding(self, target):
+        # Simple wrapper around golix.FirstParty.make_debind
+        with self._opslock:
+            return self._identity.make_debind(target)
 
 
 class HGXCore:
@@ -198,10 +348,6 @@ class HGXCore:
         # Target lookup for most recent frame in dynamic bindings.
         # {<dynamic ghid>: <most recent target>}
         self._dynamic_targets = {}
-        
-        # DEPRECATED AND UNUSED?
-        # Lookup for shared objects. {<object address>: {<recipients>}}
-        self._shared_objects = {}
         
     def link_proxy(self, proxy):
         ''' Chicken vs egg. Should be called ASAGDFP after __init__.
@@ -536,24 +682,6 @@ class HGXCore:
             
         # Update the various buffers and do the object's callbacks
         frame_history.appendleft(dynamic.ghid)
-        
-        # Note: this should all move to dispatch, which maintains the ownership
-        # records for ghids.
-        # # Clear out old key material
-        # if old_tail not in frame_history:
-        #     # So this should actually be handled via the weakvaluedict -- we
-        #     # should be automatically clearing out anything that isn't the most
-        #     # recent key for the binding.
-        #     if old_tail in self._secrets:
-        #         warnings.warn(RuntimeWarning(
-        #             'Tail secret was inappropriately retained.'
-        #         ))
-        #     # self._del_secret(old_tail)
-        
-        # # Since we're not doing a ratchet right now, just do this every time.
-        # if obj.address in self._shared_objects:
-        #     for recipient in self._shared_objects[obj.address]:
-        #         self.hand_object(obj, recipient)
         
         # Return the frame ghid
         return dynamic.ghid
@@ -949,26 +1077,48 @@ class _GAOBase(metaclass=abc.ABCMeta):
         staticmethod or classmethod.
         '''
         pass
-    
+        
+    @classmethod
+    @abc.abstractmethod
+    def from_ghid(cls, core, ghid, **kwargs):
+        ''' Construct the GAO from a passed (existing) ghid.
+        '''
+        pass
+            
+            
+_GAOBootstrap = collections.namedtuple(
+    typename = '_GAOBootstrap',
+    field_names = ('bootstrap_name', 'bootstrap_secret', 'bootstrap_state'),
+)
+        
     
 class _GAO(_GAOBase):
     ''' Base class for Golix-Aware Objects (Golix Accountability 
     Objects?). Anyways, used by core to handle plaintexts and things.
     
     TODO: thread safety? or async safety?
+    
+    TODO: support reference nesting.
     '''
-    def __init__(self, core, dynamic, _legroom=None, *args, **kwargs):
+    def __init__(self, core, persister, privateer, ghidproxy, dynamic, 
+                _legroom=None, _bootstrap=None, accountant=None):
         ''' Creates a golix-aware object. If ghid is passed, will 
         immediately pull from core to sync with existing object. If not,
         will create new object on first push. If ghid is not None, then
         dynamic will be ignored.
         '''
+        # TODO: move all silencing code into the persistence core.
+        
         self.__opslock = threading.RLock()
         self.__updater = None
         self.__state = None
         
         self._deleted = False
         self._core = core
+        self._persister = persister
+        self._privateer = privateer
+        self._ghidproxy = ghidproxy
+        
         self.dynamic = bool(dynamic)
         self.ghid = None
         self.author = None
@@ -976,7 +1126,13 @@ class _GAO(_GAOBase):
         
         if _legroom is None:
             _legroom = core._legroom
+        # Legroom must have a minimum of 3
+        _legroom = max([_legroom, 3])
         self._legroom = _legroom
+        
+        # TODO: reorganize to that silence will automatically silence anything
+        # within _history
+        self._history = collections.deque(maxlen=_legroom)
         
         # This probably only needs to be maxlen=2, but it's a pretty negligible
         # footprint to add some headspace
@@ -984,6 +1140,53 @@ class _GAO(_GAOBase):
         self._update_greenlight = threading.Event()
         
         super().__init__(*args, **kwargs)
+        
+        # This will only get passed if this is a NEW bootstrap object TO CREATE
+        if _bootstrap is not None:
+            # First, short-circuit and immediately apply a state.
+            self.apply_state(_bootstrap[2])
+            # Now immediately create the object, bypassing the privateer's 
+            # secret lookup.
+            with self.__opslock:
+                self.__new(_bootstrap[1])
+            # Let the accountant know that we have a new bootstrap address.
+            accountant.set_bootstrap_address(_bootstrap[0], self.ghid)
+            
+    def freeze(self):
+        ''' Creates a static binding for the most current state of a 
+        dynamic binding. Returns a new GAO.
+        '''
+        if not self.dynamic:
+            raise TypeError('Cannot freeze a static GAO.')
+            
+        container_ghid = self._ghidproxy.resolve(self.ghid)
+        binding = self._core.make_binding_stat(container_ghid)
+        self._persister.ingest_gobs(binding)
+        
+        return self._oracle.get_object(
+            gaoclass = type(self), 
+            ghid = container_ghid
+        )
+        
+    def delete(self):
+        ''' Attempts to permanently remove (aka debind) the object.
+        ''' 
+        if self.dynamic:
+            debinding = self._core.make_debinding(self.ghid)
+            self._persister.ingest_gdxx(debinding)
+            
+        else:
+            # Get frozenset of binding ghids
+            bindings = self._persister.bookie.bind_status()
+            
+            for binding in bindings:
+                obj = self._persister.librarian.whois(binding)
+                if isinstance(obj, _GobsLite):
+                    if obj.author == self._core.whoami:
+                        debinding = self._core.make_debinding(obj.ghid)
+                        self._persister.ingest_gdxx(debinding)
+            
+        self.apply_delete()
         
     def halt_updates(self):
         # TODO: this is going to create a resource leak in a race condition:
@@ -999,6 +1202,8 @@ class _GAO(_GAOBase):
         Since this is only set up to silence one ghid at a time, this
         depends upon our local persister enforcing monotonic frame 
         progression.
+        
+        TODO: move all silencing into the persistence core.
         '''
         with self.__opslock:
             # Make this indempotent so we can't accidentally forget everything
@@ -1015,20 +1220,52 @@ class _GAO(_GAOBase):
                 self._silenced.remove(notification)
             except ValueError:
                 pass
+                
+    @staticmethod
+    def _attempt_open_container(core, privateer, secret, packed):
+        try:
+            # TODO: fix this leaky abstraction.
+            unpacked = core._identity.unpack_container(packed)
+            packed_state = core.open_container(unpacked, secret)
+        
+        except SecurityError:
+            privateer.abandon(unpacked.ghid)
+            raise
+            
+        else:
+            privateer.commit(unpacked.ghid)
+            
+        return packed_state
             
     @classmethod
-    def from_ghid(cls, core, ghid, _legroom=None, *args, **kwargs):
+    def from_ghid(cls, core, persister, ghidproxy, privateer, ghid, 
+                _legroom=None, _bootstrap=None, *args, **kwargs):
         ''' Loads the GAO from an existing ghid.
+        
+        _bootstrap allows for bypassing looking up the secret at the
+        privateer.
         '''
-        author, dynamic, packed_state = core.get_ghid(ghid)
+        container_ghid = ghidproxy.resolve(ghid)
+        
+        # If the container ghid does not match the passed ghid, this must be a
+        # dynamic object.
+        dynamic = (container_ghid != ghid)
+        
+        packed = persister.get(container_ghid)
+        secret = privateer.get(container_ghid)
+        
+        packed_state = cls._attempt_open_container(core, privateer, secret, 
+                                                    packed)
         
         self = cls(
             core = core, 
+            persister = persister,
+            privateer = privateer,
+            ghidproxy = ghidproxy,
             dynamic = dynamic, 
             _legroom = _legroom, 
             *args, **kwargs
         )
-        
         self.ghid = ghid
         self.author = author
         
@@ -1036,7 +1273,10 @@ class _GAO(_GAOBase):
         self.apply_state(unpacked_state)
         
         if dynamic:
-            core.persister.subscribe(ghid, self._weak_touch)
+            binding = persister.librarian.whois(ghid)
+            self._history.extend(binding.history)
+            self._history.appendleft(binding.frame_ghid)
+            persister.subscribe(ghid, self._weak_touch)
             
         # DON'T FORGET TO SET THIS!
         self._update_greenlight.set()
@@ -1096,32 +1336,85 @@ class _GAO(_GAOBase):
         instantiation for any existing objects. Should instead be called
         directly, or through _weak_touch for any new status.
         '''
-        # Note that, when used as a subs handler, we'll be passed our own 
-        # self.ghid (as the subscription ghid) as well as the ghid for the new
-        # frame (as the notification ghid)
-        
         with self.__opslock:
-            if not self._deleted:
-                if self.dynamic:
-                    # State will be None if no update was applied.
-                    packed_state = self._core.touch_dynamic(
-                        self.ghid, 
-                        notification
-                    )
-                    if packed_state:
-                        # Don't forget to extract...
-                        self.apply_state(
-                            self._unpack(packed_state)
-                        )
-                        modified = True
-                    else:
-                        modified = False
-                else:
-                    modified = False
-            else:
+            if self._deleted:
                 raise TypeError('Deleted GAOs cannot be pulled.')
+                
+            else:
+                if self.dynamic:
+                    modified = self._pull_dynamic(notification)
+                        
+                else:
+                    modified = self._pull_static(notification)
         
         return modified
+        
+    def _pull_dynamic(self, notification):
+        ''' Note that this is redundant with persister_core handling
+        update silencing.
+        
+        TODO: remove redundancy.
+        '''
+        if notification is None:
+            check_address = self.ghid
+        else:
+            check_address = notification
+        check_obj = self._persister.librarian.whois(check_address)
+        
+        # First check to see if we're deleting the object.
+        if isinstance(check_obj, _GdxxLite):
+            modified = self._attempt_delete(check_obj)
+            
+        # This is the redundant bit. Well... maybe it isn't, if we allow for
+        # explicit pull calls, outside of just doing an update check. Anyways,
+        # Now we check if it's something we already know about.
+        elif check_obj.frame_ghid in self._history:
+            modified = False
+        
+        # Huh, looks like it is, in fact, new.
+        else:
+            modified = True
+            secret = self._privateer.get(check_obj.ghid)
+            packed = self._persister.get(check_obj.ghid)
+            packed_state = self._attempt_open_container(
+                self._core, 
+                self._privateer, 
+                secret, 
+                packed
+            )
+            
+            # Don't forget to extract state before applying it
+            self.apply_state(self._unpack(packed_state))
+            # Also don't forget to update history.
+            self._history.clear()
+            self._history.extend(check_obj.history)
+            self._history.appendleft(check_obj.frame_ghid)
+            
+        return modified
+            
+    def _attempt_delete(self, deleter):
+        ''' Attempts to apply a delete. Returns True if successful;
+        False otherwise.
+        '''
+        if obj.target == self.ghid:
+            self.apply_delete()
+            modified = True
+            
+        else:
+            logger.warning(
+                'Mismatching pull debinding target: \n'
+                '    obj.ghid:         ' + str(bytes(self.ghid)) + '\n'
+                '    debinding.target: ' + str(bytes(obj.target))
+            )
+            modified = False
+            
+        return modified
+        
+    def _pull_static(self, notification):
+        ''' Currently, doesn't actually do anything. Just assumes that 
+        our local state is correct, and returns modified=False.
+        '''
+        return False
         
     def touch(self, subscription, notification):
         ''' Notifies the object to check upstream for changes.
@@ -1145,31 +1438,51 @@ class _GAO(_GAOBase):
         if notification not in self._silenced:
             self.pull(notification)
         
-    def __new(self):
+    def __new(self, bypass_secret=None):
         ''' Creates a new Golix object for self using self._state, 
         self._dynamic, etc.
         '''
-        if self.dynamic:
-            # Need both of these so we can silence the initial frame.
-            address, frame_address = self._core.new_dynamic(
-                state = self._pack(
-                    self.extract_state()
-                ),
-                _legroom = self._legroom,
+        # We're doing this so that privateer can make use of GAO for its
+        # own bootstrap object.
+        if bypass_secret is not None:
+            container = self._core.make_container(
+                self._pack(self.extract_state()), 
+                bypass_secret
             )
-            # Silence any updates about this initial frame address.
-            self.silence(frame_address)
-            # Finally, subscribe to updates.
-            self._core.persister.subscribe(address, self._weak_touch)
         else:
-            address = self._core.new_static(
-                state = self._pack(
-                    self.extract_state()
-                )
+            secret = self._privateer.new_secret()
+            container = self._core.make_container(
+                self._pack(self.extract_state()), 
+                secret
             )
+            self._privateer.stage(container.ghid, secret)
+            self._privateer.commit(container.ghid)
+        
+        if self.dynamic:
+            binding = self._core.make_binding_dyn(target=container.ghid)
+            # NOTE THAT THIS IS A GOLIX PRIMITIVE! And that therefore there's a
+            # discrepancy between ghid_dynamic and ghid.
+            address = binding.ghid_dynamic
+            # Silence the **frame address** (see above) and add it to historian
+            self.silence(binding.ghid)
+            self._history.appendleft(binding.ghid)
+            # Now assign this dynamic address as a chain owner.
+            self._privateer.make_chain(address)
+            # Finally, publish the binding and subscribe to it
+            self._persister.ingest_gobd(binding)
+            self._persister.subscribe(address, self._weak_touch)
+            
+        else:
+            binding = self._core.make_binding_stat(target=container.ghid)
+            address = container.ghid
+            self._persister.ingest_gobs(binding)
         
         self.author = self._core.whoami
         self.ghid = address
+            
+        # Finally, publish the container itself.
+        self._persister.ingest_geoc(container)
+        
         # Successful creation. Clear us for updates.
         self._update_greenlight.set()
         
@@ -1184,19 +1497,60 @@ class _GAO(_GAOBase):
         try:
             # Pause updates while doing this.
             self._update_greenlight.clear()
-            frame_ghid = self._core.update_dynamic(
-                ghid_dynamic = self.ghid,
-                state = self._pack(
-                    self.extract_state()
-                ),
+            
+            # We need a secret.
+            try:
+                secret = self._privateer.ratchet(self.ghid)
+            # TODO: make this a specific error.
+            except:
+                logger.info(
+                    'Failed to ratchet secret for ' + str(bytes(self.ghid))
+                )
+                secret = self._privateer.new_secret()
+                
+            container = self._core.make_container(
+                self._pack(self.extract_state()),
+                secret
             )
-            # Make sure to never call an update for this frame.
-            self.silence(frame_ghid)
+            binding = self._core.make_binding_dyn(
+                target = container.ghid,
+                ghid = self.ghid,
+                history = self._history
+            )
+            # NOTE THE DISCREPANCY between the Golix dynamic binding version
+            # of ghid and ours! This is silencing the frame ghid.
+            self.silence(binding.ghid)
+            self._history.appendleft(binding.ghid)
+            # Publish to persister
+            self._persister.ingest_gobd(binding)
+            self._persister.ingest_geoc(container)
             
         except:
-            author, dynamic, packed_state = self._core.get_ghid(self.ghid)
-            state = self._unpack(packed_state)
-            self.apply_state(state)
+            # We had a problem, so we're going to forcibly restore the object
+            # to the last known good state.
+            logger.error(
+                'Failed to update object; forcibly restoring state.\n' + 
+                ''.join(traceback.format_exc())
+            )
+            
+            # TODO: move core._ghidproxy to here.
+            container_ghid = self._core._ghidproxy.resolve(self.ghid)
+            secret = self._privateer.get(container_ghid)
+            packed = self._persister.get(container_ghid)
+            packed_state = self._attempt_open_container(
+                self._core, 
+                self._privateer, 
+                secret, 
+                packed
+            )
+            
+            # TODO: fix these leaky abstractions.
+            self.apply_state(self._unpack(packed_state))
+            binding = self._persister.librarian.whois(ghid)
+            self._history.clear()
+            self._history.extend(binding.history)
+            self._history.appendleft(binding.frame_ghid)
+            
             raise
             
         finally:

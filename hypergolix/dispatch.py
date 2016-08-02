@@ -118,9 +118,15 @@ class DispatcherBase(metaclass=abc.ABCMeta):
         ack is a golix.AsymNak object.
         '''
         pass
+            
+            
+_SharePair = collections.namedtuple(
+    typename = '_SharePair',
+    field_names = ('ghid', 'recipient'),
+)
 
 
-class Dispatcher(DispatcherBase):
+class Dispatcher:
     ''' A standard, working dispatcher.
     
     Objects are dispatched to endpoints based on two criteria:
@@ -144,7 +150,7 @@ class Dispatcher(DispatcherBase):
     which applications should have access to which APIs, but currently
     anything installed is considered trusted.
     '''
-    def __init__(self, core, oracle, all_tokens, startup_objs, pending_reqs):
+    def __init__(self, core, oracle, all_tokens, startup_objs):
         ''' Some notes re: objects being passed in:
         
         all_tokens must be set-like, and must already contain a key for 
@@ -158,6 +164,7 @@ class Dispatcher(DispatcherBase):
         '''
         self._core = core
         self._oracle = oracle
+        self._rolodex = None
         
         # First init local state.
         
@@ -171,7 +178,6 @@ class Dispatcher(DispatcherBase):
         
         self._all_known_tokens = all_tokens
         self._startup_by_token = startup_objs
-        self._pending_requests = pending_reqs
         
         # Lookup for api_ids -> app_tokens. Contains ONLY the apps that are 
         # currently available, because it's only used for dispatching objects
@@ -180,8 +186,9 @@ class Dispatcher(DispatcherBase):
         
         # Lookup for handshake ghid -> handshake object
         self._outstanding_handshakes = {}
-        # Lookup for handshake ghid -> app_token, recipient
-        self._outstanding_shares = {}
+        # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
+        # TODO: this should be made persistent across multiple instances.
+        self._outstanding_shares = SetMap()
         
         # Lookup for ghid -> tokens that specifically requested the ghid
         # TODO: change this to "tokens that have a copy of the ghid"
@@ -194,6 +201,10 @@ class Dispatcher(DispatcherBase):
         
         # Lookup for token -> waiting ghid -> operations
         self._pending_by_token = _JitDictDict()
+        
+    def link_rolodex(self, rolodex):
+        # Chicken, meet egg.
+        self._rolodex = weakref.proxy(rolodex)
         
     def get_object(self, asking_token, ghid):
         ''' Gets an object by ghid for a specific endpoint. Currently 
@@ -270,37 +281,6 @@ class Dispatcher(DispatcherBase):
         # finally:
         #     self._ignore_subs_because_updating.remove(ghid)
         
-    def share_object(self, asking_token, ghid, recipient):
-        ''' Do the whole super thing, and then record which application
-        initiated the request, and who the recipient was.
-        '''
-        obj = self._oracle.get_object(
-            gaoclass = _Dispatchable,
-            dispatch = self, 
-            ghid = ghid
-        )
-            
-        if obj.app_token != bytes(4):
-            raise DispatchError('Cannot share a private object.')
-        
-        try:
-            self._outstanding_shares[ghid] = (
-                asking_token, 
-                recipient
-            )
-            
-            # Currently, just perform a handshake. In the future, move this 
-            # to a dedicated exchange system.
-            request = self._core.hand_ghid(ghid, recipient)
-            
-        except:
-            del self._outstanding_shares[ghid]
-            raise
-            
-    def await_handshake_response(self, target, request):
-        # Save a lookup from the request.ghid to the target.ghid
-        self._pending_requests[request] = target
-        
     def freeze_object(self, asking_token, ghid):
         ''' Converts a dynamic object to a static object, returning the
         static ghid.
@@ -334,7 +314,8 @@ class Dispatcher(DispatcherBase):
         preventing its deletion to any connected persistence providers.
         '''
         # TODO: add some kind of proofing here? 
-        self._core.hold_ghid(ghid)
+        binding = self._core.make_binding_stat(ghid)
+        self._persister.ingest_gobs(binding)
         
     def delete_object(self, asking_token, ghid):
         ''' Debinds an object, attempting to delete it. This operation
@@ -420,71 +401,77 @@ class Dispatcher(DispatcherBase):
         else:
             self._requestors_by_ghid[ghid].discard(asking_token)
             self._discarders_by_ghid[ghid].add(asking_token)
-    
-    def dispatch_share(self, ghid):
-        ''' Dispatches shares that were not created via handshake.
+        
+    def share_object(self, asking_token, ghid, recipient):
+        ''' Do the whole super thing, and then record which application
+        initiated the request, and who the recipient was.
         '''
-        raise NotImplementedError('Cannot yet share without handshakes.')
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            dispatch = self, 
+            ghid = ghid
+        )
+            
+        if obj.app_token != bytes(4):
+            raise DispatchError('Cannot share a private object.')
         
-    def dispatch_handshake(self, target):
-        ''' Receives the target *object* for a handshake (note: NOT the 
-        handshake itself) and dispatches it to the appropriate 
-        application.
+        sharepair = _SharePair(ghid, recipient)
         
-        handshake is a StaticObject or DynamicObject.
-        Raises HandshakeError if unsuccessful.
+        try:
+            self._outstanding_shares.add(sharepair, asking_token)
+            
+            # Currently, just perform a handshake. In the future, move this 
+            # to a dedicated exchange system.
+            request = self._core.hand_ghid(ghid, recipient)
+            
+        except:
+            self._outstanding_shares.discard(sharepair, asking_token)
+            raise
+    
+    def dispatch_share(self, target):
+        ''' Receives the target *object* from a rolodex share, and 
+        dispatches it as appropriate.
         '''        
         # Go ahead and distribute it to the appropriate endpoints.
         self.distribute_to_endpoints(target)
-        
-        # Note: we should add something in here to catch issues if we can't
-        # distribute to endpoints or something, so that the handshake doesn't
-        # get stuck in limbo.
-        
-        # Note that unless we raise a HandshakeError RIGHT NOW, we'll be
-        # sending an ack to the handshake, just to indicate successful receipt 
-        # of the share. If the originating app wants to check for availability, 
-        # well, that's currently on them. In the future, add handle for that in
-        # SHARE instead of HANDSHAKE? <-- probably good idea
     
-    def dispatch_handshake_ack(self, request):
-        ''' Receives a handshake acknowledgement and dispatches it to
-        the appropriate application.
-        
-        ack is a golix.AsymAck object.
+    def dispatch_share_ack(self, target, recipient):
+        ''' Receives a share ack from the rolodex and passes it on to 
+        the application that requested the share.
         '''
-        target = self._pending_requests.pop(request)
+        sharepair = _SharePair(target, recipient)
         
-        # This was added in our overriden share_object
-        app_token, recipient = self._outstanding_shares[target]
-        del self._outstanding_shares[target]
+        # TODO: make this work distributedly.
+        requesting_tokens = self._outstanding_shares.pop_any(sharepair)
+        
         # Now notify just the requesting app of the successful share. Note that
         # this will also handle any missing endpoints.
-        self._attempt_contact_endpoint(
-            app_token, 
-            'notify_share_success',
-            target, 
-            recipient = recipient
-        )
+        for app_token in requesting_tokens:
+            self._attempt_contact_endpoint(
+                app_token, 
+                'notify_share_success',
+                target, 
+                recipient = recipient
+            )
     
-    def dispatch_handshake_nak(self, request):
-        ''' Receives a handshake nonacknowledgement and dispatches it to
-        the appropriate application.
-        
-        ack is a golix.AsymNak object.
+    def dispatch_share_nak(self, target, recipient):
+        ''' Receives a share nak from the rolodex and passes it on to 
+        the application that requested the share.
         '''
-        target = self._pending_requests.pop(request)
+        sharepair = _SharePair(target, recipient)
         
-        app_token, ghid, recipient = self._outstanding_shares[target]
-        del self._outstanding_shares[target]
-        # Now notify just the requesting app of the failed share. Note that
+        # TODO: make this work distributedly.
+        requesting_tokens = self._outstanding_shares.pop_any(sharepair)
+        
+        # Now notify just the requesting app of the successful share. Note that
         # this will also handle any missing endpoints.
-        self._attempt_contact_endpoint(
-            app_token, 
-            'notify_share_failure',
-            target, 
-            recipient = recipient
-        )
+        for app_token in requesting_tokens:
+            self._attempt_contact_endpoint(
+                app_token, 
+                'notify_share_failure',
+                target, 
+                recipient = recipient
+            )
                     
     def distribute_to_endpoints(self, ghid, skip_token=None, deleted=False):
         ''' Passes the object to all endpoints supporting its api via 

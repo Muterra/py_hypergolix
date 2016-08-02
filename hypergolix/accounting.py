@@ -100,17 +100,27 @@ class AgentBootstrap:
         If bootstrap (ghid) is passed, we'll use the credential to 
         extract an identity. If bootstrap_ghid is not passed, will use 
         the credential to create one.
+        
+        TODO: move entire bootstrap creation process (or as much as 
+        possible, anyways) into register().
         '''
-        identity = FirstParty()
+        if bootstrap is None:
+            identity = FirstParty()
+        else:
+            raise NotImplementedError('Not just yet buddy-o!')
+            
         persister.publish(identity.second_party.packed)
         self.persister = persister
         
         self.core = HGXCore(identity)
         self.oracle = Oracle(self.core)
-        self.proxy = _GhidProxier(self.core, self.oracle)
+        self.proxy = _GhidProxier(self.core, self.persister)
         self.core.link_proxy(self.proxy)
         self.core.link_oracle(self.oracle)
         self.core.link_persister(self.persister)
+        
+        # Okay, I need to be able to bootstrap privateer.
+        
         self.privateer = Privateer(self.core)
         self.core.link_privateer(self.privateer)
         
@@ -137,7 +147,7 @@ class AgentBootstrap:
             )
             
         else:
-            raise NotImplementedError('Not just yet buddy-o!')
+            pass
         
         self.dispatch = Dispatcher(
             self.core, 

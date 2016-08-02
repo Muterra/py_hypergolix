@@ -45,6 +45,7 @@ from . import exceptions
 from . import ipc
 from . import persisters
 from . import privateer
+from . import rolodex
 from . import service
 from . import utils
 

@@ -87,6 +87,47 @@ class Privateer:
         # Just here for diagnosing a testing problem
         self._committment_problems = {}
         
+    def new_secret(self):
+        # Straight pass-through to the golix new_secret bit.
+        return self._core._identity.new_secret()
+        
+    def make_chain(self, proxy, *args, **kwargs):
+        ''' Makes a ratchetable chain. Must be owned by a particular
+        dynamic address (proxy).
+        '''
+        pass
+        
+    def ratchet(self, proxy):
+        raise NotImplementedError()
+        # TODO IMPORTANT:
+        # First we need to decide if we're going to ratchet the secret, or 
+        # create a new one. The latter will require updating anyone who we've
+        # shared it with. Ratcheting is only available if the last target was
+        # directly referenced.
+        
+        # Note that this is not directly a security issue, because of the 
+        # specifics of ratcheting: each dynamic binding is salting with the
+        # frame ghid, which will be different for each dynamic binding. So we
+        # won't ever see a two-time pad, but we might accidentally break the
+        # ratchet.
+        
+        # However, note that this (potentially substantially) decreases the
+        # strength of the ratchet, in the event that the KDF salting does not
+        # sufficiently alter the KDF seed.
+        
+        # But, keep in mind that if the Golix spec ever changes, we could 
+        # potentially create two separate top-level refs to containers. So in
+        # that case, we would need to implement some kind of ownership of the
+        # secret by a particular dynamic binding.
+        
+        # TEMPORARY FIX: Don't support nesting dynamic bindings. Document that 
+        # downstream stuff cannot reuse links in dynamic bindings (or prevent
+        # their use entirely).
+        
+        # Note: currently in Hypergolix, links in dynamic objects aren't yet
+        # fully supported at all, and certainly aren't documented, so they 
+        # shouldn't yet be considered a public part of the api.
+        
     def get(self, ghid):
         ''' Get a secret for a ghid, regardless of status.
         
