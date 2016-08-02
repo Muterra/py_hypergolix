@@ -1099,6 +1099,9 @@ class _GAO(_GAOBase):
     TODO: thread safety? or async safety?
     
     TODO: support reference nesting.
+    
+    TODO: consider consolidating references to the circus (oracle, etc)
+        here, into _GAO, wherever possible.
     '''
     def __init__(self, core, persister, privateer, ghidproxy, dynamic, 
                 _legroom=None, _bootstrap=None, accountant=None):
@@ -1132,7 +1135,10 @@ class _GAO(_GAOBase):
         
         # TODO: reorganize to that silence will automatically silence anything
         # within _history
+        # Most recent FRAME GHIDS
         self._history = collections.deque(maxlen=_legroom)
+        # Most recent FRAME TARGETS
+        self._history_targets = collections.deque(maxlen=_legroom)
         
         # This probably only needs to be maxlen=2, but it's a pretty negligible
         # footprint to add some headspace
@@ -1276,6 +1282,7 @@ class _GAO(_GAOBase):
             binding = persister.librarian.whois(ghid)
             self._history.extend(binding.history)
             self._history.appendleft(binding.frame_ghid)
+            self._history_targets.appendleft(binding.target)
             persister.subscribe(ghid, self._weak_touch)
             
         # DON'T FORGET TO SET THIS!
@@ -1374,8 +1381,9 @@ class _GAO(_GAOBase):
         # Huh, looks like it is, in fact, new.
         else:
             modified = True
-            secret = self._privateer.get(check_obj.ghid)
-            packed = self._persister.get(check_obj.ghid)
+            self._privateer.heal_ratchet(gao=self, binding=check_obj)
+            secret = self._privateer.get(check_obj.target)
+            packed = self._persister.get(check_obj.target)
             packed_state = self._attempt_open_container(
                 self._core, 
                 self._privateer, 
@@ -1386,11 +1394,64 @@ class _GAO(_GAOBase):
             # Don't forget to extract state before applying it
             self.apply_state(self._unpack(packed_state))
             # Also don't forget to update history.
-            self._history.clear()
-            self._history.extend(check_obj.history)
-            self._history.appendleft(check_obj.frame_ghid)
+            self._advance_history(check_obj)
             
         return modified
+        
+    def _advance_history(self, new_obj):
+        ''' Updates our history to match the new one.
+        '''
+        old_history = self._history
+        # Cannot concatenate deque to list, so use extend instead
+        new_history = collections.deque([new_obj.frame_ghid])
+        new_history.extend(new_obj.history)
+        
+        right_offset = self._align_histories(old_history, new_history)
+                
+        # Check for a match. If right_offset == 0, there was no match, and we 
+        # need to reset everything. Note: this will break any existing ratchet.
+        if right_offset == 0:
+            self._history.clear()
+            self._history_targets.clear()
+            self._history.appendleft(new_obj.frame_ghid)
+            self._history_targets.appendleft(new_obj.target)
+        
+        # We did, in fact, find a match. Let's combine appropriately.
+        else:
+            # Note that deque.extendleft reverses the order of things.
+            # Also note that new_history is a new, local object, so we don't
+            # need to worry about accidentally affecting something else.
+            new_history.reverse()
+            self._history.extendleft(new_history[:right_offset])
+            
+            # Now let's create new targets. Simply populate any missing bits 
+            # with None...
+            new_targets = [None] * (right_offset - 1)
+            # ...and then add the current target as the last item (note 
+            # reversal as per above), and then extend self._history_targets.
+            new_targets.append(new_obj.target)
+            self._history_targets.extendleft(new_targets)
+        
+    @staticmethod
+    def _align_histories(old_history, new_history):
+        ''' Attempts to align two histories.
+        '''
+        jj = 0
+        for ii in range(len(new_history)):
+            # Check current element against offset
+            if new_history[ii] == old_history[jj]:
+                jj += 1
+                continue
+                
+            # No match. Check to see if we matched the zeroth element instead.
+            elif new_history[ii] == old_history[0]:
+                jj = 1
+                
+            # No match there either. Reset.
+            else:
+                jj = 0
+                
+        return jj
             
     def _attempt_delete(self, deleter):
         ''' Attempts to apply a delete. Returns True if successful;
@@ -1466,8 +1527,9 @@ class _GAO(_GAOBase):
             # Silence the **frame address** (see above) and add it to historian
             self.silence(binding.ghid)
             self._history.appendleft(binding.ghid)
+            self._history_targets.appendleft(container.ghid)
             # Now assign this dynamic address as a chain owner.
-            self._privateer.make_chain(address)
+            self._privateer.make_chain(address, container.ghid)
             # Finally, publish the binding and subscribe to it
             self._persister.ingest_gobd(binding)
             self._persister.subscribe(address, self._weak_touch)
@@ -1521,9 +1583,13 @@ class _GAO(_GAOBase):
             # of ghid and ours! This is silencing the frame ghid.
             self.silence(binding.ghid)
             self._history.appendleft(binding.ghid)
+            self._history_targets.appendleft(container.ghid)
             # Publish to persister
             self._persister.ingest_gobd(binding)
             self._persister.ingest_geoc(container)
+            
+            # And now, as everything was successful, update the ratchet
+            self._privateer.update_chain(self.ghid, container.ghid)
             
         except:
             # We had a problem, so we're going to forcibly restore the object
@@ -1547,9 +1613,8 @@ class _GAO(_GAOBase):
             # TODO: fix these leaky abstractions.
             self.apply_state(self._unpack(packed_state))
             binding = self._persister.librarian.whois(ghid)
-            self._history.clear()
-            self._history.extend(binding.history)
-            self._history.appendleft(binding.frame_ghid)
+            # Don't forget to fix history as well
+            self._advance_history(binding)
             
             raise
             

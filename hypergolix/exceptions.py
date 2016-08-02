@@ -65,6 +65,9 @@ __all__ = [
     'RequestFinished',
     'RequestUnknown',
     'SessionClosed',
+    # These are privateer errors
+    'PrivateerError',
+    'RatchetError',
 ]
 
 
@@ -230,5 +233,19 @@ class RequestUnknown(RequestError):
     
 class SessionClosed(CommsError):
     ''' Raised when something goes wrong with IPC (bad commands, etc).
+    '''
+    pass
+
+
+class PrivateerError(HypergolixException, RuntimeError):
+    ''' This exception (or a subclass thereof) is raised for all failed 
+    operations with privateers (which keep secrets).
+    '''
+    pass
+    
+    
+class RatchetError(PrivateerError):
+    ''' This PrivateerError is raised when ratcheting a secret could not
+    be completed successfully.
     '''
     pass

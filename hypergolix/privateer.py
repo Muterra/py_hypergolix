@@ -41,6 +41,9 @@ __all__ = [
 
 from .utils import TraceLogger
 
+from .exceptions import PrivateerError
+from .exceptions import RatchetError
+
 # External dependencies
 import threading
 import collections
@@ -50,6 +53,7 @@ from Crypto.Hash import SHA512
 from Crypto.Protocol.KDF import HKDF
 
 # Intra-package dependencies
+from .core import _GAO
 from .core import _GAODict
 
 
@@ -69,14 +73,42 @@ logger = logging.getLogger(__name__)
 
 class Privateer:
     ''' Lookup system to get secret from ghid. Threadsafe?
+    
+    Note: a lot of the ratcheting state preservation could POTENTIALLY
+    be eliminated (and restored via oracle). But, that should probably
+    wait for Golix v2.0, which will change secret ratcheting anyways.
+    This will also help us track which secrets use the old ratcheting
+    mechanism and which ones use the new one, once that change is 
+    started.
     '''
     def __init__(self, core):
         self._core = core
         self._modlock = threading.Lock()
-        # On second thought, let's hold off on this, bootstrapping it is going
-        # to be a big pain in the dick
-        # self._secrets_persistent = _GAODict(core, dynamic=True)
-        # self._secrets_staging = _GAODict(core, dynamic=True)
+        
+        # These must be linked while bootstrapping.
+        self._oracle = None
+        self._secrets_persistent = None
+        self._secrets_staging = None
+        self._secrets = None
+        # Keep track of chains (this will need to be distributed)
+        # Lookup <proxy ghid>: <container ghid>
+        self._chains = None
+        
+        # Keep track of chain progress. This does not need to be distributed.
+        # Lookup <proxy ghid>
+        self._ratchet_in_progress = set()
+        
+        # Just here for diagnosing a testing problem
+        self._committment_problems = {}
+        
+    def bootstrap(self, oracle):
+        ''' Initializes the privateer.
+        '''
+        # We need an oracle for ratcheting.
+        self._oracle = oracle
+        
+        # We very obviously need to be able to look up what secrets we have.
+        # Lookups: <container ghid>: <container secret>
         self._secrets_persistent = {}
         self._secrets_staging = {}
         self._secrets = collections.ChainMap(
@@ -84,49 +116,163 @@ class Privateer:
             self._secrets_staging,
         )
         
-        # Just here for diagnosing a testing problem
-        self._committment_problems = {}
+        # Keep track of chains (this will need to be distributed)
+        # Lookup <proxy ghid>: <container ghid>
+        self._chains = {}
         
     def new_secret(self):
         # Straight pass-through to the golix new_secret bit.
         return self._core._identity.new_secret()
         
-    def make_chain(self, proxy, *args, **kwargs):
+    def make_chain(self, proxy, container):
         ''' Makes a ratchetable chain. Must be owned by a particular
-        dynamic address (proxy).
+        dynamic address (proxy). Need to know the container address so
+        we can ratchet it properly.
         '''
-        pass
+        with self._modlock:
+            if proxy in self._chains:
+                raise ValueError('Proxy has already been chained.')
+                
+            if container not in self._secrets:
+                raise ValueError(
+                    'Cannot chain unless the container secret is known.'
+                )
+        
+            self._chains[proxy] = container
+        
+    def update_chain(self, proxy, container):
+        ''' Updates a chain container address. Must have been ratcheted
+        prior to update, and cannot be ratcheted again until updated.
+        '''
+        with self._modlock:
+            if proxy not in self._chains:
+                raise ValueError('No chain for proxy.')
+                
+            if proxy not in self._ratchet_in_progress:
+                raise ValueError('No ratchet in progress for proxy.')
+                
+            self._chains[proxy] = container
+            self._ratchet_in_progress.remove(proxy)
+        
+    def reset_chain(self, proxy, container):
+        ''' Used to reset a chain back to a pristine state.
+        '''
+        with self._modlock:
+            if proxy not in self._chains:
+                raise ValueError('Proxy has no existing chain.')
+                
+            self._ratchet_in_progress.discard(proxy)
+            self._chains[proxy] = container
         
     def ratchet(self, proxy):
-        raise NotImplementedError()
-        # TODO IMPORTANT:
-        # First we need to decide if we're going to ratchet the secret, or 
-        # create a new one. The latter will require updating anyone who we've
-        # shared it with. Ratcheting is only available if the last target was
-        # directly referenced.
+        ''' Gets a new secret for the proxy. Returns the secret, and 
+        flags the ratchet as in-progress.
+        '''
+        with self._modlock:
+            if proxy in self._ratchet_in_progress:
+                raise ValueError('Must update chain prior to re-ratcheting.')
+                
+            if proxy not in self._chains:
+                raise ValueError('No chain for that proxy.')
+            
+            # TODO: make sure this is not a race condition.
+            binding = self._oracle.get_object(gaoclass=_GAO, ghid=proxy)
+            target = binding.target
+            last_frame = binding._history[0]
+            
+            try:
+                existing_secret = self._secrets[target]
+            except KeyError as exc:
+                raise RatchetError('No secret for existing target?') from exc
+            
+            result = self._ratchet(
+                secret = existing_secret,
+                proxy = proxy,
+                salt_ghid = last_frame
+            )
+            
+            self._ratchet_in_progress.add(proxy)
+            
+        return result
+            
+    def heal_ratchet(self, gao, binding):
+        ''' Heals the ratchet for a binding using the gao. Call this any 
+        time an agent RECEIVES a new EXTERNAL ratcheted object. Stages
+        the resulting secret for the most recent frame in binding, BUT
+        DOES NOT RETURN (or commit) IT.
+        '''
+        # Get a local copy of _history_targets, since it's not currently tsafe
+        # TODO: make gao tsafe; fix this leaky abstraction; make sure not race
+        gao_targets = gao._history_targets.copy()
+        gao_history = gao._history.copy()
         
-        # Note that this is not directly a security issue, because of the 
-        # specifics of ratcheting: each dynamic binding is salting with the
-        # frame ghid, which will be different for each dynamic binding. So we
-        # won't ever see a two-time pad, but we might accidentally break the
-        # ratchet.
+        with self._modlock:
+            # This finds the first target for which we have a secret.
+            for offset in range(len(gao_targets)):
+                if gao_targets[offset] in self._secrets:
+                    known_secret = self._secrets[gao_targets[offset]]
+                    break
+                else:
+                    continue
+                    
+            # If we did not find a target, the ratchet is broken.
+            else:
+                raise RatchetError(
+                    'No available secrets for any of the object\'s known past '
+                    'targets. Re-establish the ratchet.'
+                )
+            
+        # Count backwards in index (and therefore forward in time) from the 
+        # first new frame to zero (and therefore the current frame).
+        # Note that we're using the previous frame's ghid as salt.
+        for ii in range(offset, -1, -1):
+            known_secret = self._ratchet(
+                secret = known_secret,
+                proxy = gao.ghid,
+                salt_ghid = gao_history[ii]
+            )
+            
+        # DON'T take _modlock here or we will be reentrant = deadlock
+        self.stage(binding.target, known_secret)
         
-        # However, note that this (potentially substantially) decreases the
-        # strength of the ratchet, in the event that the KDF salting does not
-        # sufficiently alter the KDF seed.
+    @staticmethod
+    def _ratchet(secret, proxy, salt_ghid):
+        ''' Ratchets a key using HKDF-SHA512, using the associated 
+        address as salt. For dynamic files, this should be the previous
+        frame ghid (not the dynamic ghid).
         
-        # But, keep in mind that if the Golix spec ever changes, we could 
-        # potentially create two separate top-level refs to containers. So in
-        # that case, we would need to implement some kind of ownership of the
-        # secret by a particular dynamic binding.
+        Note: this ratchet is bound to a particular dynamic address. The
+        ratchet algorithm is:
         
-        # TEMPORARY FIX: Don't support nesting dynamic bindings. Document that 
-        # downstream stuff cannot reuse links in dynamic bindings (or prevent
-        # their use entirely).
-        
-        # Note: currently in Hypergolix, links in dynamic objects aren't yet
-        # fully supported at all, and certainly aren't documented, so they 
-        # shouldn't yet be considered a public part of the api.
+        new_key = HKDF-SHA512(
+            IKM = old_secret, (secret IV/nonce | secret key)
+            salt = old_frame_ghid, (entire 65 bytes)
+            info = dynamic_ghid, (entire 65 bytes)
+            new_key_length = len(IV/nonce) + len(key),
+            num_keys = 1,
+        )
+        '''
+        cls = type(secret)
+        cipher = secret.cipher
+        version = secret.version
+        len_seed = len(secret.seed)
+        len_key = len(secret.key)
+        source = bytes(secret.seed + secret.key)
+        ratcheted = HKDF(
+            master = source,
+            salt = bytes(salt_ghid),
+            key_len = len_seed + len_key,
+            hashmod = SHA512,
+            num_keys = 1,
+            context = bytes(proxy)
+        )
+        return cls(
+            cipher = cipher,
+            version = version,
+            key = ratcheted[:len_key],
+            seed = ratcheted[len_key:]
+        )
+                    
         
     def get(self, ghid):
         ''' Get a secret for a ghid, regardless of status.
@@ -241,29 +387,3 @@ class Privateer:
                 
         if fail_test:
             raise KeyError('Secret not found for GHID ' + str(ghid))
-        
-    @staticmethod
-    def _ratchet_secret(secret, ghid):
-        ''' Ratchets a key using HKDF-SHA512, using the associated 
-        address as salt. For dynamic files, this should be the previous
-        frame ghid (not the dynamic ghid).
-        '''
-        cls = type(secret)
-        cipher = secret.cipher
-        version = secret.version
-        len_seed = len(secret.seed)
-        len_key = len(secret.key)
-        source = bytes(secret.seed + secret.key)
-        ratcheted = HKDF(
-            master = source,
-            salt = bytes(ghid),
-            key_len = len_seed + len_key,
-            hashmod = SHA512,
-            num_keys = 1
-        )
-        return cls(
-            cipher = cipher,
-            version = version,
-            key = ratcheted[:len_key],
-            seed = ratcheted[len_key:]
-        )
