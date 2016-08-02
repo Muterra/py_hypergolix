@@ -59,6 +59,7 @@ from .core import Oracle
 # Intra-package dependencies
 from .utils import _JitSetDict
 from .utils import _JitDictDict
+from .utils import SetMap
 
 from .exceptions import DispatchError
 from .exceptions import DispatchWarning
@@ -150,7 +151,7 @@ class Dispatcher:
     which applications should have access to which APIs, but currently
     anything installed is considered trusted.
     '''
-    def __init__(self, core, oracle, all_tokens, startup_objs):
+    def __init__(self):
         ''' Some notes re: objects being passed in:
         
         all_tokens must be set-like, and must already contain a key for 
@@ -162,9 +163,13 @@ class Dispatcher:
         pending_reqs must be dict-like. It's the lookup for the request
             address: target address.
         '''
-        self._core = core
-        self._oracle = oracle
+        self._core = None
+        self._oracle = None
         self._rolodex = None
+        
+        # Temporarily set distributed state to None.
+        self._all_known_tokens = None
+        self._startup_by_token = None
         
         # First init local state.
         
@@ -173,11 +178,6 @@ class Dispatcher:
         self._active_tokens = weakref.WeakValueDictionary()
         # Defining b'\x00\x00\x00\x00' will prevent using it as a token.
         self._active_tokens[b'\x00\x00\x00\x00'] = self
-        
-        # Now init distributed state.
-        
-        self._all_known_tokens = all_tokens
-        self._startup_by_token = startup_objs
         
         # Lookup for api_ids -> app_tokens. Contains ONLY the apps that are 
         # currently available, because it's only used for dispatching objects
@@ -202,8 +202,17 @@ class Dispatcher:
         # Lookup for token -> waiting ghid -> operations
         self._pending_by_token = _JitDictDict()
         
-    def link_rolodex(self, rolodex):
+    def bootstrap(self, all_tokens, startup_objs):
+        ''' Initialize distributed state.
+        '''
+        # Now init distributed state.
+        self._all_known_tokens = all_tokens
+        self._startup_by_token = startup_objs
+        
+    def assemble(self, golix_core, oracle, rolodex):
         # Chicken, meet egg.
+        self._core = weakref.proxy(golix_core)
+        self._oracle = weakref.proxy(oracle)
         self._rolodex = weakref.proxy(rolodex)
         
     def get_object(self, asking_token, ghid):

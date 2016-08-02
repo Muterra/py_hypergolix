@@ -33,6 +33,7 @@ hypergolix: A python Golix client.
 # Global dependencies
 import weakref
 import traceback
+import threading
 
 from golix import SecondParty
 from golix import Ghid
@@ -73,34 +74,40 @@ class Rolodex:
     pipelines, negotiated through handshakes, to perform sharing
     symmetrically between contacts.
     '''
-    def __init__(self, core, oracle, privateer, pending_requests):
+    def __init__(self):
         self._opslock = threading.Lock()
         
-        self._core = core
-        self._oracle = oracle
-        self._privateer = privateer
-        
+        self._core = None
+        self._oracle = None
+        self._privateer = None
         self._persister = None
         self._librarian = None
         self._ghidproxy = None
         
         # Persistent dict-like lookup for 
         # request_ghid -> (request_target, request recipient)
+        self._pending_requests = None
+        
+    def bootstrap(self, pending_requests):
+        ''' Initialize distributed state.
+        '''
+        # Persistent dict-like lookup for 
+        # request_ghid -> (request_target, request recipient)
         self._pending_requests = pending_requests
         
-    def link_dispatch(self, dispatch):
-        # Chicken, meet egg.
-        self._dispatch = weakref.proxy(dispatch)
+        # And get the persister up and running.
+        self._persister.subscribe(self._core.whoami, self.request_listener)
         
-    def link_persister(self, persister):
-        # Mostly a simple pass to weakref proxy
+    def assemble(self, golix_core, oracle, privateer, dispatch, persister, 
+                ghidproxy):
+        # Chicken, meet egg.
+        self._core = weakref.proxy(golix_core)
+        self._oracle = weakref.proxy(oracle)
+        self._privateer = weakref.proxy(privateer)
+        self._dispatch = weakref.proxy(dispatch)
         # TODO: change _persister to _persistence_core
         self._librarian = weakref.proxy(persister.librarian)
         self._persister = weakref.proxy(persister)
-        persister.subscribe(self._core.whoami, self.request_listener)
-        
-    def link_ghidproxy(self, ghidproxy):
-        # Pass through to weakref proxy
         self._ghidproxy = weakref.proxy(ghidproxy)
         
     def share_object(self, target, recipient):

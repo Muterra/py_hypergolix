@@ -48,15 +48,17 @@ from golix import FirstParty
 
 # Intra-package dependencies
 
-from .core import HGXCore
+# from .core import HGXCore
+from .core import GolixCore
 from .core import Oracle
-from .core import _GhidProxier
+from .core import GhidProxier
 from .core import _GAOSet
 from .core import _GAODict
 
 from .dispatch import Dispatcher
 from .dispatch import _Dispatchable
 from .privateer import Privateer
+from .rolodex import Rolodex
 
 from .utils import Aengel
 from .utils import threading_autojoin
@@ -104,29 +106,39 @@ class AgentBootstrap:
         TODO: move entire bootstrap creation process (or as much as 
         possible, anyways) into register().
         '''
-        if bootstrap is None:
-            identity = FirstParty()
-        else:
-            raise NotImplementedError('Not just yet buddy-o!')
-            
-        persister.publish(identity.second_party.packed)
+        # First we need to create everything.
         self.persister = persister
+        self.golix_core = GolixCore()
+        self.privateer = Privateer()
+        self.oracle = Oracle()
+        self.rolodex = Rolodex()
+        self.proxy = GhidProxier()
+        self.dispatch = Dispatcher()
         
-        self.core = HGXCore(identity)
-        self.oracle = Oracle(self.core)
-        self.proxy = _GhidProxier(self.core, self.persister)
-        self.core.link_proxy(self.proxy)
-        self.core.link_oracle(self.oracle)
-        self.core.link_persister(self.persister)
-        
-        # Okay, I need to be able to bootstrap privateer.
-        
-        self.privateer = Privateer(self.core)
-        self.core.link_privateer(self.privateer)
-        
-        if bootstrap is None:
-            # Dispatch bootstrap:
+        # Now we need to link everything together.
+        self.golix_core.assemble(self.proxy, self.oracle, self.persister, 
+                                self.dispatch)
+        self.oracle.assemble(self.golix_core)
+        self.privateer.assemble(self.golix_core, self.oracle)
+        self.proxy.assemble(self.golix_core, self.persister.librarian)
+        self.dispatch.assemble(self.golix_core, self.oracle, self.rolodex)
+        self.rolodex.assemble(self.golix_core, self.oracle, self.privateer, 
+                            self.dispatch, self.persister, self.proxy)
             
+        # Now we need to bootstrap everything.
+        if bootstrap is None:
+            # Golix core bootstrap.
+            # ----------------------------------------------------------
+            identity = FirstParty()
+            persister.publish(identity.second_party.packed)
+            self.golix_core.bootstrap(identity)
+            
+            # Privateer bootstrap.
+            # ----------------------------------------------------------
+            self.privateer.bootstrap()
+            
+            # Dispatch bootstrap:
+            # ----------------------------------------------------------
             # Set of all known tokens. Add b'\x00\x00\x00\x00' to prevent its 
             # use. Persistent across all clients for any given agent.
             all_tokens = self.oracle.new_object(
@@ -134,29 +146,23 @@ class AgentBootstrap:
                 dynamic = True,
             )
             all_tokens.add(b'\x00\x00\x00\x00')
-            
             # SetMap of all objects to be sent to an app upon app startup.
             # TODO: make this distributed state object.
             startup_objs = SetMap()
+            self.dispatch.bootstrap(all_tokens, startup_objs)
             
+            # Rolodex bootstrap:
+            # ----------------------------------------------------------
             # Dict-like mapping of all pending requests.
             # Used to lookup {<request address>: <target address>}
-            pending_reqs = self.oracle.new_object(
+            pending_requests = self.oracle.new_object(
                 gaoclass = _GAODict,
                 dynamic = True
             )
+            self.rolodex.bootstrap(pending_requests)
             
         else:
-            pass
-        
-        self.dispatch = Dispatcher(
-            self.core, 
-            self.oracle,
-            all_tokens,
-            startup_objs,
-            pending_reqs,
-        )
-        self.core.link_dispatch(self.dispatch)
+            raise NotImplementedError('Not just yet buddy-o!')
         
     def _new_bootstrap_container(self):
         ''' Creates a new container to use for the bootstrap object.

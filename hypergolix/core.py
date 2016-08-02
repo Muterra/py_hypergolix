@@ -98,18 +98,24 @@ def _silence_unsubs_atexit(*args, **kwargs):
     is_exiting = True
 
 
-class _GhidProxier:
+class GhidProxier:
     ''' Resolve the base container GHID from any associated ghid. Uses
     all weak references, so should not interfere with GCing objects.
     
     Threadsafe.
     '''
-    def __init__(self, core, persister):
+    def __init__(self):
         # The usual.
         self._refs = {}
-        self._librarian = persister.librarian
-        self._core = weakref.proxy(core)
         self._modlock = threading.Lock()
+        
+        self._librarian = None
+        self._core = None
+        
+    def assemble(self, golix_core, librarian):
+        # Chicken, meet egg.
+        self._core = weakref.proxy(core)
+        self._librarian = weakref.proxy(librarian)
         
     def is_proxy(self, ghid):
         ''' Return True if the ghid is known as a proxy, False if the 
@@ -148,7 +154,7 @@ class _GhidProxier:
             raise TypeError('Can only resolve a ghid.')
             
         with self._modlock:
-            return = self._resolve(ghid)
+            return self._resolve(ghid)
         
     def _resolve(self, ghid):
         ''' Recursively resolves the container ghid for a proxy (or a 
@@ -178,7 +184,7 @@ class GolixCore:
     '''
     DEFAULT_LEGROOM = 3
     
-    def __init__(self, identity):
+    def __init__(self):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         
@@ -188,9 +194,7 @@ class GolixCore:
         '''
         self._opslock = threading.Lock()
         
-        # if not isinstance(persister, _PersisterBase):
-        #     raise TypeError('Persister must subclass _PersisterBase.')
-        self._identity = identity
+        self._identity = None
         
         self._librarian = None
         self._oracle = None
@@ -198,29 +202,17 @@ class GolixCore:
         self._ghidproxy = None
         self._persister = None
         
-    def link_proxy(self, proxy):
-        ''' Chicken vs egg. Should be called ASAGDFP after __init__.
-        '''
-        self._ghidproxy = proxy
+    def assemble(self, proxy, oracle, persister, dispatch):
+        # Chicken, meet egg.
+        self._ghidproxy = weakref.proxy(proxy)
+        self._oracle = weakref.proxy(oracle)
+        self._persister = weakref.proxy(persister)
+        self._librarian = weakref.proxy(persister.librarian)
+        self._dispatch = weakref.proxy(dispatch)
         
-    def link_oracle(self, oracle):
-        ''' Chicken vs egg. Call immediately after linking proxy.
-        '''
-        self._oracle = oracle
-        
-    def link_persister(self, persister):
-        ''' Chicken vs egg. Should call immediately after linking proxy
-        and oracle.
-        '''
-        self._persister = persister
-        self._librarian = persister.librarian
-    
-    def link_dispatch(self, dispatch):
-        ''' Chicken vs egg. Must call AFTER linking persister.
-        '''
-        # if not isinstance(dispatch, DispatcherBase):
-        #     raise TypeError('dispatcher must subclass DispatcherBase.')
-        self._dispatch = dispatch
+    def bootstrap(self, identity):
+        # This must be done ASAGDFP. Must be absolute first thing to bootstrap.
+        self._identity = identity
         
     @property
     def _legroom(self):
@@ -980,12 +972,17 @@ class Oracle:
     state. Might eventually be used by AgentBase. Just a quick way to 
     store and retrieve any objects based on an associated ghid.
     '''
-    def __init__(self, core):
+    def __init__(self):
         ''' Sets up internal tracking.
         '''
         self._opslock = threading.Lock()
-        self._core = core
         self._lookup = {}
+        
+        self._core = None
+        
+    def assemble(self, golix_core):
+        # Chicken, meet egg.
+        self._core = weakref.proxy(core)
             
     def get_object(self, gaoclass, ghid, **kwargs):
         with self._opslock:

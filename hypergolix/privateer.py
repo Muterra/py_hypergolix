@@ -81,12 +81,14 @@ class Privateer:
     mechanism and which ones use the new one, once that change is 
     started.
     '''
-    def __init__(self, core):
-        self._core = core
+    def __init__(self):
         self._modlock = threading.Lock()
         
-        # These must be linked while bootstrapping.
+        # These must be linked during assemble.
+        self._core = None
         self._oracle = None
+        
+        # These must be bootstrapped.
         self._secrets_persistent = None
         self._secrets_staging = None
         self._secrets = None
@@ -101,12 +103,15 @@ class Privateer:
         # Just here for diagnosing a testing problem
         self._committment_problems = {}
         
-    def bootstrap(self, oracle):
+    def assemble(self, golix_core, oracle):
+        # Chicken, meet egg.
+        self._core = weakref.proxy(golix_core)
+        # We need an oracle for ratcheting.
+        self._oracle = weakref.proxy(oracle)
+        
+    def bootstrap(self):
         ''' Initializes the privateer.
         '''
-        # We need an oracle for ratcheting.
-        self._oracle = oracle
-        
         # We very obviously need to be able to look up what secrets we have.
         # Lookups: <container ghid>: <container secret>
         self._secrets_persistent = {}
