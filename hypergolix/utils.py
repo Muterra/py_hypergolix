@@ -1837,6 +1837,76 @@ class SetMap:
         for key in other:
             new.update(key, other._mapping[key])
         return new
+            
+            
+class _WeakerSet(weakref.WeakSet):
+    ''' Used within a WeakSetMap to remove self when items are removed.
+    '''
+    def __init__(self, data=None, parent=None, key=None):
+        super().__init__(data)
+        
+        if parent is None or key is None:
+            raise TypeError('Must declare parent and key explicitly.')
+            
+        self.data = _SelfDestructingSet(self.data, parent, key)
+                
+                
+class _SelfDestructingSet(set):
+    def __init__(self, data, parent, key):
+        super().__init__(data)
+        self.__parent = weakref.proxy(parent)
+        self.__key = key
+        
+    def discard(self, *args, **kwargs):
+        super().discard(*args, **kwargs)
+        if len(self) == 0:
+            with self.__parent._lock:
+                del self.__parent._mapping[self.__key]
+        
+    def remove(self, *args, **kwargs):
+        super().remove(*args, **kwargs)
+        if len(self) == 0:
+            with self.__parent._lock:
+                del self.__parent._mapping[self.__key]
+        
+    def pop(self, *args, **kwargs):
+        result = super().pop(*args, **kwargs)
+        if len(self) == 0:
+            with self.__parent._lock:
+                del self.__parent._mapping[self.__key]
+        return result
+            
+            
+class WeakSetMap(SetMap):
+    ''' SetMap that uses WeakerSets internally.
+    ''' 
+    def add(self, key, value):
+        ''' Adds the value to the set at key. Creates a new set there if 
+        none already exists.
+        '''
+        with self._lock:
+            try:
+                self._mapping[key].add(value)
+            except KeyError:
+                self._mapping[key] = _WeakerSet(
+                    data = { value }, 
+                    parent = self, 
+                    key = key
+                )
+                
+    def update(self, key, value):
+        ''' Updates the key with the value. Value must support being
+        passed to set.update(), and the set constructor.
+        '''
+        with self._lock:
+            try:
+                self._mapping[key].update(value)
+            except KeyError:
+                self._mapping[key] = _WeakerSet(
+                    data = value, 
+                    parent = self,
+                    key = key
+                )
         
 
 class TraceLogger:
