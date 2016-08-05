@@ -994,33 +994,3 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
             return True
         else:
             raise RuntimeError('Unknown status code during disconnection.')
-    
-    
-class FakeBackend:
-    def trash(self):
-        # Literally just saving this for later.
-                
-        subscribe = self.postman.subscribe
-        unsubscribe = self.postman.unsubscribe
-        silence_notification = self.postman.silence_notification
-        list_bindings = self.bookie.bind_status
-        list_debindings = self.bookie.debind_status
-        
-        backend = MemoryPersister()
-        server = Autocomms(
-            autoresponder_class = PersisterBridgeServer,
-            autoresponder_kwargs = { 'persister': backend, },
-            connector_class = WSBasicServer,
-            connector_kwargs = {
-                'host': host,
-                'port': port,
-                # 48 bits = 1% collisions at 2.4 e 10^6 connections
-                'birthday_bits': 48,
-            },
-            debug = debug,
-            aengel = aengel,
-        )
-        if foreground:
-            threading_autojoin()
-        else:
-            return FakeBackend(), server

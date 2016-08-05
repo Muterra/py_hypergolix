@@ -67,7 +67,7 @@ from .comms import WSBasicServer
 from .remotes import PersisterBridgeClient
 from .remotes import PersisterBridgeServer
 from .remotes import MemoryPersister
-from .remotes import RemotePersistenceServer as _hgx_server
+from .remotes import RemotePersistenceServer
 
 from .ipc import IPCHost
 from .ipc import IPCEmbed
@@ -85,6 +85,33 @@ logger = logging.getLogger(__name__)
 # ###############################################
 # Lib
 # ###############################################
+
+
+def _hgx_server(host, port, debug, traceur, foreground=True, aengel=None):
+    ''' Simple remote persistence server over websockets.
+    '''
+    if not aengel:
+        aengel = Aengel()
+        
+    remote = RemotePersistenceServer()
+    server = Autocomms(
+        autoresponder_class = PersisterBridgeServer,
+        connector_class = WSBasicServer,
+        connector_kwargs = {
+            'host': host,
+            'port': port,
+            # 48 bits = 1% collisions at 2.4 e 10^6 connections
+            'birthday_bits': 48,
+        },
+        debug = debug,
+        aengel = aengel,
+    )
+    remote.assemble(server)
+    
+    if foreground:
+        threading_autojoin()
+    else:
+        return remote, server
     
     
 def HypergolixLink(ipc_port=7772, debug=False, aengel=None, *args, **kwargs):
