@@ -54,8 +54,8 @@ from hypergolix.comms import Autocomms
 from hypergolix.comms import WSBasicServer
 from hypergolix.comms import WSBasicClient
 
-from hypergolix.exceptions import NakError
-from hypergolix.exceptions import PersistenceWarning
+from hypergolix.exceptions import RemoteNak
+from hypergolix.exceptions import StillBoundWarning
 
 # These are abnormal imports
 from golix import Ghid
@@ -319,25 +319,25 @@ class _GenericPersisterTest:
         self.remote1.publish(bind1_2.packed)
         self.remote1.publish(bind2_1.packed)
         self.remote1.publish(bind2_2.packed)
-        with self.assertRaises(NakError, msg='Server allowed unknown binder.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed unknown binder.'):
             self.remote1.publish(bind3_1.packed)
-        with self.assertRaises(NakError, msg='Server allowed unknown binder.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed unknown binder.'):
             self.remote1.publish(bind3_2.packed)
             
         self.remote1.publish(cont1_1.packed)
         self.remote1.publish(cont1_2.packed)
         self.remote1.publish(cont2_1.packed)
         self.remote1.publish(cont2_2.packed)
-        with self.assertRaises(NakError, msg='Server allowed unknown author.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed unknown author.'):
             self.remote1.publish(cont3_1.packed)
-        with self.assertRaises(NakError, msg='Server allowed unknown author.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed unknown author.'):
             self.remote1.publish(cont3_2.packed)
         
         # ---------------------------------------
         # Publish impersonation debindings for the second identity
-        with self.assertRaises(NakError, msg='Server allowed wrong author debind.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed wrong author debind.'):
             self.remote1.publish(debind2_1_bad.packed)
-        with self.assertRaises(NakError, msg='Server allowed wrong author debind.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed wrong author debind.'):
             self.remote1.publish(debind2_2_bad.packed)
         
         # ---------------------------------------
@@ -349,9 +349,9 @@ class _GenericPersisterTest:
         self.assertNotIn(bind2_1.ghid, self.vault)
         self.assertNotIn(cont2_1.ghid, self.vault)
         
-        with self.assertRaises(NakError, msg='Server allowed binding replay.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed binding replay.'):
             self.remote1.publish(bind2_1.packed)
-        with self.assertRaises(NakError, msg='Server allowed binding replay.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed binding replay.'):
             self.remote1.publish(bind2_2.packed)
         
         # ---------------------------------------
@@ -363,9 +363,9 @@ class _GenericPersisterTest:
         # Publish debindings for the valid debindings
         self.remote1.publish(dedebind2_1.packed)
         self.remote1.publish(dedebind2_2.packed)
-        with self.assertRaises(NakError, msg='Server allowed debinding replay.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed debinding replay.'):
             self.remote1.publish(debind2_1.packed)
-        with self.assertRaises(NakError, msg='Server allowed debinding replay.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed debinding replay.'):
             self.remote1.publish(debind2_2.packed)
             
         self.assertNotIn(bind2_1.ghid, self.debound_by_ghid)
@@ -394,9 +394,9 @@ class _GenericPersisterTest:
         # and then redebind them
         self.remote1.publish(dededebind2_1.packed)
         self.remote1.publish(dededebind2_2.packed)
-        with self.assertRaises(NakError, msg='Server allowed dedebinding replay.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed dedebinding replay.'):
             self.remote1.publish(dedebind2_1.packed)
-        with self.assertRaises(NakError, msg='Server allowed dedebinding replay.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed dedebinding replay.'):
             self.remote1.publish(dedebind2_2.packed)
             
         self.assertNotIn(debind2_1.ghid, self.debound_by_ghid)
@@ -426,7 +426,7 @@ class _GenericPersisterTest:
         self.remote1.publish(handshake2_1.packed)
         self.assertTrue(subs_notification_checker())
         
-        with self.assertRaises(NakError, msg='Server allowed unknown recipient.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed unknown recipient.'):
             self.remote1.publish(handshake3_1.packed)
             
         self.assertIn(handshake1_1.ghid, self.vault)
@@ -440,9 +440,9 @@ class _GenericPersisterTest:
         self.assertNotIn(handshake1_1.ghid, self.vault)
         self.assertNotIn(handshake2_1.ghid, self.vault)
         
-        with self.assertRaises(NakError, msg='Server allowed request replay.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed request replay.'):
             self.remote1.publish(handshake1_1.packed)
-        with self.assertRaises(NakError, msg='Server allowed request replay.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed request replay.'):
             self.remote1.publish(handshake2_1.packed)
             
         self.assertNotIn(handshake1_1.ghid, self.vault)
@@ -457,8 +457,8 @@ class _GenericPersisterTest:
         self.remote1.publish(dyn1_1a.packed)
         self.remote1.publish(dyn2_1a.packed)
         self.remote1.publish(cont2_1.packed)
-        d11a = self.vault.whois(dyn1_1a.ghid_dynamic)
-        d21a = self.vault.whois(dyn2_1a.ghid_dynamic)
+        d11a = self.vault.summarize(dyn1_1a.ghid_dynamic)
+        d21a = self.vault.summarize(dyn2_1a.ghid_dynamic)
         self.assertEqual(dyn1_1a.ghid, d11a.frame_ghid)
         self.assertEqual(dyn2_1a.ghid, d21a.frame_ghid)
         self.assertIn(cont2_1.ghid, self.vault)
@@ -468,9 +468,9 @@ class _GenericPersisterTest:
         self.assertIn(cont1_1.ghid, self.vault)
         self.assertIn(cont2_1.ghid, self.vault)
         # Now let's try some fraudulent updates
-        with self.assertRaises(NakError, msg='Server allowed fraudulent dynamic.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed fraudulent dynamic.'):
             self.remote1.publish(dynF_1b.packed)
-        with self.assertRaises(NakError, msg='Server allowed fraudulent dynamic.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed fraudulent dynamic.'):
             self.remote1.publish(dynF_2b.packed)
             
         # Subscribe to updates before actually sending the real ones.
@@ -497,16 +497,16 @@ class _GenericPersisterTest:
         self.assertNotIn(cont1_1.ghid, self.vault)
         self.assertNotIn(cont2_1.ghid, self.vault)
         # And that the previous frame (but not its references) were as well
-        d11b = self.vault.whois(dyn1_1b.ghid_dynamic)
-        d21b = self.vault.whois(dyn2_1b.ghid_dynamic)
+        d11b = self.vault.summarize(dyn1_1b.ghid_dynamic)
+        d21b = self.vault.summarize(dyn2_1b.ghid_dynamic)
         self.assertEqual(dyn1_1b.ghid, d11b.frame_ghid)
         self.assertEqual(dyn2_1b.ghid, d21b.frame_ghid)
         self.assertIn(cont2_2.ghid, self.vault)
         
         # Make sure we cannot replay old frames.
-        with self.assertRaises(NakError, msg='Server allowed dyn frame replay.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed dyn frame replay.'):
             self.remote1.publish(dyn1_1a.packed)
-        with self.assertRaises(NakError, msg='Server allowed dyn frame replay.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed dyn frame replay.'):
             self.remote1.publish(dyn2_1a.packed)
         
         # Now let's try debinding the dynamics.
@@ -518,9 +518,9 @@ class _GenericPersisterTest:
         self.remote1.publish(dyndebind2_1.packed)
         self.assertTrue(subs_notification_checker())
         
-        with self.assertRaises(NakError, msg='Server allowed debound dyn replay.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed debound dyn replay.'):
             self.remote1.publish(dyn1_1a.packed)
-        with self.assertRaises(NakError, msg='Server allowed debound dyn replay.'):
+        with self.assertRaises(RemoteNak, msg='Server allowed debound dyn replay.'):
             self.remote1.publish(dyn2_1a.packed)
         # And check their state.
         self.assertIn(dyndebind1_1.ghid, self.vault)

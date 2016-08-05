@@ -29,7 +29,7 @@ hypergolix: A python Golix client.
 
 ------------------------------------------------------
 
-NakError status code conventions:
+RemoteNak status code conventions:
 -----
 0x0001: Does not appear to be a Golix object.
 0x0002: Failed to verify.
@@ -86,7 +86,7 @@ from golix._getlow import GDXX
 from golix._getlow import GARQ
 
 # Local dependencies
-from .exceptions import NakError
+from .exceptions import RemoteNak
 from .exceptions import MalformedGolixPrimitive
 from .exceptions import VerificationFailure
 from .exceptions import UnboundContainer
@@ -94,10 +94,12 @@ from .exceptions import InvalidIdentity
 from .exceptions import DoesNotExist
 from .exceptions import AlreadyDebound
 from .exceptions import InvalidTarget
-from .exceptions import PersistenceWarning
+from .exceptions import StillBoundWarning
 from .exceptions import RequestError
 from .exceptions import InconsistentAuthor
 from .exceptions import IllegalDynamicFrame
+from .exceptions import IntegrityError
+from .exceptions import UnavailableUpstream
 
 from .utils import _DeepDeleteChainMap
 from .utils import _WeldedSetDeepChainMap
@@ -143,6 +145,7 @@ class Salmonator:
         self._golix_core = None
         self._postman = None
         self._librarian = None
+        self._doorman = None
         
         self._upstream_remotes = set()
         self._downstream_remotes = set()
@@ -150,7 +153,8 @@ class Salmonator:
         # Simple set of weakreffed GAOs.
         self._registered = weakref.WeakSet()
         
-    def assemble(self, golix_core, persistence_core, postman, librarian):
+    def assemble(self, golix_core, persistence_core, doorman, postman, 
+                librarian):
         self._golix_core = weakref.proxy(golix_core)
         self._persist_core = weakref.proxy(persistence_core)
         self._postman = weakref.proxy(postman)
@@ -217,7 +221,7 @@ class Salmonator:
         ''' Grabs the ghid from librarian and sends it to all applicable
         remotes.
         '''
-        data = self._librarian.dereference(ghid)
+        data = self._librarian.retrieve(ghid)
         # This is, again, definitely a lame way of doing this
         for remote in self._upstream_remotes:
             remote.publish(data)
@@ -226,26 +230,174 @@ class Salmonator:
         ''' Grabs the ghid from remotes, if available, and puts it into
         the ingestion pipeline.
         '''
+        # TODO: check locally, run _inspect, check if mutable before blindly 
+        # pulling.
         # This is the lame way of doing this, fo sho
         for remote in self._upstream_remotes:
+            if self._attempt_pull_single(ghid, remote):
+                self._postman.do_mail_run()
+                break
+                
+        else:
+            raise UnavailableUpstream('Object was unavailable or unacceptable '
+                                    'at all currently-registered remotes.')
+        
+    def _attempt_pull_single(self, ghid, remote):
+        ''' Once we've successfully acquired data from
+        '''
+        # Try to get it from the remote.
+        try:
             data = remote.get(ghid)
+            
+        # Unsuccessful pull. Log the error and return False.
+        except:
+            logger.warning('Error while pulling from upstream: \n' + 
+                            ''.join(traceback.format_exc()))
+            return False
+        
+        # Only if we actually successfully got something back should we
+        # continue on to ingest.
+        else:
             # This may or may not be an update we already have.
             try:
                 # Call as remotable=False to avoid infinite loops.
                 self._core.ingest(data, remotable=False)
+            
+            # Couldn't load. Return False.
             except:
                 logger.warning(
                     'Error while pulling from upstream: \n' + 
                     ''.join(traceback.format_exc())
                 )
+                return False
                 
-        self._postman.do_mail_run()
+            # As soon as we have it, return True so parent can stop checking 
+            # other remotes.
+            else:
+                return True
+        
+    def _inspect(self, ghid):
+        ''' Checks librarian for an existing ghid. If it has it, checks
+        the object's integrity by re-parsing it. If it is dynamic, also
+        queries upstream remotes for newer versions.
+        
+        returns None if no local copy exists
+        returns True if local copy exists and is valid
+        raises IntegrityError if local copy exists, but is corrupted.
+        ~~(returns False if dynamic and local copy is out of date)~~
+            Note: this is unimplemented currently, blocking on several 
+            upstream changes.
+        '''
+        # Load the object locally
+        try:
+            obj = self._librarian.summarize(ghid)
+        
+        # Librarian has no copy.    
+        except KeyError:
+            return None
             
-    def register(self, gao):
+        # The only object that can mutate is a Gobd
+        # This is blocking on updates to the remote persistence spec, which is
+        # in turn blocking on changes to the Golix spec.
+        # if isinstance(obj, _GobdLite):
+        #     self._check_for_updates(obj)
+        
+        self._verify_existing(obj)
+        return True
+            
+    def _check_for_updates(self, obj):
+        ''' Checks with all upstream remotes for new versions of a 
+        dynamic object.
+        '''
+        # Oh wait, we can't actually do this, because the remote persistence
+        # protocol doesn't support querying what the current binding frame is
+        # without just loading the whole binding.
+        # When the Golix spec changes to semi-stateless dynamic bindings, using
+        # a counter for validating monotonicity instead of a hash chain, then
+        # the remote persistence spec should be expanded to include a query_ctr
+        # command for ultra-lightweight checks. For now, we're stuck with ~1kB
+        # dynamic bindings.
+        raise NotImplementedError()
+            
+    def _verify_existing(self, obj):
+        ''' Re-loads an object to make sure it's still good.
+        Obj should be a lightweight hypergolix representation, not the
+        packed Golix object, unpacked Golix object, nor the GAO.
+        '''
+        packed = self._librarian.retrieve(obj.ghid)
+        
+        for primitive, loader in ((_GidcLite, self._doorman.load_gidc),
+                                (_GeocLite, self._doorman.load_geoc),
+                                (_GobsLite, self._doorman.load_gobs),
+                                (_GobdLite, self._doorman.load_gobd),
+                                (_GdxxLite, self._doorman.load_gdxx),
+                                (_GarqLite, self._doorman.load_garq)):
+            # Attempt this loader
+            if isinstance(obj, primitive):
+                try:
+                    loader(packed)
+                except (MalformedGolixPrimitive, SecurityError) as exc:
+                    logger.error('Integrity of local object appears '
+                                'compromised.')
+                    raise IntegrityError('Local copy of object appears to be '
+                                        'corrupt or compromised.') from exc
+                else:
+                    break
+                    
+        # If we didn't find a loader, typeerror.
+        else:
+            raise TypeError('Invalid object type while verifying object.')
+            
+    def register(self, gao, skip_refresh=False):
         ''' Tells the Salmonator to listen upstream for any updates
         while the gao is retained in memory.
         '''
+        with self._opslock:
+            self._registered.add(gao)
         
+        if gao.dynamic:
+            with self._opslock:
+                for remote in self._upstream_remotes:
+                    # TODO: move this into the GAO itself, so that deletion
+                    # also results in unsubscribing.
+                    remote.subscribe(gao.ghid, self._remote_callback)
+            
+            if not skip_refresh:
+                self.pull(obj.ghid)
+                
+                
+class SalmonatorNoop:
+    ''' Currently used in remote persistence servers to hush everything
+    upstream/downstream while still making use of standard librarians.
+    
+    And by "used", I mean "unused, but is intended to be added in at 
+    some point, because I forgot I was just using a standard Salmonator
+    because the overhead is unimportant right now".
+    '''
+    def assemble(*args, **kwargs):
+        pass
+        
+    def add_upstream_remote(*args, **kwargs):
+        pass
+        
+    def remove_upstream_remote(*args, **kwargs):
+        pass
+        
+    def add_downstream_remote(*args, **kwargs):
+        pass
+        
+    def remove_downstream_remote(*args, **kwargs):
+        pass
+        
+    def push(*args, **kwargs):
+        pass
+        
+    def pull(*args, **kwargs):
+        pass
+        
+    def register(*args, **kwargs):
+        pass
+                
         
 class PersistenceCore:
     ''' Provides the core functions for storing Golix objects. Required 
@@ -588,7 +740,7 @@ class Doorman:
             
         # Okay, now we need to verify the object
         try:
-            author = self._librarian.whois(obj.author)
+            author = self._librarian.summarize_loud(obj.author)
         except KeyError as exc:
             raise InvalidIdentity(
                 '0x0003: Unknown author / recipient: ' + str(bytes(obj.author))
@@ -616,7 +768,7 @@ class Doorman:
             
         # Okay, now we need to verify the object
         try:
-            author = self._librarian.whois(obj.binder)
+            author = self._librarian.summarize_loud(obj.binder)
         except KeyError as exc:
             raise InvalidIdentity(
                 '0x0003: Unknown author / recipient: ' + str(bytes(obj.binder))
@@ -644,7 +796,7 @@ class Doorman:
             
         # Okay, now we need to verify the object
         try:
-            author = self._librarian.whois(obj.binder)
+            author = self._librarian.summarize_loud(obj.binder)
         except KeyError as exc:
             raise InvalidIdentity(
                 '0x0003: Unknown author / recipient: ' + str(bytes(obj.binder))
@@ -672,7 +824,7 @@ class Doorman:
             
         # Okay, now we need to verify the object
         try:
-            author = self._librarian.whois(obj.debinder)
+            author = self._librarian.summarize_loud(obj.debinder)
         except KeyError as exc:
             raise InvalidIdentity(
                 '0x0003: Unknown author / recipient: ' + 
@@ -940,7 +1092,7 @@ class PostOffice(_PostmanBase):
         # Now manually reinstate any desired notifications for garq requests
         # that have yet to be handled
         for existing_mail in self._bookie.recipient_status(ghid):
-            obj = self._librarian.whois(existing_mail)
+            obj = self._librarian.summarize(existing_mail)
             self.schedule(obj)
             
     def unsubscribe(self, ghid, callback):
@@ -999,7 +1151,7 @@ class Undertaker:
         while self._staging:
             ghid = self._staging.pop()
             try:
-                obj = self._librarian.whois(ghid)
+                obj = self._librarian.summarize(ghid)
                 
             except KeyError:
                 logger.warning(
@@ -1103,7 +1255,7 @@ class Undertaker:
         ''' GOBD require triage for previous targets.
         '''
         try:
-            existing = self._librarian.whois(obj.ghid)
+            existing = self._librarian.summarize(obj.ghid)
         except KeyError:
             # This will always happen if it's the first frame, so let's be sure
             # to ignore that for logging.
@@ -1145,7 +1297,7 @@ class Lawyer:
         
     def _validate_author(self, obj):
         try:
-            author = self._librarian.whois(obj.author)
+            author = self._librarian.summarize_loud(obj.author)
         except KeyError as exc:
             logger.info('0x0003: Unknown author / recipient.')
             raise InvalidIdentity(
@@ -1181,7 +1333,7 @@ class Lawyer:
         '''
         self._validate_author(obj)
         try:
-            existing = self._librarian.whois(obj.ghid)
+            existing = self._librarian.summarize_loud(obj.ghid)
         except KeyError:
             pass
         else:
@@ -1208,7 +1360,7 @@ class Lawyer:
         self._validate_author(obj)
         try:
             if target_obj is None:
-                existing = self._librarian.whois(obj.target)
+                existing = self._librarian.summarize_loud(obj.target)
             else:
                 existing = target_obj
                 
@@ -1251,7 +1403,7 @@ class Lawyer:
         ''' Validate recipient.
         '''
         try:
-            recipient = self._librarian.whois(obj.recipient)
+            recipient = self._librarian.summarize_loud(obj.recipient)
         except KeyError as exc:
             logger.info(
                 '0x0003: Unknown author / recipient: ' + 
@@ -1295,7 +1447,7 @@ class Enforcer:
         ''' Check if target is known, and if it is, validate it.
         '''
         try:
-            target = self._librarian.whois(obj.target)
+            target = self._librarian.summarize_loud(obj.target)
         except KeyError:
             pass
         else:
@@ -1313,7 +1465,7 @@ class Enforcer:
         Also do a state check on the dynamic binding.
         '''
         try:
-            target = self._librarian.whois(obj.target)
+            target = self._librarian.summarize_loud(obj.target)
         except KeyError:
             pass
         else:
@@ -1333,7 +1485,7 @@ class Enforcer:
         '''
         try:
             if target_obj is None:
-                target = self._librarian.whois(obj.target)
+                target = self._librarian.summarize_loud(obj.target)
             else:
                 target = target_obj
         except KeyError:
@@ -1370,7 +1522,7 @@ class Enforcer:
         '''
         # Try getting an existing binding.
         try:
-            existing = self._librarian.whois(obj.ghid)
+            existing = self._librarian.summarize_loud(obj.ghid)
             
         except KeyError:
             if obj.history:
@@ -1466,7 +1618,7 @@ class Bookie:
         # NOTE: this needs to be converted to also check for debinding validity
         for debinding_ghid in self._debound_by_ghid_staged.get_any(obj.ghid):
             # Get the existing debinding
-            debinding = self._librarian.whois(debinding_ghid)
+            debinding = self._librarian.summarize(debinding_ghid)
             
             # Validate existing binding against newly-known target
             try:
@@ -1573,7 +1725,7 @@ class Bookie:
         # First we need to make sure we're not missing an existing frame for
         # this binding, and then to schedule a GC check for its target.
         try:
-            existing = self._librarian.whois(obj.ghid)
+            existing = self._librarian.summarize_loud(obj.ghid)
         except KeyError:
             if obj.history:
                 logger.error(
@@ -1666,6 +1818,7 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
     def __init__(self):
         # Link to core, which will be assigned after __init__
         self._core = None
+        self._salmonator = None
         
         # Operations and restoration lock
         self._restoring = TruthyLock()
@@ -1679,10 +1832,11 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         self._catalog = {}
         self._opslock = threading.Lock()
         
-    def assemble(self, core):
+    def assemble(self, core, salmonator):
         # Creates a weakref proxy to core.
         # This is needed for lazy loading and restoring.
         self._core = weakref.proxy(core)
+        self._salmonator = weakref.proxy(salmonator)
         
     def force_gc(self, obj):
         ''' Forces erasure of an object. Does not notify the undertaker.
@@ -1746,16 +1900,31 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
             return self._dyn_resolver[ghid]
         else:
             return ghid
-        
-    def dereference(self, ghid):
-        ''' Returns the raw data associated with the ghid.
+            
+    def retrieve(self, ghid):
+        ''' Returns the raw data associated with the ghid, checking only
+        locally.
         '''
         with self._restoring.mutex:
             ghid = self._ghid_resolver(ghid)
             return self.get_from_cache(ghid)
         
-    def whois(self, ghid):
+    def retrieve_loud(self, ghid):
+        ''' Returns the raw data associated with the ghid, checking both
+        locally and with the salmonator.
+        '''
+        ghid = self._ghid_resolver(ghid)
+        
+        try:
+            self._salmonator.pull(ghid)
+        except UnavailableUpstream:
+            pass
+            
+        return self.retrieve(ghid)
+        
+    def summarize(self, ghid):
         ''' Returns a lightweight Hypergolix description of the object.
+        Checks only locally.
         '''
         ghid = self._ghid_resolver(ghid)
         
@@ -1774,6 +1943,21 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
                     # Lazy-load a new one if possible.
                     self._lazy_load(ghid, exc)
                     return self._catalog[ghid]
+        
+    def summarize_loud(self, ghid):
+        ''' Returns a lightweight Hypergolix description of the object.
+        Checks both locally and with the salmonator.
+        
+        CANNOT BE CALLED DURING RESTORATION.
+        '''
+        ghid = self._ghid_resolver(ghid)
+        
+        try:
+            self._salmonator.pull(ghid)
+        except UnavailableUpstream:
+            pass
+        
+        return self.summarize(ghid)
                 
     def _lazy_load(self, ghid, exc):
         ''' Does a lazy load restore of the ghid.

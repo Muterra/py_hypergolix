@@ -37,8 +37,8 @@ import threading
 __all__ = [
     # Base class for all of the above
     'HypergolixException',
-    # These are all persister errors and warnings
-    'NakError',
+    # These are remote server errors and warnings
+    'RemoteNak',
     'VerificationFailure',
     'MalformedGolixPrimitive',
     'UnboundContainer',
@@ -48,7 +48,11 @@ __all__ = [
     'DoesNotExist',
     'InvalidTarget',
     'IllegalDynamicFrame',
-    'PersistenceWarning',
+    'StillBoundWarning',
+    # These are local persistence errors
+    'PersistenceError',
+    'IntegrityError',
+    'UnavailableUpstream',
     # These are Agent/integration errors
     'HandshakeError',
     'HandshakeWarning',
@@ -79,74 +83,74 @@ class HypergolixException(Exception):
     pass
 
 
-class NakError(HypergolixException, RuntimeError):
+class RemoteNak(HypergolixException, RuntimeError):
     ''' This exception (or a subclass thereof) is raised for all failed 
-    operations with persistence providers.
+    operations with remote persister servers.
     '''
     pass
     
     
-class MalformedGolixPrimitive(NakError):
-    ''' This NakError is raised when a packed Golix primitive appears to
+class MalformedGolixPrimitive(RemoteNak):
+    ''' This RemoteNak is raised when a packed Golix primitive appears to
     be malformed.
     '''
     pass
     
     
-class VerificationFailure(NakError):
-    ''' This NakError is raised when signature verification fails on a
+class VerificationFailure(RemoteNak):
+    ''' This RemoteNak is raised when signature verification fails on a
     Golix object.
     '''
     pass
     
     
-class InvalidIdentity(NakError):
-    ''' This NakError is raised when a persistence provider has received
+class InvalidIdentity(RemoteNak):
+    ''' This RemoteNak is raised when a persistence provider has received
     a primitive with an unknown or invalid author or recipient.
     '''
     pass
     
     
-class UnboundContainer(NakError):
-    ''' This NakError is raised when a persistence provider has no 
+class UnboundContainer(RemoteNak):
+    ''' This RemoteNak is raised when a persistence provider has no 
     binding for the attempted container, and it was therefore passed
     immediately to garbage collection.
     '''
     pass
     
     
-class InvalidTarget(NakError):
-    ''' This NakError is raised when a persistence provider has received
+class InvalidTarget(RemoteNak):
+    ''' This RemoteNak is raised when a persistence provider has received
     a primitive targeting an inappropriate object (for example, trying
     to debind a GEOC directly).
     '''
     pass
     
     
-class AlreadyDebound(NakError):
-    ''' This NakError is raised when a persistence provider has already
+class AlreadyDebound(RemoteNak):
+    ''' This RemoteNak is raised when a persistence provider has already
     received a debinding for the primitive being published.
     '''
     pass
     
     
-class InconsistentAuthor(NakError):
-    ''' This NakError is raised when a persistence provider has received
+class InconsistentAuthor(RemoteNak):
+    ''' This RemoteNak is raised when a persistence provider has received
     a primitive targeting an inappropriate object (for example, trying
     to debind a GEOC directly).
     '''
     pass
     
     
-class DoesNotExist(NakError):
-    ''' This NakError is raised when a persistence provider has received
+class DoesNotExist(RemoteNak):
+    ''' This RemoteNak is raised when a persistence provider has received
     a request for a ghid that does not exist in its object store.
     '''
     pass
     
     
-class IllegalDynamicFrame(NakError):
-    ''' This NakError is raised when a persistence provider has received
+class IllegalDynamicFrame(RemoteNak):
+    ''' This RemoteNak is raised when a persistence provider has received
     an illegal dynamic frame, ie. if the existing frame is not contained
     within the new frame's history, or if the zeroth frame contains 
     history.
@@ -154,7 +158,7 @@ class IllegalDynamicFrame(NakError):
     pass
     
     
-class PersistenceWarning(HypergolixException, RuntimeWarning):
+class StillBoundWarning(HypergolixException, RuntimeWarning):
     ''' Raised when a debinding did not result in the removal of its
     target -- for example, if another binding remains on the target
     object.
@@ -247,5 +251,26 @@ class PrivateerError(HypergolixException, RuntimeError):
 class RatchetError(PrivateerError):
     ''' This PrivateerError is raised when ratcheting a secret could not
     be completed successfully.
+    '''
+    pass
+
+
+class PersistenceError(HypergolixException, RuntimeError):
+    ''' This exception (or a subclass thereof) is raised for all issues
+    related to local persistence systems.
+    '''
+    pass
+    
+    
+class IntegrityError(PersistenceError):
+    ''' This PersistenceError is raised when a packed Golix primitive 
+    appears to be corrupted in local persistence.
+    '''
+    pass
+    
+    
+class UnavailableUpstream(PersistenceError):
+    ''' This PersistenceError is raised when an object is unavailable or
+    unacceptable from (an) upstream remote(s).
     '''
     pass

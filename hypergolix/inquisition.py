@@ -28,31 +28,47 @@ hypergolix: A python Golix client.
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
-
 '''
 
-# Add in core module
-from .core import *
-# TODO: change this to select HERE what, exactly, we want as a toplevel 
-# namespace on import
+# Global dependencies
+# import weakref
+# import traceback
+# import threading
 
-# Submodules
-from . import accounting
-from . import comms
-from . import core
-from . import dispatch
-from . import exceptions
-from . import inquisition
-from . import ipc
-from . import persistence
-from . import privateer
-from . import remotes
-from . import rolodex
-from . import service
-from . import utils
+# from golix import SecondParty
+from golix import Ghid
 
-# Logging shenanigans
+# from golix.utils import AsymHandshake
+# from golix.utils import AsymAck
+# from golix.utils import AsymNak
+
+# Local dependencies
+# from .persistence import _GarqLite
+# from .persistence import _GdxxLite
+
+
+# ###############################################
+# Boilerplate
+# ###############################################
+
+
 import logging
-# Py2.7+, but this is Py3.5.1+
-from logging import NullHandler
-logging.getLogger(__name__).addHandler(NullHandler())
+logger = logging.getLogger(__name__)
+
+# Control * imports.
+__all__ = [
+    'Inquisitor', 
+]
+
+
+# ###############################################
+# Library
+# ###############################################
+
+
+class Inquisitor:
+    ''' The inquisitor handles resource utilization, locally removing
+    GAOs from memory when they are no longer sufficiently used to 
+    justify their overhead.
+    '''
+    pass

@@ -29,7 +29,7 @@ hypergolix: A python Golix client.
 
 ------------------------------------------------------
 
-NakError status code conventions:
+RemoteNak status code conventions:
 -----
 0x0001: Does not appear to be a Golix object.
 0x0002: Failed to verify.
@@ -103,7 +103,7 @@ from .persistence import MemoryLibrarian
 from .persistence import Enlitener
 from .persistence import Salmonator
 
-from .exceptions import NakError
+from .exceptions import RemoteNak
 from .exceptions import MalformedGolixPrimitive
 from .exceptions import VerificationFailure
 from .exceptions import UnboundContainer
@@ -111,7 +111,7 @@ from .exceptions import InvalidIdentity
 from .exceptions import DoesNotExist
 from .exceptions import AlreadyDebound
 from .exceptions import InvalidTarget
-from .exceptions import PersistenceWarning
+from .exceptions import StillBoundWarning
 from .exceptions import RequestError
 from .exceptions import InconsistentAuthor
 from .exceptions import IllegalDynamicFrame
@@ -150,7 +150,7 @@ __all__ = [
 
 
 ERROR_CODES = {
-    b'\xFF\xFF': NakError,
+    b'\xFF\xFF': RemoteNak,
     b'\x00\x01': MalformedGolixPrimitive,
     b'\x00\x02': VerificationFailure,
     b'\x00\x03': InvalidIdentity,
@@ -199,13 +199,13 @@ class RemotePersistenceServer:
         self.enforcer.assemble(self.librarian)
         self.lawyer.assemble(self.librarian)
         self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
-        self.librarian.assemble(self.persistence_core)
+        self.librarian.assemble(self.persistence_core, self.salmonator)
         self.postman.assemble(self.librarian, self.bookie)
         self.undertaker.assemble(self.librarian, self.bookie, self.postman)
         # Note that this will break if we ever try to use it, because 
         # golix_core isn't actually a golix_core.
-        self.salmonator.assemble(self, self.persistence_core, self.postman, 
-                                self.librarian)
+        self.salmonator.assemble(self, self.persistence_core, self.doorman, 
+                                self.postman, self.librarian)
         
         # Okay, now set up the bridge, and we should be ready.
         self.bridge = bridge
@@ -225,7 +225,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         point, that should be fixed -- maybe through ex. publish_unsafe?
         
         ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         pass
     
@@ -234,7 +234,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         ''' Queries the persistence provider for availability.
         
         ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         pass
     
@@ -244,7 +244,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         by its ghid.
         
         ACK/success is represented by returning the object
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         pass
     
@@ -263,7 +263,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         2. Asymmetric requests with the indicated GHID as a recipient
         
         ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         pass
     
@@ -274,7 +274,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         passed callback.
         
         ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         pass
     
@@ -284,7 +284,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         client.
         
         ACK/success is represented by returning a list of ghids.
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         pass
     
@@ -294,7 +294,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         ghid.
         
         ACK/success is represented by returning a list of ghids.
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         pass
     
@@ -306,7 +306,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         ACK/success is represented by returning:
             1. The debinding GHID if it exists
             2. None if it does not exist
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         pass
         
@@ -318,7 +318,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         ACK/success is represented by returning:
             True if it exists
             False otherwise
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         pass
     
@@ -330,7 +330,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         leak metadata.
         
         ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         pass
 
@@ -390,7 +390,7 @@ class MemoryPersister(PersistenceCore):
         ''' Returns a packed Golix object.
         '''
         try:
-            return self.librarian.dereference(ghid)
+            return self.librarian.retrieve(ghid)
         except KeyError as exc:
             raise DoesNotExist(
                 '0x0008: Not found at persister: ' + str(bytes(ghid))
@@ -410,7 +410,7 @@ class MemoryPersister(PersistenceCore):
         ACK/success is represented by returning:
             True if it exists
             False otherwise
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         if ghid in self.librarian:
             return True
@@ -424,7 +424,7 @@ class MemoryPersister(PersistenceCore):
         metadata.
         
         ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         # TODO: figure out something different to do here.
         self.postman._listeners = {}
@@ -631,7 +631,7 @@ class PersisterBridgeServer(Autoresponder):
         ''' Deserializes a get request; forwards it to the persister.
         '''
         ghid = Ghid.from_bytes(request_body)
-        return self._librarian.dereference(ghid)
+        return self._librarian.retrieve(ghid)
             
     async def subscribe_wrapper(self, session, request_body):
         ''' Deserializes a publish request and forwards it to the 
@@ -784,7 +784,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         ''' Queries the persistence provider for availability.
         
         ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         response = self.send_threadsafe(
             session = self.any_session,
@@ -805,7 +805,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         point, that should be fixed -- maybe through ex. publish_unsafe?
         
         ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         response = self.send_threadsafe(
             session = self.any_session,
@@ -823,7 +823,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         by its ghid.
         
         ACK/success is represented by returning the object
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         response = self.send_threadsafe(
             session = self.any_session,
@@ -847,7 +847,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         2. Asymmetric requests with the indicated GHID as a recipient
         
         ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         if ghid not in self._subscriptions:
             response = self.send_threadsafe(
@@ -871,7 +871,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         passed callback.
         
         ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         if ghid not in self._subscriptions:
             raise ValueError('Not currently subscribed to ' + str(bytes(ghid)))
@@ -907,7 +907,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         client.
         
         ACK/success is represented by returning a list of ghids.
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         # This would probably be a good time to reconcile states between the
         # persistence provider and our local set of subs!
@@ -925,7 +925,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         ghid.
         
         ACK/success is represented by returning a list of ghids.
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         response = self.send_threadsafe(
             session = self.any_session,
@@ -943,7 +943,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         ACK/success is represented by returning:
             1. The debinding GHID if it exists
             2. None if it does not exist
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         response = self.send_threadsafe(
             session = self.any_session,
@@ -961,7 +961,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         ACK/success is represented by returning:
             True if it exists
             False otherwise
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         response = self.send_threadsafe(
             session = self.any_session,
@@ -981,7 +981,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         leak metadata.
         
         ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+        NAK/failure is represented by raise RemoteNak
         '''
         response = self.send_threadsafe(
             session = self.any_session,

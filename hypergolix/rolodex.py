@@ -126,7 +126,7 @@ class Rolodex:
         ''' Initiates a handshake request with the recipient.
         '''
         contact = SecondParty.from_packed(
-            self._librarian.dereference(recipient)
+            self._librarian.retrieve_loud(recipient)
         )
         
         # This is guaranteed to resolve the container fully.
@@ -160,10 +160,11 @@ class Rolodex:
         ''' Callback to handle any requests.
         '''
         # Note that the notification could also be a GDXX.
-        request_or_debind = self._librarian.whois(notification)
+        request_or_debind = self._librarian.summarize_loud(notification)
         
         if isinstance(request_or_debind, _GarqLite):
-            packed = self._librarian.dereference(notification)
+            # We literally just did a loud summary, so no need to be loud here
+            packed = self._librarian.retrieve(notification)
             payload = self._core.open_request(packed)
             self._handle_request(payload, notification)
             

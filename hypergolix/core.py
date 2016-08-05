@@ -62,7 +62,7 @@ from golix._getlow import GARQ
 from golix._getlow import GDXX
 
 # Intra-package dependencies
-from .exceptions import NakError
+from .exceptions import RemoteNak
 from .exceptions import HandshakeError
 from .exceptions import HandshakeWarning
 from .exceptions import UnknownParty
@@ -157,7 +157,7 @@ class GhidProxier:
         # We don't know the local cache, so let's check librarian to make sure
         # it's not a dynamic address.
         except KeyError:
-            obj = self._librarian.whois(ghid)
+            obj = self._librarian.summarize_loud(ghid)
             
             if isinstance(obj, _GobdLite):
                 # Don't call chain, because we'd hit a modlock.
@@ -226,7 +226,7 @@ class GolixCore:
             unpacked = self._identity.unpack_request(request)
             
         requestor = SecondParty.from_packed(
-            self._librarian.dereference(unpacked.author)
+            self._librarian.retrieve_loud(unpacked.author)
         )
         payload = self._identity.receive_request(requestor, unpacked)
         return payload
@@ -234,7 +234,7 @@ class GolixCore:
     def make_request(self, recipient, payload):
         # Just like it says on the label...
         recipient = SecondParty.from_packed(
-            self._librarian.dereference(recipient)
+            self._librarian.retrieve_loud(recipient)
         )
         with self._opslock:
             return self._identity.make_request(
@@ -245,7 +245,7 @@ class GolixCore:
     def open_container(self, container, secret):
         # Wrapper around golix.FirstParty.receive_container.
         author = SecondParty.from_packed(
-            self._librarian.dereference(container.author)
+            self._librarian.retrieve_loud(container.author)
         )
         with self._opslock:
             return self._identity.receive_container(
@@ -308,10 +308,12 @@ class Oracle:
         self._lookup = {}
         
         self._core = None
+        self._salmonator = None
         
-    def assemble(self, golix_core):
+    def assemble(self, golix_core, salmonator):
         # Chicken, meet egg.
         self._core = weakref.proxy(core)
+        self._salmonator = weakref.proxy(salmonator)
             
     def get_object(self, gaoclass, ghid, **kwargs):
         with self._opslock:
@@ -331,6 +333,9 @@ class Oracle:
                 )
                 self._lookup[ghid] = obj
                 
+                if obj.dynamic:
+                    self._salmonator.register(obj)
+                
             return obj
         
     def new_object(self, gaoclass, **kwargs):
@@ -342,6 +347,7 @@ class Oracle:
             obj = gaoclass(core=self._core, **kwargs)
             obj.push()
             self._lookup[obj.ghid] = obj
+            self._salmonator.register(obj, skip_refresh=True)
             return obj
         
     def forget(self, ghid):
@@ -527,7 +533,7 @@ class _GAO(_GAOBase):
             
             for binding in bindings:
                 # TODO: fix leaky abstraction
-                obj = self._persister.librarian.whois(binding)
+                obj = self._persister.librarian.summarize_loud(binding)
                 if isinstance(obj, _GobsLite):
                     if obj.author == self._core.whoami:
                         debinding = self._core.make_debinding(obj.ghid)
@@ -599,7 +605,7 @@ class _GAO(_GAOBase):
         dynamic = (container_ghid != ghid)
         
         # TODO: fix leaky abstraction
-        packed = persister.librarian.dereference(container_ghid)
+        packed = persister.librarian.retrieve_loud(container_ghid)
         secret = privateer.get(container_ghid)
         
         packed_state = cls._attempt_open_container(core, privateer, secret, 
@@ -621,7 +627,7 @@ class _GAO(_GAOBase):
         self.apply_state(unpacked_state)
         
         if dynamic:
-            binding = persister.librarian.whois(ghid)
+            binding = persister.librarian.summarize_loud(ghid)
             self._history.extend(binding.history)
             self._history.appendleft(binding.frame_ghid)
             self._history_targets.appendleft(binding.target)
@@ -709,7 +715,7 @@ class _GAO(_GAOBase):
             check_address = self.ghid
         else:
             check_address = notification
-        check_obj = self._persister.librarian.whois(check_address)
+        check_obj = self._persister.librarian.summarize_loud(check_address)
         
         # First check to see if we're deleting the object.
         if isinstance(check_obj, _GdxxLite):
@@ -726,7 +732,7 @@ class _GAO(_GAOBase):
             modified = True
             self._privateer.heal_ratchet(gao=self, binding=check_obj)
             secret = self._privateer.get(check_obj.target)
-            packed = self._persister.librarian.dereference(check_obj.target)
+            packed = self._persister.librarian.retrieve_loud(check_obj.target)
             packed_state = self._attempt_open_container(
                 self._core, 
                 self._privateer, 
@@ -944,7 +950,7 @@ class _GAO(_GAOBase):
             # TODO: move core._ghidproxy to here.
             container_ghid = self._core._ghidproxy.resolve(self.ghid)
             secret = self._privateer.get(container_ghid)
-            packed = self._persister.librarian.dereference(container_ghid)
+            packed = self._persister.librarian.retrieve_loud(container_ghid)
             packed_state = self._attempt_open_container(
                 self._core, 
                 self._privateer, 
@@ -954,7 +960,7 @@ class _GAO(_GAOBase):
             
             # TODO: fix these leaky abstractions.
             self.apply_state(self._unpack(packed_state))
-            binding = self._persister.librarian.whois(ghid)
+            binding = self._persister.librarian.summarize_loud(ghid)
             # Don't forget to fix history as well
             self._advance_history(binding)
             
