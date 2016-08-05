@@ -51,7 +51,7 @@ from golix import Ghid
 
 from .accounting import AgentBootstrap
 
-from .core import HGXCore
+from .core import GolixCore
 from .core import Oracle
 from .dispatch import Dispatcher
 from .dispatch import _Dispatchable
@@ -64,9 +64,10 @@ from .comms import Autocomms
 from .comms import WSBasicClient
 from .comms import WSBasicServer
 
-from .persisters import PersisterBridgeClient
-from .persisters import PersisterBridgeServer
-from .persisters import MemoryPersister
+from .remotes import PersisterBridgeClient
+from .remotes import PersisterBridgeServer
+from .remotes import MemoryPersister
+from .remotes import RemotePersistenceServer as _hgx_server
 
 from .ipc import IPCHost
 from .ipc import IPCEmbed
@@ -84,38 +85,6 @@ logger = logging.getLogger(__name__)
 # ###############################################
 # Lib
 # ###############################################
-
-
-def _hgx_server(host, port, debug, traceur, foreground=True, aengel=None):
-    ''' Simple persistence server.
-    Expected defaults:
-    host:       'localhost'
-    port:       7770
-    logfile:    None
-    verbosity:  'warning'
-    debug:      False
-    traceur:    False
-    '''
-    if not aengel:
-        aengel = Aengel()
-        
-    backend = MemoryPersister()
-    server = Autocomms(
-        autoresponder_class = PersisterBridgeServer,
-        autoresponder_kwargs = { 'persister': backend, },
-        connector_class = WSBasicServer,
-        connector_kwargs = {
-            'host': host,
-            'port': port,
-            # 48 bits = 1% collisions at 2.4 e 10^6 connections
-            'birthday_bits': 48,
-        },
-        debug = debug,
-        aengel = aengel,
-    )
-    if foreground:
-        threading_autojoin()
-    return backend, server
     
     
 def HypergolixLink(ipc_port=7772, debug=False, aengel=None, *args, **kwargs):

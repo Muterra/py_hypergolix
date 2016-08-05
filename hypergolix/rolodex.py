@@ -43,8 +43,8 @@ from golix.utils import AsymAck
 from golix.utils import AsymNak
 
 # Local dependencies
-from .persisters import _GarqLite
-from .persisters import _GdxxLite
+from .persistence import _GarqLite
+from .persistence import _GdxxLite
 
 
 # ###############################################
@@ -95,19 +95,16 @@ class Rolodex:
         # request_ghid -> (request_target, request recipient)
         self._pending_requests = pending_requests
         
-        # And get the persister up and running.
-        self._persister.subscribe(self._core.whoami, self.request_listener)
-        
-    def assemble(self, golix_core, oracle, privateer, dispatch, persister, 
-                ghidproxy):
+    def assemble(self, golix_core, oracle, privateer, dispatch, 
+                persistence_core, librarian, ghidproxy):
         # Chicken, meet egg.
         self._core = weakref.proxy(golix_core)
         self._oracle = weakref.proxy(oracle)
         self._privateer = weakref.proxy(privateer)
         self._dispatch = weakref.proxy(dispatch)
         # TODO: change _persister to _persistence_core
-        self._librarian = weakref.proxy(persister.librarian)
-        self._persister = weakref.proxy(persister)
+        self._librarian = weakref.proxy(librarian)
+        self._persister = weakref.proxy(persistence_core)
         self._ghidproxy = weakref.proxy(ghidproxy)
         
     def share_object(self, target, recipient):
@@ -157,11 +154,9 @@ class Rolodex:
         # Note the potential race condition here. Should catch errors with the
         # persister in case we need to resolve pending requests that didn't
         # successfully post.
-        self.persister.publish(request.packed)
-        # TODO: be able to uncomment this.
-        # self.persister.ingest_garq(request)
+        self.persister.ingest_garq(request)
         
-    def request_listener(self, subscription, notification):
+    def request_handler(self, subscription, notification):
         ''' Callback to handle any requests.
         '''
         # Note that the notification could also be a GDXX.
@@ -238,9 +233,7 @@ class Rolodex:
             )
         
         response = self._core.make_request(request.author, response_obj)
-        self.persister.publish(response.packed)
-        # TODO: be able to uncomment this.
-        # self.persister.ingest_garq(response)
+        self.persister.ingest_garq(response)
             
         self._dispatch.dispatch_share(request.target)
             

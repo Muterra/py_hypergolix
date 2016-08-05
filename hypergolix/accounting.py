@@ -48,12 +48,23 @@ from golix import FirstParty
 
 # Intra-package dependencies
 
-# from .core import HGXCore
 from .core import GolixCore
 from .core import Oracle
 from .core import GhidProxier
 from .core import _GAOSet
 from .core import _GAODict
+
+from .persistence import PersistenceCore
+from .persistence import Doorman
+from .persistence import Enlitener
+from .persistence import Enforcer
+from .persistence import Lawyer
+from .persistence import Bookie
+# from .persistence import DiskLibrarian
+from .persistence import MemoryLibrarian
+from .persistence import MrPostman
+from .persistence import Undertaker
+from .persistence import Salmonator
 
 from .dispatch import Dispatcher
 from .dispatch import _Dispatchable
@@ -63,17 +74,6 @@ from .rolodex import Rolodex
 from .utils import Aengel
 from .utils import threading_autojoin
 from .utils import SetMap
-
-from .comms import Autocomms
-from .comms import WSBasicClient
-from .comms import WSBasicServer
-
-from .persisters import PersisterBridgeClient
-from .persisters import PersisterBridgeServer
-from .persisters import MemoryPersister
-
-from .ipc import IPCHost
-from .ipc import IPCEmbed
 
 
 # ###############################################
@@ -96,7 +96,7 @@ class AgentBootstrap:
     
     Also binds everything within a single namespace, etc etc.
     '''
-    def __init__(self, persister, credential, bootstrap=None, aengel=None):
+    def __init__(self, credential, bootstrap=None, aengel=None):
         ''' Creates everything and puts it into a singular namespace.
         
         If bootstrap (ghid) is passed, we'll use the credential to 
@@ -107,7 +107,14 @@ class AgentBootstrap:
         possible, anyways) into register().
         '''
         # First we need to create everything.
-        self.persister = persister
+        self.persistence_core = PersistenceCore()
+        self.doorman = Doorman()
+        self.enforcer = Enforcer()
+        self.lawyer = Lawyer()
+        self.bookie = Bookie()
+        self.postman = MrPostman()
+        self.undertaker = Undertaker()
+        self.salmonator = Salmonator()
         self.golix_core = GolixCore()
         self.privateer = Privateer()
         self.oracle = Oracle()
@@ -116,21 +123,36 @@ class AgentBootstrap:
         self.dispatch = Dispatcher()
         
         # Now we need to link everything together.
-        self.golix_core.assemble(self.proxy, self.oracle, self.persister, 
+        self.golix_core.assemble(self.proxy, self.oracle, 
+                                self.persistence_core, self.librarian, 
                                 self.dispatch)
+        self.persistence_core.assemble(self.doorman, self.enforcer, 
+                                        self.lawyer, self.bookie, 
+                                        self.librarian, self.postman,
+                                        self.undertaker, self.salmonator)
         self.oracle.assemble(self.golix_core)
         self.privateer.assemble(self.golix_core, self.oracle)
-        self.proxy.assemble(self.golix_core, self.persister.librarian)
+        self.proxy.assemble(self.golix_core, self.librarian)
         self.dispatch.assemble(self.golix_core, self.oracle, self.rolodex)
         self.rolodex.assemble(self.golix_core, self.oracle, self.privateer, 
                             self.dispatch, self.persister, self.proxy)
+        self.doorman.assemble(self.librarian)
+        self.postman.assemble(self.golix_core, self.rolodex, self.librarian, 
+                            self.bookie)
+        self.undertaker.assemble(self.librarian, self.bookie, self.postman)
+        self.lawyer.assemble(self.librarian)
+        self.enforcer.assemble(self.librarian)
+        self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
+        self.librarian.assemble(self.persistence_core)
+        self.salmonator.assemble(self.golix_core, self.persistence_core, 
+                                self.postman, self.librarian)
             
         # Now we need to bootstrap everything.
         if bootstrap is None:
             # Golix core bootstrap.
             # ----------------------------------------------------------
             identity = FirstParty()
-            persister.publish(identity.second_party.packed)
+            persister.ingest_gidc(identity.second_party)
             self.golix_core.bootstrap(identity)
             
             # Privateer bootstrap.

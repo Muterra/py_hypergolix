@@ -33,5 +33,39 @@ hypergolix: A python Golix client.
 
 '''
 
-from . import identities
-from . import logutils
+
+import sys
+import pathlib
+import logging
+import datetime
+
+
+def autoconfig(logdirname='logs'):
+    fname = sys.argv[0]
+    logdir = pathlib.Path(logdirname)
+
+    if (not logdir.exists()) or (not logdir.is_dir()):
+        logdir.mkdir()
+
+    # Note that double slashes don't cause problems.
+    prefix = logdirname + '/' + pathlib.Path(fname).stem
+    ii = 0
+    date = str(datetime.date.today())
+    ext = '.pylog'
+    while pathlib.Path(prefix + '_' + date + '_' + str(ii) + ext).exists():
+        ii += 1
+    logname = prefix + '_' + date + '_' + str(ii) + ext
+    print('USING LOGFILE: ' + logname)
+
+    loghandler = logging.FileHandler(logname)
+    loghandler.setFormatter(
+        logging.Formatter(
+            '%(threadName)-7s %(name)-12s: %(levelname)-8s %(message)s'
+        )
+    )
+    # Add to root logger
+    logging.getLogger('').addHandler(loghandler)
+        
+    # Silence the froth
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    logging.getLogger('websockets').setLevel(logging.WARNING)

@@ -2007,3 +2007,63 @@ def threading_autojoin():
                 
         except ZeroDivisionError as exc:
             logging.info(str(exc))
+            
+            
+import inspect
+class _Proxy:
+    ''' weakref.proxy doesn't support context managers? Balls to that!
+    
+    Actually this problem turns out to be very difficult and I've yet to
+    solve it, but at least this is good practice for a pickle proxy.
+    '''
+    def __init__(self, obj):
+        super().__setattr__('__hgxproxyref__', weakref.ref(obj))
+        
+        # Add some things to allow overrides
+        overridable = { '__eq__', '__ge__', '__gt__', '__le__', '__lt__', 
+            '__ne__', '__subclasshook__' }
+            
+        objdir = set(dir(obj))
+        forbidden = set(dir(self)) - overridable
+        potential_overrides = objdir - forbidden
+        
+        for candidate_name in potential_overrides:
+            candidate = getattr(obj, candidate_name)
+            if inspect.ismethod(candidate):
+                super().__setattr__(candidate_name, 
+                                    weakref.WeakMethod(candidate))
+            elif inspect.isbuiltin(candidate):
+                def weaker(*args, **kwargs):
+                    proxy = super().__getattribute__('__hgxproxyref__')()
+                    weakmethod = getattr(proxy, candidate_name)
+                    return weakmethod(*args, **kwargs)
+                
+                super().__setattr__(candidate_name, weaker)
+        
+        
+    # Explicitly un-support hashing
+    __hash__ = None
+        
+    @property
+    def _dereferenced(self):
+        # Resolve the reference.
+        return super().__getattribute__('__hgxproxyref__')()
+        
+    def __getattribute__(self, name, *args, **kwargs):
+        try:
+            return super().__getattribute__(name, *args, **kwargs)
+        
+        except AttributeError as outer_exc:
+            try:
+                proxy = super().__getattribute__('__hgxproxyref__')()
+                return proxy.__getattribute__(name, *args, **kwargs)
+            except Exception as inner_exc:
+                raise inner_exc from outer_exc
+        
+    def __setattr__(self, *args, **kwargs):
+        proxy = super().__getattribute__('__hgxproxyref__')()
+        proxy.__setattr__(*args, **kwargs)
+                
+    def __delattr__(self, *args, **kwargs):
+        proxy = super().__getattribute__('__hgxproxyref__')()
+        proxy.__delattr__(*args, **kwargs)

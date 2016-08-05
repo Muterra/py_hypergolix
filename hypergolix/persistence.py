@@ -45,10 +45,6 @@ NakError status code conventions:
         history.
 '''
 
-# Control * imports.
-__all__ = [
-    'MemoryPersister', 
-]
 
 # Global dependencies
 import abc
@@ -109,20 +105,21 @@ from .utils import _block_on_result
 from .utils import _JitSetDict
 from .utils import TruthyLock
 from .utils import SetMap
-
-# from .comms import WSAutoServer
-# from .comms import WSAutoClient
-from .comms import _AutoresponderSession
-from .comms import Autoresponder
+from .utils import WeakSetMap
 
 
 # ###############################################
-# Logging boilerplate
+# Boilerplate
 # ###############################################
 
 
 import logging
 logger = logging.getLogger(__name__)
+
+# Control * imports.
+__all__ = [
+    'PersistenceCore', 
+]
 
 
 # ###############################################
@@ -130,140 +127,124 @@ logger = logging.getLogger(__name__)
 # ###############################################
 
 
-ERROR_CODES = {
-    b'\xFF\xFF': NakError,
-    b'\x00\x01': MalformedGolixPrimitive,
-    b'\x00\x02': VerificationFailure,
-    b'\x00\x03': InvalidIdentity,
-    b'\x00\x04': UnboundContainer,
-    b'\x00\x05': AlreadyDebound,
-    b'\x00\x06': InvalidTarget,
-    b'\x00\x07': InconsistentAuthor,
-    b'\x00\x08': DoesNotExist,
-    b'\x00\x09': IllegalDynamicFrame,
-}
-
-
-class _PersisterBase(metaclass=abc.ABCMeta):
-    ''' Base class for persistence providers.
-    '''    
-    @abc.abstractmethod
-    def publish(self, packed):
-        ''' Submits a packed object to the persister.
-        
-        Note that this is going to (unfortunately) result in packing + 
-        unpacking the object twice for ex. a MemoryPersister. At some 
-        point, that should be fixed -- maybe through ex. publish_unsafe?
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''
-        pass
+class Salmonator:
+    ''' Responsible for disseminating Golix objects upstream and 
+    downstream. Handles all comms with them as well.
     
-    @abc.abstractmethod
-    def ping(self):
-        ''' Queries the persistence provider for availability.
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+    # TODO: (f)reebase and separate into components for both local and
+    # server use
+    '''
+    def __init__(self):
+        ''' Yarp.
         '''
-        pass
+        self._opslock = threading.Lock()
+        
+        self._persist_core = None
+        self._golix_core = None
+        self._postman = None
+        self._librarian = None
+        
+        self._upstream_remotes = set()
+        self._downstream_remotes = set()
+        
+        # Simple set of weakreffed GAOs.
+        self._registered = weakref.WeakSet()
+        
+    def assemble(self, golix_core, persistence_core, postman, librarian):
+        self._golix_core = weakref.proxy(golix_core)
+        self._persist_core = weakref.proxy(persistence_core)
+        self._postman = weakref.proxy(postman)
+        self._librarian = weakref.proxy(librarian)
     
-    @abc.abstractmethod
-    def get(self, ghid):
-        ''' Requests an object from the persistence provider, identified
-        by its ghid.
+    def add_upstream_remote(self, persister):
+        ''' Adds an upstream persister.
         
-        ACK/success is represented by returning the object
-        NAK/failure is represented by raise NakError
+        PersistenceCore will attempt to have a constantly consistent 
+        state with upstream persisters. That means that any local 
+        resources will either be subscribed to upstream, or checked for
+        updates before ingestion by the Hypergolix service.
+        
+        HOWEVER, the Salmonator will make no attempt to synchronize 
+        state **between** upstream remotes.
         '''
-        pass
-    
-    @abc.abstractmethod
-    def subscribe(self, ghid, callback):
-        ''' Request that the persistence provider update the client on
-        any changes to the object addressed by ghid. Must target either:
+        with self._opslock:
+            self._upstream_remotes.add(persister)
+            # Subscribe to our identity, assuming we actually have a golix core
+            try:
+                persister.subscribe(self._golix_core.whoami, 
+                                    self._remote_callback)
+            except AttributeError:
+                pass
+                
+            # Subscribe to every active GAO
+            for registrant in self._registered:
+                persister.subscribe(registrant.ghid, self._remote_callback)
         
-        1. Dynamic ghid
-        2. Author identity ghid
-        
-        Upon successful subscription, the persistence provider will 
-        publish to client either of the above:
-        
-        1. New frames to a dynamic binding
-        2. Asymmetric requests with the indicated GHID as a recipient
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+    def remove_upstream_remote(self, persister):
+        ''' Inverse of above.
         '''
-        pass
-    
-    @abc.abstractmethod
-    def unsubscribe(self, ghid, callback):
-        ''' Unsubscribe. Client must have an existing subscription to 
-        the passed ghid at the persistence provider. Removes only the
-        passed callback.
+        with self._opslock:
+            self._upstream_remotes.remove(persister)
+            # Remove all subscriptions
+            persister.disconnect()
         
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+    def add_downstream_remote(self, persister):
+        ''' Adds a downstream persister.
+        
+        PersistenceCore will not attempt to keep a consistent state with
+        downstream persisters. Instead, it will simply push updates to
+        local objects downstream. It will not, however, look to them for
+        updates.
+        
+        Therefore, to create synchronization **between** multiple 
+        upstream remotes, also add them as downstream remotes.
         '''
-        pass
-    
-    @abc.abstractmethod
-    def list_subs(self):
-        ''' List all currently subscribed ghids for the connected 
-        client.
+        raise NotImplementedError()
+        self._downstream_remotes.add(persister)
         
-        ACK/success is represented by returning a list of ghids.
-        NAK/failure is represented by raise NakError
+    def remove_downstream_remote(self, persister):
+        ''' Inverse of above.
         '''
-        pass
-    
-    @abc.abstractmethod
-    def list_bindings(self, ghid):
-        ''' Request a list of identities currently binding to the passed
-        ghid.
+        raise NotImplementedError()
+        self._downstream_remotes.remove(persister)
         
-        ACK/success is represented by returning a list of ghids.
-        NAK/failure is represented by raise NakError
+    def _remote_callback(self, subscription, notification):
+        ''' Callback to use when subscribing to things at remotes.
         '''
-        pass
-    
-    @abc.abstractmethod
-    def list_debindings(self, ghid):
-        ''' Request a the address of any debindings of ghid, if they
-        exist.
+        self.pull(notification)
         
-        ACK/success is represented by returning:
-            1. The debinding GHID if it exists
-            2. None if it does not exist
-        NAK/failure is represented by raise NakError
+    def push(self, ghid):
+        ''' Grabs the ghid from librarian and sends it to all applicable
+        remotes.
         '''
-        pass
+        data = self._librarian.dereference(ghid)
+        # This is, again, definitely a lame way of doing this
+        for remote in self._upstream_remotes:
+            remote.publish(data)
         
-    @abc.abstractmethod
-    def query(self, ghid):
-        ''' Checks the persistence provider for the existence of the
-        passed ghid.
-        
-        ACK/success is represented by returning:
-            True if it exists
-            False otherwise
-        NAK/failure is represented by raise NakError
+    def pull(self, ghid):
+        ''' Grabs the ghid from remotes, if available, and puts it into
+        the ingestion pipeline.
         '''
-        pass
-    
-    @abc.abstractmethod
-    def disconnect(self):
-        ''' Terminates all subscriptions and requests. Not required for
-        a disconnect, but highly recommended, and prevents an window of
-        attack for address spoofers. Note that such an attack would only
-        leak metadata.
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
+        # This is the lame way of doing this, fo sho
+        for remote in self._upstream_remotes:
+            data = remote.get(ghid)
+            # This may or may not be an update we already have.
+            try:
+                # Call as remotable=False to avoid infinite loops.
+                self._core.ingest(data, remotable=False)
+            except:
+                logger.warning(
+                    'Error while pulling from upstream: \n' + 
+                    ''.join(traceback.format_exc())
+                )
+                
+        self._postman.do_mail_run()
+            
+    def register(self, gao):
+        ''' Tells the Salmonator to listen upstream for any updates
+        while the gao is retained in memory.
         '''
-        pass
         
         
 class PersistenceCore:
@@ -274,60 +255,38 @@ class PersistenceCore:
     Other persisters should pass through the "ingestive tract". Local
     objects can be published directly through calling the ingest_<type> 
     methods.
+    
+    TODO: add librarian validation, so that attempting to update an 
+    object we already have an identical copy to silently exits.
     '''
-    def __init__(self, doorman, enforcer, lawyer, bookie, librarian, postman, 
-                undertaker):
+    def __init__(self):
         self._opslock = threading.Lock()
         
-        doorman.link_librarian(librarian)
-        self.doorman = doorman
+        self.doorman = None
+        self.enlitener = None
+        self.enforcer = None
+        self.lawyer = None
+        self.bookie = None
+        self.postman = None
+        self.undertaker = None
+        self.librarian = None
+        self.salmonator = None
         
-        self.enlitener = _Enlitener
-        
-        enforcer.link_librarian(librarian)
-        self.enforcer = enforcer
-        
-        lawyer.link_librarian(librarian)
-        self.lawyer = lawyer
-        
-        bookie.link_librarian(librarian)
-        bookie.link_lawyer(lawyer)
-        bookie.link_undertaker(undertaker)
-        self.bookie = bookie
-        
-        postman.link_librarian(librarian)
-        postman.link_bookie(bookie)
-        self.postman = postman
-        
-        undertaker.link_librarian(librarian)
-        undertaker.link_bookie(bookie)
-        undertaker.link_postman(postman)
+    def assemble(self, doorman, enforcer, lawyer, bookie, librarian, postman, 
+                undertaker, salmonator):
+        self.doorman = weakref.proxy(doorman)
+        self.enlitener = Enlitener
+        self.enforcer = weakref.proxy(enforcer)
+        self.lawyer = weakref.proxy(lawyer)
+        self.bookie = weakref.proxy(bookie)
+        self.postman = weakref.proxy(postman)
+        # This breaks all context managers, unfortunately
+        # self.undertaker = weakref.proxy(undertaker)
         self.undertaker = undertaker
+        self.librarian = weakref.proxy(librarian)
+        self.salmonator = weakref.proxy(salmonator)
         
-        librarian.link_core(self)
-        self.librarian = librarian
-    
-    def add_upstream_persister(self, persister):
-        ''' Adds an upstream persister.
-        
-        PersistenceCore will attempt to have a constantly consistent 
-        state with upstream persisters. That means that any local 
-        resources will either be subscribed to upstream, or checked for
-        updates before ingestion by the Hypergolix service.
-        '''
-        raise NotImplementedError()
-        
-    def add_downstream_persister(self, persister):
-        ''' Adds a downstream persister.
-        
-        PersistenceCore will not attempt to keep a consistent state with
-        downstream persisters. Instead, it will simply push updates to
-        local objects downstream. It will not, however, look to them for
-        updates.
-        '''
-        raise NotImplementedError()
-        
-    def ingest(self, packed):
+    def ingest(self, packed, remotable=True):
         ''' Called on an untrusted and unknown object. May be bypassed
         by locally-created, trusted objects (by calling the individual 
         ingest methods directly). Parses, validates, and stores the 
@@ -348,7 +307,7 @@ class PersistenceCore:
                 continue
             # This loader succeeded. Ingest it and then break out of the loop.
             else:
-                obj = ingester(golix_obj)
+                obj = ingester(golix_obj, remotable)
                 break
         # Running into the else means we could not find a loader.
         else:
@@ -356,28 +315,39 @@ class PersistenceCore:
                 '0x0001: Packed bytes do not appear to be a Golix primitive.'
             )
                     
-        # Note that we don't need to call postman from the individual ingest
-        # methods, because they will only be called directly for locally-built
-        # objects, which will be distributed by the dispatcher.
-        self.postman.schedule(obj)
+        # If the object is identical to what we already have, the ingester will
+        # return None, so don't schedule that.
+        if obj is not None:
+            # Note that individual ingest methods are only called directly for 
+            # locally-built objects, which do not need a mail run.
+            self.postman.schedule(obj)
                     
         return obj
         
-    def ingest_gidc(self, obj):
+    def ingest_gidc(self, obj, remotable=True):
         raw = obj.packed
         obj = self.enlitener._convert_gidc(obj)
         
         # Take the lock first, since this will mutate state
         with self._opslock:
+            # Validate to make sure that we don't already have an identical
+            # object. If so, short-circuit immediately.
+            # if not self.librarian.validate_gidc(obj):
+            #     return None
+                
             # First need to enforce target selection
             self.enforcer.validate_gidc(obj)
             # Now make sure authorship requirements are satisfied
             self.lawyer.validate_gidc(obj)
             
             # Add GC pass in case of illegal existing debindings.
-            with self.undertaker:
-                # Finally make sure persistence rules are followed
-                self.bookie.validate_gidc(obj)
+            try:
+                with self.undertaker:
+                    # Finally make sure persistence rules are followed
+                    self.bookie.validate_gidc(obj)
+            except AttributeError:
+                print(self.undertaker)
+                print(dir(self.undertaker))
         
             # Force GC pass after every mutation
             with self.undertaker:
@@ -389,14 +359,23 @@ class PersistenceCore:
                 # And finally add it to the librarian
                 self.librarian.store(obj, raw)
         
+        # TODO: push this to a delayed callback within an event loop...
+        if remotable:
+            self.salmonator.push(obj.ghid)
+        
         return obj
         
-    def ingest_geoc(self, obj):
+    def ingest_geoc(self, obj, remotable=True):
         raw = obj.packed
         obj = self.enlitener._convert_geoc(obj)
         
         # Take the lock first, since this will mutate state
         with self._opslock:
+            # Validate to make sure that we don't already have an identical
+            # object. If so, short-circuit immediately.
+            # if not self.librarian.validate_gidc(obj):
+            #     return None
+                
             # First need to enforce target selection
             self.enforcer.validate_geoc(obj)
             # Now make sure authorship requirements are satisfied
@@ -417,14 +396,23 @@ class PersistenceCore:
                 # And finally add it to the librarian
                 self.librarian.store(obj, raw)
         
+        # TODO: push this to a delayed callback within an event loop...
+        if remotable:
+            self.salmonator.push(obj.ghid)
+        
         return obj
         
-    def ingest_gobs(self, obj):
+    def ingest_gobs(self, obj, remotable=True):
         raw = obj.packed
         obj = self.enlitener._convert_gobs(obj)
         
         # Take the lock first, since this will mutate state
         with self._opslock:
+            # Validate to make sure that we don't already have an identical
+            # object. If so, short-circuit immediately.
+            # if not self.librarian.validate_gidc(obj):
+            #     return None
+                
             # First need to enforce target selection
             self.enforcer.validate_gobs(obj)
             # Now make sure authorship requirements are satisfied
@@ -445,14 +433,23 @@ class PersistenceCore:
                 # And finally add it to the librarian
                 self.librarian.store(obj, raw)
         
+        # TODO: push this to a delayed callback within an event loop...
+        if remotable:
+            self.salmonator.push(obj.ghid)
+        
         return obj
         
-    def ingest_gobd(self, obj):
+    def ingest_gobd(self, obj, remotable=True):
         raw = obj.packed
         obj = self.enlitener._convert_gobd(obj)
         
         # Take the lock first, since this will mutate state
         with self._opslock:
+            # Validate to make sure that we don't already have an identical
+            # object. If so, short-circuit immediately.
+            # if not self.librarian.validate_gidc(obj):
+            #     return None
+                
             # First need to enforce target selection
             self.enforcer.validate_gobd(obj)
             # Now make sure authorship requirements are satisfied
@@ -473,14 +470,23 @@ class PersistenceCore:
                 # And finally add it to the librarian
                 self.librarian.store(obj, raw)
         
+        # TODO: push this to a delayed callback within an event loop...
+        if remotable:
+            self.salmonator.push(obj.ghid)
+        
         return obj
         
-    def ingest_gdxx(self, obj):
+    def ingest_gdxx(self, obj, remotable=True):
         raw = obj.packed
         obj = self.enlitener._convert_gdxx(obj)
         
         # Take the lock first, since this will mutate state
         with self._opslock:
+            # Validate to make sure that we don't already have an identical
+            # object. If so, short-circuit immediately.
+            # if not self.librarian.validate_gidc(obj):
+            #     return None
+                
             # First need to enforce target selection
             self.enforcer.validate_gdxx(obj)
             # Now make sure authorship requirements are satisfied
@@ -501,14 +507,23 @@ class PersistenceCore:
                 # And finally add it to the librarian
                 self.librarian.store(obj, raw)
         
+        # TODO: push this to a delayed callback within an event loop...
+        if remotable:
+            self.salmonator.push(obj.ghid)
+        
         return obj
         
-    def ingest_garq(self, obj):
+    def ingest_garq(self, obj, remotable=True):
         raw = obj.packed
         obj = self.enlitener._convert_garq(obj)
         
         # Take the lock first, since this will mutate state
         with self._opslock:
+            # Validate to make sure that we don't already have an identical
+            # object. If so, short-circuit immediately.
+            # if not self.librarian.validate_gidc(obj):
+            #     return None
+                
             # First need to enforce target selection
             self.enforcer.validate_garq(obj)
             # Now make sure authorship requirements are satisfied
@@ -529,610 +544,14 @@ class PersistenceCore:
                 # And finally add it to the librarian
                 self.librarian.store(obj, raw)
         
+        # TODO: push this to a delayed callback within an event loop...
+        if remotable:
+            self.salmonator.push(obj.ghid)
+        
         return obj
-
-
-class MemoryPersister(PersistenceCore):
-    ''' Basic in-memory persister.
-    
-    This is a deprecated legacy thing we're keeping around so that we 
-    don't need to completely re-write our already inadequate test suite.
-    '''    
-    def __init__(self):
-        super().__init__(_Doorman(), _Enforcer(), _Lawyer(), _Bookie(), 
-                        _Librarian(), _MrPostman(), _Undertaker())
-        
-        self.subscribe = self.postman.subscribe
-        self.unsubscribe = self.postman.unsubscribe
-        self.silence_notification = self.postman.silence_notification
-        # self.publish = self.core.ingest
-        self.list_bindings = self.bookie.bind_status
-        self.list_debindings = self.bookie.debind_status
-        
-    def publish(self, *args, **kwargs):
-        # This is a temporary fix to force memorypersisters to notify during
-        # publishing. Ideally, this would happen immediately after returning.
-        self.ingest(*args, **kwargs)
-        self.postman.do_mail_run()
-        
-    def ping(self):
-        ''' Queries the persistence provider for availability.
-        '''
-        return True
-        
-    def get(self, ghid):
-        ''' Returns a packed Golix object.
-        '''
-        try:
-            return self.librarian.dereference(ghid)
-        except KeyError as exc:
-            raise DoesNotExist(
-                '0x0008: Not found at persister: ' + str(bytes(ghid))
-            ) from exc
-        
-    def list_subs(self):
-        ''' List all currently subscribed ghids for the connected 
-        client.
-        '''
-        # TODO: figure out what to do instead of this
-        return tuple(self.postman._listeners)
-            
-    def query(self, ghid):
-        ''' Checks the persistence provider for the existence of the
-        passed ghid.
-        
-        ACK/success is represented by returning:
-            True if it exists
-            False otherwise
-        NAK/failure is represented by raise NakError
-        '''
-        if ghid in self.librarian:
-            return True
-        else:
-            return False
-        
-    def disconnect(self):
-        ''' Terminates all subscriptions. Not required for a disconnect, 
-        but highly recommended, and prevents an window of attack for 
-        address spoofers. Note that such an attack would only leak 
-        metadata.
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''
-        # TODO: figure out something different to do here.
-        self.postman._listeners = {}
-        return True
         
         
-class DiskCachePersister(MemoryPersister):
-    ''' Persister that caches to disk.
-    Replicate MemoryPersister, just replace Librarian.
-    
-    Same note re: deprecated.
-    '''    
-    def __init__(self, cache_dir):
-        super().__init__(_Doorman(), _Enforcer(), _Lawyer(), _Bookie(), 
-                        DiskLibrarian(cache_dir=cache_dir), _MrPostman(), 
-                        _Undertaker())
-        
-        self.subscribe = self.postman.subscribe
-        self.unsubscribe = self.postman.unsubscribe
-        self.silence_notification = self.postman.silence_notification
-        # self.publish = self.core.ingest
-        self.list_bindings = self.bookie.bind_status
-        self.list_debindings = self.bookie.debind_status
-
-
-class _PersisterBridgeSession(_AutoresponderSession):
-    def __init__(self, transport, *args, **kwargs):
-        # Copying like this seems dangerous, but I think it should be okay.
-        if isinstance(transport, weakref.ProxyTypes):
-            self._transport = transport
-        else:
-            self._transport = weakref.proxy(transport)
-            
-        self._subscriptions = {}
-        self._processing = asyncio.Event()
-        
-        super().__init__(*args, **kwargs)
-    
-    def send_subs_update(self, subscribed_ghid, notification_ghid):
-        ''' Send the connection its subscription update.
-        Note that this is going to be called from within an event loop,
-        but not asynchronously (no await).
-        
-        TODO: make persisters async.
-        '''
-        asyncio.ensure_future(
-            self.send_subs_update_ax(subscribed_ghid, notification_ghid)
-        )
-        # asyncio.run_coroutine_threadsafe(
-        #     coro = self.send_subs_update_ax(subscribed_ghid, notification_ghid)
-        #     loop = self._transport._loop
-        # )
-            
-    async def send_subs_update_ax(self, subscribed_ghid, notification_ghid):
-        ''' Deliver any subscription updates.
-        
-        Also, temporary workaround for not re-delivering updates for 
-        objects we just sent up.
-        '''
-        if not self._processing.is_set():
-            await self._transport.send(
-                session = self,
-                msg = bytes(subscribed_ghid) + bytes(notification_ghid),
-                request_code = self._transport.REQUEST_CODES['send_subs_update'],
-                # Note: for now, just don't worry about failures.
-                await_reply = False
-            )
-        # await self._transport.send(
-        #     session = self,
-        #     msg = bytes(subscribed_ghid) + bytes(notification_ghid),
-        #     request_code = self._transport.REQUEST_CODES['send_subs_update'],
-        #     # Note: for now, just don't worry about failures.
-        #     await_reply = False
-        # )
-
-
-class PersisterBridgeServer(Autoresponder):
-    ''' Serialization mixins for persister bridges.
-    '''
-    REQUEST_CODES = {
-        # Receive an update for an existing object.
-        'send_subs_update': b'!!',
-    }
-    
-    def __init__(self, persister, *args, **kwargs):
-        # Copying like this seems dangerous, but I think it should be okay.
-        if isinstance(persister, weakref.ProxyTypes):
-            self._persister = persister
-        else:
-            self._persister = weakref.proxy(persister)
-            
-        req_handlers = {
-            # ping 
-            b'??': self.ping_wrapper,
-            # publish 
-            b'PB': self.publish_wrapper,
-            # get  
-            b'GT': self.get_wrapper,
-            # subscribe 
-            b'+S': self.subscribe_wrapper,
-            # unsubscribe 
-            b'xS': self.unsubscribe_wrapper,
-            # list subs 
-            b'LS': self.list_subs_wrapper,
-            # list binds 
-            b'LB': self.list_bindings_wrapper,
-            # list debindings
-            b'LD': self.list_debindings_wrapper,
-            # query (existence) 
-            b'QE': self.query_wrapper,
-            # disconnect 
-            b'XX': self.disconnect_wrapper,
-        }
-        
-        super().__init__(
-            req_handlers = req_handlers,
-            success_code = b'AK',
-            failure_code = b'NK',
-            error_lookup = ERROR_CODES,
-            *args, **kwargs
-        )
-            
-    def session_factory(self):
-        ''' Added for easier subclassing. Returns the session class.
-        '''
-        logger.debug('Session created.')
-        return _PersisterBridgeSession(
-            transport = self,
-        )
-            
-    async def ping_wrapper(self, session, request_body):
-        ''' Deserializes a ping request; forwards it to the persister.
-        '''
-        try:
-            if self._persister.ping():
-                return b'\x01'
-            else:
-                return b'\x00'
-                
-                logger.warning(
-                'Exception while autoresponding to request: \n' + ''.join(
-                traceback.format_exc())
-            )
-        
-        except Exception as exc:
-            msg = ('Error while receiving ping.\n' + repr(exc) + '\n' + 
-                ''.join(traceback.format_exc()))
-            logger.error(msg)
-            # return b'\x00'
-            raise
-            
-    async def publish_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        session._processing.set()
-        self._persister.publish(request_body)
-        session._processing.clear()
-        return b'\x01'
-        # obj = self._persister.ingest(request_body)
-        # self.schedule_ignore_update(obj.ghid, session)
-        # ensure_future(do_future_subs_update())
-            
-    async def get_wrapper(self, session, request_body):
-        ''' Deserializes a get request; forwards it to the persister.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        return self._persister.get(ghid)
-            
-    async def subscribe_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        
-        def updater(subscribed_ghid, notification_ghid, 
-                    call=session.send_subs_update):
-            call(subscribed_ghid, notification_ghid)
-        
-        self._persister.subscribe(ghid, updater)
-        session._subscriptions[ghid] = updater
-        return b'\x01'
-            
-    async def unsubscribe_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        callback = session._subscriptions[ghid]
-        unsubbed = self._persister.unsubscribe(ghid, callback)
-        del session._subscriptions[ghid]
-        if unsubbed:
-            return b'\x01'
-        else:
-            return b'\x00'
-            
-    async def list_subs_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        ghidlist = list(session._subscriptions)
-        parser = generate_ghidlist_parser()
-        return parser.pack(ghidlist)
-            
-    async def list_bindings_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        ghidlist = self._persister.list_bindings(ghid)
-        parser = generate_ghidlist_parser()
-        return parser.pack(ghidlist)
-            
-    async def list_debindings_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        ghidlist = self._persister.list_debindings(ghid)
-        parser = generate_ghidlist_parser()
-        return parser.pack(ghidlist)
-            
-    async def query_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        ghid = Ghid.from_bytes(request_body)
-        status = self._persister.query(ghid)
-        if status:
-            return b'\x01'
-        else:
-            return b'\x00'
-            
-    async def disconnect_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
-        persister.
-        '''
-        for sub_ghid, sub_callback in session._subscriptions.items():
-            self._persister.unsubscribe(sub_ghid, sub_callback)
-        session._subscriptions.clear()
-        return b'\x01'
-        
-        
-class PersisterBridgeClient(Autoresponder, _PersisterBase):
-    ''' Websockets request/response persister (the client half).
-    '''
-            
-    REQUEST_CODES = {
-        # ping 
-        'ping': b'??',
-        # publish 
-        'publish': b'PB',
-        # get  
-        'get': b'GT',
-        # subscribe 
-        'subscribe': b'+S',
-        # unsubscribe 
-        'unsubscribe': b'xS',
-        # list subs 
-        'list_subs': b'LS',
-        # list binds 
-        'list_bindings': b'LB',
-        # list debindings
-        'list_debindings': b'LD',
-        # query (existence) 
-        'query': b'QE',
-        # disconnect 
-        'disconnect': b'XX',
-    }
-    
-    def __init__(self, *args, **kwargs):
-        # Note that these are only for unsolicited contact from the server.
-        req_handlers = {
-            # Receive/dispatch a new object.
-            b'!!': self.deliver_update_wrapper,
-        }
-        
-        self._subscriptions = _JitSetDict()
-        
-        super().__init__(
-            req_handlers = req_handlers,
-            success_code = b'AK',
-            failure_code = b'NK',
-            error_lookup = ERROR_CODES,
-            *args, **kwargs
-        )
-        
-    async def deliver_update_wrapper(self, session, response_body):
-        ''' Handles update pings.
-        '''
-        # # Shit, I have a race condition somewhere.
-        # time.sleep(.01)
-        subscribed_ghid = Ghid.from_bytes(response_body[0:65])
-        notification_ghid = Ghid.from_bytes(response_body[65:130])
-        
-        # for callback in self._subscriptions[subscribed_ghid]:
-        #     callback(notification_ghid)
-                
-        # Well this is a huge hack. But something about the event loop 
-        # itself is fucking up control flow and causing the world to hang
-        # here. May want to create a dedicated thread just for pushing 
-        # updates? Like autoresponder, but autoupdater?
-        # TODO: fix this gross mess
-            
-        def run_callbacks(subscribed_ghid, notification_ghid):
-            for callback in self._subscriptions[subscribed_ghid]:
-                callback(subscribed_ghid, notification_ghid)
-        
-        worker = threading.Thread(
-            target = run_callbacks,
-            daemon = True,
-            args = (subscribed_ghid, notification_ghid),
-        )
-        worker.start()
-        
-        return b'\x01'
-    
-    def ping(self):
-        ''' Queries the persistence provider for availability.
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''
-        response = self.send_threadsafe(
-            session = self.any_session,
-            msg = b'',
-            request_code = self.REQUEST_CODES['ping']
-        )
-        
-        if response == b'\x01':
-            return True
-        else:
-            return False
-    
-    def publish(self, packed):
-        ''' Submits a packed object to the persister.
-        
-        Note that this is going to (unfortunately) result in packing + 
-        unpacking the object twice for ex. a MemoryPersister. At some 
-        point, that should be fixed -- maybe through ex. publish_unsafe?
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''
-        response = self.send_threadsafe(
-            session = self.any_session,
-            msg = packed,
-            request_code = self.REQUEST_CODES['publish']
-        )
-        
-        if response == b'\x01':
-            return True
-        else:
-            raise RuntimeError('Unknown response code while publishing object.')
-    
-    def get(self, ghid):
-        ''' Requests an object from the persistence provider, identified
-        by its ghid.
-        
-        ACK/success is represented by returning the object
-        NAK/failure is represented by raise NakError
-        '''
-        response = self.send_threadsafe(
-            session = self.any_session,
-            msg = bytes(ghid),
-            request_code = self.REQUEST_CODES['get']
-        )
-            
-        return response
-    
-    def subscribe(self, ghid, callback):
-        ''' Request that the persistence provider update the client on
-        any changes to the object addressed by ghid. Must target either:
-        
-        1. Dynamic ghid
-        2. Author identity ghid
-        
-        Upon successful subscription, the persistence provider will 
-        publish to client either of the above:
-        
-        1. New frames to a dynamic binding
-        2. Asymmetric requests with the indicated GHID as a recipient
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''
-        if ghid not in self._subscriptions:
-            response = self.send_threadsafe(
-                session = self.any_session,
-                msg = bytes(ghid),
-                request_code = self.REQUEST_CODES['subscribe']
-            )
-            
-            if response != b'\x01':
-                raise RuntimeError(
-                    'Unknown response code while subscribing to ' + 
-                    str(bytes(ghid))
-                )
-                
-        self._subscriptions[ghid].add(callback)
-        return True
-    
-    def unsubscribe(self, ghid, callback):
-        ''' Unsubscribe. Client must have an existing subscription to 
-        the passed ghid at the persistence provider. Removes only the
-        passed callback.
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''
-        if ghid not in self._subscriptions:
-            raise ValueError('Not currently subscribed to ' + str(bytes(ghid)))
-            
-        self._subscriptions[ghid].discard(callback)
-        
-        if len(self._subscriptions[ghid]) == 0:
-            del self._subscriptions[ghid]
-            
-            response = self.send_threadsafe(
-                session = self.any_session,
-                msg = bytes(ghid),
-                request_code = self.REQUEST_CODES['unsubscribe']
-            )
-        
-            if response == b'\x01':
-                # There was a subscription, and it was successfully removed.
-                pass
-            elif response == b'\x00':
-                # This means there was no subscription to remove.
-                pass
-            else:
-                raise RuntimeError(
-                    'Unknown response code while unsubscribing from ' + 
-                    str(bytes(ghid)) + '\nThe persister might still send '
-                    'updates, but the callback has been removed.'
-                )
-                
-        return True
-    
-    def list_subs(self):
-        ''' List all currently subscribed ghids for the connected 
-        client.
-        
-        ACK/success is represented by returning a list of ghids.
-        NAK/failure is represented by raise NakError
-        '''
-        # This would probably be a good time to reconcile states between the
-        # persistence provider and our local set of subs!
-        response = self.send_threadsafe(
-            session = self.any_session,
-            msg = b'',
-            request_code = self.REQUEST_CODES['list_subs']
-        )
-        
-        parser = generate_ghidlist_parser()
-        return parser.unpack(response)
-    
-    def list_bindings(self, ghid):
-        ''' Request a list of identities currently binding to the passed
-        ghid.
-        
-        ACK/success is represented by returning a list of ghids.
-        NAK/failure is represented by raise NakError
-        '''
-        response = self.send_threadsafe(
-            session = self.any_session,
-            msg = bytes(ghid),
-            request_code = self.REQUEST_CODES['list_bindings']
-        )
-        
-        parser = generate_ghidlist_parser()
-        return parser.unpack(response)
-    
-    def list_debindings(self, ghid):
-        ''' Request a the address of any debindings of ghid, if they
-        exist.
-        
-        ACK/success is represented by returning:
-            1. The debinding GHID if it exists
-            2. None if it does not exist
-        NAK/failure is represented by raise NakError
-        '''
-        response = self.send_threadsafe(
-            session = self.any_session,
-            msg = bytes(ghid),
-            request_code = self.REQUEST_CODES['list_debindings']
-        )
-        
-        parser = generate_ghidlist_parser()
-        return parser.unpack(response)
-        
-    def query(self, ghid):
-        ''' Checks the persistence provider for the existence of the
-        passed ghid.
-        
-        ACK/success is represented by returning:
-            True if it exists
-            False otherwise
-        NAK/failure is represented by raise NakError
-        '''
-        response = self.send_threadsafe(
-            session = self.any_session,
-            msg = bytes(ghid),
-            request_code = self.REQUEST_CODES['query']
-        )
-        
-        if response == b'\x00':
-            return False
-        else:
-            return True
-    
-    def disconnect(self):
-        ''' Terminates all subscriptions and requests. Not required for
-        a disconnect, but highly recommended, and prevents an window of
-        attack for address spoofers. Note that such an attack would only
-        leak metadata.
-        
-        ACK/success is represented by a return True
-        NAK/failure is represented by raise NakError
-        '''
-        response = self.send_threadsafe(
-            session = self.any_session,
-            msg = b'',
-            request_code = self.REQUEST_CODES['disconnect']
-        )
-        
-        if response == b'\x01':
-            self._subscriptions.clear()
-            return True
-        else:
-            raise RuntimeError('Unknown status code during disconnection.')
-        
-        
-class _Doorman:
+class Doorman:
     ''' Parses files and enforces crypto. Can be bypassed for trusted 
     (aka locally-created) objects. Only called from within the typeless
     PersisterCore.ingest() method.
@@ -1141,7 +560,7 @@ class _Doorman:
         self._librarian = None
         self._golix = ThirdParty()
         
-    def link_librarian(self, librarian):
+    def assemble(self, librarian):
         # Called to link to the librarian.
         self._librarian = weakref.proxy(librarian)
         
@@ -1291,7 +710,7 @@ _MrPostcard = collections.namedtuple(
 )
 
             
-class _MrPostman:
+class _PostmanBase(metaclass=abc.ABCMeta):
     ''' Tracks, delivers notifications about objects using **only weak
     references** to them. Threadsafe.
     
@@ -1306,34 +725,16 @@ class _MrPostman:
         
         self._out_for_delivery = threading.Event()
         
-        # Lookup <ghid>: set(<callback>)
-        self._opslock_listen = threading.Lock()
-        self._listeners = {}
-        
         # The scheduling queue
         self._scheduled = queue.Queue()
-        # Ignoring lookup: <callback>: set(<_MrPostcards>)
-        self._opslock_ignore = threading.Lock()
-        self._ignored = SetMap()
         # The delayed lookup. <awaiting ghid>: set(<subscribed ghids>)
         self._opslock_defer = threading.Lock()
-        self._deferred = {}
+        self._deferred = SetMap()
         
-    def link_librarian(self, librarian):
-        # Call before using.
+    def assemble(self, librarian, bookie):
+        # Links the librarian and bookie.
         self._librarian = weakref.proxy(librarian)
-        
-    def link_bookie(self, bookie):
-        # Call before using.
         self._bookie = weakref.proxy(bookie)
-        
-    def silence_notification(self, callback, subscription, notification):
-        ''' Silences callbacks for specific subscription, notification
-        pairs.
-        '''
-        with self._opslock_ignore:
-            ignorable = _MrPostcard(subscription, notification)
-            self._ignored.add(callback, ignorable)
         
     def schedule(self, obj, removed=False):
         ''' Schedules update delivery for the passed object.
@@ -1388,7 +789,7 @@ class _MrPostman:
             if obj.target not in self._librarian:
                 self._defer_update(
                     awaiting_ghid = obj.target,
-                    notifier = notifier,
+                    postcard = notifier,
                 )
             else:
                 self._scheduled.put(notifier)
@@ -1416,58 +817,21 @@ class _MrPostman:
                 _MrPostcard(obj.recipient, obj.ghid)
             )
             
-    def _defer_update(self, awaiting_ghid, notifier):
+    def _defer_update(self, awaiting_ghid, postcard):
         ''' Defer a subscription notification until the awaiting_ghid is
         received as well.
         '''
         # Note that deferred updates will always be dynamic bindings, so the
         # subscribed ghid will be identical to the notification ghid.
         with self._opslock_defer:
-            try:
-                self._deferred[awaiting_ghid].add(notifier)
-            except KeyError:
-                self._deferred[awaiting_ghid] = { notifier }
+            self._deferred.add(awaiting_ghid, postcard)
             
     def _has_deferred(self, obj):
         ''' Checks to see if a subscription is waiting on the obj, and 
         if so, returns the originally subscribed ghid.
         '''
         with self._opslock_defer:
-            try:
-                subscribed_ghids = self._deferred[obj.ghid]
-            except KeyError:
-                return set()
-            else:
-                del self._deferred[obj.ghid]
-                return subscribed_ghids
-        
-    def subscribe(self, ghid, callback):
-        ''' Tells the postman that the watching_session would like to be
-        updated about ghid.
-        '''
-        # First add the subscription listeners
-        with self._opslock_listen:
-            try:
-                self._listeners[ghid].add(callback)
-            except KeyError:
-                self._listeners[ghid] = { callback }
-            
-        # Now manually reinstate any desired notifications for garq requests
-        # that have yet to be handled
-        for existing_mail in self._bookie.recipient_status(ghid):
-            obj = self._librarian.whois(existing_mail)
-            self.schedule(obj)
-            
-    def unsubscribe(self, ghid, callback):
-        ''' Remove the callback for ghid. Indempotent; will never raise
-        a keyerror.
-        '''
-        try:
-            self._listeners[ghid].discard(callback)
-        except KeyError:
-            logger.debug(
-                'KeyError while unsubscribing from ' + str(bytes(ghid))
-            )
+            return self._deferred.pop_any(obj.ghid)
             
     def do_mail_run(self):
         ''' Executes the actual mail run, clearing out the _scheduled
@@ -1502,6 +866,7 @@ class _MrPostman:
                 # delivery mechanisms want this to have an event loop.
                 self._deliver(subscription, notification)
             
+    @abc.abstractmethod
     def _deliver(self, subscription, notification):
         ''' Do the actual subscription update.
         '''
@@ -1509,22 +874,96 @@ class _MrPostman:
         # don't need to lock them while we go through all of the callbacks.
         # Instead, just sacrifice any subs being added concurrently to the 
         # current delivery run.
-        try:
-            callbacks = frozenset(self._listeners[subscription])
-        # No listeners for it? No worries.
-        except KeyError:
-            callbacks = frozenset()
-                
+        pass
+
+
+class MrPostman(_PostmanBase):
+    ''' Postman to use for local persistence systems.
+    
+    Note that MrPostman doesn't need to worry about silencing updates,
+    because the persistence ingestion tract will only result in a mail
+    run if there's a new object there. So, by definition, any re-sent
+    objects will be DOA.
+    '''
+    def __init__(self):
+        super().__init__()
+        self._rolodex = None
+        self._golix_core = None
+        
+        self._listeners = WeakSetMap()
+        
+    def assemble(self, golix_core, rolodex, *args, **kwargs):
+        super().assemble(*args, **kwargs)
+        self._golix_core = weakref.proxy(golix_core)
+        self._rolodex = weakref.proxy(rolodex)
+        
+    def register(self, gao):
+        ''' Registers a GAO with the postman, so that it will receive
+        any updates from upstream/downstream remotes. By using the handy
+        WeakSetMap and gao._weak_touch, we can ensure that python GCing
+        the GAO will also result in removal of the listener.
+        
+        Theoretically, we should only ever have one registered GAO for
+        a given ghid at the same time, so maybe in the future there's
+        some optimization to be had there.
+        '''
+        self._listeners.add(gao.ghid, gao._weak_touch)
+            
+    def _deliver(self, subscription, notification):
+        ''' Do the actual subscription update.
+        '''
+        if subscription == self._golix_core.whoami:
+            self._rolodex.request_handler(subscription, notification)
+        else:
+            for callback in self._listeners.get_any(subscription):
+                callback(subscription, notification)
+        
+        
+class PostOffice(_PostmanBase):
+    ''' Postman to use for remote persistence servers.
+    '''
+    def __init__(self):
+        super().__init__()
+        # By using WeakSetMap we can automatically handle dropped connections
+        # Lookup <subscribed ghid>: set(<subscribed callbacks>)
+        self._opslock_listen = threading.Lock()
+        self._listeners = WeakSetMap()
+        
+    def subscribe(self, ghid, callback):
+        ''' Tells the postman that the watching_session would like to be
+        updated about ghid.
+        '''
+        # First add the subscription listeners
+        with self._opslock_listen:
+            self._listeners.add(ghid, callback)
+            
+        # Now manually reinstate any desired notifications for garq requests
+        # that have yet to be handled
+        for existing_mail in self._bookie.recipient_status(ghid):
+            obj = self._librarian.whois(existing_mail)
+            self.schedule(obj)
+            
+    def unsubscribe(self, ghid, callback):
+        ''' Remove the callback for ghid. Indempotent; will never raise
+        a keyerror.
+        '''
+        self._listeners.discard(ghid, callback)
+            
+    def _deliver(self, subscription, notification):
+        ''' Do the actual subscription update.
+        '''
+        # We need to freeze the listeners before we operate on them, but we 
+        # don't need to lock them while we go through all of the callbacks.
+        # Instead, just sacrifice any subs being added concurrently to the 
+        # current delivery run.
+        callbacks = self._listeners.get_any(subscription)
         postcard = _MrPostcard(subscription, notification)
                 
         for callback in callbacks:
-            if self._ignored.contains_within(callback, postcard):
-                self._ignored.discard(callback, postcard)
-            else:
-                callback(*postcard)
+            callback(*postcard)
         
         
-class _Undertaker:
+class Undertaker:
     ''' Note: what about post-facto removal of bindings that have 
     illegal targets? For example, if someone uploads a binding for a 
     target that isn't currently known, and then it turns out that the
@@ -1539,18 +978,13 @@ class _Undertaker:
         self._librarian = None
         self._bookie = None
         self._postman = None
+        
         self._staging = None
         
-    def link_librarian(self, librarian):
+    def assemble(self, librarian, bookie, postman):
         # Call before using.
         self._librarian = weakref.proxy(librarian)
-        
-    def link_bookie(self, bookie):
-        # Call before using.
         self._bookie = weakref.proxy(bookie)
-        
-    def link_postman(self, postman):
-        # Call before using.
         self._postman = weakref.proxy(postman)
         
     def __enter__(self):
@@ -1692,7 +1126,7 @@ class _Undertaker:
         return True
         
         
-class _Lawyer:
+class Lawyer:
     ''' Enforces authorship requirements, including both having a known
     entity as author/recipient and consistency for eg. bindings and 
     debindings.
@@ -1705,7 +1139,7 @@ class _Lawyer:
         # python runtime state
         self._librarian = None
         
-    def link_librarian(self, librarian):
+    def assemble(self, librarian):
         # Call before using.
         self._librarian = weakref.proxy(librarian)
         
@@ -1837,13 +1271,13 @@ class _Lawyer:
         return True
         
         
-class _Enforcer:
+class Enforcer:
     ''' Enforces valid target selections.
     '''
     def __init__(self):
         self._librarian = None
         
-    def link_librarian(self, librarian):
+    def assemble(self, librarian):
         # Call before using.
         self._librarian = weakref.proxy(librarian)
         
@@ -1953,7 +1387,7 @@ class _Enforcer:
                 )
             
             
-class _Bookie:
+class Bookie:
     ''' Tracks state relationships between objects using **only weak
     references** to them. ONLY CONCERNED WITH LIFETIMES! Does not check
     (for example) consistent authorship.
@@ -1990,15 +1424,10 @@ class _Bookie:
         # python runtime state
         self._requests_for_recipient = SetMap()
         
-    def link_librarian(self, librarian):
+    def assemble(self, librarian, lawyer, undertaker):
         # Call before using.
         self._librarian = weakref.proxy(librarian)
-        
-    def link_lawyer(self, lawyer):
-        # Call before using.
         self._lawyer = weakref.proxy(lawyer)
-        
-    def link_undertaker(self, undertaker):
         # We need to be able to initiate GC on illegal debindings detected 
         # after the fact.
         self._undertaker = weakref.proxy(undertaker)
@@ -2250,8 +1679,9 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         self._catalog = {}
         self._opslock = threading.Lock()
         
-    def link_core(self, core):
+    def assemble(self, core):
         # Creates a weakref proxy to core.
+        # This is needed for lazy loading and restoring.
         self._core = weakref.proxy(core)
         
     def force_gc(self, obj):
@@ -2569,7 +1999,7 @@ class DiskLibrarian(_LibrarianCore):
         return fpath.exists()
         
         
-class _Librarian(_LibrarianCore):
+class MemoryLibrarian(_LibrarianCore):
     def __init__(self):
         self._shelf = {}
         super().__init__()
@@ -2603,7 +2033,7 @@ class _Librarian(_LibrarianCore):
         return ghid in self._shelf
         
         
-class _Enlitener:
+class Enlitener:
     ''' Handles conversion from heavyweight Golix objects to lightweight
     Hypergolix representations.
     ''' 

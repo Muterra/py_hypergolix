@@ -43,8 +43,9 @@ from . import core
 from . import dispatch
 from . import exceptions
 from . import ipc
-from . import persisters
+from . import persistence
 from . import privateer
+from . import remotes
 from . import rolodex
 from . import service
 from . import utils

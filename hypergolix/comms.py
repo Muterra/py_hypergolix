@@ -530,13 +530,17 @@ class Autoresponder(LooperTrooper):
         token = their_token.to_bytes(length=2, byteorder='big', signed=False)
         try:
             code = self.error_lookup[type(exc)]
-            body = str(exc).encode('utf-8')
+            body = (repr(exc) + '\n' + ''.join(
+                traceback.format_tb(exc.__traceback__))).encode('utf-8')
         except KeyError:
             code = b'\x00\x00'
-            body = repr(exc).encode('utf-8')
+            body = (repr(exc) + '\n' + ''.join(
+                traceback.format_tb(exc.__traceback__))).encode('utf-8')
         except:
             code = b'\x00\x00'
-            body = b'Failure followed by exception while handling failure.'
+            body = ('Failure followed by exception handling failure:\n' +
+                    ''.join(traceback.format_exc())).encode('utf-8')
+            
         return token + code + body
         
     def unpack_failure(self, data):
@@ -973,11 +977,11 @@ def Autocomms(autoresponder_class, connector_class, autoresponder_args=None,
     # cancellation to the Aengel, so we do not need to reorder.
 
     autoresponder = autoresponder_class(
+        *autoresponder_args,
+        **autoresponder_kwargs,
         threaded = True,
         debug = debug,
         thread_name = autoresponder_name,
-        *autoresponder_args,
-        **autoresponder_kwargs,
         aengel = aengel,
     )
     
