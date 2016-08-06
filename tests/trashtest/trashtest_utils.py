@@ -97,5 +97,10 @@ class LooperTrooperTest(unittest.TestCase):
         #     IPython.embed()
 
 if __name__ == "__main__":
+    from _fixtures import logutils
+    logutils.autoconfig()
     
+    # from hypergolix.utils import TraceLogger
+    # with TraceLogger(interval=10):
+    #     unittest.main()
     unittest.main()

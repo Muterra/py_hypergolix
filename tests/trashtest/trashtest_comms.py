@@ -358,18 +358,15 @@ def stdout_redirected(to=os.devnull, stdout=None):
 def merged_stderr_stdout():  # $ exec 2>&1
     return stdout_redirected(to=sys.stdout, stdout=sys.stderr)
 
-from hypergolix.utils import TraceLogger
-
 if __name__ == "__main__":
-    # # Override the module-level logger definition to root
-    # logger = logging.getLogger()
-    # # For now, log to console
-    # log_handler = logging.StreamHandler()
-    # log_handler.setLevel(logging.DEBUG)
-    # logger.addHandler(log_handler)
-    logging.basicConfig(filename='logs/comms.pylog', level=logging.DEBUG)
+    from _fixtures import logutils
+    logutils.autoconfig()
     
+    # from hypergolix.utils import TraceLogger
+    # with TraceLogger(interval=10):
+    #     unittest.main()
     unittest.main()
+    
     # with open('std.py', 'w') as f:
     #     with stdout_redirected(to=f), merged_stderr_stdout():
     #         unittest.main()
