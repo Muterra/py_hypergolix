@@ -40,7 +40,7 @@ import logging
 import datetime
 
 
-def autoconfig(logdirname='logs'):
+def autoconfig(logdirname='logs', loglevel='debug'):
     fname = sys.argv[0]
     logdir = pathlib.Path(logdirname)
 
@@ -57,14 +57,26 @@ def autoconfig(logdirname='logs'):
     logname = prefix + '_' + date + '_' + str(ii) + ext
     print('USING LOGFILE: ' + logname)
 
+    # Calculate the logging level
+    try:
+        loglevel = {'debug': logging.DEBUG,
+                    'info': logging.INFO,
+                    'warning': logging.WARNING,
+                    'error': logging.ERROR,}[loglevel.lower()]
+    except KeyError:
+        loglevel = logging.WARNING
+
+    # Make a log handler
     loghandler = logging.FileHandler(logname)
     loghandler.setFormatter(
         logging.Formatter(
             '%(threadName)-7s %(name)-12s: %(levelname)-8s %(message)s'
         )
     )
+    
     # Add to root logger
     logging.getLogger('').addHandler(loghandler)
+    logging.getLogger('').setLevel(loglevel)
         
     # Silence the froth
     logging.getLogger('asyncio').setLevel(logging.WARNING)

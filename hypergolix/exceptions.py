@@ -37,7 +37,11 @@ import threading
 __all__ = [
     # Base class for all of the above
     'HypergolixException',
-    # These are remote server errors and warnings
+    # These are local persistence errors
+    'PersistenceError',
+    'IntegrityError',
+    'UnavailableUpstream',
+    # These are remote server errors and warnings. All subclass PersistenceErr
     'RemoteNak',
     'VerificationFailure',
     'MalformedGolixPrimitive',
@@ -49,10 +53,6 @@ __all__ = [
     'InvalidTarget',
     'IllegalDynamicFrame',
     'StillBoundWarning',
-    # These are local persistence errors
-    'PersistenceError',
-    'IntegrityError',
-    'UnavailableUpstream',
     # These are Agent/integration errors
     'HandshakeError',
     'HandshakeWarning',
@@ -83,7 +83,28 @@ class HypergolixException(Exception):
     pass
 
 
-class RemoteNak(HypergolixException, RuntimeError):
+class PersistenceError(HypergolixException, RuntimeError):
+    ''' This exception (or a subclass thereof) is raised for all issues
+    related to local persistence systems.
+    '''
+    pass
+    
+    
+class IntegrityError(PersistenceError):
+    ''' This PersistenceError is raised when a packed Golix primitive 
+    appears to be corrupted in local persistence.
+    '''
+    pass
+    
+    
+class UnavailableUpstream(PersistenceError):
+    ''' This PersistenceError is raised when an object is unavailable or
+    unacceptable from (an) upstream remote(s).
+    '''
+    pass
+
+
+class RemoteNak(PersistenceError):
     ''' This exception (or a subclass thereof) is raised for all failed 
     operations with remote persister servers.
     '''
@@ -251,26 +272,5 @@ class PrivateerError(HypergolixException, RuntimeError):
 class RatchetError(PrivateerError):
     ''' This PrivateerError is raised when ratcheting a secret could not
     be completed successfully.
-    '''
-    pass
-
-
-class PersistenceError(HypergolixException, RuntimeError):
-    ''' This exception (or a subclass thereof) is raised for all issues
-    related to local persistence systems.
-    '''
-    pass
-    
-    
-class IntegrityError(PersistenceError):
-    ''' This PersistenceError is raised when a packed Golix primitive 
-    appears to be corrupted in local persistence.
-    '''
-    pass
-    
-    
-class UnavailableUpstream(PersistenceError):
-    ''' This PersistenceError is raised when an object is unavailable or
-    unacceptable from (an) upstream remote(s).
     '''
     pass

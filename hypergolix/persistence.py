@@ -493,13 +493,9 @@ class PersistenceCore:
             self.lawyer.validate_gidc(obj)
             
             # Add GC pass in case of illegal existing debindings.
-            try:
-                with self.undertaker:
-                    # Finally make sure persistence rules are followed
-                    self.bookie.validate_gidc(obj)
-            except AttributeError:
-                print(self.undertaker)
-                print(dir(self.undertaker))
+            with self.undertaker:
+                # Finally make sure persistence rules are followed
+                self.bookie.validate_gidc(obj)
         
             # Force GC pass after every mutation
             with self.undertaker:
@@ -1042,10 +1038,13 @@ class MrPostman(_PostmanBase):
         self._rolodex = None
         self._golix_core = None
         
+        # self._listeners = SetMap()
+        # NOTE! This means that the listeners CANNOT be methods, as methods
+        # will be DOA.
         self._listeners = WeakSetMap()
         
-    def assemble(self, golix_core, rolodex, *args, **kwargs):
-        super().assemble(*args, **kwargs)
+    def assemble(self, golix_core, librarian, bookie, rolodex):
+        super().assemble(librarian, bookie)
         self._golix_core = weakref.proxy(golix_core)
         self._rolodex = weakref.proxy(rolodex)
         
@@ -1600,7 +1599,7 @@ class Bookie:
         '''
         total = set()
         total.update(self._debound_by_ghid.get_any(ghid))
-        total.update(self._debound_by_ghid.get_any(ghid))
+        total.update(self._debound_by_ghid_staged.get_any(ghid))
         return total
         
     def is_illegal(self, obj):

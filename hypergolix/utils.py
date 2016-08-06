@@ -1802,6 +1802,11 @@ class SetMap:
         with self._lock:
             self._mapping.clear()
             
+    def __len__(self):
+        ''' Returns the length of the mapping only.
+        '''
+        return len(self._mapping)
+            
     def __iter__(self):
         ''' Send this through to the dict, bypassing the usual route, 
         because otherwise we'll have a deadlock.

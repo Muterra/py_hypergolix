@@ -372,8 +372,9 @@ class MemoryPersister(PersistenceCore):
         self.lawyer.assemble(librarian)
         self.enforcer.assemble(librarian)
         self.bookie.assemble(librarian, lawyer, undertaker)
-        self.librarian.assemble(self)
-        self.salmonator.assemble(self, self, self.postman, self.librarian)
+        self.librarian.assemble(self, self.salmonator)
+        self.salmonator.assemble(self, self, self.doorman, self.postman, 
+                                self.librarian)
         
     def publish(self, *args, **kwargs):
         # This is a temporary fix to force memorypersisters to notify during

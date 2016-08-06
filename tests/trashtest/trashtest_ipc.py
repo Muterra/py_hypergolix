@@ -44,14 +44,14 @@ import random
 import traceback
 import logging
 
-from hypergolix.core import HGXCore
+from hypergolix.core import GolixCore
 from hypergolix.core import Oracle
-from hypergolix.core import _GhidProxier
+from hypergolix.core import GhidProxier
 from hypergolix.dispatch import _Dispatchable
 from hypergolix.dispatch import Dispatcher
 from hypergolix.privateer import Privateer
 
-from hypergolix.persisters import MemoryPersister
+from hypergolix.remotes import MemoryPersister
 
 from hypergolix.utils import Aengel
 from hypergolix.utils import SetMap
@@ -75,7 +75,7 @@ from _fixtures.identities import TEST_AGENT1
 from _fixtures.identities import TEST_AGENT2
 
 
-class MockCore(HGXCore):
+class MockCore(GolixCore):
     def __init__(self, persister, *args, **kwargs):
         super().__init__(*args, **kwargs)
         persister.publish(self._identity.second_party.packed)
@@ -295,5 +295,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         cls.aengel.stop()
 
 if __name__ == "__main__":
-    logging.basicConfig(filename='logs/ipchosts.pylog', level=logging.DEBUG)
+    from _fixtures import logutils
+    logutils.autoconfig()
+    
     unittest.main()
