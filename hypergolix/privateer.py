@@ -169,7 +169,7 @@ class Privateer:
             self._ratchet_in_progress.discard(proxy)
             self._chains[proxy] = container
         
-    def ratchet(self, proxy):
+    def ratchet_chain(self, proxy):
         ''' Gets a new secret for the proxy. Returns the secret, and 
         flags the ratchet as in-progress.
         '''
@@ -200,7 +200,7 @@ class Privateer:
             
         return result
             
-    def heal_ratchet(self, gao, binding):
+    def heal_chain(self, gao, binding):
         ''' Heals the ratchet for a binding using the gao. Call this any 
         time an agent RECEIVES a new EXTERNAL ratcheted object. Stages
         the resulting secret for the most recent frame in binding, BUT

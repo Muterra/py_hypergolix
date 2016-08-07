@@ -68,6 +68,8 @@ from .exceptions import HandshakeWarning
 from .exceptions import UnknownParty
 from .exceptions import DoesNotExist
 
+from .persistence import _GobdLite
+
 # from .persisters import _PersisterBase
 
 # from .ipc import _IPCBase
@@ -95,33 +97,29 @@ class GhidProxier:
     Threadsafe.
     '''
     def __init__(self):
-        # The usual.
-        self._refs = {}
+        # Note that we can't really cache aliases, because their proxies will
+        # not update when we change things unless the proxy is also removed 
+        # from the cache. Since the objects may (or may not) exist locally in
+        # memory anyways, we should just take advantage of that, and allow our
+        # inquisitor to more easily manage memory consumption as well.
+        # self._refs = {}
+        
         self._modlock = threading.Lock()
         
         self._librarian = None
-        self._core = None
         
-    def assemble(self, golix_core, librarian):
+    def assemble(self, librarian):
         # Chicken, meet egg.
-        self._core = weakref.proxy(core)
         self._librarian = weakref.proxy(librarian)
         
-    def is_proxy(self, ghid):
-        ''' Return True if the ghid is known as a proxy, False if the 
-        ghid is not known as a proxy.
-        
-        False doesn't guarantee that it's not a proxy, but True 
-        guarantees that it is.
-        '''
-        return ghid in self._refs
-        
-    def chain(self, proxy, target):
+    def __mklink(self, proxy, target):
         ''' Set, or update, a ghid proxy.
         
         Ghids must only ever have a single proxy. Calling chain on an 
         existing proxy will update the target.
         '''
+        raise NotImplementedError('Explicit link creation has been removed.')
+        
         if not isinstance(proxy, Ghid):
             raise TypeError('Proxy must be Ghid.')
             
@@ -150,18 +148,17 @@ class GhidProxier:
         ''' Recursively resolves the container ghid for a proxy (or a 
         container).
         '''
-        # First check our local cache of aliases
         try:
-            return self._resolve(self._refs[ghid])
-            
-        # We don't know the local cache, so let's check librarian to make sure
-        # it's not a dynamic address.
-        except KeyError:
             obj = self._librarian.summarize_loud(ghid)
-            
+        except KeyError:
+            logger.warning(
+                'Librarian missing resource record; could not verify full '
+                'resolution of ' + str(bytes(ghid)) + '\n' + 
+                ''.join(traceback.format_exc()))
+            return ghid
+        
+        else:
             if isinstance(obj, _GobdLite):
-                # Don't call chain, because we'd hit a modlock.
-                self._refs[ghid] = obj.target
                 return self._resolve(obj.target)
                 
             else:
@@ -727,7 +724,7 @@ class _GAO(_GAOBase):
         # Huh, looks like it is, in fact, new.
         else:
             modified = True
-            self._privateer.heal_ratchet(gao=self, binding=check_obj)
+            self._privateer.heal_chain(gao=self, binding=check_obj)
             secret = self._privateer.get(check_obj.target)
             packed = self._persister.librarian.retrieve_loud(check_obj.target)
             packed_state = self._attempt_open_container(
@@ -803,15 +800,15 @@ class _GAO(_GAOBase):
         ''' Attempts to apply a delete. Returns True if successful;
         False otherwise.
         '''
-        if obj.target == self.ghid:
+        if deleter.target == self.ghid:
             self.apply_delete()
             modified = True
             
         else:
             logger.warning(
-                'Mismatching pull debinding target: \n'
+                'Mismatching pull while debinding target: \n'
                 '    obj.ghid:         ' + str(bytes(self.ghid)) + '\n'
-                '    debinding.target: ' + str(bytes(obj.target))
+                '    debinding.target: ' + str(bytes(deleter.target))
             )
             modified = False
             
@@ -907,7 +904,7 @@ class _GAO(_GAOBase):
             
             # We need a secret.
             try:
-                secret = self._privateer.ratchet(self.ghid)
+                secret = self._privateer.ratchet_chain(self.ghid)
             # TODO: make this a specific error.
             except:
                 logger.info(
