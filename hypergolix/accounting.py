@@ -123,9 +123,7 @@ class AgentBootstrap:
         self.dispatch = Dispatcher()
         
         # Now we need to link everything together.
-        self.golix_core.assemble(self.proxy, self.oracle, 
-                                self.persistence_core, self.librarian, 
-                                self.dispatch)
+        self.golix_core.assemble(self.librarian)
         self.persistence_core.assemble(self.doorman, self.enforcer, 
                                         self.lawyer, self.bookie, 
                                         self.librarian, self.postman,

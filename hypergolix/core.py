@@ -184,21 +184,14 @@ class GolixCore:
         '''
         self._opslock = threading.Lock()
         
+        # Added during bootstrap
         self._identity = None
-        
+        # Added during assembly
         self._librarian = None
-        self._oracle = None
-        self._dispatch = None
-        self._ghidproxy = None
-        self._persister = None
         
-    def assemble(self, proxy, oracle, persistence_core, librarian, dispatch):
+    def assemble(self, librarian):
         # Chicken, meet egg.
-        self._ghidproxy = weakref.proxy(proxy)
-        self._oracle = weakref.proxy(oracle)
-        self._persister = weakref.proxy(persistence_core)
         self._librarian = weakref.proxy(librarian)
-        self._dispatch = weakref.proxy(dispatch)
         
     def bootstrap(self, identity):
         # This must be done ASAGDFP. Must be absolute first thing to bootstrap.
@@ -269,6 +262,10 @@ class GolixCore:
             return self._identity.make_bind_static(target)
         
     def make_binding_dyn(self, target, ghid=None, history=None):
+        ''' Make a new dynamic binding frame.
+        If supplied, ghid is the dynamic address, and history is an 
+        ordered iterable of the previous frame ghids.
+        '''
         # Make a new binding!
         if (ghid is None and history is None):
             pass
@@ -284,7 +281,7 @@ class GolixCore:
         with self._opslock:
             return self._identity.make_bind_dynamic(
                 target = target,
-                ghid_dynamic = ghid_dynamic,
+                ghid_dynamic = ghid,
                 history = history
             )
         
