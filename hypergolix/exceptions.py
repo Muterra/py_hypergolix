@@ -274,3 +274,17 @@ class RatchetError(PrivateerError):
     be completed successfully.
     '''
     pass
+    
+    
+class ConflictingSecrets(PrivateerError):
+    ''' This PrivateerError is raised when an existing secret does not
+    match a new secret.
+    '''
+    pass
+    
+    
+class SecretUnknown(PrivateerError, KeyError):
+    ''' This PrivateerError is raised when a request is made for an 
+    unknown secret.
+    '''
+    pass

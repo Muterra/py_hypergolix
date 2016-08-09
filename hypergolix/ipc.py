@@ -28,6 +28,72 @@ hypergolix: A python Golix client.
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
+
+
+Some thoughts:
+
+All of IPC should use a single autoresponder. 
+    + Then, more communications methods can be added to / removed from 
+        the host. 
+    + That can be quite easily accomplished with a minor modification to
+        the code already used in AutoComms. The same LinkedConnector
+        can subclass, extending __init__ to include the autoresponder
+        instead of forming a closure within "def Autocomms():"
+    + More likely than not, the same methodology should be applied to 
+        persistence remotes, through the salmonator.
+Given the above, IPCHost should be renamed.
+    + Too confusing with the IPC servers that will be added in 
+        accounting.
+    + Should still stay within ipc.py though.
+    + 
+The IPCHost autoresponder isn't *quite* the same thing as Dispatch.
+    + They're very tightly-coupled, yes, but look at the DoC: dispatch
+        is concerned only with obj <--> endpoint, whereas IPC is focused
+        on how, exactly, the endpoint communicates.
+    + Endpoint registration should be moved into the IPC autoresponder.
+        It should be called via dispatch's "distribute to endpoints" 
+        method, which also needs to move. That will point the IPC host
+        wholly in charge of tracking IPC, and Dispatch wholly in charge
+        of object distribution.
+    + The accountant (should we rename AgentBootstrap?) should maintain
+        the liveliness of any added IPC servers. It will also need to be
+        responsible for the instance creation and startup of the ipc
+        servers themselves, since as per above toplevel comment, the IPC
+        servers will need to be initialized with a reference to the 
+        IPCHost object.
+All of the endpoint logic should be moved into IPCHost.
+    + This definitely also applies to the app_token tracking. Use a 
+        WeakValueDict to get the endpoint from the token. Then, when
+        endpoint connections die (from closure, etc), they automatically
+        are removed from available tokens.
+    + This should also apply to api_ids, except it will need to be a
+        WeakSetMap instead. Each api_id has a single key, and when an
+        endpoint registers that api_id, it is added to the WSM. When the
+        connection dies, so does the api_id mapping.
+    + At least for now, applications must ephemerally declare themselves
+        capable of supporting a given API. Note, once again, that these
+        api_id registrations ONLY APPLY TO UNSOLICITED OBJECT SHARES!
+Definitely add in more component awareness to IPCHost.
+    + At the very least, add oracle and golcore. That way, dispatch can
+        be bypassed for many requests.
+    + Also convert it to use the now-standardized "assemble" API.
+Should stop inferring object "private" status within dispatch.
+    + There's really no reason to send app_token on the wire after the
+        initial declaration
+    + Reduced reliability, testing hassles, etc
+    + This also means there's no good reason to store the app_token 
+        within the _Dispatchable. Could simply and directly rely upon
+        the Dispatcher's bootstrapped stateful privacy tracking object.
+    + Use a private_by_ghid _GAODict() for <ghid>: <owning token> lookup
+It'd be nice to remove the msgpack dependency in utils.IPCPackerMixIn.
+    + Could use very simple serialization instead.
+    + Very heavyweight for such a silly thing.
+    + It would take very little time to remove.
+    + This should wait until we have a different serialization for all
+        of the core bootstrapping _GAOs. This, in turn, should wait 
+        until after SmartyParse is converted to be async.
+
+
 '''
 
 # Control * imports.
@@ -39,7 +105,6 @@ __all__ = [
 
 # External dependencies
 import abc
-import msgpack
 import os
 import warnings
 import weakref
@@ -423,6 +488,7 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         
         Does not require an existing app token.
         '''
+        # TODO: fix leaky abstraction
         ghid = self.dispatch._golcore.whoami
         return bytes(ghid)
         

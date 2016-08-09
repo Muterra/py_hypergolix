@@ -75,34 +75,6 @@ from golix import Ghid
 
 from _fixtures.identities import TEST_AGENT1
 from _fixtures.identities import TEST_AGENT2
-
-
-class MockDispatch:
-    ''' Test fixture for dispatch.
-    
-    Oops, didn't actually need to do this. I think?
-    '''
-    def __init__(self):
-        self.incoming = []
-        self.acks = []
-        self.naks = []
-        
-    def assemble(self, *args, **kwargs):
-        # Noop
-        pass
-        
-    def bootstrap(self, *args, **kwargs):
-        # Noop
-        pass
-        
-    def dispatch_share(self, target):
-        self.incoming.append(target)
-        
-    def dispatch_share_ack(self, target, recipient):
-        self.acks.append((target, recipient))
-        
-    def dispatch_share_nak(self, target, recipient):
-        self.naks.append((target, recipient))
         
         
 class MockRolodex:

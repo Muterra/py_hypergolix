@@ -58,6 +58,8 @@ from .utils import TraceLogger
 
 from .exceptions import PrivateerError
 from .exceptions import RatchetError
+from .exceptions import ConflictingSecrets
+from .exceptions import SecretUnknown
 
 
 # ###############################################
@@ -105,6 +107,11 @@ class Privateer:
         
         # Just here for diagnosing a testing problem
         self._committment_problems = {}
+            
+    def __contains__(self, ghid):
+        ''' Check if we think we know a secret for the ghid.
+        '''
+        return ghid in self._secrets
         
     def assemble(self, golix_core, oracle):
         # Chicken, meet egg.
@@ -131,6 +138,117 @@ class Privateer:
     def new_secret(self):
         # Straight pass-through to the golix new_secret bit.
         return self._golcore._identity.new_secret()
+        
+    def get(self, ghid):
+        ''' Get a secret for a ghid, regardless of status.
+        
+        Raises KeyError if secret is not present.
+        '''
+        try:
+            with self._modlock:
+                return self._secrets[ghid]
+        except KeyError as exc:
+            raise SecretUnknown('Secret not found for ' + repr(ghid)) from exc
+        
+    def stage(self, ghid, secret):
+        ''' Preliminarily set a secret for a ghid.
+        
+        If a secret is already staged for that ghid and the ghids are 
+        not equal, raises ConflictingSecrets.
+        '''
+        with self._modlock:
+            if ghid in self._secrets:
+                if self._secrets[ghid] != secret:
+                    raise ConflictingSecrets(
+                        'Non-matching secret already staged for GHID ' + 
+                        str(ghid)
+                    )
+            else:
+                self._secrets_staging[ghid] = secret
+            
+    def unstage(self, ghid):
+        ''' Remove a staged secret, probably due to a SecurityError.
+        Returns the secret.
+        '''
+        with self._modlock:
+            try:
+                secret = self._secrets_staging.pop(ghid)
+            except KeyError as exc:
+                raise SecretUnknown(
+                    'No currently staged secret for GHID ' + str(ghid)
+                ) from exc
+        return secret
+        
+    def commit(self, ghid):
+        ''' Store a secret "permanently". The secret must already be
+        staged.
+        
+        Raises KeyError if ghid is not currently in staging
+        
+        This is indempotent; if a ghid is currently in staging AND 
+        already committed, will compare the two and raise ValueError if
+        they don't match.
+        
+        This is transactional and atomic; any errors (ex: ValueError 
+        above) will return its state to the previous.
+        '''
+        with self._modlock:
+            if ghid in self._secrets_persistent:
+                self._compare_staged_to_persistent(ghid)
+            else:
+                try:
+                    secret = self._secrets_staging.pop(ghid)
+                except KeyError as exc:
+                    raise SecretUnknown(
+                        'Secret not currently staged for GHID ' + str(ghid)
+                    ) from exc
+                else:
+                    # It doesn't exist, so commit it directly.
+                    self._secrets_persistent[ghid] = secret
+                    
+                # Just keep track of shit for this fucking error
+                self._committment_problems[ghid] = TraceLogger.dump_my_trace()
+            
+    def _compare_staged_to_persistent(self, ghid):
+        try:
+            staged = self._secrets_staging.pop(ghid)
+        except KeyError:
+            # Nothing is staged. Short-circuit.
+            pass
+        else:
+            if staged != self._secrets_persistent[ghid]:
+                # Re-stage, just in case.
+                self._secrets_staging[ghid] = staged
+                raise ConflictingSecrets(
+                    'Non-matching secret already committed for GHID ' +
+                    str(ghid)
+                )
+        
+    def abandon(self, ghid, quiet=True):
+        ''' Remove a secret. If quiet=True, silence any KeyErrors.
+        '''
+        # Short circuit any tests if quiet is enabled
+        fail_test = not quiet
+        
+        with self._modlock:
+            try:
+                del self._secrets_staging[ghid]
+            except KeyError:
+                fail_test &= True
+                logger.debug('Secret not staged for GHID ' + str(ghid))
+            else:
+                fail_test = False
+                
+            try:
+                del self._secrets_persistent[ghid]
+            except KeyError:
+                fail_test &= True
+                logger.debug('Secret not stored for GHID ' + str(ghid))
+            else:
+                fail_test = False
+                
+        if fail_test:
+            raise SecretUnknown('Secret not found for GHID ' + str(ghid))
         
     def make_chain(self, proxy, container):
         ''' Makes a ratchetable chain. Must be owned by a particular
@@ -299,123 +417,3 @@ class Privateer:
             key = ratcheted[:len_key],
             seed = ratcheted[len_key:]
         )
-                    
-        
-    def get(self, ghid):
-        ''' Get a secret for a ghid, regardless of status.
-        
-        Raises KeyError if secret is not present.
-        '''
-        try:
-            with self._modlock:
-                return self._secrets[ghid]
-        except KeyError as exc:
-            raise KeyError('Secret not found for GHID ' + str(ghid)) from exc
-        
-    def stage(self, ghid, secret):
-        ''' Preliminarily set a secret for a ghid.
-        
-        If a secret is already staged for that ghid and the ghids are 
-        not equal, raises ValueError.
-        '''
-        with self._modlock:
-            if ghid in self._secrets_staging:
-                if self._secrets_staging[ghid] != secret:
-                    raise ValueError(
-                        'Non-matching secret already staged for GHID ' + 
-                        str(ghid)
-                    )
-            else:
-                self._secrets_staging[ghid] = secret
-            
-    def unstage(self, ghid):
-        ''' Remove a staged secret, probably due to a SecurityError.
-        Returns the secret.
-        '''
-        with self._modlock:
-            try:
-                secret = self._secrets_staging.pop(ghid)
-            except KeyError as exc:
-                raise KeyError(
-                    'No currently staged secret for GHID ' + str(ghid)
-                ) from exc
-        return secret
-        
-    def commit(self, ghid):
-        ''' Store a secret "permanently". The secret must already be
-        staged.
-        
-        Raises KeyError if ghid is not currently in staging
-        
-        This is indempotent; if a ghid is currently in staging AND 
-        already committed, will compare the two and raise ValueError if
-        they don't match.
-        
-        This is transactional and atomic; any errors (ex: ValueError 
-        above) will return its state to the previous.
-        '''
-        with self._modlock:
-            if ghid in self._secrets_persistent:
-                self._compare_staged_to_persistent(ghid)
-            else:
-                try:
-                    secret = self._secrets_staging.pop(ghid)
-                except KeyError as exc:
-                    raise KeyError(
-                        'Secret not currently staged for GHID ' + str(ghid)
-                    ) from exc
-                else:
-                    # It doesn't exist, so commit it directly.
-                    self._secrets_persistent[ghid] = secret
-                    
-                # Just keep track of shit for this fucking error
-                self._committment_problems[ghid] = TraceLogger.dump_my_trace()
-                    
-    def last_commit(self, ghid):
-        return self._committment_problems[ghid]
-            
-    def _compare_staged_to_persistent(self, ghid):
-        try:
-            staged = self._secrets_staging.pop(ghid)
-        except KeyError:
-            # Nothing is staged. Short-circuit.
-            pass
-        else:
-            if staged != self._secrets_persistent[ghid]:
-                # Re-stage, just in case.
-                self._secrets_staging[ghid] = staged
-                raise ValueError(
-                    'Non-matching secret already committed for GHID ' +
-                    str(ghid)
-                )
-        
-    def abandon(self, ghid, quiet=True):
-        ''' Remove a secret. If quiet=True, silence any KeyErrors.
-        '''
-        # Short circuit any tests if quiet is enabled
-        fail_test = not quiet
-        
-        with self._modlock:
-            try:
-                del self._secrets_staging[ghid]
-            except KeyError as exc:
-                fail_test &= True
-                logger.debug('Secret not staged for GHID ' + str(ghid))
-            else:
-                fail_test = False
-                
-            try:
-                del self._secrets_persistent[ghid]
-            except KeyError as exc:
-                fail_test &= True
-                logger.debug('Secret not stored for GHID ' + str(ghid))
-            else:
-                fail_test = False
-                
-        if fail_test:
-            raise KeyError('Secret not found for GHID ' + str(ghid))
-            
-    def __contains__(self, ghid):
-        ''' Check if we think we know a secret for the ghid.
-        '''
-        return ghid in self._secrets

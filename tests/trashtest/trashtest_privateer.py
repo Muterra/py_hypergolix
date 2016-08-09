@@ -40,31 +40,14 @@ import collections
 import logging
 import weakref
 
-from hypergolix.core import GolixCore
-from hypergolix.core import Oracle
-from hypergolix.core import GhidProxier
-from hypergolix.core import _GAO
-
 from hypergolix.privateer import Privateer
-
-from hypergolix.persistence import PersistenceCore
-from hypergolix.persistence import Doorman
-from hypergolix.persistence import Lawyer
-from hypergolix.persistence import Enforcer
-from hypergolix.persistence import Bookie
-from hypergolix.persistence import MemoryLibrarian
-from hypergolix.persistence import MrPostman
-from hypergolix.persistence import Undertaker
-from hypergolix.persistence import SalmonatorNoop
-from hypergolix.persistence import _GidcLite
-from hypergolix.persistence import _GeocLite
-from hypergolix.persistence import _GobdLite
-
-# This is a semi-normal import
-from golix.utils import _dummy_ghid
+from hypergolix.exceptions import ConflictingSecrets
+from hypergolix.exceptions import RatchetError
+from hypergolix.exceptions import SecretUnknown
 
 # These are fixture imports
 from golix import Ghid
+from golix.utils import Secret
 
 
 # ###############################################
@@ -74,40 +57,16 @@ from golix import Ghid
 
 from _fixtures.identities import TEST_AGENT1
 from _fixtures.identities import TEST_AGENT2
-
-
-class MockDispatch:
-    ''' Test fixture for dispatch.
-    
-    Oops, didn't actually need to do this. I think?
-    '''
+        
+        
+class MockOracle:
+    pass
+        
+        
+class MockGolcore:
     def __init__(self):
-        self.incoming = []
-        self.acks = []
-        self.naks = []
-        
-    def assemble(self, *args, **kwargs):
-        # Noop
-        pass
-        
-    def bootstrap(self, *args, **kwargs):
-        # Noop
-        pass
-        
-    def dispatch_share(self, target):
-        self.incoming.append(target)
-        
-    def dispatch_share_ack(self, target, recipient):
-        self.acks.append((target, recipient))
-        
-    def dispatch_share_nak(self, target, recipient):
-        self.naks.append((target, recipient))
-        
-        
-class MockRolodex:
-    def request_handler(self, subs_ghid, notify_ghid):
-        # Noop
-        pass
+        # This is just being used to call new_secret(), so no worries
+        self._identity = TEST_AGENT1
 
 
 # ###############################################
@@ -116,7 +75,130 @@ class MockRolodex:
         
         
 class PrivateerTest(unittest.TestCase):
-    def test_trash(self):
+    def setUp(self):
+        self.golcore = MockGolcore()
+        self.oracle = MockOracle()
+        self.privateer = Privateer()
+        
+        self.privateer.assemble(self.golcore, self.oracle)
+        self.privateer.bootstrap()
+    
+    def test_simple(self):
+        ''' Beep boop, SweetBot1.0 reporting
+        '''
+        # Not much in the way of verification here, definitely room to improve
+        secret = self.privateer.new_secret()
+        self.assertTrue(isinstance(secret, Secret))
+        
+        # Okay some of this might be silly but if you got it might as well 
+        # flaunt it, amirite?
+        secret1 = self.privateer.new_secret()
+        from _fixtures.remote_exchanges import cont1_1 as cont1
+        secret2 = self.privateer.new_secret()
+        from _fixtures.remote_exchanges import cont1_2 as cont2
+        secret3 = self.privateer.new_secret()
+        from _fixtures.remote_exchanges import cont2_1 as cont3
+        secret4 = self.privateer.new_secret()
+        from _fixtures.remote_exchanges import cont2_2 as cont4
+        secret5 = self.privateer.new_secret()
+        from _fixtures.remote_exchanges import cont3_1 as cont5
+        secret6 = self.privateer.new_secret()
+        from _fixtures.remote_exchanges import cont3_2 as cont6
+        
+        # First, stage a secret and verify its limited availability.
+        self.privateer.stage(cont1.ghid, secret1)
+        self.assertIn(cont1.ghid, self.privateer)
+        self.assertIn(cont1.ghid, self.privateer._secrets_staging)
+        self.assertNotIn(cont1.ghid, self.privateer._secrets_persistent)
+        
+        # Okay, now attempt to stage a competing secret.
+        with self.assertRaises(ConflictingSecrets, 
+                                msg = 'Allowed conflicting secret to stage.'):
+            self.privateer.stage(cont1.ghid, secret2)
+            
+        # And attempt to re-stage the correct secret.
+        self.privateer.stage(cont1.ghid, secret1)
+        self.assertIn(cont1.ghid, self.privateer)
+        self.assertIn(cont1.ghid, self.privateer._secrets_staging)
+        self.assertNotIn(cont1.ghid, self.privateer._secrets_persistent)
+            
+        # Now actually commit the secret and verify it persistence
+        self.privateer.commit(cont1.ghid)
+        self.assertIn(cont1.ghid, self.privateer)
+        self.assertNotIn(cont1.ghid, self.privateer._secrets_staging)
+        self.assertIn(cont1.ghid, self.privateer._secrets_persistent)
+        
+        # Once again, attempt to stage a competing secret
+        with self.assertRaises(ConflictingSecrets, 
+                                msg = 'Allowed conflicting secret to stage.'):
+            self.privateer.stage(cont1.ghid, secret2)
+            
+        # Again attempt to re-stage the correct secret. Make sure commit's both
+        # indempotent AND doesn't result in garbage within the staging arena.
+        self.privateer.stage(cont1.ghid, secret1)
+        self.assertIn(cont1.ghid, self.privateer)
+        self.assertNotIn(cont1.ghid, self.privateer._secrets_staging)
+        self.assertIn(cont1.ghid, self.privateer._secrets_persistent)
+            
+        # Now test abandonment issues
+        self.privateer.stage(cont2.ghid, secret2)
+        self.assertIn(cont2.ghid, self.privateer)
+        self.assertIn(cont2.ghid, self.privateer._secrets_staging)
+        self.assertNotIn(cont2.ghid, self.privateer._secrets_persistent)
+        self.privateer.abandon(cont2.ghid)
+        self.assertNotIn(cont2.ghid, self.privateer)
+        self.assertNotIn(cont2.ghid, self.privateer._secrets_staging)
+        self.assertNotIn(cont2.ghid, self.privateer._secrets_persistent)
+        
+        # Now same with committed secrets
+        self.privateer.stage(cont2.ghid, secret2)
+        self.privateer.commit(cont2.ghid)
+        self.assertIn(cont2.ghid, self.privateer)
+        self.assertNotIn(cont2.ghid, self.privateer._secrets_staging)
+        self.assertIn(cont2.ghid, self.privateer._secrets_persistent)
+        self.privateer.abandon(cont2.ghid)
+        self.assertNotIn(cont2.ghid, self.privateer)
+        self.assertNotIn(cont2.ghid, self.privateer._secrets_staging)
+        self.assertNotIn(cont2.ghid, self.privateer._secrets_persistent)
+        
+        # And now let's test abandoning an unknown secret, both quiet and loud
+        self.privateer.abandon(cont3.ghid, quiet=True)
+        with self.assertRaises(SecretUnknown, 
+                                msg = 'Allowed abandoning unknown secret.'):
+            self.privateer.abandon(cont3.ghid, quiet=False)
+        
+        # And committing an unknown secret...
+        with self.assertRaises(SecretUnknown, 
+                                msg = 'Allowed abandoning unknown secret.'):
+            self.privateer.commit(cont3.ghid)
+        
+        # And getting an unknown secret...
+        with self.assertRaises(SecretUnknown, 
+                                msg = 'Allowed abandoning unknown secret.'):
+            self.privateer.get(cont3.ghid)
+        
+        # Now stage a bad secret, unstage it, and restage a good one.
+        self.privateer.stage(cont3.ghid, secret2)
+        self.privateer.unstage(cont3.ghid)
+        self.assertNotIn(cont3.ghid, self.privateer)
+        self.assertNotIn(cont3.ghid, self.privateer._secrets_staging)
+        self.assertNotIn(cont3.ghid, self.privateer._secrets_persistent)
+        self.privateer.stage(cont3.ghid, secret3)
+        self.assertIn(cont3.ghid, self.privateer)
+        self.assertIn(cont3.ghid, self.privateer._secrets_staging)
+        self.assertNotIn(cont3.ghid, self.privateer._secrets_persistent)
+        
+        # Also, unstaging something that doesn't exist.
+        with self.assertRaises(SecretUnknown, 
+                                msg = 'Allowed abandoning unknown secret.'):
+            self.privateer.unstage(cont4.ghid)
+            
+        # And finally, make sure that getting secrets does, in fact, return
+        # them correctly, both from staged and committed.
+        self.assertEqual(self.privateer.get(cont1.ghid), secret1)
+        self.assertEqual(self.privateer.get(cont3.ghid), secret3)
+        
+    def test_chains_and_ratchets(self):
         raise NotImplementedError()
         
 
