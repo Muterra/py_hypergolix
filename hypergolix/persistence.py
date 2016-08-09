@@ -141,8 +141,8 @@ class Salmonator:
         '''
         self._opslock = threading.Lock()
         
-        self._persist_core = None
-        self._golix_core = None
+        self._percore = None
+        self._golcore = None
         self._postman = None
         self._librarian = None
         self._doorman = None
@@ -150,13 +150,13 @@ class Salmonator:
         self._upstream_remotes = set()
         self._downstream_remotes = set()
         
-        # Simple set of weakreffed GAOs.
-        self._registered = weakref.WeakSet()
+        # WVD lookup for <registered ghid>: GAO.
+        self._registered = weakref.WeakValueDictionary()
         
     def assemble(self, golix_core, persistence_core, doorman, postman, 
                 librarian):
-        self._golix_core = weakref.proxy(golix_core)
-        self._persist_core = weakref.proxy(persistence_core)
+        self._golcore = weakref.proxy(golix_core)
+        self._percore = weakref.proxy(persistence_core)
         self._postman = weakref.proxy(postman)
         self._librarian = weakref.proxy(librarian)
     
@@ -175,14 +175,14 @@ class Salmonator:
             self._upstream_remotes.add(persister)
             # Subscribe to our identity, assuming we actually have a golix core
             try:
-                persister.subscribe(self._golix_core.whoami, 
+                persister.subscribe(self._golcore.whoami, 
                                     self._remote_callback)
             except AttributeError:
                 pass
                 
-            # Subscribe to every active GAO
+            # Subscribe to every active GAO's ghid
             for registrant in self._registered:
-                persister.subscribe(registrant.ghid, self._remote_callback)
+                persister.subscribe(registrant, self._remote_callback)
         
     def remove_upstream_remote(self, persister):
         ''' Inverse of above.
@@ -261,7 +261,7 @@ class Salmonator:
             # This may or may not be an update we already have.
             try:
                 # Call as remotable=False to avoid infinite loops.
-                self._core.ingest(data, remotable=False)
+                self._golcore.ingest(data, remotable=False)
             
             # Couldn't load. Return False.
             except:
@@ -353,17 +353,51 @@ class Salmonator:
         while the gao is retained in memory.
         '''
         with self._opslock:
-            self._registered.add(gao)
+            self._registered[gao.ghid] = gao
         
-        if gao.dynamic:
-            with self._opslock:
+            if gao.dynamic:
                 for remote in self._upstream_remotes:
-                    # TODO: move this into the GAO itself, so that deletion
-                    # also results in unsubscribing.
-                    remote.subscribe(gao.ghid, self._remote_callback)
+                    try:
+                        remote.subscribe(gao.ghid, self._remote_callback)
+                    except:
+                        logger.warning(
+                            'Exception while subscribing to upstream updates '
+                            'for GAO at ' + str(bytes(ghid)) + '\n' +
+                            ''.join(traceback.format_exc())
+                        )
+                        
+            # Add deregister as a finalizer.
+            weakref.finalize(gao, self.deregister, gao.ghid)
             
-            if not skip_refresh:
-                self.pull(obj.ghid)
+        # This should also catch any upstream deletes.
+        if not skip_refresh:
+            self.pull(obj.ghid)
+                
+    def deregister(self, ghid):
+        ''' Tells the salmonator to stop listening for upstream 
+        object updates. Primarily intended for use as a finalizer
+        for GAO objects.
+        '''
+        with self._opslock:
+            try:
+                # We shouldn't really actually need to do this, but let's
+                # explicitly do it anyways, to ensure there is no race 
+                # condition between object removal and someone else sending an 
+                # update. The weak-value-ness of the _registered lookup can be 
+                # used as a fallback.
+                del self._registered[ghid]
+            except KeyError:
+                pass
+            
+            for remote in self._upstream_remotes:
+                try:
+                    remote.unsubscribe(ghid, self._remote_callback)
+                except:
+                    logger.warning(
+                        'Exception while unsubscribing from upstream updates '
+                        'during GAO cleanup for ' + str(bytes(ghid)) + '\n' +
+                        ''.join(traceback.format_exc())
+                    )
                 
                 
 class SalmonatorNoop:
@@ -473,6 +507,10 @@ class PersistenceCore:
             # Note that individual ingest methods are only called directly for 
             # locally-built objects, which do not need a mail run.
             self.postman.schedule(obj)
+            
+            # Note: this is not the place for salmonator pushing! Locally 
+            # created/updated objects call the individual ingest methods 
+            # directly, so they have to be the ones that actually deal with
                     
         return obj
         
@@ -736,7 +774,7 @@ class Doorman:
             
         # Okay, now we need to verify the object
         try:
-            author = self._librarian.summarize_loud(obj.author)
+            author = self._librarian.summarize(obj.author)
         except KeyError as exc:
             raise InvalidIdentity(
                 '0x0003: Unknown author / recipient: ' + str(bytes(obj.author))
@@ -764,7 +802,7 @@ class Doorman:
             
         # Okay, now we need to verify the object
         try:
-            author = self._librarian.summarize_loud(obj.binder)
+            author = self._librarian.summarize(obj.binder)
         except KeyError as exc:
             raise InvalidIdentity(
                 '0x0003: Unknown author / recipient: ' + str(bytes(obj.binder))
@@ -792,7 +830,7 @@ class Doorman:
             
         # Okay, now we need to verify the object
         try:
-            author = self._librarian.summarize_loud(obj.binder)
+            author = self._librarian.summarize(obj.binder)
         except KeyError as exc:
             raise InvalidIdentity(
                 '0x0003: Unknown author / recipient: ' + str(bytes(obj.binder))
@@ -820,7 +858,7 @@ class Doorman:
             
         # Okay, now we need to verify the object
         try:
-            author = self._librarian.summarize_loud(obj.debinder)
+            author = self._librarian.summarize(obj.debinder)
         except KeyError as exc:
             raise InvalidIdentity(
                 '0x0003: Unknown author / recipient: ' + 
@@ -1036,7 +1074,7 @@ class MrPostman(_PostmanBase):
     def __init__(self):
         super().__init__()
         self._rolodex = None
-        self._golix_core = None
+        self._golcore = None
         
         # self._listeners = SetMap()
         # NOTE! This means that the listeners CANNOT be methods, as methods
@@ -1045,7 +1083,7 @@ class MrPostman(_PostmanBase):
         
     def assemble(self, golix_core, librarian, bookie, rolodex):
         super().assemble(librarian, bookie)
-        self._golix_core = weakref.proxy(golix_core)
+        self._golcore = weakref.proxy(golix_core)
         self._rolodex = weakref.proxy(rolodex)
         
     def register(self, gao):
@@ -1063,7 +1101,7 @@ class MrPostman(_PostmanBase):
     def _deliver(self, subscription, notification):
         ''' Do the actual subscription update.
         '''
-        if subscription == self._golix_core.whoami:
+        if subscription == self._golcore.whoami:
             self._rolodex.request_handler(subscription, notification)
         else:
             for callback in self._listeners.get_any(subscription):
@@ -1296,7 +1334,7 @@ class Lawyer:
         
     def _validate_author(self, obj):
         try:
-            author = self._librarian.summarize_loud(obj.author)
+            author = self._librarian.summarize(obj.author)
         except KeyError as exc:
             logger.info('0x0003: Unknown author / recipient.')
             raise InvalidIdentity(
@@ -1332,7 +1370,7 @@ class Lawyer:
         '''
         self._validate_author(obj)
         try:
-            existing = self._librarian.summarize_loud(obj.ghid)
+            existing = self._librarian.summarize(obj.ghid)
         except KeyError:
             pass
         else:
@@ -1359,7 +1397,7 @@ class Lawyer:
         self._validate_author(obj)
         try:
             if target_obj is None:
-                existing = self._librarian.summarize_loud(obj.target)
+                existing = self._librarian.summarize(obj.target)
             else:
                 existing = target_obj
                 
@@ -1402,7 +1440,7 @@ class Lawyer:
         ''' Validate recipient.
         '''
         try:
-            recipient = self._librarian.summarize_loud(obj.recipient)
+            recipient = self._librarian.summarize(obj.recipient)
         except KeyError as exc:
             logger.info(
                 '0x0003: Unknown author / recipient: ' + 
@@ -1446,7 +1484,7 @@ class Enforcer:
         ''' Check if target is known, and if it is, validate it.
         '''
         try:
-            target = self._librarian.summarize_loud(obj.target)
+            target = self._librarian.summarize(obj.target)
         except KeyError:
             pass
         else:
@@ -1464,7 +1502,7 @@ class Enforcer:
         Also do a state check on the dynamic binding.
         '''
         try:
-            target = self._librarian.summarize_loud(obj.target)
+            target = self._librarian.summarize(obj.target)
         except KeyError:
             pass
         else:
@@ -1484,7 +1522,7 @@ class Enforcer:
         '''
         try:
             if target_obj is None:
-                target = self._librarian.summarize_loud(obj.target)
+                target = self._librarian.summarize(obj.target)
             else:
                 target = target_obj
         except KeyError:
@@ -1521,7 +1559,7 @@ class Enforcer:
         '''
         # Try getting an existing binding.
         try:
-            existing = self._librarian.summarize_loud(obj.ghid)
+            existing = self._librarian.summarize(obj.ghid)
             
         except KeyError:
             if obj.history:
@@ -1724,7 +1762,7 @@ class Bookie:
         # First we need to make sure we're not missing an existing frame for
         # this binding, and then to schedule a GC check for its target.
         try:
-            existing = self._librarian.summarize_loud(obj.ghid)
+            existing = self._librarian.summarize(obj.ghid)
         except KeyError:
             if obj.history:
                 logger.error(
@@ -1816,7 +1854,7 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
     '''
     def __init__(self):
         # Link to core, which will be assigned after __init__
-        self._core = None
+        self._percore = None
         self._salmonator = None
         
         # Operations and restoration lock
@@ -1834,7 +1872,7 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
     def assemble(self, core, salmonator):
         # Creates a weakref proxy to core.
         # This is needed for lazy loading and restoring.
-        self._core = weakref.proxy(core)
+        self._percore = weakref.proxy(core)
         self._salmonator = weakref.proxy(salmonator)
         
     def force_gc(self, obj):
@@ -1908,19 +1946,6 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
             ghid = self._ghid_resolver(ghid)
             return self.get_from_cache(ghid)
         
-    def retrieve_loud(self, ghid):
-        ''' Returns the raw data associated with the ghid, checking both
-        locally and with the salmonator.
-        '''
-        ghid = self._ghid_resolver(ghid)
-        
-        try:
-            self._salmonator.pull(ghid)
-        except UnavailableUpstream:
-            pass
-            
-        return self.retrieve(ghid)
-        
     def summarize(self, ghid):
         ''' Returns a lightweight Hypergolix description of the object.
         Checks only locally.
@@ -1942,26 +1967,11 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
                     # Lazy-load a new one if possible.
                     self._lazy_load(ghid, exc)
                     return self._catalog[ghid]
-        
-    def summarize_loud(self, ghid):
-        ''' Returns a lightweight Hypergolix description of the object.
-        Checks both locally and with the salmonator.
-        
-        CANNOT BE CALLED DURING RESTORATION.
-        '''
-        ghid = self._ghid_resolver(ghid)
-        
-        try:
-            self._salmonator.pull(ghid)
-        except UnavailableUpstream:
-            pass
-        
-        return self.summarize(ghid)
                 
     def _lazy_load(self, ghid, exc):
         ''' Does a lazy load restore of the ghid.
         '''
-        if self._core is None:
+        if self._percore is None:
             raise RuntimeError(
                 'Core must be linked to lazy-load from cache.'
             ) from exc
@@ -1972,7 +1982,7 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
             
             # I guess we might as well validate on every lazy load.
             with self._restoring:
-                self._core.ingest(data)
+                self._percore.ingest(data)
                 
         except Exception as new_exc:
             raise new_exc from exc
@@ -1992,7 +2002,7 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         # still informed that we're restoring.
         logger.warning('# BEGINNING LIBRARIAN RESTORATION ###################')
         
-        if self._core is None:
+        if self._percore is None:
             raise RuntimeError(
                 'Cannot restore a librarian\'s cache without first linking to '
                 'its corresponding core.'
@@ -2019,33 +2029,33 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
             
             # First load all identities, so that we have authors for everything
             for gidc in gidcs:
-                self._core.ingest(gidc.packed)
-                # self._core.ingest_gidc(gidc)
+                self._percore.ingest(gidc.packed)
+                # self._percore.ingest_gidc(gidc)
                 
             # Now all debindings, so that we can check state while we're at it
             for gdxx in gdxxs:
-                self._core.ingest(gdxx.packed)
-                # self._core.ingest_gdxx(gdxx)
+                self._percore.ingest(gdxx.packed)
+                # self._percore.ingest_gdxx(gdxx)
                 
             # Now all bindings, so that objects aren't gc'd. Note: can't 
             # combine into single list, because of different ingest methods
             for gobs in gobss:
-                self._core.ingest(gobs.packed)
-                # self._core.ingest_gobs(gobs)
+                self._percore.ingest(gobs.packed)
+                # self._percore.ingest_gobs(gobs)
             for gobd in gobds:
-                self._core.ingest(gobd.packed)
-                # self._core.ingest_gobd(gobd)
+                self._percore.ingest(gobd.packed)
+                # self._percore.ingest_gobd(gobd)
                 
             # Next the objects themselves, so that any requests will have their 
             # targets available (not that it would matter yet, buuuuut)...
             for geoc in geocs:
-                self._core.ingest(geoc.packed)
-                # self._core.ingest_geoc(geoc)
+                self._percore.ingest(geoc.packed)
+                # self._percore.ingest_geoc(geoc)
                 
             # Last but not least
             for garq in garqs:
-                self._core.ingest(garq.packed)
-                # self._core.ingest_garq(garq)
+                self._percore.ingest(garq.packed)
+                # self._percore.ingest_garq(garq)
                 
         # Upgrade this to warning just so that the default logging level is
         # still informed that we're restoring.

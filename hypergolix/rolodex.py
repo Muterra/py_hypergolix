@@ -77,10 +77,10 @@ class Rolodex:
     def __init__(self):
         self._opslock = threading.Lock()
         
-        self._core = None
+        self._golcore = None
         self._oracle = None
         self._privateer = None
-        self._persister = None
+        self._percore = None
         self._librarian = None
         self._ghidproxy = None
         
@@ -98,13 +98,12 @@ class Rolodex:
     def assemble(self, golix_core, oracle, privateer, dispatch, 
                 persistence_core, librarian, ghidproxy):
         # Chicken, meet egg.
-        self._core = weakref.proxy(golix_core)
+        self._golcore = weakref.proxy(golix_core)
         self._oracle = weakref.proxy(oracle)
         self._privateer = weakref.proxy(privateer)
         self._dispatch = weakref.proxy(dispatch)
-        # TODO: change _persister to _persistence_core
         self._librarian = weakref.proxy(librarian)
-        self._persister = weakref.proxy(persistence_core)
+        self._percore = weakref.proxy(persistence_core)
         self._ghidproxy = weakref.proxy(ghidproxy)
         
     def share_object(self, target, recipient):
@@ -126,7 +125,7 @@ class Rolodex:
         ''' Initiates a handshake request with the recipient.
         '''
         contact = SecondParty.from_packed(
-            self._librarian.retrieve_loud(recipient)
+            self._librarian.retrieve(recipient)
         )
         
         # This is guaranteed to resolve the container fully.
@@ -135,7 +134,7 @@ class Rolodex:
         with self._opslock:
             # TODO: fix Golix library so this isn't such a shitshow re:
             # breaking abstraction barriers.
-            handshake = self._core._identity.make_handshake(
+            handshake = self._golcore._identity.make_handshake(
                 target = target,
                 secret = self._privateer.get(container_ghid)
             )
@@ -149,23 +148,21 @@ class Rolodex:
         # there's a race condition between them.
         self._pending_requests[request.ghid] = target, recipient
         
-        # TODO: move all persister operations to some dedicated something or 
-        # other. Oracle maybe?
         # Note the potential race condition here. Should catch errors with the
         # persister in case we need to resolve pending requests that didn't
         # successfully post.
-        self.persister.ingest_garq(request)
+        self._percore.ingest_garq(request)
         
     def request_handler(self, subscription, notification):
         ''' Callback to handle any requests.
         '''
         # Note that the notification could also be a GDXX.
-        request_or_debind = self._librarian.summarize_loud(notification)
+        request_or_debind = self._librarian.summarize(notification)
         
         if isinstance(request_or_debind, _GarqLite):
             # We literally just did a loud summary, so no need to be loud here
             packed = self._librarian.retrieve(notification)
-            payload = self._core.open_request(packed)
+            payload = self._golcore.open_request(packed)
             self._handle_request(payload, notification)
             
         elif isinstance(request_or_debind, _GdxxLite):
@@ -223,18 +220,18 @@ class Rolodex:
                 'NAK.\n' + ''.join(traceback.format_exc())
             )
             # Erfolglos. Send a nak to whomever sent the handshake
-            response_obj = self._core._identity.make_nak(
+            response_obj = self._golcore._identity.make_nak(
                 target = source_ghid
             )
             
         else:
             # Success. Send an ack to whomever sent the handshake
-            response_obj = self._core._identity.make_ack(
+            response_obj = self._golcore._identity.make_ack(
                 target = source_ghid
             )
         
-        response = self._core.make_request(request.author, response_obj)
-        self.persister.ingest_garq(response)
+        response = self._golcore.make_request(request.author, response_obj)
+        self._percore.ingest_garq(response)
             
         self._dispatch.dispatch_share(request.target)
             

@@ -163,7 +163,7 @@ class Dispatcher:
         pending_reqs must be dict-like. It's the lookup for the request
             address: target address.
         '''
-        self._core = None
+        self._golcore = None
         self._oracle = None
         self._rolodex = None
         
@@ -211,7 +211,7 @@ class Dispatcher:
         
     def assemble(self, golix_core, oracle, rolodex):
         # Chicken, meet egg.
-        self._core = weakref.proxy(golix_core)
+        self._golcore = weakref.proxy(golix_core)
         self._oracle = weakref.proxy(oracle)
         self._rolodex = weakref.proxy(rolodex)
         
@@ -303,7 +303,7 @@ class Dispatcher:
         if not obj.dynamic:
             raise DispatchError('Cannot freeze a static object.')
             
-        static_address = self._core.freeze_dynamic(
+        static_address = self._golcore.freeze_dynamic(
             ghid_dynamic = ghid
         )
         
@@ -323,7 +323,7 @@ class Dispatcher:
         preventing its deletion to any connected persistence providers.
         '''
         # TODO: add some kind of proofing here? 
-        binding = self._core.make_binding_stat(ghid)
+        binding = self._golcore.make_binding_stat(ghid)
         self._persister.ingest_gobs(binding)
         
     def delete_object(self, asking_token, ghid):
@@ -346,7 +346,7 @@ class Dispatcher:
         try:
             obj.halt_updates()
             # self._ignore_subs_because_updating.add(ghid)
-            self._core.delete_ghid(ghid)
+            self._golcore.delete_ghid(ghid)
         except:
             # Why is it a syntax error to have else without except?
             raise
@@ -431,7 +431,7 @@ class Dispatcher:
             
             # Currently, just perform a handshake. In the future, move this 
             # to a dedicated exchange system.
-            request = self._core.hand_ghid(ghid, recipient)
+            request = self._golcore.hand_ghid(ghid, recipient)
             
         except:
             self._outstanding_shares.discard(sharepair, asking_token)

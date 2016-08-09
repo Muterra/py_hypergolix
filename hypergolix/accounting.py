@@ -107,7 +107,7 @@ class AgentBootstrap:
         possible, anyways) into register().
         '''
         # First we need to create everything.
-        self.persistence_core = PersistenceCore()
+        self.percore = PersistenceCore()
         self.doorman = Doorman()
         self.enforcer = Enforcer()
         self.lawyer = Lawyer()
@@ -115,7 +115,7 @@ class AgentBootstrap:
         self.postman = MrPostman()
         self.undertaker = Undertaker()
         self.salmonator = Salmonator()
-        self.golix_core = GolixCore()
+        self.golcore = GolixCore()
         self.privateer = Privateer()
         self.oracle = Oracle()
         self.rolodex = Rolodex()
@@ -123,26 +123,26 @@ class AgentBootstrap:
         self.dispatch = Dispatcher()
         
         # Now we need to link everything together.
-        self.golix_core.assemble(self.librarian)
-        self.persistence_core.assemble(self.doorman, self.enforcer, 
+        self.golcore.assemble(self.librarian)
+        self.percore.assemble(self.doorman, self.enforcer, 
                                         self.lawyer, self.bookie, 
                                         self.librarian, self.postman,
                                         self.undertaker, self.salmonator)
-        self.oracle.assemble(self.golix_core)
-        self.privateer.assemble(self.golix_core, self.oracle)
-        self.proxy.assemble(self.golix_core, self.librarian)
-        self.dispatch.assemble(self.golix_core, self.oracle, self.rolodex)
-        self.rolodex.assemble(self.golix_core, self.oracle, self.privateer, 
+        self.oracle.assemble(self.golcore)
+        self.privateer.assemble(self.golcore, self.oracle)
+        self.proxy.assemble(self.golcore, self.librarian)
+        self.dispatch.assemble(self.golcore, self.oracle, self.rolodex)
+        self.rolodex.assemble(self.golcore, self.oracle, self.privateer, 
                             self.dispatch, self.persister, self.proxy)
         self.doorman.assemble(self.librarian)
-        self.postman.assemble(self.golix_core, self.rolodex, self.librarian, 
+        self.postman.assemble(self.golcore, self.rolodex, self.librarian, 
                             self.bookie)
         self.undertaker.assemble(self.librarian, self.bookie, self.postman)
         self.lawyer.assemble(self.librarian)
         self.enforcer.assemble(self.librarian)
         self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
-        self.librarian.assemble(self.persistence_core)
-        self.salmonator.assemble(self.golix_core, self.persistence_core, 
+        self.librarian.assemble(self.percore)
+        self.salmonator.assemble(self.golcore, self.percore, 
                                 self.postman, self.librarian)
             
         # Now we need to bootstrap everything.
@@ -151,7 +151,7 @@ class AgentBootstrap:
             # ----------------------------------------------------------
             identity = FirstParty()
             persister.ingest_gidc(identity.second_party)
-            self.golix_core.bootstrap(identity)
+            self.golcore.bootstrap(identity)
             
             # Privateer bootstrap.
             # ----------------------------------------------------------

@@ -423,7 +423,7 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         
         Does not require an existing app token.
         '''
-        ghid = self.dispatch._core.whoami
+        ghid = self.dispatch._golcore.whoami
         return bytes(ghid)
         
     async def get_object_wrapper(self, endpoint, request_body):

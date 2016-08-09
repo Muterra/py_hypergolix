@@ -39,14 +39,12 @@ __all__ = [
     'Privateer', 
 ]
 
-from .utils import TraceLogger
-
-from .exceptions import PrivateerError
-from .exceptions import RatchetError
 
 # External dependencies
 import threading
 import collections
+import weakref
+import traceback
 
 # These are used for secret ratcheting only.
 from Crypto.Hash import SHA512
@@ -55,6 +53,11 @@ from Crypto.Protocol.KDF import HKDF
 # Intra-package dependencies
 from .core import _GAO
 from .core import _GAODict
+
+from .utils import TraceLogger
+
+from .exceptions import PrivateerError
+from .exceptions import RatchetError
 
 
 # ###############################################
@@ -85,7 +88,7 @@ class Privateer:
         self._modlock = threading.Lock()
         
         # These must be linked during assemble.
-        self._core = None
+        self._golcore = None
         self._oracle = None
         
         # These must be bootstrapped.
@@ -97,15 +100,15 @@ class Privateer:
         self._chains = None
         
         # Keep track of chain progress. This does not need to be distributed.
-        # Lookup <proxy ghid>
-        self._ratchet_in_progress = set()
+        # Lookup <proxy ghid> -> proxy secret
+        self._ratchet_in_progress = {}
         
         # Just here for diagnosing a testing problem
         self._committment_problems = {}
         
     def assemble(self, golix_core, oracle):
         # Chicken, meet egg.
-        self._core = weakref.proxy(golix_core)
+        self._golcore = weakref.proxy(golix_core)
         # We need an oracle for ratcheting.
         self._oracle = weakref.proxy(oracle)
         
@@ -127,7 +130,7 @@ class Privateer:
         
     def new_secret(self):
         # Straight pass-through to the golix new_secret bit.
-        return self._core._identity.new_secret()
+        return self._golcore._identity.new_secret()
         
     def make_chain(self, proxy, container):
         ''' Makes a ratchetable chain. Must be owned by a particular
@@ -156,8 +159,12 @@ class Privateer:
             if proxy not in self._ratchet_in_progress:
                 raise ValueError('No ratchet in progress for proxy.')
                 
+            secret = self._ratchet_in_progress.pop(proxy)
             self._chains[proxy] = container
-            self._ratchet_in_progress.remove(proxy)
+            
+            # NOTE: this bypasses the usual stage -> commit process, because it
+            # can only be used locally during the creation of a new container.
+            self._secrets_persistent[container] = secret
         
     def reset_chain(self, proxy, container):
         ''' Used to reset a chain back to a pristine state.
@@ -166,7 +173,14 @@ class Privateer:
             if proxy not in self._chains:
                 raise ValueError('Proxy has no existing chain.')
                 
-            self._ratchet_in_progress.discard(proxy)
+            if container not in self._secrets:
+                raise ValueError('Container secret is unknown; cannot reset.')
+                
+            try:
+                del self._ratchet_in_progress[proxy]
+            except KeyError:
+                pass
+                
             self._chains[proxy] = container
         
     def ratchet_chain(self, proxy):
@@ -182,23 +196,23 @@ class Privateer:
             
             # TODO: make sure this is not a race condition.
             binding = self._oracle.get_object(gaoclass=_GAO, ghid=proxy)
-            target = binding.target
+            last_target = binding._history_targets[0]
             last_frame = binding._history[0]
             
             try:
-                existing_secret = self._secrets[target]
+                existing_secret = self._secrets[last_target]
             except KeyError as exc:
                 raise RatchetError('No secret for existing target?') from exc
             
-            result = self._ratchet(
+            ratcheted = self._ratchet(
                 secret = existing_secret,
                 proxy = proxy,
                 salt_ghid = last_frame
             )
             
-            self._ratchet_in_progress.add(proxy)
+            self._ratchet_in_progress[proxy] = ratcheted
             
-        return result
+        return ratcheted
             
     def heal_chain(self, gao, binding):
         ''' Heals the ratchet for a binding using the gao. Call this any 
@@ -238,7 +252,15 @@ class Privateer:
             )
             
         # DON'T take _modlock here or we will be reentrant = deadlock
-        self.stage(binding.target, known_secret)
+        try:
+            self.stage(binding.target, known_secret)
+            # Note that opening the container itself will commit the secret.
+        except:
+            logger.warning(
+                'Error while staging new secret for attempted ratchet. The '
+                'ratchet is very likely broken.\n' + 
+                ''.join(traceback.format_exc())
+            )
         
     @staticmethod
     def _ratchet(secret, proxy, salt_ghid):
@@ -392,3 +414,8 @@ class Privateer:
                 
         if fail_test:
             raise KeyError('Secret not found for GHID ' + str(ghid))
+            
+    def __contains__(self, ghid):
+        ''' Check if we think we know a secret for the ghid.
+        '''
+        return ghid in self._secrets

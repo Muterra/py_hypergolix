@@ -176,7 +176,7 @@ class RemotePersistenceServer:
     def __init__(self):
         self.bridge = None
         
-        self.persistence_core = PersistenceCore()
+        self.percore = PersistenceCore()
         self.doorman = Doorman()
         self.enforcer = Enforcer()
         self.lawyer = Lawyer()
@@ -191,7 +191,7 @@ class RemotePersistenceServer:
         
     def assemble(self, bridge):
         # Now we need to link everything together.
-        self.persistence_core.assemble(self.doorman, self.enforcer, 
+        self.percore.assemble(self.doorman, self.enforcer, 
                                         self.lawyer, self.bookie, 
                                         self.librarian, self.postman,
                                         self.undertaker, self.salmonator)
@@ -199,17 +199,17 @@ class RemotePersistenceServer:
         self.enforcer.assemble(self.librarian)
         self.lawyer.assemble(self.librarian)
         self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
-        self.librarian.assemble(self.persistence_core, self.salmonator)
+        self.librarian.assemble(self.percore, self.salmonator)
         self.postman.assemble(self.librarian, self.bookie)
         self.undertaker.assemble(self.librarian, self.bookie, self.postman)
         # Note that this will break if we ever try to use it, because 
         # golix_core isn't actually a golix_core.
-        self.salmonator.assemble(self, self.persistence_core, self.doorman, 
+        self.salmonator.assemble(self, self.percore, self.doorman, 
                                 self.postman, self.librarian)
         
         # Okay, now set up the bridge, and we should be ready.
         self.bridge = bridge
-        self.bridge.assemble(self.persistence_core, self.bookie, 
+        self.bridge.assemble(self.percore, self.bookie, 
                             self.librarian, self.postman)
 
 
@@ -528,7 +528,7 @@ class PersisterBridgeServer(Autoresponder):
     }
     
     def __init__(self, *args, **kwargs):
-        self._pcore = None
+        self._percore = None
         self._bookie = None
         self._librarian = None
         self._postman = None
@@ -571,7 +571,7 @@ class PersisterBridgeServer(Autoresponder):
         
     def assemble(self, persistence_core, bookie, librarian, postman):
         # Link to the remote core.
-        self._pcore = weakref.proxy(persistence_core)
+        self._percore = weakref.proxy(persistence_core)
         self._bookie = weakref.proxy(bookie)
         self._postman = weakref.proxy(postman)
         self._librarian = weakref.proxy(librarian)
@@ -596,7 +596,7 @@ class PersisterBridgeServer(Autoresponder):
         '''
         obj = await self._loop.run_in_executor(
             self._ingester, # executor
-            self._pcore.ingest, # func
+            self._percore.ingest, # func
             request_body, # packed
             False) # remotable
         

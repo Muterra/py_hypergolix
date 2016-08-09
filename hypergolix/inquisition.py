@@ -72,3 +72,8 @@ class Inquisitor:
     justify their overhead.
     '''
     pass
+    # Note: you're probably not going to want to use the _GAO to maintain the
+    # librarian retention directly, because not all _GAO have a librarian 
+    # counterpart. For example, debindings will basically never be associated
+    # with a live GAO, so, if you decided to let GAO live-ness dictate the
+    # librarian caching of "lite"weight objects, you would never cache a GDXX.

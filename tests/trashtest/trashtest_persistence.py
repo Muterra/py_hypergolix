@@ -51,7 +51,6 @@ from hypergolix.persistence import Enforcer
 from hypergolix.persistence import Bookie
 from hypergolix.persistence import DiskLibrarian
 from hypergolix.persistence import MemoryLibrarian
-from hypergolix.persistence import Enlitener
 from hypergolix.persistence import Salmonator
 
 from hypergolix.exceptions import PersistenceError
