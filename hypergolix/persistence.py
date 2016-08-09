@@ -127,310 +127,6 @@ __all__ = [
 # ###############################################
 # Library
 # ###############################################
-
-
-class Salmonator:
-    ''' Responsible for disseminating Golix objects upstream and 
-    downstream. Handles all comms with them as well.
-    
-    # TODO: (f)reebase and separate into components for both local and
-    # server use
-    '''
-    def __init__(self):
-        ''' Yarp.
-        '''
-        self._opslock = threading.Lock()
-        
-        self._percore = None
-        self._golcore = None
-        self._postman = None
-        self._librarian = None
-        self._doorman = None
-        
-        self._upstream_remotes = set()
-        self._downstream_remotes = set()
-        
-        # WVD lookup for <registered ghid>: GAO.
-        self._registered = weakref.WeakValueDictionary()
-        
-    def assemble(self, golix_core, persistence_core, doorman, postman, 
-                librarian):
-        self._golcore = weakref.proxy(golix_core)
-        self._percore = weakref.proxy(persistence_core)
-        self._postman = weakref.proxy(postman)
-        self._librarian = weakref.proxy(librarian)
-    
-    def add_upstream_remote(self, persister):
-        ''' Adds an upstream persister.
-        
-        PersistenceCore will attempt to have a constantly consistent 
-        state with upstream persisters. That means that any local 
-        resources will either be subscribed to upstream, or checked for
-        updates before ingestion by the Hypergolix service.
-        
-        HOWEVER, the Salmonator will make no attempt to synchronize 
-        state **between** upstream remotes.
-        '''
-        with self._opslock:
-            self._upstream_remotes.add(persister)
-            # Subscribe to our identity, assuming we actually have a golix core
-            try:
-                persister.subscribe(self._golcore.whoami, 
-                                    self._remote_callback)
-            except AttributeError:
-                pass
-                
-            # Subscribe to every active GAO's ghid
-            for registrant in self._registered:
-                persister.subscribe(registrant, self._remote_callback)
-        
-    def remove_upstream_remote(self, persister):
-        ''' Inverse of above.
-        '''
-        with self._opslock:
-            self._upstream_remotes.remove(persister)
-            # Remove all subscriptions
-            persister.disconnect()
-        
-    def add_downstream_remote(self, persister):
-        ''' Adds a downstream persister.
-        
-        PersistenceCore will not attempt to keep a consistent state with
-        downstream persisters. Instead, it will simply push updates to
-        local objects downstream. It will not, however, look to them for
-        updates.
-        
-        Therefore, to create synchronization **between** multiple 
-        upstream remotes, also add them as downstream remotes.
-        '''
-        raise NotImplementedError()
-        self._downstream_remotes.add(persister)
-        
-    def remove_downstream_remote(self, persister):
-        ''' Inverse of above.
-        '''
-        raise NotImplementedError()
-        self._downstream_remotes.remove(persister)
-        
-    def _remote_callback(self, subscription, notification):
-        ''' Callback to use when subscribing to things at remotes.
-        '''
-        self.pull(notification)
-        
-    def push(self, ghid):
-        ''' Grabs the ghid from librarian and sends it to all applicable
-        remotes.
-        '''
-        data = self._librarian.retrieve(ghid)
-        # This is, again, definitely a lame way of doing this
-        for remote in self._upstream_remotes:
-            remote.publish(data)
-        
-    def pull(self, ghid):
-        ''' Grabs the ghid from remotes, if available, and puts it into
-        the ingestion pipeline.
-        '''
-        # TODO: check locally, run _inspect, check if mutable before blindly 
-        # pulling.
-        # This is the lame way of doing this, fo sho
-        for remote in self._upstream_remotes:
-            if self._attempt_pull_single(ghid, remote):
-                self._postman.do_mail_run()
-                break
-                
-        else:
-            raise UnavailableUpstream('Object was unavailable or unacceptable '
-                                    'at all currently-registered remotes.')
-        
-    def _attempt_pull_single(self, ghid, remote):
-        ''' Once we've successfully acquired data from
-        '''
-        # Try to get it from the remote.
-        try:
-            data = remote.get(ghid)
-            
-        # Unsuccessful pull. Log the error and return False.
-        except:
-            logger.warning('Error while pulling from upstream: \n' + 
-                            ''.join(traceback.format_exc()))
-            return False
-        
-        # Only if we actually successfully got something back should we
-        # continue on to ingest.
-        else:
-            # This may or may not be an update we already have.
-            try:
-                # Call as remotable=False to avoid infinite loops.
-                self._golcore.ingest(data, remotable=False)
-            
-            # Couldn't load. Return False.
-            except:
-                logger.warning(
-                    'Error while pulling from upstream: \n' + 
-                    ''.join(traceback.format_exc())
-                )
-                return False
-                
-            # As soon as we have it, return True so parent can stop checking 
-            # other remotes.
-            else:
-                return True
-        
-    def _inspect(self, ghid):
-        ''' Checks librarian for an existing ghid. If it has it, checks
-        the object's integrity by re-parsing it. If it is dynamic, also
-        queries upstream remotes for newer versions.
-        
-        returns None if no local copy exists
-        returns True if local copy exists and is valid
-        raises IntegrityError if local copy exists, but is corrupted.
-        ~~(returns False if dynamic and local copy is out of date)~~
-            Note: this is unimplemented currently, blocking on several 
-            upstream changes.
-        '''
-        # Load the object locally
-        try:
-            obj = self._librarian.summarize(ghid)
-        
-        # Librarian has no copy.    
-        except KeyError:
-            return None
-            
-        # The only object that can mutate is a Gobd
-        # This is blocking on updates to the remote persistence spec, which is
-        # in turn blocking on changes to the Golix spec.
-        # if isinstance(obj, _GobdLite):
-        #     self._check_for_updates(obj)
-        
-        self._verify_existing(obj)
-        return True
-            
-    def _check_for_updates(self, obj):
-        ''' Checks with all upstream remotes for new versions of a 
-        dynamic object.
-        '''
-        # Oh wait, we can't actually do this, because the remote persistence
-        # protocol doesn't support querying what the current binding frame is
-        # without just loading the whole binding.
-        # When the Golix spec changes to semi-stateless dynamic bindings, using
-        # a counter for validating monotonicity instead of a hash chain, then
-        # the remote persistence spec should be expanded to include a query_ctr
-        # command for ultra-lightweight checks. For now, we're stuck with ~1kB
-        # dynamic bindings.
-        raise NotImplementedError()
-            
-    def _verify_existing(self, obj):
-        ''' Re-loads an object to make sure it's still good.
-        Obj should be a lightweight hypergolix representation, not the
-        packed Golix object, unpacked Golix object, nor the GAO.
-        '''
-        packed = self._librarian.retrieve(obj.ghid)
-        
-        for primitive, loader in ((_GidcLite, self._doorman.load_gidc),
-                                (_GeocLite, self._doorman.load_geoc),
-                                (_GobsLite, self._doorman.load_gobs),
-                                (_GobdLite, self._doorman.load_gobd),
-                                (_GdxxLite, self._doorman.load_gdxx),
-                                (_GarqLite, self._doorman.load_garq)):
-            # Attempt this loader
-            if isinstance(obj, primitive):
-                try:
-                    loader(packed)
-                except (MalformedGolixPrimitive, SecurityError) as exc:
-                    logger.error('Integrity of local object appears '
-                                'compromised.')
-                    raise IntegrityError('Local copy of object appears to be '
-                                        'corrupt or compromised.') from exc
-                else:
-                    break
-                    
-        # If we didn't find a loader, typeerror.
-        else:
-            raise TypeError('Invalid object type while verifying object.')
-            
-    def register(self, gao, skip_refresh=False):
-        ''' Tells the Salmonator to listen upstream for any updates
-        while the gao is retained in memory.
-        '''
-        with self._opslock:
-            self._registered[gao.ghid] = gao
-        
-            if gao.dynamic:
-                for remote in self._upstream_remotes:
-                    try:
-                        remote.subscribe(gao.ghid, self._remote_callback)
-                    except:
-                        logger.warning(
-                            'Exception while subscribing to upstream updates '
-                            'for GAO at ' + str(bytes(ghid)) + '\n' +
-                            ''.join(traceback.format_exc())
-                        )
-                        
-            # Add deregister as a finalizer.
-            weakref.finalize(gao, self.deregister, gao.ghid)
-            
-        # This should also catch any upstream deletes.
-        if not skip_refresh:
-            self.pull(obj.ghid)
-                
-    def deregister(self, ghid):
-        ''' Tells the salmonator to stop listening for upstream 
-        object updates. Primarily intended for use as a finalizer
-        for GAO objects.
-        '''
-        with self._opslock:
-            try:
-                # We shouldn't really actually need to do this, but let's
-                # explicitly do it anyways, to ensure there is no race 
-                # condition between object removal and someone else sending an 
-                # update. The weak-value-ness of the _registered lookup can be 
-                # used as a fallback.
-                del self._registered[ghid]
-            except KeyError:
-                pass
-            
-            for remote in self._upstream_remotes:
-                try:
-                    remote.unsubscribe(ghid, self._remote_callback)
-                except:
-                    logger.warning(
-                        'Exception while unsubscribing from upstream updates '
-                        'during GAO cleanup for ' + str(bytes(ghid)) + '\n' +
-                        ''.join(traceback.format_exc())
-                    )
-                
-                
-class SalmonatorNoop:
-    ''' Currently used in remote persistence servers to hush everything
-    upstream/downstream while still making use of standard librarians.
-    
-    And by "used", I mean "unused, but is intended to be added in at 
-    some point, because I forgot I was just using a standard Salmonator
-    because the overhead is unimportant right now".
-    '''
-    def assemble(*args, **kwargs):
-        pass
-        
-    def add_upstream_remote(*args, **kwargs):
-        pass
-        
-    def remove_upstream_remote(*args, **kwargs):
-        pass
-        
-    def add_downstream_remote(*args, **kwargs):
-        pass
-        
-    def remove_downstream_remote(*args, **kwargs):
-        pass
-        
-    def push(*args, **kwargs):
-        pass
-        
-    def pull(*args, **kwargs):
-        pass
-        
-    def register(*args, **kwargs):
-        pass
                 
         
 class PersistenceCore:
@@ -2224,6 +1920,310 @@ class MemoryLibrarian(_LibrarianCore):
         ''' Check to see if the ghid is contained in the cache.
         '''
         return ghid in self._shelf
+
+
+class Salmonator:
+    ''' Responsible for disseminating Golix objects upstream and 
+    downstream. Handles all comms with them as well.
+    
+    # TODO: (f)reebase and separate into components for both local and
+    # server use
+    '''
+    def __init__(self):
+        ''' Yarp.
+        '''
+        self._opslock = threading.Lock()
+        
+        self._percore = None
+        self._golcore = None
+        self._postman = None
+        self._librarian = None
+        self._doorman = None
+        
+        self._upstream_remotes = set()
+        self._downstream_remotes = set()
+        
+        # WVD lookup for <registered ghid>: GAO.
+        self._registered = weakref.WeakValueDictionary()
+        
+    def assemble(self, golix_core, persistence_core, doorman, postman, 
+                librarian):
+        self._golcore = weakref.proxy(golix_core)
+        self._percore = weakref.proxy(persistence_core)
+        self._postman = weakref.proxy(postman)
+        self._librarian = weakref.proxy(librarian)
+    
+    def add_upstream_remote(self, persister):
+        ''' Adds an upstream persister.
+        
+        PersistenceCore will attempt to have a constantly consistent 
+        state with upstream persisters. That means that any local 
+        resources will either be subscribed to upstream, or checked for
+        updates before ingestion by the Hypergolix service.
+        
+        HOWEVER, the Salmonator will make no attempt to synchronize 
+        state **between** upstream remotes.
+        '''
+        with self._opslock:
+            self._upstream_remotes.add(persister)
+            # Subscribe to our identity, assuming we actually have a golix core
+            try:
+                persister.subscribe(self._golcore.whoami, 
+                                    self._remote_callback)
+            except AttributeError:
+                pass
+                
+            # Subscribe to every active GAO's ghid
+            for registrant in self._registered:
+                persister.subscribe(registrant, self._remote_callback)
+        
+    def remove_upstream_remote(self, persister):
+        ''' Inverse of above.
+        '''
+        with self._opslock:
+            self._upstream_remotes.remove(persister)
+            # Remove all subscriptions
+            persister.disconnect()
+        
+    def add_downstream_remote(self, persister):
+        ''' Adds a downstream persister.
+        
+        PersistenceCore will not attempt to keep a consistent state with
+        downstream persisters. Instead, it will simply push updates to
+        local objects downstream. It will not, however, look to them for
+        updates.
+        
+        Therefore, to create synchronization **between** multiple 
+        upstream remotes, also add them as downstream remotes.
+        '''
+        raise NotImplementedError()
+        self._downstream_remotes.add(persister)
+        
+    def remove_downstream_remote(self, persister):
+        ''' Inverse of above.
+        '''
+        raise NotImplementedError()
+        self._downstream_remotes.remove(persister)
+        
+    def _remote_callback(self, subscription, notification):
+        ''' Callback to use when subscribing to things at remotes.
+        '''
+        self.pull(notification)
+        
+    def push(self, ghid):
+        ''' Grabs the ghid from librarian and sends it to all applicable
+        remotes.
+        '''
+        data = self._librarian.retrieve(ghid)
+        # This is, again, definitely a lame way of doing this
+        for remote in self._upstream_remotes:
+            remote.publish(data)
+        
+    def pull(self, ghid):
+        ''' Grabs the ghid from remotes, if available, and puts it into
+        the ingestion pipeline.
+        '''
+        # TODO: check locally, run _inspect, check if mutable before blindly 
+        # pulling.
+        # This is the lame way of doing this, fo sho
+        for remote in self._upstream_remotes:
+            if self._attempt_pull_single(ghid, remote):
+                self._postman.do_mail_run()
+                break
+                
+        else:
+            raise UnavailableUpstream('Object was unavailable or unacceptable '
+                                    'at all currently-registered remotes.')
+        
+    def _attempt_pull_single(self, ghid, remote):
+        ''' Once we've successfully acquired data from
+        '''
+        # Try to get it from the remote.
+        try:
+            data = remote.get(ghid)
+            
+        # Unsuccessful pull. Log the error and return False.
+        except:
+            logger.warning('Error while pulling from upstream: \n' + 
+                            ''.join(traceback.format_exc()))
+            return False
+        
+        # Only if we actually successfully got something back should we
+        # continue on to ingest.
+        else:
+            # This may or may not be an update we already have.
+            try:
+                # Call as remotable=False to avoid infinite loops.
+                self._golcore.ingest(data, remotable=False)
+            
+            # Couldn't load. Return False.
+            except:
+                logger.warning(
+                    'Error while pulling from upstream: \n' + 
+                    ''.join(traceback.format_exc())
+                )
+                return False
+                
+            # As soon as we have it, return True so parent can stop checking 
+            # other remotes.
+            else:
+                return True
+        
+    def _inspect(self, ghid):
+        ''' Checks librarian for an existing ghid. If it has it, checks
+        the object's integrity by re-parsing it. If it is dynamic, also
+        queries upstream remotes for newer versions.
+        
+        returns None if no local copy exists
+        returns True if local copy exists and is valid
+        raises IntegrityError if local copy exists, but is corrupted.
+        ~~(returns False if dynamic and local copy is out of date)~~
+            Note: this is unimplemented currently, blocking on several 
+            upstream changes.
+        '''
+        # Load the object locally
+        try:
+            obj = self._librarian.summarize(ghid)
+        
+        # Librarian has no copy.    
+        except KeyError:
+            return None
+            
+        # The only object that can mutate is a Gobd
+        # This is blocking on updates to the remote persistence spec, which is
+        # in turn blocking on changes to the Golix spec.
+        # if isinstance(obj, _GobdLite):
+        #     self._check_for_updates(obj)
+        
+        self._verify_existing(obj)
+        return True
+            
+    def _check_for_updates(self, obj):
+        ''' Checks with all upstream remotes for new versions of a 
+        dynamic object.
+        '''
+        # Oh wait, we can't actually do this, because the remote persistence
+        # protocol doesn't support querying what the current binding frame is
+        # without just loading the whole binding.
+        # When the Golix spec changes to semi-stateless dynamic bindings, using
+        # a counter for validating monotonicity instead of a hash chain, then
+        # the remote persistence spec should be expanded to include a query_ctr
+        # command for ultra-lightweight checks. For now, we're stuck with ~1kB
+        # dynamic bindings.
+        raise NotImplementedError()
+            
+    def _verify_existing(self, obj):
+        ''' Re-loads an object to make sure it's still good.
+        Obj should be a lightweight hypergolix representation, not the
+        packed Golix object, unpacked Golix object, nor the GAO.
+        '''
+        packed = self._librarian.retrieve(obj.ghid)
+        
+        for primitive, loader in ((_GidcLite, self._doorman.load_gidc),
+                                (_GeocLite, self._doorman.load_geoc),
+                                (_GobsLite, self._doorman.load_gobs),
+                                (_GobdLite, self._doorman.load_gobd),
+                                (_GdxxLite, self._doorman.load_gdxx),
+                                (_GarqLite, self._doorman.load_garq)):
+            # Attempt this loader
+            if isinstance(obj, primitive):
+                try:
+                    loader(packed)
+                except (MalformedGolixPrimitive, SecurityError) as exc:
+                    logger.error('Integrity of local object appears '
+                                'compromised.')
+                    raise IntegrityError('Local copy of object appears to be '
+                                        'corrupt or compromised.') from exc
+                else:
+                    break
+                    
+        # If we didn't find a loader, typeerror.
+        else:
+            raise TypeError('Invalid object type while verifying object.')
+            
+    def register(self, gao, skip_refresh=False):
+        ''' Tells the Salmonator to listen upstream for any updates
+        while the gao is retained in memory.
+        '''
+        with self._opslock:
+            self._registered[gao.ghid] = gao
+        
+            if gao.dynamic:
+                for remote in self._upstream_remotes:
+                    try:
+                        remote.subscribe(gao.ghid, self._remote_callback)
+                    except:
+                        logger.warning(
+                            'Exception while subscribing to upstream updates '
+                            'for GAO at ' + str(bytes(ghid)) + '\n' +
+                            ''.join(traceback.format_exc())
+                        )
+                        
+            # Add deregister as a finalizer.
+            weakref.finalize(gao, self.deregister, gao.ghid)
+            
+        # This should also catch any upstream deletes.
+        if not skip_refresh:
+            self.pull(obj.ghid)
+                
+    def deregister(self, ghid):
+        ''' Tells the salmonator to stop listening for upstream 
+        object updates. Primarily intended for use as a finalizer
+        for GAO objects.
+        '''
+        with self._opslock:
+            try:
+                # We shouldn't really actually need to do this, but let's
+                # explicitly do it anyways, to ensure there is no race 
+                # condition between object removal and someone else sending an 
+                # update. The weak-value-ness of the _registered lookup can be 
+                # used as a fallback.
+                del self._registered[ghid]
+            except KeyError:
+                pass
+            
+            for remote in self._upstream_remotes:
+                try:
+                    remote.unsubscribe(ghid, self._remote_callback)
+                except:
+                    logger.warning(
+                        'Exception while unsubscribing from upstream updates '
+                        'during GAO cleanup for ' + str(bytes(ghid)) + '\n' +
+                        ''.join(traceback.format_exc())
+                    )
+                
+                
+class SalmonatorNoop:
+    ''' Currently used in remote persistence servers to hush everything
+    upstream/downstream while still making use of standard librarians.
+    
+    And by "used", I mean "unused, but is intended to be added in at 
+    some point, because I forgot I was just using a standard Salmonator
+    because the overhead is unimportant right now".
+    '''
+    def assemble(*args, **kwargs):
+        pass
+        
+    def add_upstream_remote(*args, **kwargs):
+        pass
+        
+    def remove_upstream_remote(*args, **kwargs):
+        pass
+        
+    def add_downstream_remote(*args, **kwargs):
+        pass
+        
+    def remove_downstream_remote(*args, **kwargs):
+        pass
+        
+    def push(*args, **kwargs):
+        pass
+        
+    def pull(*args, **kwargs):
+        pass
+        
+    def register(*args, **kwargs):
+        pass
         
         
 class Enlitener:

@@ -39,6 +39,7 @@ import warnings
 import collections
 import logging
 import weakref
+import time
 
 from hypergolix.core import GolixCore
 from hypergolix.core import Oracle
@@ -381,29 +382,61 @@ class GAOTest(unittest.TestCase):
         self.assertEqual(obj_dyn.extract_state(), pt2)
         
 class OracleTest(unittest.TestCase):
-    def __setUp(self):
+    def setUp(self):
+        # These are directly required by the oracle
         self.golcore = GolixCore()
-        self.salmonator = SalmonatorNoop()
+        self.ghidproxy = GhidProxier()
+        self.privateer = Privateer()
+        self.percore = PersistenceCore()
+        self.bookie = Bookie()
         self.librarian = MemoryLibrarian()
         self.oracle = Oracle()
+        self.postman = MrPostman()
+        self.salmonator = SalmonatorNoop()
         
+        # These are here, for lack of fixturing of the above.
+        self.doorman = Doorman()
+        self.enforcer = Enforcer()
+        self.lawyer = Lawyer()
+        self.undertaker = Undertaker()
+        self.rolodex = MockRolodex()
+        
+        # These are a mix of "necessary" and "unnecessary if well-fixtured"
         self.golcore.assemble(self.librarian)
-        self.librarian.assemble(self.golcore, self.salmonator)
+        self.ghidproxy.assemble(self.librarian)
         self.oracle.assemble(self.golcore, self.ghidproxy, self.privateer, 
                             self.percore, self.bookie, self.librarian, 
                             self.postman, self.salmonator)
+        self.privateer.assemble(self.golcore, self.oracle)
+        self.percore.assemble(self.doorman, self.enforcer, self.lawyer, 
+                            self.bookie, self.librarian, self.postman, 
+                            self.undertaker, self.salmonator)
+        self.doorman.assemble(self.librarian)
+        self.enforcer.assemble(self.librarian)
+        self.lawyer.assemble(self.librarian)
+        self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
+        self.librarian.assemble(self.percore, self.salmonator)
+        self.postman.assemble(self.golcore, self.librarian, self.bookie,
+                            self.rolodex)
+        self.undertaker.assemble(self.librarian, self.bookie, self.postman)
         
+        # These are both "who-knows-if-necessary-when-fixtured"
         self.golcore.bootstrap(TEST_AGENT1)
+        self.privateer.bootstrap()
+        self.percore.ingest(TEST_AGENT1.second_party.packed)
     
-    def test_trash(self):
-        raise NotImplementedError()
-        
+    def test_load(self):
         # First let's try simple retrieval
         from _fixtures.remote_exchanges import pt1
         from _fixtures.remote_exchanges import cont1_1
+        from _fixtures.remote_exchanges import secret1_1
         geoc1_1 = _GeocLite(cont1_1.ghid, cont1_1.author)
+        
+        from _fixtures.remote_exchanges import pt2
         from _fixtures.remote_exchanges import cont1_2
+        from _fixtures.remote_exchanges import secret1_2
         geoc1_2 = _GeocLite(cont1_2.ghid, cont1_2.author)
+        
         from _fixtures.remote_exchanges import dyn1_1a
         gobd1_a = _GobdLite(
             dyn1_1a.ghid_dynamic, 
@@ -411,6 +444,7 @@ class OracleTest(unittest.TestCase):
             dyn1_1a.target,
             dyn1_1a.ghid,
             dyn1_1a.history)
+        
         from _fixtures.remote_exchanges import dyn1_1b
         gobd1_b = _GobdLite(
             dyn1_1b.ghid_dynamic, 
@@ -419,20 +453,52 @@ class OracleTest(unittest.TestCase):
             dyn1_1b.ghid,
             dyn1_1b.history)
         
-        self.librarian.store(geoc1_1, cont1_1.packed)
-        self.librarian.store(gobd1_a, dyn1_1a.packed)
+        self.percore.ingest(dyn1_1a.packed)
+        self.percore.ingest(cont1_1.packed)
+        self.privateer.stage(cont1_1.ghid, secret1_1)
+        # Manually call this before next update, to prevent later keyerrors 
+        # from attempting to deliver a "posthumous" notification for the above
+        # ingestion.
+        self.postman.do_mail_run()
         
         # Okay, now we should be able to get that.
-        obj = self.oracle.get_obect(_GAO, dyn1_1a.ghid_dynamic)
+        obj = self.oracle.get_object(_GAO, dyn1_1a.ghid_dynamic)
         self.assertEqual(obj.extract_state(), pt1)
+        # Make sure we loaded it into memory
+        self.assertIn(dyn1_1a.ghid_dynamic, self.oracle._lookup)
+        # Test loading it again to get the other code path
+        obj = self.oracle.get_object(_GAO, dyn1_1a.ghid_dynamic)
         
-        # self.librarian.store(geoc1_2, cont1_2.packed)
-        # self.librarian.store(gobd1_b, dyn1_1b.packed)
+        # Now, that should have registered with the postman, so let's make sure
+        # it did, by updating the object.
+        self.percore.ingest(dyn1_1b.packed)
+        self.percore.ingest(cont1_2.packed)
+        self.privateer.stage(cont1_2.ghid, secret1_2)
         
+        # Do the mail run and then verify the state has updated
+        self.postman.do_mail_run()
         
-class PrivateerTest(unittest.TestCase):
-    def test_trash(self):
-        raise NotImplementedError()
+        # Ew. Gross.
+        time.sleep(.1)
+        
+        self.assertEqual(obj.extract_state(), pt2)
+        # TODO: also verify that the object has been registered with the 
+        # salmonator.
+    
+    def test_new(self):
+        state = b'\x00'
+        obj = self.oracle.new_object(_GAO, state, dynamic=True)
+        # Make sure we called push and therefore have a ghid
+        self.assertTrue(obj.ghid)
+        self.assertEqual(obj.extract_state(), state)
+        
+        # Make sure we loaded it into memory
+        self.assertIn(obj.ghid, self.oracle._lookup)
+        
+        # TODO: verify that the object has been registered with the postman in 
+        # this (the new object) case.
+        # TODO: also verify that the object has been registered with the 
+        # salmonator.
         
 
 if __name__ == "__main__":

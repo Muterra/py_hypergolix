@@ -335,8 +335,13 @@ class Oracle:
                     
             except KeyError:
                 obj = gaoclass.from_ghid(
-                    core = self._golcore, 
                     ghid = ghid, 
+                    golix_core = self._golcore,
+                    ghidproxy = self._ghidproxy,
+                    privateer = self._privateer,
+                    persistence_core = self._percore,
+                    bookie = self._bookie,
+                    librarian = self._librarian,
                     **kwargs
                 )
                 self._lookup[ghid] = obj
@@ -347,13 +352,22 @@ class Oracle:
                 
             return obj
         
-    def new_object(self, gaoclass, **kwargs):
-        ''' Creates a new object and returns it. Passes all *args and
-        **kwargs to the declared gao_class. Eliminates the need to pass
-        core, or call push.
+    def new_object(self, gaoclass, state, **kwargs):
+        ''' Creates a new object and returns it. Passes all *kwargs to 
+        the declared gao_class. Requires a zeroth state, and calls push
+        internally.
         '''
         with self._opslock:
-            obj = gaoclass(core=self._golcore, **kwargs)
+            obj = gaoclass(
+                golix_core = self._golcore,
+                ghidproxy = self._ghidproxy,
+                privateer = self._privateer,
+                persistence_core = self._percore,
+                bookie = self._bookie,
+                librarian = self._librarian,
+                **kwargs
+            )
+            obj.apply_state(state)
             obj.push()
             self._lookup[obj.ghid] = obj
             self._postman.register(obj)
