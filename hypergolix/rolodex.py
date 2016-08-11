@@ -64,6 +64,12 @@ __all__ = [
 # ###############################################
 # Library
 # ###############################################
+            
+            
+_SharePair = collections.namedtuple(
+    typename = '_SharePair',
+    field_names = ('ghid', 'recipient'),
+)
 
 
 class Rolodex:
@@ -78,15 +84,17 @@ class Rolodex:
         self._opslock = threading.Lock()
         
         self._golcore = None
-        self._oracle = None
         self._privateer = None
         self._percore = None
         self._librarian = None
         self._ghidproxy = None
+        self._ipccore = None
         
         # Persistent dict-like lookup for 
         # request_ghid -> (request_target, request recipient)
         self._pending_requests = None
+        # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
+        self._outstanding_shares = None
         
     def bootstrap(self, pending_requests):
         ''' Initialize distributed state.
@@ -95,18 +103,22 @@ class Rolodex:
         # request_ghid -> (request_target, request recipient)
         self._pending_requests = pending_requests
         
-    def assemble(self, golix_core, oracle, privateer, dispatch, 
-                persistence_core, librarian, ghidproxy):
+        # These need to be distributed but aren't yet. TODO!
+        # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
+        self._outstanding_shares = SetMap()
+        
+    def assemble(self, golix_core, privateer, dispatch, 
+                persistence_core, librarian, ghidproxy, ipc_core):
         # Chicken, meet egg.
         self._golcore = weakref.proxy(golix_core)
-        self._oracle = weakref.proxy(oracle)
         self._privateer = weakref.proxy(privateer)
         self._dispatch = weakref.proxy(dispatch)
         self._librarian = weakref.proxy(librarian)
         self._percore = weakref.proxy(persistence_core)
         self._ghidproxy = weakref.proxy(ghidproxy)
+        self._ipccore = weakref.proxy(ipc_core)
         
-    def share_object(self, target, recipient):
+    def share_object(self, target, recipient, requesting_token):
         ''' Share a target ghid with the recipient.
         '''
         if not isinstance(target, Ghid):
@@ -117,9 +129,12 @@ class Rolodex:
             raise TypeError(
                 'recipient must be Ghid or similar.'
             )
+
+        sharepair = _SharePair(target, recipient)
             
         # For now, this is just doing a handshake with some typechecking.
-        self._hand_object(target, recipient)
+        self._hand_object(*sharepair)
+        self._outstanding_shares.add(sharepair, requesting_token)
         
     def _hand_object(self, target, recipient):
         ''' Initiates a handshake request with the recipient.
@@ -233,7 +248,7 @@ class Rolodex:
         response = self._golcore.make_request(request.author, response_obj)
         self._percore.ingest_garq(response)
             
-        self._dispatch.dispatch_share(request.target)
+        self.share_handler(request.target, request.author)
             
     def _handle_ack(self, request):
         ''' Handles a handshake ack after reception.
@@ -246,7 +261,7 @@ class Rolodex:
                 str(bytes(request.target))
             )
         else:
-            self.dispatch.dispatch_share_ack(target, recipient)
+            self.receipt_ack_handler(target, recipient)
             
     def _handle_nak(self, request):
         ''' Handles a handshake nak after reception.
@@ -259,4 +274,75 @@ class Rolodex:
                 str(bytes(request.target))
             )
         else:
-            self.dispatch.dispatch_share_nak(target, recipient)
+            self.receipt_nak_handler(target, recipient)
+    
+    def share_handler(self, target, sender):
+        ''' Incoming share targets (well, their ghids anyways) are 
+        forwarded to the _ipccore.
+        
+        Only separate from _handle_handshake right now because in the
+        future, object sharing will be at least partly handled within 
+        its own dedicated rolodex pipeline.
+        '''
+        call_coroutine_threadsafe(
+            coro = self._share_handler(target, sender),
+            loop = self._ipccore._loop
+        )
+        
+    async def _share_handler(self, target, sender):
+        ''' Wrapper to inject our share_handler into the _ipccore's 
+        event loop.
+        '''
+        # Build a callsheet for the target.
+        callsheet = await self._ipccore.make_callsheet(target)
+        # Go ahead and distribute it to the appropriate endpoints.
+        await self._ipccore.distribute_to_endpoints(
+            self._ipccore.send_share,
+            callsheet,
+            target,
+            sender
+        )
+    
+    def receipt_ack_handler(self, target, recipient):
+        ''' Receives a share ack from the rolodex and passes it on to 
+        the application that requested the share.
+        '''
+        call_coroutine_threadsafe(
+            coro = self._receipt_ack_handler(target, recipient),
+            loop = self._ipccore._loop
+        )
+            
+    async def _receipt_ack_handler(self, target, recipient):
+        ''' Wrapper to inject our handler into the _ipccore event loop.
+        '''
+        sharepair = _SharePair(target, recipient)
+        callsheet = self._outstanding_shares.pop_any(sharepair)
+        
+        # Distribute the share success to all apps that requested its delivery
+        await self._ipchost._robodialer(
+            self._ipchost.notify_share_success,
+            target,
+            recipient
+        )
+    
+    def receipt_nak_handler(self, target, recipient):
+        ''' Receives a share nak from the rolodex and passes it on to 
+        the application that requested the share.
+        '''
+        call_coroutine_threadsafe(
+            coro = self._receipt_nak_handler(target, recipient),
+            loop = self._ipccore._loop
+        )
+            
+    async def _receipt_nak_handler(self, target, recipient):
+        ''' Wrapper to inject our handler into the _ipccore event loop.
+        '''
+        sharepair = _SharePair(target, recipient)
+        callsheet = self._outstanding_shares.pop_any(sharepair)
+        
+        # Distribute the share failure to all apps that requested its delivery
+        await self._ipchost._robodialer(
+            self._ipchost.notify_share_failure,
+            target,
+            recipient
+        )

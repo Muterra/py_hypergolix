@@ -954,6 +954,31 @@ def _generate_threadnames(*prefixes):
             names.extend(candidates)
             
     return names
+    
+    
+class AutoresponseConnector:
+    ''' Connects an autoresponder to a connector. Use it by subclassing
+    both the connector and this class, for example:
+    
+    class WSAutoServer(AutoresponseConnector, WSBasicServer):
+        pass
+    '''
+    def __init__(self, autoresponder, *args, **kwargs):
+        # I am actually slightly concerned about future name collisions here
+        self.__autoresponder = autoresponder
+        
+    async def new_connection(self, *args, **kwargs):
+        ''' Bridge the connection with a newly created session.
+        '''
+        connection = await super().new_connection(*args, **kwargs)
+        await self.__autoresponder._generate_session_loopsafe(connection)
+        return connection
+    
+    async def _handle_connection(self, *args, **kwargs):
+        ''' Close the session with the connection.
+        '''
+        connection = await super()._handle_connection(*args, **kwargs)
+        await self.__autoresponder._close_session_loopsafe(connection)
 
 
 def Autocomms(autoresponder_class, connector_class, autoresponder_args=None, 

@@ -121,527 +121,81 @@ class DispatcherBase(metaclass=abc.ABCMeta):
         pass
             
             
-_SharePair = collections.namedtuple(
-    typename = '_SharePair',
-    field_names = ('ghid', 'recipient'),
+_AppDef = collections.namedtuple(
+    typename = '_AppDef',
+    field_names = ('app_token',),
+)
+            
+            
+_DispatchableState = collections.namedtuple(
+    typename = '_DispatchableState',
+    field_names = ('api_id', 'app_token', 'state'),
 )
 
 
 class Dispatcher:
-    ''' A standard, working dispatcher.
+    ''' The Dispatcher decides which objects should be delivered where.
+    This is decided through either:
     
-    Objects are dispatched to endpoints based on two criteria:
+    1. An API identifier (schema) dictating general compatibility as a
+        dispatchable
+    2. Declaring an object to be private, at which point the Dispatcher
+        will internally (though distributedly) maintain that object to
+        be exclusively available to an app token.
+        
+    Objects, once declared as non-private, cannot be retroactively 
+    privatized. That cat has officially left the bag/building/rodeo.
+    However, a private object can be made non-private at a later time,
+    provided it has defined an API ID.
     
-    1. API identifiers, or
-    2. Application tokens.
+    Private objects do not track their owning app tokens internally.
+    Instead, this is managed through a Dispatcher-internal GAO. As such,
+    even a bug resulting in a leaked private object will not result in a
+    leaked app token.
     
-    Application tokens should never be shared, as doing so may allow for
-    local phishing. The token is meant to create a private and unique 
-    identifier for that application; it is specific to that particular
-    agent. Objects being dispatched by token will only be usable by that
-    application at that agent.
+    Ideally, the dispatcher will eventually also enforce whatever user
+    restrictions on sharing are desired BETWEEN INSTALLED APPLICATIONS.
+    Sharing restrictions between external parties are within the purview
+    of the Rolodex.
     
-    API identifiers (and objects dispatched by them), however, may be 
-    shared as desired. They are not necessarily specific to a particular
-    application; when sharing, the originating application has no 
-    guarantees that the receiving application will be the same. They 
-    serve only to enforce data interoperability.
-    
-    Ideally, the actual agent will eventually be capable of configuring
-    which applications should have access to which APIs, but currently
-    anything installed is considered trusted.
+    TODO: support notification mechanism to push new objects to other
+    concurrent hypergolix instances. See note in ipc.ipccore.send_object
     '''
     def __init__(self):
-        ''' Some notes re: objects being passed in:
-        
-        all_tokens must be set-like, and must already contain a key for 
-            b'\x00\x00\x00\x00'. It's the list of all known tokens for 
-            the agent.
-        startup_objs must be SetMap-like. It's the list of all objects 
-            to be passed to a given app token.
-            TODO: make startup_objs actually that.
-        pending_reqs must be dict-like. It's the lookup for the request
-            address: target address.
+        ''' Yup yup yup yup yup yup yup
         '''
-        self._golcore = None
         self._oracle = None
         self._rolodex = None
+        self._ipccore = None
         
         # Temporarily set distributed state to None.
+        # Lookup for all known tokens: set(<tokens>)
         self._all_known_tokens = None
+        # Lookup (set-map-like) for <app token>: set(<startup ghids>)
         self._startup_by_token = None
+        # Lookup (dict-like) for <obj ghid>: <private owner>
+        self._private_by_ghid = None
+        # Distributed lock for adding app tokens
+        self._token_lock = None
         
-        # First init local state.
-        
-        # Lookup for app_tokens -> endpoints. Will be specific to the current
-        # state of this particular client for this agent.
-        self._active_tokens = weakref.WeakValueDictionary()
-        # Defining b'\x00\x00\x00\x00' will prevent using it as a token.
-        self._active_tokens[b'\x00\x00\x00\x00'] = self
-        
-        # Lookup for api_ids -> app_tokens. Contains ONLY the apps that are 
-        # currently available, because it's only used for dispatching objects
-        # that are being modified while the dispatcher is running.
-        self._api_ids = _JitSetDict()
-        
-        # Lookup for handshake ghid -> handshake object
-        self._outstanding_handshakes = {}
-        # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
-        # TODO: this should be made persistent across multiple instances.
-        self._outstanding_shares = SetMap()
-        
-        # Lookup for ghid -> tokens that specifically requested the ghid
-        # TODO: change this to "tokens that have a copy of the ghid"
-        self._requestors_by_ghid = _JitSetDict()
-        self._discarders_by_ghid = _JitSetDict()
-        
-        self._orphan_shares_incoming = set()
-        self._orphan_shares_outgoing_success = []
-        self._orphan_shares_outgoing_failed = []
-        
-        # Lookup for token -> waiting ghid -> operations
-        self._pending_by_token = _JitDictDict()
-        
-    def bootstrap(self, all_tokens, startup_objs):
+    def bootstrap(self, all_tokens, startup_objs, private_by_ghid):
         ''' Initialize distributed state.
         '''
         # Now init distributed state.
+        # All known tokens must already contain a key for b'\x00\x00\x00\x00'.
+        # TODO: check or add or something.
         self._all_known_tokens = all_tokens
         self._startup_by_token = startup_objs
+        self._private_by_ghid = private_by_ghid
         
-    def assemble(self, golix_core, oracle, rolodex):
+        # These need to be distributed but aren't yet. TODO!
+        self._token_lock = threading.Lock()
+        
+    def assemble(self, oracle, rolodex, ipc_core):
         # Chicken, meet egg.
-        self._golcore = weakref.proxy(golix_core)
         self._oracle = weakref.proxy(oracle)
         self._rolodex = weakref.proxy(rolodex)
-        
-    def get_object(self, asking_token, ghid):
-        ''' Gets an object by ghid for a specific endpoint. Currently 
-        only works for non-private objects.
-        '''
-        obj = self._oracle.get_object(
-            gaoclass = _Dispatchable,
-            dispatch = self,
-            ghid = ghid,
-        )
-        
-        if obj.app_token != bytes(4) and obj.app_token != asking_token:
-            raise DispatchError(
-                'Attempted to load private object from different application.'
-            )
-        
-        self._requestors_by_ghid[ghid].add(asking_token)
-        self._discarders_by_ghid[ghid].discard(asking_token)
-        
-        return obj
-        
-    def new_object(self, asking_token, *args, **kwargs):
-        ''' Creates a new object with the upstream golix provider.
-        asking_token is the app_token requesting the object.
-        *args and **kwargs are passed to Oracle.new_object(), which are 
-            in turn passed to the _GAO_Class (probably _Dispatchable)
-        ''' 
-        obj = self._oracle.new_object(
-            gaoclass = _Dispatchable, 
-            dispatch = self, 
-            *args, **kwargs
-        )
-        
-        # If this is a private object, record it as an object to be passed 
-        # during app startup
-        if obj.app_token != bytes(4):
-            self._startup_by_token.add(obj.app_token, obj.ghid)
-        
-        # Note: should we add some kind of mechanism to defer passing to other 
-        # endpoints until we update the one that actually requested the obj?
-        self.distribute_to_endpoints(
-            ghid = obj.ghid, 
-            skip_token = asking_token
-        )
-        
-        return obj.ghid
-        
-    def update_object(self, asking_token, ghid, state):
-        ''' Initiates an update of an object. Must be tied to a specific
-        endpoint, to prevent issuing that endpoint a notification in 
-        return.
-        '''
-        obj = self._oracle.get_object(
-            gaoclass = _Dispatchable,
-            dispatch = self, 
-            ghid = ghid,
-        )
-                
-        # Try updating golix before local.
-        # Temporarily silence updates from persister about the ghid we're 
-        # in the process of updating
-        try:
-            # This is now handled internally by _GAO in the _Dispatchable
-            # self._ignore_subs_because_updating.add(ghid)
-            obj.update(state)
-        except:
-            # Note: because a push() failure restores previous state, we should 
-            # probably distribute it INCLUDING TO THE ASKING TOKEN if there's a 
-            # push failure. TODO: think about this more.
-            raise
-        else:
-            self.distribute_to_endpoints(ghid, skip_token=asking_token)
-        # See above re: no longer needed (handled by _GAO)
-        # finally:
-        #     self._ignore_subs_because_updating.remove(ghid)
-        
-    def freeze_object(self, asking_token, ghid):
-        ''' Converts a dynamic object to a static object, returning the
-        static ghid.
-        '''
-        obj = self._oracle.get_object(
-            gaoclass = _Dispatchable,
-            dispatch = self, 
-            ghid = ghid
-        )
-        
-        if not obj.dynamic:
-            raise DispatchError('Cannot freeze a static object.')
-            
-        static_address = self._golcore.freeze_dynamic(
-            ghid_dynamic = ghid
-        )
-        
-        # We're going to avoid a race condition by pulling the freezed object
-        # post-facto, instead of using a cache.
-        self._oracle.get_object(
-            gaoclass = _Dispatchable,
-            dispatch = self, 
-            ghid = static_address
-        )
-        
-        return static_address
-        
-    def hold_object(self, asking_token, ghid):
-        ''' Binds to an address, preventing its deletion. Note that this
-        will publicly identify you as associated with the address and
-        preventing its deletion to any connected persistence providers.
-        '''
-        # TODO: add some kind of proofing here? 
-        binding = self._golcore.make_binding_stat(ghid)
-        self._persister.ingest_gobs(binding)
-        
-    def delete_object(self, asking_token, ghid):
-        ''' Debinds an object, attempting to delete it. This operation
-        will succeed if the persistence provider accepts the deletion,
-        but that doesn't necessarily mean the object was removed. A
-        warning may be issued if the object was successfully debound, 
-        but other bindings are preventing its removal.
-        
-        NOTE THAT THIS DELETES ALL COPIES OF THE OBJECT! It will become
-        subsequently unavailable to other applications using it.
-        '''
-        # First we need to cache the object so we can call updates.
-        obj = self._oracle.get_object(
-            gaoclass = _Dispatchable,
-            dispatch = self, 
-            ghid = ghid
-        )
-        
-        try:
-            obj.halt_updates()
-            # self._ignore_subs_because_updating.add(ghid)
-            self._golcore.delete_ghid(ghid)
-        except:
-            # Why is it a syntax error to have else without except?
-            raise
-        else:
-            self._oracle.forget(ghid)
-            
-            # If this is a private object, remove it from startup object record
-            if obj.app_token != bytes(4):
-                self._startup_by_token.discard(obj.app_token, obj.ghid)
-                
-        # This is now handled by obj.silence(), except because the object is
-        # being deleted, we don't need to unsilence it.
-        # finally:
-        #     self._ignore_subs_because_updating.remove(ghid)
-        
-        # Todo: check to see if this actually results in deleting the object
-        # upstream.
-        
-        # There's only a race condition here if the object wasn't actually 
-        # removed upstream.
-        self.distribute_to_endpoints(
-            ghid, 
-            skip_token = asking_token, 
-            deleted = obj
-        )
-        
-    def discard_object(self, asking_token, ghid):
-        ''' Removes the object from *only the asking application*. The
-        asking_token will no longer receive updates about the object.
-        However, the object itself will persist, and remain available to
-        other applications. This is the preferred way to remove objects.
-        '''
-        # This is sorta an accidental check that we're actually tracking the
-        # object. Could make it explicit I suppose.
-        obj = self._oracle.get_object(
-            gaoclass = _Dispatchable,
-            dispatch = self, 
-            ghid = ghid
-        )
-            
-        api_id = obj.api_id
-        
-        # Completely discard/deregister anything we don't care about anymore.
-        interested_tokens = set()
-        
-        if obj.app_token == bytes(4):
-            interested_tokens.update(self._api_ids[api_id])
-        else:
-            interested_tokens.add(obj.app_token)
-            
-        interested_tokens.update(self._requestors_by_ghid[ghid])
-        interested_tokens.difference_update(self._discarders_by_ghid[ghid])
-        interested_tokens.discard(asking_token)
-        
-        # Now perform actual updates
-        if len(interested_tokens) == 0:
-            # Delete? GC? Not clear what we should do here.
-            # For now, just tell the oracle to ignore it.
-            self._oracle.forget(ghid)
-            
-        else:
-            self._requestors_by_ghid[ghid].discard(asking_token)
-            self._discarders_by_ghid[ghid].add(asking_token)
-        
-    def share_object(self, asking_token, ghid, recipient):
-        ''' Do the whole super thing, and then record which application
-        initiated the request, and who the recipient was.
-        '''
-        obj = self._oracle.get_object(
-            gaoclass = _Dispatchable,
-            dispatch = self, 
-            ghid = ghid
-        )
-            
-        if obj.app_token != bytes(4):
-            raise DispatchError('Cannot share a private object.')
-        
-        sharepair = _SharePair(ghid, recipient)
-        
-        try:
-            self._outstanding_shares.add(sharepair, asking_token)
-            
-            # Currently, just perform a handshake. In the future, move this 
-            # to a dedicated exchange system.
-            request = self._golcore.hand_ghid(ghid, recipient)
-            
-        except:
-            self._outstanding_shares.discard(sharepair, asking_token)
-            raise
-    
-    def dispatch_share(self, target):
-        ''' Receives the target *object* from a rolodex share, and 
-        dispatches it as appropriate.
-        '''        
-        # Go ahead and distribute it to the appropriate endpoints.
-        self.distribute_to_endpoints(target)
-    
-    def dispatch_share_ack(self, target, recipient):
-        ''' Receives a share ack from the rolodex and passes it on to 
-        the application that requested the share.
-        '''
-        sharepair = _SharePair(target, recipient)
-        
-        # TODO: make this work distributedly.
-        requesting_tokens = self._outstanding_shares.pop_any(sharepair)
-        
-        # Now notify just the requesting app of the successful share. Note that
-        # this will also handle any missing endpoints.
-        for app_token in requesting_tokens:
-            self._attempt_contact_endpoint(
-                app_token, 
-                'notify_share_success',
-                target, 
-                recipient = recipient
-            )
-    
-    def dispatch_share_nak(self, target, recipient):
-        ''' Receives a share nak from the rolodex and passes it on to 
-        the application that requested the share.
-        '''
-        sharepair = _SharePair(target, recipient)
-        
-        # TODO: make this work distributedly.
-        requesting_tokens = self._outstanding_shares.pop_any(sharepair)
-        
-        # Now notify just the requesting app of the successful share. Note that
-        # this will also handle any missing endpoints.
-        for app_token in requesting_tokens:
-            self._attempt_contact_endpoint(
-                app_token, 
-                'notify_share_failure',
-                target, 
-                recipient = recipient
-            )
-                    
-    def distribute_to_endpoints(self, ghid, skip_token=None, deleted=False):
-        ''' Passes the object to all endpoints supporting its api via 
-        command.
-        
-        If tokens to skip is defined, they will be skipped.
-        tokens_to_skip isinstance iter(app_tokens)
-        
-        Should suppressing notifications for original creator be handled
-        by the endpoint instead?
-        '''
-        # Create a temporary set
-        callsheet = set()
-        
-        # If deleted, we passed the object itself.
-        if deleted:
-            obj = deleted
-        else:
-            # Not deleted? Grab the object.
-            obj = self._oracle.get_object(
-                gaoclass = _Dispatchable,
-                dispatch = self, 
-                ghid = ghid
-            )
-            
-        # The app token is defined, so contact that endpoint (and only that 
-        # endpoint) directly
-        # Bypass if someone is sending us an app token we don't know about
-        if (obj.app_token != bytes(4) and 
-            obj.app_token in self._all_known_tokens):
-                callsheet.add(obj.app_token)
-            
-        # It's not defined, so get everyone that uses that api_id
-        else:
-            callsheet.update(self._api_ids[obj.api_id])
-            
-        # Now add anyone explicitly tracking that object
-        callsheet.update(self._requestors_by_ghid[ghid])
-        
-        # And finally, remove the skip token if present, as well as any apps
-        # that have discarded the object
-        callsheet.discard(skip_token)
-        callsheet.difference_update(self._discarders_by_ghid[ghid])
-            
-        if len(callsheet) == 0:
-            logger.warning('Agent lacks application to handle app id.')
-            self._orphan_shares_incoming.add(ghid)
-        else:
-            for token in callsheet:
-                if deleted:
-                    # It's mildly dangerous to do this -- what if we throw an 
-                    # error in _attempt_contact_endpoint?
-                    self._attempt_contact_endpoint(
-                        token, 
-                        'send_delete', 
-                        ghid
-                    )
-                else:
-                    # It's mildly dangerous to do this -- what if we throw an 
-                    # error in _attempt_contact_endpoint?
-                    self._attempt_contact_endpoint(
-                        token, 
-                        'notify_object', 
-                        ghid, 
-                        state = obj.state
-                )
-                
-    def _attempt_contact_endpoint(self, app_token, command, ghid, *args, **kwargs):
-        ''' We have a token defined for the api_id, but we don't know if
-        the application is locally installed and running. Try to use it,
-        and if we can't, warn and stash the object.
-        '''
-        if app_token not in self._all_known_tokens:
-            raise DispatchError(
-                'Agent lacks application with matching token. WARNING: object '
-                'may have been discarded as a result!'
-            )
-        
-        elif app_token not in self._active_tokens:
-            warnings.warn(DispatchWarning(
-                'App token currently unavailable.'
-            ))
-            # Add it to the (potentially jit) dict record of waiting objs, so
-            # we can continue later.
-            # Side note: what the fuck is this trash?
-            self._pending_by_token[app_token][ghid] = (
-                app_token, 
-                command, 
-                args, 
-                kwargs
-            )
-            
-        else:
-            # This is a quick way of resolving command into the endpoint 
-            # operation.
-            endpoint = self._active_tokens[app_token]
-            
-            try:
-                do_dispatch = {
-                    'notify_object': endpoint.notify_object_threadsafe,
-                    'send_delete': endpoint.send_delete_threadsafe,
-                    'notify_share_success': endpoint.notify_share_success_threadsafe,
-                    'notify_share_failure': endpoint.notify_share_failure_threadsafe,
-                }[command]
-            except KeyError as e:
-                raise ValueError('Invalid command.') from e
-                
-            # TODO: fix leaky abstraction that's causing us to spit out threads
-            wargs = [ghid]
-            wargs.extend(args)
-            worker = threading.Thread(
-                target = do_dispatch,
-                daemon = True,
-                args = wargs,
-                kwargs = kwargs,
-            )
-            worker.start()
-    
-    def register_endpoint(self, endpoint):
-        ''' Registers an endpoint and all of its appdefs / APIs. If the
-        endpoint has already been registered, updates it.
-        
-        Note: this cannot be used to create new app tokens! The token 
-        must already be known to the dispatcher.
-        '''
-        app_token = endpoint.app_token
-        # This cannot be used to create new app tokens!
-        if app_token not in self._all_known_tokens:
-            raise ValueError('Endpoint app token is unknown to dispatcher.')
-        
-        if app_token in self._active_tokens:
-            if self._active_tokens[app_token] is not endpoint:
-                raise RuntimeError(
-                    'Attempt to reregister a new endpoint for the same token. '
-                    'Each app token must have exactly one endpoint.'
-                )
-        else:
-            self._active_tokens[app_token] = endpoint
-        
-        # Do this regardless, so that the endpoint can use this to update apis.
-        for api in endpoint.apis:
-            self._api_ids[api].add(app_token)
-        # Note: how to handle removing api_ids?
-            
-    def close_endpoint(self, endpoint):
-        ''' Closes this client's connection to the endpoint, meaning it
-        will not be able to handle any more requests. However, does not
-        (and should not) clean tokens from the api_id dict.
-        '''
-        del self._active_tokens[endpoint.app_token]
-        
-    def get_tokens(self, api_id):
-        ''' Gets the local app tokens registered as capable of handling
-        the passed API id.
-        '''
-        if api_id in self._api_ids:
-            return frozenset(self._api_ids[api_id])
-        else:
-            raise KeyError(
-                'Dispatcher does not have a token for passed api_id.'
-            )
+        self._ipccore = weakref.proxy(ipccore)
         
     def new_token(self):
         # Use a dummy api_id to force the while condition to be true initially
@@ -649,16 +203,76 @@ class Dispatcher:
         # Birthday paradox be damned; we can actually *enforce* uniqueness
         while token in self._all_known_tokens:
             token = os.urandom(4)
-        # Do this right away to prevent race condition (todo: also use lock?)
-        # Todo: something to make sure the token is actually being used?
-        self._all_known_tokens.add(token)
         return token
+        
+    def register_application(self, appdef):
+        ''' Creates a new application at the dispatcher.
+        
+        Currently, that just means creating an app token and adding it 
+        to the master list of all available app tokens. But, in the 
+        future, it will also encompass any information necessary to 
+        actually start the app, as Hypergolix makes the transition from 
+        backround service to core OS service.
+        '''
+        # TODO: this lock actually needs to be a distributed lock across all
+        # Hypergolix processes. There's a race condition currently. It's going
+        # to be a very, very unlikely one to hit, but existant nonetheless.
+        with self._token_lock:
+            token = self.new_token()
+            # Do this right away to prevent race condition
+            self._all_known_tokens.add(token)
             
+        return _AppDef(token)
+        
+    def check_application(self, appdef):
+        ''' Ensures that an application is known to the dispatcher.
+        
+        Currently just checks within all known tokens. In the future, 
+        this will likely be deprecated, as app launching itself starts
+        to be handled by the dispatcher (or whatever ends up doing that;
+        I guess it could be something else, too).
+        '''
+        # This cannot be used to create new app tokens!
+        if appdef.app_token not in self._all_known_tokens:
+            raise ValueError('App token unknown to dispatcher.')
             
-_DispatchableState = collections.namedtuple(
-    typename = '_DispatchableState',
-    field_names = ('api_id', 'app_token', 'state'),
-)
+    def get_parent_token(self, ghid):
+        ''' Returns the app_token parent for the passed ghid, if (and 
+        only if) it's private. Otherwise, returns None.
+        '''
+        try:
+            return self._private_by_ghid[ghid]
+        except KeyError:
+            return None
+        
+    def notify(self, ghid, deleted=False):
+        ''' Notify the dispatcher of a change to an object, which will
+        then be forwarded to the ipc core.
+        '''
+        call_coroutine_threadsafe(
+            coro = self._notify(ghid, deleted),
+            loop = self._ipccore._loop
+        )
+        
+    async def _notify(self, ghid, deleted=False):
+        ''' Wrapper to inject our handler into _ipccore event loop.
+        '''
+        # Build a callsheet for the target.
+        callsheet = await self._ipccore.make_callsheet(target)
+        
+        # Go ahead and distribute it to the appropriate endpoints.
+        if deleted:
+            await self._ipccore.distribute_to_endpoints(
+                self._ipccore.send_delete,
+                callsheet,
+                ghid
+            )
+        else:
+            await self._ipccore.distribute_to_endpoints(
+                self._ipccore.send_update,
+                callsheet,
+                ghid
+            )
             
             
 class _Dispatchable(_GAO):
@@ -672,6 +286,27 @@ class _Dispatchable(_GAO):
         self.api_id = api_id
         self.app_token = app_token
         
+        # This is a weak set for figuring out what endpoints are currently
+        # using the object.
+        self._used_by = weakref.WeakSet()
+        
+    def register_listener(self, endpoint):
+        ''' Registers the endpoint as a listener for the object.
+        '''
+        self._used_by.add(endpoint)
+        
+    def deregister_listener(self, endpoint):
+        ''' Removes the endpoint from object listeners. Need not be 
+        called before GCing the endpoint.
+        '''
+        self._used_by.discard(endpoint)
+        
+    @property
+    def listeners(self):
+        ''' Returns a temporary strong reference to any listeners.
+        '''
+        return frozenset(self._used_by)
+        
     def pull(self, *args, **kwargs):
         ''' Refreshes self from upstream. Should NOT be called at object 
         instantiation for any existing objects. Should instead be called
@@ -679,7 +314,7 @@ class _Dispatchable(_GAO):
         '''
         modified = super().pull(*args, **kwargs)
         if modified:
-            self._dispatch.distribute_to_endpoints(self.ghid)
+            self._dispatch.notify(self.ghid)
         
     @staticmethod
     def _pack(state):
@@ -788,4 +423,4 @@ class _Dispatchable(_GAO):
         
     def apply_delete(self):
         super().apply_delete()
-        self._dispatch.distribute_to_endpoints(self.ghid, deleted=self)
+        self._dispatch.notify(self.ghid, deleted=self)

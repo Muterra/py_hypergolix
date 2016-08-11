@@ -33,19 +33,10 @@ hypergolix: A python Golix client.
 Some thoughts:
 
 All of IPC should use a single autoresponder. 
-    + Then, more communications methods can be added to / removed from 
-        the host. 
-    + That can be quite easily accomplished with a minor modification to
-        the code already used in AutoComms. The same LinkedConnector
-        can subclass, extending __init__ to include the autoresponder
-        instead of forming a closure within "def Autocomms():"
     + More likely than not, the same methodology should be applied to 
-        persistence remotes, through the salmonator.
-Given the above, IPCHost should be renamed.
-    + Too confusing with the IPC servers that will be added in 
-        accounting.
-    + Should still stay within ipc.py though.
-    + 
+        persistence remotes, through the salmonator. Salmonator should
+        then be moved into hypergolix.remotes instead of .persistence.
+        
 The IPCHost autoresponder isn't *quite* the same thing as Dispatch.
     + They're very tightly-coupled, yes, but look at the DoC: dispatch
         is concerned only with obj <--> endpoint, whereas IPC is focused
@@ -55,12 +46,7 @@ The IPCHost autoresponder isn't *quite* the same thing as Dispatch.
         method, which also needs to move. That will point the IPC host
         wholly in charge of tracking IPC, and Dispatch wholly in charge
         of object distribution.
-    + The accountant (should we rename AgentBootstrap?) should maintain
-        the liveliness of any added IPC servers. It will also need to be
-        responsible for the instance creation and startup of the ipc
-        servers themselves, since as per above toplevel comment, the IPC
-        servers will need to be initialized with a reference to the 
-        IPCHost object.
+        
 All of the endpoint logic should be moved into IPCHost.
     + This definitely also applies to the app_token tracking. Use a 
         WeakValueDict to get the endpoint from the token. Then, when
@@ -73,10 +59,12 @@ All of the endpoint logic should be moved into IPCHost.
     + At least for now, applications must ephemerally declare themselves
         capable of supporting a given API. Note, once again, that these
         api_id registrations ONLY APPLY TO UNSOLICITED OBJECT SHARES!
+        
 Definitely add in more component awareness to IPCHost.
     + At the very least, add oracle and golcore. That way, dispatch can
         be bypassed for many requests.
     + Also convert it to use the now-standardized "assemble" API.
+    
 Should stop inferring object "private" status within dispatch.
     + There's really no reason to send app_token on the wire after the
         initial declaration
@@ -85,6 +73,7 @@ Should stop inferring object "private" status within dispatch.
         within the _Dispatchable. Could simply and directly rely upon
         the Dispatcher's bootstrapped stateful privacy tracking object.
     + Use a private_by_ghid _GAODict() for <ghid>: <owning token> lookup
+    
 It'd be nice to remove the msgpack dependency in utils.IPCPackerMixIn.
     + Could use very simple serialization instead.
     + Very heavyweight for such a silly thing.
@@ -92,16 +81,21 @@ It'd be nice to remove the msgpack dependency in utils.IPCPackerMixIn.
     + This should wait until we have a different serialization for all
         of the core bootstrapping _GAOs. This, in turn, should wait 
         until after SmartyParse is converted to be async.
+        
+IPC Apps should not have access to objects that are not _Dispatchable.
+    + Yes, this introduces some overhead. Currently, it isn't the most
+        efficient abstraction.
+    + Non-dispatchable objects are inherently un-sharable. That's the
+        most fundamental issue here.
+    + Note that private objects are also un-sharable, so they should be
+        able to bypass some overhead in the future (see below)
+    + Future effort will focus on making the "dispatchable" wrapper as
+        efficient an abstraction as possible.
+    + This basically makes a judgement call that everything should be
+        sharable.
 
 
 '''
-
-# Control * imports.
-__all__ = [
-    'IPCHost',
-    'IPCEmbed',
-    'AppObj'
-]
 
 # External dependencies
 import abc
@@ -131,269 +125,103 @@ from .utils import IPCPackerMixIn
 from .utils import RawObj
 from .utils import call_coroutine_threadsafe
 from .utils import await_sync_future
+from .utils import WeakSetMap
 
 from .comms import _AutoresponderSession
 from .comms import Autoresponder
+from .comms import AutoresponseConnector
+
+from .dispatch import _Dispatchable
+from .dispatch import _DispatchableState
+from .dispatch import _AppDef
 
 
 # ###############################################
-# Logging boilerplate
+# Boilerplate
 # ###############################################
 
 
 import logging
 logger = logging.getLogger(__name__)
 
-
-class IPCHostEndpoint(_AutoresponderSession):
-    ''' An application endpoints, as used by IPC hosts. Must only be 
-    created from within an event loop!
-    
-    ENDPOINTS HAVE A 1:1 CORRELATION WITH APPLICATION TOKENS. A token
-    denotes a singular application, and one endpoint is used for one
-    application.
-    
-    TODO: move object methods into the IPC host. Also a note about them:
-    since they're only ever called by the dispatch, which doesn't know 
-    about the endpoint until it has been successfully registered, we 
-    don't need to check for the app token.
-    
-    TODO: in the process of above, will need to modify dispatchers to 
-    accommodate new behavior. That will also standardize the call 
-    signatures for anything involving sessions, connections, etc.
-    '''
-    def __init__(self, ipc, dispatch, app_token=None, apis=None, *args, **kwargs):
-        ''' Creates an endpoint for the specified agent that handles the
-        associated apis. Apis is an iterable of api_ids. If token is not
-        specified, generates a new one from dispatch.
-        '''
-        self._ctx = asyncio.Event()
-        
-        self._dispatch = weakref.proxy(dispatch)
-        self._ipc = weakref.proxy(ipc)
-        self._expecting_exchange = threading.Lock()
-        self._known_ghids = set()
-            
-        self._token = app_token
-        self._apis = set()
-        
-        if apis is not None:
-            for api in apis:
-                self.add_api(api)
-                
-        super().__init__(*args, **kwargs)
-            
-    def add_api(self, api_id):
-        ''' This adds an api_id to the endpoint. Probably not strictly
-        necessary, but helps keep track of things.
-        '''
-        # Need to add a type check.
-        self._apis.add(api_id)
-        # Don't forget to update the dispatch. For now, just reregister self.
-        self.dispatch.register_endpoint(self)
-        
-    @property
-    def dispatch(self):
-        ''' Access the agent.
-        '''
-        return self._dispatch
-        
-    @property
-    def app_token(self):
-        ''' Access the app token.
-        '''
-        return self._token
-        
-    @property
-    def apis(self):
-        ''' Access a frozen set of the apis supported by the endpoint.
-        '''
-        return frozenset(self._apis)
-        
-    def notify_object_threadsafe(self, ghid, state):
-        ''' Do that whole threadsafe thing.
-        '''
-        return call_coroutine_threadsafe(
-            coro = self.notify_object(ghid, state),
-            loop = self._ipc._loop
-        )
-        
-    async def notify_object(self, ghid, state):
-        ''' Notifies the endpoint that the object is available. May be
-        either a new object, or an updated one.
-        
-        Checks to make sure we're not currently expecting and update to
-        suppress.
-        '''
-        # if not self._expecting_exchange.locked():
-        if ghid in self._known_ghids:
-            await self.send_update(ghid, state)
-        else:
-            self.register_ghid(ghid)
-            await self.send_object(ghid, state)
-            
-    def register_ghid(self, ghid):
-        ''' Pretty simple wrapper to make sure we know about the ghid.
-        '''
-        self._known_ghids.add(ghid)
-        
-    def send_object_threadsafe(self, ghid, state):
-        return call_coroutine_threadsafe(
-            coro = self.send_object(ghid, state),
-            loop = self._ipc._loop
-        )
-        
-    async def send_object(self, ghid, state):
-        ''' Sends a new object to the emedded client.
-        '''
-        if isinstance(state, Ghid):
-            is_link = True
-            state = bytes(state)
-        else:
-            is_link = False
-            
-        # TODO: some kind of try/catch here?
-        obj = self.dispatch.get_object(
-            asking_token = self.app_token,
-            ghid = ghid,
-        )
-            
-        author = obj.author
-        dynamic = obj.dynamic
-        api_id = obj.api_id
-        
-        response = await self._ipc.send(
-            session = self,
-            msg = self._ipc._pack_object_def(
-                ghid,
-                author,
-                state,
-                is_link,
-                api_id,
-                None,
-                None,
-                dynamic,
-                None
-            ),
-            request_code = self._ipc.REQUEST_CODES['send_object'],
-            # Note: for now, just don't worry about failures.
-            # Todo: expect reply, and enclose within try/catch to prevent apps
-            # from crashing the service.
-            await_reply = False
-        )
-    
-    def send_update_threadsafe(self, ghid, state):
-        return call_coroutine_threadsafe(
-            coro = self.send_update(ghid, state),
-            loop = self._ipc._loop
-        )
-    
-    async def send_update(self, ghid, state):
-        ''' Sends an updated object to the emedded client.
-        '''
-        # Note: currently we're actually sending the whole object update, not
-        # just a notification of update address.
-        
-        if isinstance(state, Ghid):
-            is_link = True
-            state = bytes(state)
-        else:
-            is_link = False
-        
-        response = await self._ipc.send(
-            session = self,
-            msg = self._ipc._pack_object_def(
-                ghid,
-                None,
-                state,
-                is_link,
-                None,
-                None,
-                None,
-                None,
-                None
-            ),
-            request_code = self._ipc.REQUEST_CODES['send_update'],
-            # Note: for now, just don't worry about failures. See previous note
-            await_reply = False
-        )
-    
-    def send_delete_threadsafe(self, ghid):
-        return call_coroutine_threadsafe(
-            coro = self.send_delete(ghid),
-            loop = self._ipc._loop
-        )
-        
-    async def send_delete(self, ghid):
-        ''' Notifies the endpoint that the object has been deleted 
-        upstream.
-        '''
-        if not isinstance(ghid, Ghid):
-            raise TypeError('ghid must be type Ghid or similar.')
-        
-        response = await self._ipc.send(
-            session = self,
-            msg = bytes(ghid),
-            request_code = self._ipc.REQUEST_CODES['send_delete'],
-            # Note: for now, just don't worry about failures.
-            await_reply = False
-        )
-    
-    def notify_share_failure_threadsafe(self, ghid, recipient):
-        return call_coroutine_threadsafe(
-            coro = self.notify_share_failure(ghid, recipient),
-            loop = self._ipc._loop
-        )
-        
-    async def notify_share_failure(self, ghid, recipient):
-        ''' Notifies the embedded client of an unsuccessful share.
-        '''
-        pass
-    
-    def notify_share_success_threadsafe(self, ghid, recipient):
-        return call_coroutine_threadsafe(
-            coro = self.notify_share_success(ghid, recipient),
-            loop = self._ipc._loop
-        )
-        
-    async def notify_share_success(self, ghid, recipient):
-        ''' Notifies the embedded client of a successful share.
-        '''
-        pass
-        
-    async def close(self):
-        await super().close()
-        self.dispatch.close_endpoint(self)
+# Control * imports.
+__all__ = [
+    # 'Inquisitor', 
+]
 
 
-class IPCHost(Autoresponder, IPCPackerMixIn):
-    ''' Reusable base class for Hypergolix IPC hosts. Subclasses 
-    Autoresponder. Combine with a server in an AutoComms to establish 
-    IPC over that transport.
+# ###############################################
+# Library
+# ###############################################
+            
+            
+# Identity here can be either a sender or recipient dependent upon context
+_ShareLog = collections.namedtuple(
+    typename = '_ShareLog',
+    field_names = ('ghid', 'identity'),
+)
+
+
+class IPCCore(Autoresponder, IPCPackerMixIn):
+    ''' The core IPC system, including the server autoresponder. Add the
+    individual IPC servers to the IPC Core.
+    
+    NOTE: this class, with the exception of initialization, is wholly
+    asynchronous. Outside entities should call into it using 
+    utils.call_coroutine_threadsafe. Any thread-wrapping that needs to
+    happen to break in-loop chains should also be executed in the 
+    outside entity.
     '''
     REQUEST_CODES = {
-        # Receive/dispatch a new object.
+        # Receive a new object from a remotely concurrent instance of self.
         'send_object': b'+O',
         # Receive an update for an existing object.
         'send_update': b'!O',
         # Receive an update that an object has been deleted.
         'send_delete': b'XO',
+        # Receive an object that was just shared with us.
+        'send_share': b'^O',
         # Receive an async notification of a sharing failure.
         'notify_share_failure': b'^F',
         # Receive an async notification of a sharing success.
         'notify_share_success': b'^S',
     }
     
-    def __init__(self, dispatch, *args, **kwargs):
-        # Don't weakref.proxy, since dispatchers never contact the ipcbase,
-        # just the endpoints.
-        self._dispatch = dispatch
+    def __init__(self, *args, **kwargs):
+        ''' Initialize the autoresponder and get it ready to go.
+        '''
+        self._dispatch = None
+        self._oracle = None
+        self._golcore = None
+        self._rolodex = None
+        self._salmonator = None
+        
+        # Some distributed objects to be bootstrapped
+        # Set of incoming shared ghids that had no endpoint
+        # set(<ghid, sender tuples>)
+        self._orphan_incoming_shares = None
+        # Setmap-like lookup for share acks that had no endpoint
+        # <app token>: set(<ghids>)
+        self._orphan_share_acks = None
+        # Setmap-like lookup for share naks that had no endpoint
+        # <app token>: set(<ghids>)
+        self._orphan_share_naks = None
+        
+        # Lookup <server_name>: <server>
+        self._ipc_servers = {}
+        
+        # Lookup <app token>: <connection/session/endpoint>
+        self._endpoint_from_token = weakref.WeakValueDictionary()
+        # Reverse lookup <connection/session/endpoint>: <app token>
+        self._token_from_endpoint = weakref.WeakKeyDictionary()
+        
+        # Lookup <api ID>: set(<connection/session/endpoint>)
+        self._endpoints_from_api = WeakSetMap()
         
         req_handlers = {
-            # New app tokens are handled during endpoint creation.
-            # # Get new app token
+            # Get new app token
             b'+T': self.new_token_wrapper,
-            # # Register existing app token
+            # Register existing app token
             b'$T': self.set_token_wrapper,
             # Register an API
             b'$A': self.add_api_wrapper,
@@ -425,40 +253,295 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
             failure_code = b'NK',
             *args, **kwargs
         )
-            
-    def session_factory(self):
-        ''' Added for easier subclassing. Returns the session class.
+        
+    def assemble(self, golix_core, oracle, dispatch, rolodex, salmonator):
+        # Chicken, egg, etc.
+        self._golcore = weakref.proxy(golix_core)
+        self._oracle = weakref.proxy(oracle)
+        self._dispatch = weakref.proxy(dispatch)
+        self._rolodex = weakref.proxy(rolodex)
+        self._salmonator = weakref.proxy(salmonator)
+        
+    def bootstrap(self):
+        ''' Initializes distributed state.
         '''
-        logger.debug('Session endpoint created, but not yet initialized.')
-        return IPCHostEndpoint(
-            dispatch = self.dispatch,
-            ipc = self,
-            # app_token = app_token,
-            # apis = apis,
+        # Set of incoming shared ghids that had no endpoint
+        # set(<ghid, sender tuples>)
+        self._orphan_incoming_shares = set()
+        # Setmap-like lookup for share acks that had no endpoint
+        # <app token>: set(<ghid, recipient tuples>)
+        self._orphan_share_acks = SetMap()
+        # Setmap-like lookup for share naks that had no endpoint
+        # <app token>: set(<ghid, recipient tuples>)
+        self._orphan_share_naks = SetMap()
+        
+    def add_ipc_server(self, server_class, server_name, *args, **kwargs):
+        ''' Automatically sets up an IPC server connected to the IPCCore
+        system. Just give it the server_class, eg WSBasicServer, and
+        all of the *args and **kwargs will be passed to the server's
+        __init__.
+        '''
+        if server_name in self._ipc_servers:
+            raise ValueError(
+                'Cannot overwrite an existing IPC server. Pop it first.'
+            )
+        
+        # We could do this elsewhere, but adding an IPC server isn't really
+        # performance-critical, especially not now.
+        class LinkedServer(AutoresponseConnector, server_class):
+            pass
+            
+        self._ipc_servers[server_name] = LinkedServer(*args, **kwargs)
+
+    def pop_ipc_server(self, server_name):
+        ''' Removes and returns the IPC server. It may then be cleanly 
+        shut down (manually).
+        '''
+        self._ipc_servers.pop(server_name)
+    
+    async def make_callsheet(self, ghid, skip_endpoint=None, skip_tokens=None):
+        ''' Generates a callsheet (set of tokens) for the dispatchable
+        obj.
+        
+        The callsheet is generated from app_tokens, so that the actual 
+        distributor can kick missing tokens back for safekeeping.
+        '''
+        try:
+            obj = self._oracle.get_object(
+                gaoclass = _Dispatchable, 
+                ghid = ghid,
+                dispatch = self._dispatch)
+        
+        except:
+            # At some point we'll need some kind of proper handling for this.
+            logger.error(
+                'Failed to retrieve object at ' + str(bytes(ghid)) + '\n' + 
+                ''.join(traceback.format_exc())
+            )
+            return set()
+        
+        # Create a temporary set for relevant endpoints
+        callsheet = set()
+        
+        private_owner = self._dispatch.get_parent_token(ghid)
+        if private_owner:
+            callsheet.add(private_owner)
+            
+        # elif override_tokens is not None:
+        #     callsheet.update(override_tokens)
+            
+        else:
+            endpoints = set()
+            endpoints.update(self._endpoints_from_api[obj.api_id])
+            endpoints.update(obj.listeners)
+            for endpoint in endpoints:
+                callsheet.add(self._token_from_endpoint[endpoint])
+                
+        # This keyerror will catch both default of None as well as missing.
+        try:
+            skip_token = self._token_from_endpoint[skip_endpoint]
+        except KeyError:
+            skip_token = None
+            
+        callsheet.discard(skip_token)
+        callsheet.difference_update(skip_tokens)
+        
+        return callsheet
+        
+    async def distribute_to_endpoints(self, callsheet, distributor, *args):
+        ''' For each app token in the callsheet, awaits the distributor,
+        passing it the endpoint and *args.
+        '''
+        if len(callsheet) == 0:
+            logger.info('No applications are available to handle the request.')
+            await self._handle_orphan_distr(distributor, *args, **kwargs)
+            
+        else:
+            await self._robodialer(
+                self._distr_single, 
+                callsheet, 
+                distributor, 
+                *args
+            )
+            
+    async def _robodialer(self, caller, callsheet, *args):
+        tasks = []
+        for token in callsheet:
+            # For each token...
+            tasks.append(
+                # ...in parallel, schedule a single execution
+                asyncio.ensure_future(
+                    # Of a _distribute_single call to the distributor.
+                    caller(token, *args)
+                )
+            )
+        await asyncio.gather(*tasks)
+                    
+    async def _distr_single(self, token, distributor, *args):
+        ''' Distributes a single request to a single token.
+        '''
+        try:
+            await distributor(self._endpoint_from_token[token], *args)
+            
+        except:
+            logger.error(
+                'Error while contacting endpoint: \n' + 
+                ''.join(traceback.format_exc())
+            )
+            
+    async def _handle_orphan_distr(self, distributor, *args):
+        ''' This is what happens when our callsheet has zero length.
+        Also, this is how we get ants.
+        '''
+        # Save incoming object shares.
+        if distributor is self.send_share:
+            sharelog = _ShareLog(*args)
+            self._orphan_incoming_shares.add(sharelog)
+    
+        # But ignore everything else.
+    
+    async def _obj_sender(self, endpoint, ghid, request_code):
+        ''' Generic flow control for sending an object.
+        '''
+        try:
+            obj = self._oracle.get_object(
+                gaoclass = _Dispatchable, 
+                ghid = ghid,
+                dispatch = self._dispatch
+            )
+            
+        except:
+            # At some point we'll need some kind of proper handling for this.
+            logger.error(
+                'Failed to retrieve object at ' + str(bytes(ghid)) + '\n' + 
+                ''.join(traceback.format_exc())
+            )
+            
+        else:
+            response = await self.send(
+                session = endpoint,
+                msg = self._pack_object_def(
+                    obj.ghid,
+                    obj.author,
+                    obj.state,
+                    False, # is_link is currently unsupported
+                    obj.api_id,
+                    None,
+                    None,
+                    obj.dynamic,
+                    None
+                ),
+                request_code = request_code,
+                # Note: for now, just don't worry about failures.
+                # Todo: expect reply, and enclose within try/catch to prevent 
+                # apps from crashing the service.
+                await_reply = False
+            )
+    
+    async def send_share(self, endpoint, ghid, sender):
+        ''' Notifies the endpoint of a shared object, for which it is 
+        interested. This will never be called when the object was 
+        created concurrently by another remote instance of the agent
+        themselves, just when someone else shares the object with the
+        agent.
+        '''
+        # Note: currently we're actually sending the whole object update, not
+        # just a notification of update address.
+        # Note also that we're not currently doing anything about who send the
+        # share itself.
+        await self._obj_sender(endpoint, ghid, 'send_share')
+        
+    async def send_object(self, endpoint, ghid):
+        ''' Sends a new object to the emedded client. This is called
+        when another (concurrent and remote) instance of the logged-in 
+        agent has created an object that local applications might be
+        interested in.
+        
+        NOTE: This is not currently invoked anywhere, because we don't
+        currently have a mechanism to push these things between multiple
+        concurrent Hypergolix instances. Put simply, we're lacking a 
+        notification mechanism. See note in Dispatcher.
+        '''
+        # Note: currently we're actually sending the whole object update, not
+        # just a notification of update address.
+        await self._obj_sender(endpoint, ghid, 'send_object')
+    
+    async def send_update(self, endpoint, ghid):
+        ''' Sends an updated object to the emedded client.
+        '''
+        # Note: currently we're actually sending the whole object update, not
+        # just a notification of update address.
+        await self._obj_sender(endpoint, ghid, 'send_update')
+        
+    async def send_delete(self, endpoint, ghid):
+        ''' Notifies the endpoint that the object has been deleted 
+        upstream.
+        '''
+        if not isinstance(ghid, Ghid):
+            raise TypeError('ghid must be type Ghid or similar.')
+        
+        response = await self.send(
+            session = self,
+            msg = bytes(ghid),
+            request_code = self.REQUEST_CODES['send_delete'],
+            # Note: for now, just don't worry about failures.
+            await_reply = False
         )
         
-    async def init_endpoint(self, endpoint):
-        ''' Waits for the endpoint to be ready for use, then registers
-        it with dispatch.
+    async def notify_share_success(self, token, ghid, recipient):
+        ''' Notifies the embedded client of a successful share.
         '''
-        await endpoint._ctx.wait()
-        self.dispatch.register_endpoint(endpoint)
-        logger.debug('Session completely registered.')
+        raise NotImplementedError('No share notification yet.')
         
-    @property
-    def dispatch(self):
-        ''' Sorta superfluous right now.
+        try:
+            endpoint = self._endpoint_from_token[token]
+            
+        except KeyError:
+            logger.info('Requesting app currently unavailable for share ack.')
+            sharelog = _ShareLog(ghid, recipient)
+            self._orphan_share_acks.add(token, sharelog)
+            
+        else:
+            # This would be where you actually distribute it to that app.
+            pass
+        
+    async def notify_share_failure(self, token, ghid, recipient):
+        ''' Notifies the embedded client of an unsuccessful share.
         '''
-        return self._dispatch
-    
+        raise NotImplementedError('No share notification yet.')
+        
+        try:
+            endpoint = self._endpoint_from_token[token]
+            
+        except KeyError:
+            logger.info('Requesting app currently unavailable for share nak.')
+            sharelog = _ShareLog(ghid, recipient)
+            self._orphan_share_acks.add(token, sharelog)
+            
+        else:
+            # This would be where you actually distribute it to that app.
+            pass
+        
     async def set_token_wrapper(self, endpoint, request_body):
         ''' Ignore body, get new token from dispatch, and proceed.
         
         Obviously doesn't require an existing app token.
         '''
         app_token = request_body[0:4]
-        endpoint.app_token = app_token
-        endpoint._ctx.set()
+        
+        if app_token in self._endpoint_from_token:
+            raise RuntimeError(
+                'Attempt to reregister a new endpoint for the same token. '
+                'Each app token must have exactly one endpoint.'
+            )
+        
+        appdef = _AppDef(app_token)
+        self._dispatch.check_application(appdef)
+        
+        # TODO: should these be enclosed within an operations lock?
+        self._endpoint_from_token[app_token] = endpoint
+        self._token_from_endpoint[endpoint] = app_token
+        
         return b''
     
     async def new_token_wrapper(self, endpoint, request_body):
@@ -466,9 +549,13 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         
         Obviously doesn't require an existing app token.
         '''
-        app_token = self.dispatch.new_token()
-        endpoint._token = app_token
-        endpoint._ctx.set()
+        appdef = self._dispatch.register_application()
+        app_token = appdef.app_token
+        
+        # TODO: should these be enclosed within an operations lock?
+        self._endpoint_from_token[app_token] = endpoint
+        self._token_from_endpoint[endpoint] = app_token
+        
         return app_token
         
     async def add_api_wrapper(self, endpoint, request_body):
@@ -476,11 +563,14 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         
         Requires existing app token.
         '''
-        if not endpoint.app_token:
+        if endpoint not in self._token_from_endpoint:
             raise IPCError('Must register app token prior to adding APIs.')
+            
         if len(request_body) != 65:
             raise ValueError('Invalid API ID format.')
-        endpoint.add_api(request_body)
+            
+        self._endpoints_from_api.add(request_body, endpoint)
+        
         return b'\x01'
         
     async def whoami_wrapper(self, endpoint, request_body):
@@ -488,8 +578,7 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         
         Does not require an existing app token.
         '''
-        # TODO: fix leaky abstraction
-        ghid = self.dispatch._golcore.whoami
+        ghid = self._golcore.whoami
         return bytes(ghid)
         
     async def get_object_wrapper(self, endpoint, request_body):
@@ -497,15 +586,20 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         
         Requires an existing app token.
         '''
-        if not endpoint.app_token:
+        if endpoint not in self._token_from_endpoint:
             raise IPCError('Must register app token prior to getting objects.')
             
         ghid = Ghid.from_bytes(request_body)
-        
-        obj = self.dispatch.get_object(
-            asking_token = endpoint.app_token,
-            ghid = ghid
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable, 
+            ghid = ghid,
+            dispatch = self._dispatch
         )
+        obj.register_listener(endpoint)
+        
+        # TODO: remove app_token from dispatchable.
+        # TODO: shuffle-ish api_id?
+        # TODO: add "private" as explicit flag?
             
         if obj.app_token != bytes(4):
             private = True
@@ -522,9 +616,6 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         # For now, anyways.
         # Note: need to add some kind of handling for legroom.
         _legroom = None
-        
-        # Let the endpoint know to remember it
-        endpoint.register_ghid(ghid)
         
         return self._pack_object_def(
             obj.ghid,
@@ -543,10 +634,8 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         
         Requires an existing app token.
         '''
-        if not endpoint.app_token:
-            raise IPCError(
-                'Must register app token prior to making new objects.'
-            )
+        if endpoint not in self._token_from_endpoint:
+            raise IPCError('Must register app token prior to making objects.')
         
         (
             address, # Unused and set to None.
@@ -561,31 +650,28 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         ) = self._unpack_object_def(request_body)
         
         if is_link:
+            raise NotImplementedError('Linked objects are not yet supported.')
             state = Ghid.from_bytes(state)
         
-        address = self.dispatch.new_object(
-            asking_token = endpoint.app_token,
-            state = state, 
-            api_id = api_id, 
-            app_token = app_token, 
-            dynamic = dynamic,
-            _legroom = _legroom
-        )
+        obj = self._oracle.new_object(
+                gaoclass = _Dispatchable, 
+                ghid = ghid,
+                dispatch = self._dispatch,
+                state = _DispatchableState(api_id, app_token, state),
+                dynamic = dynamic,
+                _legroom = _legroom,
+            )
+        obj.register_listener(endpoint) 
         
-        # Let the endpoint know to remember it
-        endpoint.register_ghid(address)
-        
-        return bytes(address)
+        return bytes(obj.ghid)
         
     async def update_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         
         Requires existing app token.
         '''
-        if not endpoint.app_token:
-            raise IPCError(
-                'Must register app token prior to updating objects.'
-            )
+        if endpoint not in self._token_from_endpoint:
+            raise IPCError('Must register app token before updating objects.')
             
         (
             address,
@@ -600,95 +686,91 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         ) = self._unpack_object_def(request_body)
         
         if is_link:
+            raise NotImplementedError('Linked objects are not yet supported.')
             state = Ghid.from_bytes(state)
-        
-        self.dispatch.update_object(
-            asking_token = endpoint.app_token,
-            ghid = address,
-            state = state
+            
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable, 
+            ghid = ghid,
+            dispatch = self._dispatch
         )
+        obj.update(state)
+        obj.register_listener(endpoint)
         
         return b'\x01'
         
     async def sync_object_wrapper(self, endpoint, request_body):
-        ''' Requires existing app token. Currently unimplimented.
+        ''' Requires existing app token. Will not return the update; if
+        a new copy of the object was available, it will be sent 
+        independently.
         '''
-        if not endpoint.app_token:
-            raise IPCError(
-                'Must register app token prior to syncing objects.'
-            )
+        if endpoint not in self._token_from_endpoint:
+            raise IPCError('Must register app token before syncing objects.')
             
-        # return b''
-        raise NotImplementedError('Manual syncing not yet supported.')
+        ghid = Ghid.from_bytes(request_body)
+        self._salmonator.pull(ghid)
+        return b'\x01'
         
     async def share_object_wrapper(self, endpoint, request_body):
-        ''' Wraps object sharing.
-        
-        Requires existing app token.
+        ''' Wraps object sharing. Requires existing app token. Note that
+        it will return successfully immediately, regardless of whether
+        or not the share was eventually accepted by the recipient.
         '''
-        if not endpoint.app_token:
-            raise IPCError(
-                'Must register app token prior to sharing objects.'
-            )
+        if endpoint not in self._token_from_endpoint:
+            raise IPCError('Must register app token before sharing objects.')
             
         ghid = Ghid.from_bytes(request_body[0:65])
         recipient = Ghid.from_bytes(request_body[65:130])
-        self.dispatch.share_object(
-            asking_token = endpoint.app_token,
-            ghid = ghid,
-            recipient = recipient
-        )
+        requesting_token = self._token_from_endpoint[endpoint]
+        self._rolodex.share_object(ghid, recipient, requesting_token)
         return b'\x01'
         
     async def freeze_object_wrapper(self, endpoint, request_body):
-        ''' Wraps object freezing into a packed format.
+        ''' Wraps object freezing.
         
         Requires an app token.
         '''
-        if not endpoint.app_token:
-            raise IPCError(
-                'Must register app token prior to freezing objects.'
-            )
+        if endpoint not in self._token_from_endpoint:
+            raise IPCError('Must register app token before freezing objects.')
             
         ghid = Ghid.from_bytes(request_body)
-        address = self.dispatch.freeze_object(
-            asking_token = endpoint.app_token,
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable, 
             ghid = ghid,
+            dispatch = self._dispatch
         )
-        return bytes(address)
+        frozen_address = obj.freeze()
+        
+        return bytes(frozen_address)
         
     async def hold_object_wrapper(self, endpoint, request_body):
-        ''' Wraps object holding into a packed format.
-        
-        Requires an app token.
+        ''' Wraps object holding. Requires an app token.
         '''
-        if not endpoint.app_token:
-            raise IPCError(
-                'Must register app token prior to holding objects.'
-            )
+        if endpoint not in self._token_from_endpoint:
+            raise IPCError('Must register app token before holding objects.')
             
         ghid = Ghid.from_bytes(request_body)
-        self.dispatch.hold_object(
-            asking_token = endpoint.app_token,
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable, 
             ghid = ghid,
+            dispatch = self._dispatch
         )
+        obj.hold()
         return b'\x01'
         
     async def discard_object_wrapper(self, endpoint, request_body):
-        ''' Wraps object discarding into a packable format.
-        
-        Requires an app token.
+        ''' Wraps object discarding. Requires an app token.
         '''
-        if not endpoint.app_token:
-            raise IPCError(
-                'Must register app token prior to discarding objects.'
-            )
+        if endpoint not in self._token_from_endpoint:
+            raise IPCError('Register an app token before discarding objects.')
             
         ghid = Ghid.from_bytes(request_body)
-        self.dispatch.discard_object(
-            asking_token = endpoint.app_token,
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable, 
             ghid = ghid,
+            dispatch = self._dispatch
         )
+        obj.deregister_listener(endpoint)
         return b'\x01'
         
     async def delete_object_wrapper(self, endpoint, request_body):
@@ -696,16 +778,17 @@ class IPCHost(Autoresponder, IPCPackerMixIn):
         
         Requires an app token.
         '''
-        if not endpoint.app_token:
-            raise IPCError(
-                'Must register app token prior to updating objects.'
-            )
+        if endpoint not in self._token_from_endpoint:
+            raise IPCError('Must register app token before deleting objects.')
             
         ghid = Ghid.from_bytes(request_body)
-        self.dispatch.delete_object(
-            asking_token = endpoint.app_token,
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable, 
             ghid = ghid,
+            dispatch = self._dispatch
         )
+        obj.deregister_listener(endpoint)
+        obj.delete()
         return b'\x01'
         
         
@@ -771,8 +854,10 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         
         # Note that these are only for unsolicited contact from the server.
         req_handlers = {
-            # Receive/dispatch a new object.
+            # Receive a new object from a remotely concurrent instance of self.
             b'+O': self.deliver_object_wrapper,
+            # Receive a new object from a share.
+            b'^O': self.deliver_share_wrapper,
             # Receive an update for an existing object.
             b'!O': self.update_object_wrapper,
             # Receive a delete command.
@@ -1270,6 +1355,56 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         
         return True
         
+    async def deliver_share_wrapper(self, session, request_body):
+        ''' Deserializes an incoming object delivery, dispatches it to
+        the application, and serializes a response to the IPC host.
+        '''
+        (
+            address,
+            author,
+            state, 
+            is_link, 
+            api_id,
+            app_token, # Will be unused and set to None 
+            private, # Will be unused and set to None 
+            dynamic,
+            _legroom # Will be unused and set to None
+        ) = self._unpack_object_def(request_body)
+        
+        # Resolve any links
+        if is_link:
+            link = Ghid.from_bytes(state)
+            # Note: this may cause things to freeze, because async
+            state = self.get_object(link)
+            
+        # Okay, now let's create an object for it
+        obj = AppObj(
+            embed = self, 
+            address = address, 
+            state = state, 
+            author = author, 
+            api_id = api_id, 
+            private = False,
+            dynamic = dynamic,
+            _legroom = None,
+            threadsafe_callbacks = [],
+            async_callbacks = [],
+        )
+            
+        # Well this is a huge hack. But something about the event loop 
+        # itself is fucking up control flow and causing the world to hang
+        # here.
+        # TODO: fix this.
+        worker = threading.Thread(
+            target = self._object_handlers[api_id],
+            daemon = True,
+            args = (obj,),
+        )
+        worker.start()
+        
+        # Successful delivery. Return true
+        return b'\x01'
+        
     async def deliver_object_wrapper(self, session, request_body):
         ''' Deserializes an incoming object delivery, dispatches it to
         the application, and serializes a response to the IPC host.
@@ -1374,21 +1509,6 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         host.
         '''
         return b''
-        
-        
-class _HeadlessIPCEndpoint:
-    ''' Endpoint for a single application that has been directly 
-    embedded within the hypergolix service itself. Not intended for 
-    outside consumption.
-    '''
-    pass
-        
-        
-class _HeadlessIPC:
-    ''' Fake IPC for applications that are directly embedded within the
-    hypergolix service itself. Not intended for outside consumption.
-    '''
-    pass
 
 
 class AppObj:
