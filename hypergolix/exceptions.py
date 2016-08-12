@@ -60,6 +60,7 @@ __all__ = [
     'UnknownParty',
     # These are dispatch errors
     'DispatchError',
+    'UnknownToken',
     'DispatchWarning',
     # These are IPC/embed errors
     'IPCError',
@@ -214,6 +215,12 @@ class HandshakeWarning(HypergolixException, RuntimeWarning):
 
 
 class DispatchError(HypergolixException, RuntimeError):
+    ''' Raised when something fails with dispatch.
+    '''
+    pass
+
+
+class UnknownToken(DispatchError, ValueError):
     ''' Raised when something fails with dispatch.
     '''
     pass

@@ -122,7 +122,6 @@ from .exceptions import HandshakeWarning
 from .exceptions import IPCError
 
 from .utils import IPCPackerMixIn
-from .utils import RawObj
 from .utils import call_coroutine_threadsafe
 from .utils import await_sync_future
 from .utils import WeakSetMap
@@ -608,7 +607,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             
         ghid = Ghid.from_bytes(request_body)
         requesting_token = self._token_from_endpoint[endpoint]
-        self._dispatch.register_startup(ghid, requesting_token)
+        self._dispatch.register_startup(requesting_token, ghid)
         return b'\x01'
         
     async def get_object_wrapper(self, endpoint, request_body):
@@ -688,7 +687,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         
         # If the object is private, register it as such.
         if private:
-            self._dispatch.register_private(obj.ghid, app_token)
+            self._dispatch.register_private(app_token, obj.ghid)
             
         # Otherwise, make sure to notify any other interested parties.
         else:

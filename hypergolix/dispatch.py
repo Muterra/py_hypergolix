@@ -60,10 +60,12 @@ from .core import Oracle
 from .utils import _JitSetDict
 from .utils import _JitDictDict
 from .utils import SetMap
+from .utils import call_coroutine_threadsafe
 
 from .exceptions import DispatchError
 from .exceptions import DispatchWarning
-from .exceptions import HandshakeWarning
+from .exceptions import UnknownToken
+
 # from .exceptions import HandshakeError
 
 
@@ -164,8 +166,6 @@ class Dispatcher:
     def __init__(self):
         ''' Yup yup yup yup yup yup yup
         '''
-        self._oracle = None
-        self._rolodex = None
         self._ipccore = None
         
         # Temporarily set distributed state to None.
@@ -178,24 +178,28 @@ class Dispatcher:
         # Distributed lock for adding app tokens
         self._token_lock = None
         
+    def assemble(self, ipc_core):
+        # Chicken, meet egg.
+        self._ipccore = weakref.proxy(ipc_core)
+        
     def bootstrap(self, all_tokens, startup_objs, private_by_ghid):
         ''' Initialize distributed state.
         '''
         # Now init distributed state.
         # All known tokens must already contain a key for b'\x00\x00\x00\x00'.
-        # TODO: check or add or something.
+        if b'\x00\x00\x00\x00' not in all_tokens:
+            all_tokens.add(b'\x00\x00\x00\x00')
+            
+        # Lookup for all known tokens: set(<tokens>)
         self._all_known_tokens = all_tokens
+        # Lookup (set-map-like) for <app token>: set(<startup ghids>)
         self._startup_by_token = startup_objs
+        # Lookup (dict-like) for <obj ghid>: <private owner>
         self._private_by_ghid = private_by_ghid
         
         # These need to be distributed but aren't yet. TODO!
+        # Distributed lock for adding app tokens
         self._token_lock = threading.Lock()
-        
-    def assemble(self, oracle, rolodex, ipc_core):
-        # Chicken, meet egg.
-        self._oracle = weakref.proxy(oracle)
-        self._rolodex = weakref.proxy(rolodex)
-        self._ipccore = weakref.proxy(ipccore)
         
     def new_token(self):
         # Use a dummy api_id to force the while condition to be true initially
@@ -205,28 +209,7 @@ class Dispatcher:
             token = os.urandom(4)
         return token
         
-    def register_private(self, ghid, app_token):
-        ''' Called by oracle's new_object to register an object as 
-        private. Should only be called at object creation, but this is
-        only enforced through the ipccore.
-        '''
-        app_token = bytes(app_token)
-        if len(app_token) != 4:
-            raise ValueError('App tokens must be 4 bytes long.')
-            
-        self._private_by_ghid[ghid] = app_token
-        
-    def make_public(self, obj):
-        ''' Makes a private object public.
-        '''
-        try:
-            del self._private_by_ghid[obj.ghid]
-        except KeyError as exc:
-            raise ValueError(
-                'Object is already public: ' + str(obj.ghid)
-            ) from exc
-        
-    def register_application(self, appdef):
+    def register_application(self):
         ''' Creates a new application at the dispatcher.
         
         Currently, that just means creating an app token and adding it 
@@ -254,27 +237,62 @@ class Dispatcher:
         startup objects to the application.
         '''
         # This cannot be used to create new app tokens!
-        if appdef.app_token not in self._all_known_tokens:
-            raise ValueError('App token unknown to dispatcher.')
+        if appdef[0] not in self._all_known_tokens:
+            raise UnknownToken('App token unknown to dispatcher.')
             
-    def register_startup(self, ghid, token):
+    def register_startup(self, token, ghid):
         ''' Registers a ghid to be used as a startup object for token.
         '''
-        self._startup_by_token.add(token, ghid)
+        with self._token_lock:
+            if token not in self._all_known_tokens:
+                raise UnknownToken()
+            else:
+                self._startup_by_token.add(token, ghid)
+                
+    def deregister_startup(self, token, ghid):
+        ''' Deregisters a ghid to be used as a startup object for token.
+        '''
+        with self._token_lock:
+            if token not in self._all_known_tokens:
+                raise UnknownToken()
+            else:
+                self._startup_by_token.discard(token, ghid)
         
     def get_startup_objs(self, token):
         ''' Returns a frozenset of any objects used by the token at 
         startup. If none have been registered, returns an empty one.
         ''' 
-        return self._startup_by_token.get_any(token)
-            
-    def get_startup_tokens(self, ghid):
-        ''' Returns a frozenset of any app tokens that use the ghid as a
-        startup object. If none do, returns an empty set.
+        with self._token_lock:
+            if token not in self._all_known_tokens:
+                raise UnknownToken()
+            else:
+                return self._startup_by_token.get_any(token)
         
-        May or may not be added in the future.
+    def register_private(self, token, ghid):
+        ''' Called by oracle's new_object to register an object as 
+        private. Should only be called at object creation, but this is
+        only enforced through the ipccore.
         '''
-        raise NotImplementedError()
+        token = bytes(token)
+        if len(token) != 4:
+            raise ValueError('App tokens must be 4 bytes long.')
+            
+        with self._token_lock:
+            if token not in self._all_known_tokens:
+                raise UnknownToken()
+            
+        self._private_by_ghid[ghid] = token
+        
+    def make_public(self, ghid):
+        ''' Makes a private object public.
+        '''
+        try:
+            del self._private_by_ghid[ghid]
+            
+        except KeyError as exc:
+            raise ValueError(
+                'Obj w/ passed ghid is unknown or already public: ' + str(ghid)
+            ) from exc
             
     def get_parent_token(self, ghid):
         ''' Returns the app_token parent for the passed ghid, if (and 
@@ -284,6 +302,14 @@ class Dispatcher:
             return self._private_by_ghid[ghid]
         except KeyError:
             return None
+            
+    def get_startup_tokens(self, ghid):
+        ''' Returns a frozenset of any app tokens that use the ghid as a
+        startup object. If none do, returns an empty set.
+        
+        May or may not be added in the future.
+        '''
+        raise NotImplementedError()
         
     def notify(self, ghid, deleted=False):
         ''' Notify the dispatcher of a change to an object, which will
@@ -298,7 +324,7 @@ class Dispatcher:
         ''' Wrapper to inject our handler into _ipccore event loop.
         '''
         # Build a callsheet for the target.
-        callsheet = await self._ipccore.make_callsheet(target)
+        callsheet = await self._ipccore.make_callsheet(ghid)
         
         # Go ahead and distribute it to the appropriate endpoints.
         if deleted:
