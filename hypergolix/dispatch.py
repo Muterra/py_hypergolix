@@ -129,7 +129,7 @@ _AppDef = collections.namedtuple(
             
 _DispatchableState = collections.namedtuple(
     typename = '_DispatchableState',
-    field_names = ('api_id', 'app_token', 'state'),
+    field_names = ('api_id', 'state'),
 )
 
 
@@ -205,6 +205,27 @@ class Dispatcher:
             token = os.urandom(4)
         return token
         
+    def register_private(self, ghid, app_token):
+        ''' Called by oracle's new_object to register an object as 
+        private. Should only be called at object creation, but this is
+        only enforced through the ipccore.
+        '''
+        app_token = bytes(app_token)
+        if len(app_token) != 4:
+            raise ValueError('App tokens must be 4 bytes long.')
+            
+        self._private_by_ghid[ghid] = app_token
+        
+    def make_public(self, obj):
+        ''' Makes a private object public.
+        '''
+        try:
+            del self._private_by_ghid[obj.ghid]
+        except KeyError as exc:
+            raise ValueError(
+                'Object is already public: ' + str(obj.ghid)
+            ) from exc
+        
     def register_application(self, appdef):
         ''' Creates a new application at the dispatcher.
         
@@ -224,17 +245,36 @@ class Dispatcher:
             
         return _AppDef(token)
         
-    def check_application(self, appdef):
+    def start_application(self, appdef):
         ''' Ensures that an application is known to the dispatcher.
         
         Currently just checks within all known tokens. In the future, 
-        this will likely be deprecated, as app launching itself starts
-        to be handled by the dispatcher (or whatever ends up doing that;
-        I guess it could be something else, too).
+        this be responsible for starting the application (unless we move
+        that responsibility elsewhere), and then sending all of the
+        startup objects to the application.
         '''
         # This cannot be used to create new app tokens!
         if appdef.app_token not in self._all_known_tokens:
             raise ValueError('App token unknown to dispatcher.')
+            
+    def register_startup(self, ghid, token):
+        ''' Registers a ghid to be used as a startup object for token.
+        '''
+        self._startup_by_token.add(token, ghid)
+        
+    def get_startup_objs(self, token):
+        ''' Returns a frozenset of any objects used by the token at 
+        startup. If none have been registered, returns an empty one.
+        ''' 
+        return self._startup_by_token.get_any(token)
+            
+    def get_startup_tokens(self, ghid):
+        ''' Returns a frozenset of any app tokens that use the ghid as a
+        startup object. If none do, returns an empty set.
+        
+        May or may not be added in the future.
+        '''
+        raise NotImplementedError()
             
     def get_parent_token(self, ghid):
         ''' Returns the app_token parent for the passed ghid, if (and 
@@ -278,17 +318,44 @@ class Dispatcher:
 class _Dispatchable(_GAO):
     ''' A dispatchable object.
     '''
-    def __init__(self, dispatch, api_id=None, app_token=None, state=None, 
+    def __init__(self, dispatch, api_id=None, private=False, state=None, 
                 *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._dispatch = dispatch
         self.state = state
         self.api_id = api_id
-        self.app_token = app_token
         
         # This is a weak set for figuring out what endpoints are currently
         # using the object.
         self._used_by = weakref.WeakSet()
+        
+    @property
+    def parent_token(self):
+        ''' Read-only proxy to dispatch to check for a private parent.
+        Returns the parent app token, or None if not a private object.
+        '''
+        return self._dispatch.get_parent_token(self.ghid)
+        
+    @property
+    def private(self):
+        ''' Returns true/false if the object is private.
+        '''
+        return bool(self._dispatch.get_parent_token(self.ghid))
+        
+    @property
+    def startup_tokens(self):
+        ''' Read-only proxy to dispatch to check if we're used as a 
+        startup object for any tokens. Always returns a frozenset, which
+        will be empty if it's unused.
+        '''
+        return self._dispatch.get_startup_tokens(self.ghid)
+        
+    @property
+    def is_startup(self):
+        ''' Returns true/false if the object is used as a startup object
+        for any application
+        '''
+        return bool(self._dispatch.get_startup_tokens(self.ghid))
         
     def register_listener(self, endpoint):
         ''' Registers the endpoint as a listener for the object.
@@ -323,7 +390,7 @@ class _Dispatchable(_GAO):
         classmethod.
         '''
         version = b'\x00'
-        return b'hgxd' + version + state[0] + state[1] + state[2]
+        return b'hgxd' + version + state[0] + state[1]
         
     @staticmethod
     def _unpack(packed):
@@ -340,10 +407,9 @@ class _Dispatchable(_GAO):
             raise DispatchError('Incompatible dispatchable version number.')
             
         api_id = packed[5:70]
-        app_token = packed[70:74]
-        state = packed[74:]
+        state = packed[70:]
         
-        return _DispatchableState(api_id, app_token, state)
+        return _DispatchableState(api_id, state)
         
     def apply_state(self, state):
         ''' Apply the UNPACKED state to self.
@@ -351,25 +417,21 @@ class _Dispatchable(_GAO):
         # TODO: make sure this doesn't accidentally change api_id or app_token
         # Maybe set the _attributes directly or something as well?
         self.api_id = state[0]
-        self.app_token = state[1]
-        self.state = state[2]
+        self.state = state[1]
         
     def extract_state(self):
         ''' Extract self into a packable state.
         '''
-        return _DispatchableState(self.api_id, self.app_token, self.state)
+        return _DispatchableState(self.api_id, self.state)
         
     @property
     def api_id(self):
         # Warn if both api_id and app_token are undefined
         # Is this the appropriate time to check this?
-        if self._api_id == bytes(65) and self._app_token == bytes(4):
-            warnings.warn(
-                'Leaving both api_id and app_token undefined will result in '
-                'an inaccessible object.'
-            )
-            
-        return self._api_id
+        if self._api_id == bytes(65):
+            return None
+        else:
+            return self._api_id
         
     @api_id.setter
     def api_id(self, value):
@@ -381,31 +443,6 @@ class _Dispatchable(_GAO):
                 raise ValueError('API IDs must be 65 bytes long.')
             
         self._api_id = value
-        
-    @property
-    def app_token(self):
-        # Warn if both api_id and app_token are undefined
-        # Is this the appropriate time to check this?
-        if self._api_id == bytes(65) and self._app_token == bytes(4):
-            warnings.warn(
-                'Leaving both api_id and app_token undefined will result in '
-                'an inaccessible object.'
-            )
-            
-        return self._app_token
-        
-    @app_token.setter
-    def app_token(self, value):
-        # Warn if both api_id and app_token are undefined
-        # Is this the appropriate time to check this?
-        if value is None:
-            value = bytes(4)
-        else:
-            value = bytes(value)
-            if len(value) != 4:
-                raise ValueError('App tokens must be 4 bytes long.')
-            
-        self._app_token = value
         
     def update(self, state):
         ''' Wrapper to apply state that reuses api_id and app_token, and

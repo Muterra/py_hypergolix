@@ -45,6 +45,9 @@ from hypergolix.utils import LooperTrooper
 # ###############################################
 
 
+TEST_THIS_MANY_THREADED_LOOPERS = 10
+
+
 class LooperFixture(LooperTrooper):
     async def loop_init(self):
         self._sum = 0
@@ -76,7 +79,7 @@ class LooperTrooperTest(unittest.TestCase):
         self.assertEqual(looper._counter, 0)
         
     def test_otherthreads(self):
-        for __ in range(25):
+        for __ in range(TEST_THIS_MANY_THREADED_LOOPERS):
             looper = LooperFixture(threaded=True)
             looper._thread.join(timeout=10)
             self.assertTrue(looper._sum >= 5050)

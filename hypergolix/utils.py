@@ -775,7 +775,7 @@ class DispatchObj(RawObj):
 class IPCPackerMixIn:
     ''' Mix-in class for packing objects for IPC usage.
     '''
-    def _pack_object_def(self, address, author, state, is_link, api_id, app_token, private, dynamic, _legroom):
+    def _pack_object_def(self, address, author, state, is_link, api_id, private, dynamic, _legroom):
         ''' Serializes an object definition.
         '''
         if author is not None:
@@ -790,7 +790,6 @@ class IPCPackerMixIn:
             'state': state,
             'is_link': is_link,
             'api_id': api_id,
-            'app_token': app_token,
             'private': private,
             'dynamic': dynamic,
             '_legroom': _legroom,
@@ -843,7 +842,6 @@ class IPCPackerMixIn:
                 unpacked_msg['state'], 
                 unpacked_msg['is_link'],
                 unpacked_msg['api_id'], 
-                unpacked_msg['app_token'],
                 unpacked_msg['private'], 
                 unpacked_msg['dynamic'], 
                 unpacked_msg['_legroom']

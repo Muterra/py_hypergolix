@@ -199,7 +199,20 @@ class PrivateerTest(unittest.TestCase):
         self.assertEqual(self.privateer.get(cont3.ghid), secret3)
         
     def test_chains_and_ratchets(self):
+        ''' Mostly checking ratchets and healing and stuff for 
+        self-consistency.
+        '''
+        # Okay some of this might be silly but if you got it might as well 
+        # flaunt it, amirite?
+        secret1 = self.privateer.new_secret()
+        from _fixtures.remote_exchanges import cont1_1 as cont1
+        from _fixtures.remote_exchanges import dyn1_1a as dyn1a
+        from _fixtures.remote_exchanges import cont1_1 as cont2
+        from _fixtures.remote_exchanges import dyn1_1b as dyn1b
+        
         raise NotImplementedError()
+        
+        # Note: need better mock for oracle. That won't cut it for ratcheting!
         
 
 if __name__ == "__main__":

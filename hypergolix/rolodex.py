@@ -34,6 +34,7 @@ hypergolix: A python Golix client.
 import weakref
 import traceback
 import threading
+import collections
 
 from golix import SecondParty
 from golix import Ghid

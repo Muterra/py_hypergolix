@@ -966,6 +966,7 @@ class AutoresponseConnector:
     def __init__(self, autoresponder, *args, **kwargs):
         # I am actually slightly concerned about future name collisions here
         self.__autoresponder = autoresponder
+        super().__init__(receiver=autoresponder.receiver, *args, **kwargs)
         
     async def new_connection(self, *args, **kwargs):
         ''' Bridge the connection with a newly created session.

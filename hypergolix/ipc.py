@@ -126,6 +126,7 @@ from .utils import RawObj
 from .utils import call_coroutine_threadsafe
 from .utils import await_sync_future
 from .utils import WeakSetMap
+from .utils import SetMap
 
 from .comms import _AutoresponderSession
 from .comms import Autoresponder
@@ -173,6 +174,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
     outside entity.
     '''
     REQUEST_CODES = {
+        # Receive a declared startup obj.
+        'send_startup': b':O',
         # Receive a new object from a remotely concurrent instance of self.
         'send_object': b'+O',
         # Receive an update for an existing object.
@@ -225,6 +228,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             b'$T': self.set_token_wrapper,
             # Register an API
             b'$A': self.add_api_wrapper,
+            # Register a startup object
+            b'$O': self.register_startup_wrapper,
             # Whoami?
             b'?I': self.whoami_wrapper,
             # Get object
@@ -275,7 +280,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         # <app token>: set(<ghid, recipient tuples>)
         self._orphan_share_naks = SetMap()
         
-    def add_ipc_server(self, server_class, server_name, *args, **kwargs):
+    def add_ipc_server(self, server_name, server_class, *args, **kwargs):
         ''' Automatically sets up an IPC server connected to the IPCCore
         system. Just give it the server_class, eg WSBasicServer, and
         all of the *args and **kwargs will be passed to the server's
@@ -286,12 +291,13 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                 'Cannot overwrite an existing IPC server. Pop it first.'
             )
         
-        # We could do this elsewhere, but adding an IPC server isn't really
-        # performance-critical, especially not now.
+        # We could maybe do this elsewhere, but adding an IPC server isn't 
+        # really performance-critical, especially not now.
         class LinkedServer(AutoresponseConnector, server_class):
             pass
             
-        self._ipc_servers[server_name] = LinkedServer(*args, **kwargs)
+        self._ipc_servers[server_name] = \
+            LinkedServer(autoresponder=self, *args, **kwargs)
 
     def pop_ipc_server(self, server_name):
         ''' Removes and returns the IPC server. It may then be cleanly 
@@ -344,7 +350,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             skip_token = None
             
         callsheet.discard(skip_token)
-        callsheet.difference_update(skip_tokens)
+        # What would use this?
+        # callsheet.difference_update(skip_tokens)
         
         return callsheet
         
@@ -427,16 +434,60 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                     False, # is_link is currently unsupported
                     obj.api_id,
                     None,
-                    None,
                     obj.dynamic,
                     None
                 ),
-                request_code = request_code,
+                request_code = self.REQUEST_CODES[request_code],
                 # Note: for now, just don't worry about failures.
                 # Todo: expect reply, and enclose within try/catch to prevent 
                 # apps from crashing the service.
                 await_reply = False
             )
+        
+    async def set_token_wrapper(self, endpoint, request_body):
+        ''' With the current paradigm of independent app starting, this
+        is the "official" start of the application. We set our lookups 
+        for endpoint <--> token, and then send all startup objects.
+        '''
+        app_token = request_body[0:4]
+        
+        if app_token in self._endpoint_from_token:
+            raise RuntimeError(
+                'Attempt to reregister a new endpoint for the same token. '
+                'Each app token must have exactly one endpoint.'
+            )
+        
+        appdef = _AppDef(app_token)
+        # Check our app token
+        self._dispatch.start_application(appdef)
+        
+        # TODO: should these be enclosed within an operations lock?
+        self._endpoint_from_token[app_token] = endpoint
+        self._token_from_endpoint[endpoint] = app_token
+        
+        for ghid in self._dispatch.get_startup_objs(app_token):
+            await self.send_startup(endpoint, ghid)
+        
+        return b'\x01'
+    
+    async def new_token_wrapper(self, endpoint, request_body):
+        ''' Ignore body, get new token from dispatch, and proceed.
+        
+        Obviously doesn't require an existing app token.
+        '''
+        appdef = self._dispatch.register_application()
+        app_token = appdef.app_token
+        
+        # TODO: should these be enclosed within an operations lock?
+        self._endpoint_from_token[app_token] = endpoint
+        self._token_from_endpoint[endpoint] = app_token
+        
+        return app_token
+    
+    async def send_startup(self, endpoint, ghid):
+        ''' Sends the endpoint a startup object.
+        '''
+        await self._obj_sender(endpoint, ghid, 'send_startup')
     
     async def send_share(self, endpoint, ghid, sender):
         ''' Notifies the endpoint of a shared object, for which it is 
@@ -522,42 +573,6 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             # This would be where you actually distribute it to that app.
             pass
         
-    async def set_token_wrapper(self, endpoint, request_body):
-        ''' Ignore body, get new token from dispatch, and proceed.
-        
-        Obviously doesn't require an existing app token.
-        '''
-        app_token = request_body[0:4]
-        
-        if app_token in self._endpoint_from_token:
-            raise RuntimeError(
-                'Attempt to reregister a new endpoint for the same token. '
-                'Each app token must have exactly one endpoint.'
-            )
-        
-        appdef = _AppDef(app_token)
-        self._dispatch.check_application(appdef)
-        
-        # TODO: should these be enclosed within an operations lock?
-        self._endpoint_from_token[app_token] = endpoint
-        self._token_from_endpoint[endpoint] = app_token
-        
-        return b''
-    
-    async def new_token_wrapper(self, endpoint, request_body):
-        ''' Ignore body, get new token from dispatch, and proceed.
-        
-        Obviously doesn't require an existing app token.
-        '''
-        appdef = self._dispatch.register_application()
-        app_token = appdef.app_token
-        
-        # TODO: should these be enclosed within an operations lock?
-        self._endpoint_from_token[app_token] = endpoint
-        self._token_from_endpoint[endpoint] = app_token
-        
-        return app_token
-        
     async def add_api_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
         
@@ -581,6 +596,21 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         ghid = self._golcore.whoami
         return bytes(ghid)
         
+    async def register_startup_wrapper(self, endpoint, request_body):
+        ''' Wraps object sharing. Requires existing app token. Note that
+        it will return successfully immediately, regardless of whether
+        or not the share was eventually accepted by the recipient.
+        '''
+        if endpoint not in self._token_from_endpoint:
+            raise IPCError(
+                'Must register app token before registering startup objects.'
+            )
+            
+        ghid = Ghid.from_bytes(request_body)
+        requesting_token = self._token_from_endpoint[endpoint]
+        self._dispatch.register_startup(ghid, requesting_token)
+        return b'\x01'
+        
     async def get_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.get_object into a bytes return.
         
@@ -596,15 +626,6 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             dispatch = self._dispatch
         )
         obj.register_listener(endpoint)
-        
-        # TODO: remove app_token from dispatchable.
-        # TODO: shuffle-ish api_id?
-        # TODO: add "private" as explicit flag?
-            
-        if obj.app_token != bytes(4):
-            private = True
-        else:
-            private = False
             
         if isinstance(obj.state, Ghid):
             is_link = True
@@ -623,8 +644,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             state,
             is_link,
             obj.api_id,
-            obj.app_token,
-            private,
+            obj.private,
             obj.dynamic,
             _legroom
         )
@@ -643,25 +663,51 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             state, 
             is_link, 
             api_id, 
-            app_token, 
             private, 
             dynamic, 
             _legroom
         ) = self._unpack_object_def(request_body)
+        
+        app_token = self._token_from_endpoint[endpoint]
         
         if is_link:
             raise NotImplementedError('Linked objects are not yet supported.')
             state = Ghid.from_bytes(state)
         
         obj = self._oracle.new_object(
-                gaoclass = _Dispatchable, 
-                ghid = ghid,
-                dispatch = self._dispatch,
-                state = _DispatchableState(api_id, app_token, state),
-                dynamic = dynamic,
-                _legroom = _legroom,
-            )
+            gaoclass = _Dispatchable,
+            dispatch = self._dispatch,
+            state = _DispatchableState(api_id, state),
+            dynamic = dynamic,
+            _legroom = _legroom,
+            api_id = api_id,
+        )
+            
+        # Add the endpoint as a listener.
         obj.register_listener(endpoint) 
+        
+        # If the object is private, register it as such.
+        if private:
+            self._dispatch.register_private(obj.ghid, app_token)
+            
+        # Otherwise, make sure to notify any other interested parties.
+        else:
+            # TODO: change send_object to just send the ghid, not the object
+            # itself, so that the app doesn't have to be constantly discarding
+            # stuff it didn't create?
+            callsheet = await self.make_callsheet(
+                obj.ghid, 
+                skip_endpoint = endpoint
+            )
+            
+            for call_token in callsheet:
+                obj.register_listener(self._endpoint_from_token[call_token])
+                
+            await self.distribute_to_endpoints(
+                callsheet,
+                self.send_object,
+                obj.ghid
+            )
         
         return bytes(obj.ghid)
         
@@ -679,7 +725,6 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             state, 
             is_link, 
             api_id, # Unused and set to None.
-            app_token, # Unused and set to None.
             private, # Unused and set to None.
             dynamic, # Unused and set to None.
             _legroom # Unused and set to None.
@@ -691,11 +736,26 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             
         obj = self._oracle.get_object(
             gaoclass = _Dispatchable, 
-            ghid = ghid,
+            ghid = address,
             dispatch = self._dispatch
         )
         obj.update(state)
         obj.register_listener(endpoint)
+        
+        if not obj.private:
+            callsheet = await self.make_callsheet(
+                obj.ghid, 
+                skip_endpoint = endpoint
+            )
+            
+            for call_token in callsheet:
+                obj.register_listener(self._endpoint_from_token[call_token])
+                
+            await self.distribute_to_endpoints(
+                callsheet,
+                self.send_update,
+                obj.ghid
+            )
         
         return b'\x01'
         
@@ -809,6 +869,8 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         'set_token': b'$T',
         # Register an API
         'register_api': b'$A',
+        # Register a startup object
+        'register_startup': b'$O',
         # Whoami?
         'whoami': b'?I',
         # Get object
@@ -854,6 +916,8 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         
         # Note that these are only for unsolicited contact from the server.
         req_handlers = {
+            # Receive a startup object.
+            b':O': self.deliver_startup_wrapper,
             # Receive a new object from a remotely concurrent instance of self.
             b'+O': self.deliver_object_wrapper,
             # Receive a new object from a share.
@@ -996,14 +1060,10 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             state, 
             is_link, 
             api_id, 
-            app_token, 
             private, 
             dynamic, 
             _legroom
         ) = self._unpack_object_def(response)
-        
-        if app_token == bytes(4):
-            app_token = None
             
         if is_link:
             link = Ghid.from_bytes(state)
@@ -1078,7 +1138,6 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             state,
             is_link,
             api_id,
-            app_token,
             private,
             dynamic,
             _legroom
@@ -1134,7 +1193,6 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             None,
             state,
             obj.is_link,
-            None,
             None,
             None,
             None,
@@ -1355,6 +1413,55 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         
         return True
         
+    async def deliver_startup_wrapper(self, session, request_body):
+        ''' Deserializes an incoming object delivery, dispatches it to
+        the application, and serializes a response to the IPC host.
+        '''
+        (
+            address,
+            author,
+            state, 
+            is_link, 
+            api_id,
+            private, # Will be unused and set to None 
+            dynamic,
+            _legroom # Will be unused and set to None
+        ) = self._unpack_object_def(request_body)
+        
+        # Resolve any links
+        if is_link:
+            link = Ghid.from_bytes(state)
+            # Note: this may cause things to freeze, because async
+            state = self.get_object(link)
+            
+        # Okay, now let's create an object for it
+        obj = AppObj(
+            embed = self, 
+            address = address, 
+            state = state, 
+            author = author, 
+            api_id = api_id, 
+            private = False,
+            dynamic = dynamic,
+            _legroom = None,
+            threadsafe_callbacks = [],
+            async_callbacks = [],
+        )
+            
+        # Well this is a huge hack. But something about the event loop 
+        # itself is fucking up control flow and causing the world to hang
+        # here.
+        # TODO: fix this.
+        worker = threading.Thread(
+            target = self._object_handlers[api_id],
+            daemon = True,
+            args = (obj,),
+        )
+        worker.start()
+        
+        # Successful delivery. Return true
+        return b'\x01'
+        
     async def deliver_share_wrapper(self, session, request_body):
         ''' Deserializes an incoming object delivery, dispatches it to
         the application, and serializes a response to the IPC host.
@@ -1365,7 +1472,6 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             state, 
             is_link, 
             api_id,
-            app_token, # Will be unused and set to None 
             private, # Will be unused and set to None 
             dynamic,
             _legroom # Will be unused and set to None
@@ -1415,7 +1521,6 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             state, 
             is_link, 
             api_id,
-            app_token, # Will be unused and set to None 
             private, # Will be unused and set to None 
             dynamic,
             _legroom # Will be unused and set to None
@@ -1466,7 +1571,6 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             state, 
             is_link, 
             api_id, # Will be unused and set to None 
-            app_token, # Will be unused and set to None 
             private, # Will be unused and set to None 
             dynamic, # Will be unused and set to None 
             _legroom # Will be unused and set to None

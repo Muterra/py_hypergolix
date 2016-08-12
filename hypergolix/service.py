@@ -69,7 +69,7 @@ from .remotes import PersisterBridgeServer
 from .remotes import MemoryPersister
 from .remotes import RemotePersistenceServer
 
-from .ipc import IPCHost
+from .ipc import IPCCore
 from .ipc import IPCEmbed
 
 
