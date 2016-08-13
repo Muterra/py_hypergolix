@@ -279,6 +279,12 @@ class TestDispatcher(unittest.TestCase):
         callerbuffer = self.ipccore.caller_buffer.popleft()
         self.assertEqual(callerbuffer, self.ipccore.send_delete)
         
+        
+class TestDispatchable(unittest.TestCase):
+    @unittest.expectedFailure
+    def test_dispatchable(self):
+        raise NotImplementedError()
+        
 
 if __name__ == "__main__":
     from _fixtures import logutils

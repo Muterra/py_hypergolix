@@ -127,10 +127,10 @@ class MockDispatch:
     def get_startup_objs(self, token):
         return frozenset([self.startups[token]])
         
-    def register_startup(self, ghid, token):
+    def register_startup(self, token, ghid):
         self.startups[token] = ghid
         
-    def register_private(self, ghid, token):
+    def register_private(self, token, ghid):
         self.parents[ghid] = token
         
     def start_application(self, appdef):
