@@ -89,81 +89,6 @@ logger = logging.getLogger(__name__)
 # ###############################################
 # Lib
 # ###############################################
-
-
-class GhidProxier:
-    ''' Resolve the base container GHID from any associated ghid. Uses
-    all weak references, so should not interfere with GCing objects.
-    
-    Threadsafe.
-    '''
-    def __init__(self):
-        # Note that we can't really cache aliases, because their proxies will
-        # not update when we change things unless the proxy is also removed 
-        # from the cache. Since the objects may (or may not) exist locally in
-        # memory anyways, we should just take advantage of that, and allow our
-        # inquisitor to more easily manage memory consumption as well.
-        # self._refs = {}
-        
-        self._modlock = threading.Lock()
-        
-        self._librarian = None
-        
-    def assemble(self, librarian):
-        # Chicken, meet egg.
-        self._librarian = weakref.proxy(librarian)
-        
-    def __mklink(self, proxy, target):
-        ''' Set, or update, a ghid proxy.
-        
-        Ghids must only ever have a single proxy. Calling chain on an 
-        existing proxy will update the target.
-        '''
-        raise NotImplementedError('Explicit link creation has been removed.')
-        
-        if not isinstance(proxy, Ghid):
-            raise TypeError('Proxy must be Ghid.')
-            
-        if not isinstance(target, Ghid):
-            raise TypeError('Target must be ghid.')
-        
-        with self._modlock:
-            self._refs[proxy] = target
-            
-    def resolve(self, ghid):
-        ''' Protect the entry point with a global lock, but don't leave
-        the recursive bit alone.
-        
-        TODO: make this guarantee, through using the persister's 
-        librarian, that the resolved ghid IS, in fact, a container.
-        
-        TODO: consider adding a depth limit to resolution.
-        '''
-        if not isinstance(ghid, Ghid):
-            raise TypeError('Can only resolve a ghid.')
-            
-        with self._modlock:
-            return self._resolve(ghid)
-        
-    def _resolve(self, ghid):
-        ''' Recursively resolves the container ghid for a proxy (or a 
-        container).
-        '''
-        try:
-            obj = self._librarian.summarize(ghid)
-        except KeyError:
-            logger.warning(
-                'Librarian missing resource record; could not verify full '
-                'resolution of ' + str(bytes(ghid)) + '\n' + 
-                ''.join(traceback.format_exc()))
-            return ghid
-        
-        else:
-            if isinstance(obj, _GobdLite):
-                return self._resolve(obj.target)
-                
-            else:
-                return ghid
             
             
 class GolixCore:
@@ -208,14 +133,18 @@ class GolixCore:
         '''
         return self._identity.ghid
         
-    def open_request(self, request):
+    def unpack_request(self, request):
         ''' Just like it says on the label...
         Note that the request is PACKED, not unpacked.
         '''
-        # TODO: have this interface with rolodex.
         with self._opslock:
             unpacked = self._identity.unpack_request(request)
-            
+        return unpacked
+        
+    def open_request(self, unpacked):
+        ''' Just like it says on the label...
+        Note that the request is UNPACKED, not packed.
+        '''
         requestor = SecondParty.from_packed(
             self._librarian.retrieve(unpacked.author)
         )
@@ -287,6 +216,86 @@ class GolixCore:
         # Simple wrapper around golix.FirstParty.make_debind
         with self._opslock:
             return self._identity.make_debind(target)
+
+
+class GhidProxier:
+    ''' Resolve the base container GHID from any associated ghid. Uses
+    all weak references, so should not interfere with GCing objects.
+    
+    Threadsafe.
+    '''
+    def __init__(self):
+        # Note that we can't really cache aliases, because their proxies will
+        # not update when we change things unless the proxy is also removed 
+        # from the cache. Since the objects may (or may not) exist locally in
+        # memory anyways, we should just take advantage of that, and allow our
+        # inquisitor to more easily manage memory consumption as well.
+        # self._refs = {}
+        
+        self._modlock = threading.Lock()
+        
+        self._librarian = None
+        self._salmonator = None
+        
+    def assemble(self, librarian, salmonator):
+        # Chicken, meet egg.
+        self._librarian = weakref.proxy(librarian)
+        self._salmonator = weakref.proxy(salmonator)
+        
+    def __mklink(self, proxy, target):
+        ''' Set, or update, a ghid proxy.
+        
+        Ghids must only ever have a single proxy. Calling chain on an 
+        existing proxy will update the target.
+        '''
+        raise NotImplementedError('Explicit link creation has been removed.')
+        
+        if not isinstance(proxy, Ghid):
+            raise TypeError('Proxy must be Ghid.')
+            
+        if not isinstance(target, Ghid):
+            raise TypeError('Target must be ghid.')
+        
+        with self._modlock:
+            self._refs[proxy] = target
+            
+    def resolve(self, ghid):
+        ''' Protect the entry point with a global lock, but don't leave
+        the recursive bit alone.
+        
+        TODO: make this guarantee, through using the persister's 
+        librarian, that the resolved ghid IS, in fact, a container.
+        
+        TODO: consider adding a depth limit to resolution.
+        '''
+        if not isinstance(ghid, Ghid):
+            raise TypeError('Can only resolve a ghid.')
+            
+        with self._modlock:
+            return self._resolve(ghid)
+        
+    def _resolve(self, ghid):
+        ''' Recursively resolves the container ghid for a proxy (or a 
+        container).
+        '''
+        if ghid not in self._librarian:
+            self._salmonator.pull(ghid, quiet=True)
+        
+        try:
+            obj = self._librarian.summarize(ghid)
+        except KeyError:
+            logger.warning(
+                'Librarian missing resource record; could not verify full '
+                'resolution of ' + str(bytes(ghid)) + '\n' + 
+                ''.join(traceback.format_exc()))
+            return ghid
+        
+        else:
+            if isinstance(obj, _GobdLite):
+                return self._resolve(obj.target)
+                
+            else:
+                return ghid
         
         
 class Oracle:
@@ -334,6 +343,9 @@ class Oracle:
                     )
                     
             except KeyError:
+                if ghid not in self._librarian:
+                    self._salmonator.pull(ghid, quiet=True)
+                
                 obj = gaoclass.from_ghid(
                     ghid = ghid, 
                     golix_core = self._golcore,
@@ -1124,11 +1136,10 @@ class _GAODict(_GAOMsgpackBase):
             1. For every change
             2. Using msgpack
     '''
-    def __init__(self, core, dynamic, _legroom=None, *args, **kwargs):
-        # Include these so that we can pass *args and **kwargs to the dict
-        super().__init__(core, dynamic, _legroom)
-        self._state = dict(*args, **kwargs)
+    def __init__(self, *args, **kwargs):
         self._statelock = threading.Lock()
+        self._state = {}
+        super().__init__(*args, **kwargs)
         
     def apply_state(self, state):
         ''' Apply the UNPACKED state to self.
@@ -1233,11 +1244,10 @@ class _GAOSet(_GAOMsgpackBase):
             1. For every change
             2. Using msgpack
     '''
-    def __init__(self, core, dynamic, _legroom=None, *args, **kwargs):
-        # Include these so that we can pass *args and **kwargs to the set
-        super().__init__(core, dynamic, _legroom)
-        self._state = set(*args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        self._state = set()
         self._statelock = threading.Lock()
+        super().__init__(*args, **kwargs)
         
     def apply_state(self, state):
         ''' Apply the UNPACKED state to self.

@@ -266,18 +266,18 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         self._rolodex = weakref.proxy(rolodex)
         self._salmonator = weakref.proxy(salmonator)
         
-    def bootstrap(self):
+    def bootstrap(self, incoming_shares, orphan_acks, orphan_naks):
         ''' Initializes distributed state.
         '''
         # Set of incoming shared ghids that had no endpoint
         # set(<ghid, sender tuples>)
-        self._orphan_incoming_shares = set()
+        self._orphan_incoming_shares = incoming_shares
         # Setmap-like lookup for share acks that had no endpoint
         # <app token>: set(<ghid, recipient tuples>)
-        self._orphan_share_acks = SetMap()
+        self._orphan_share_acks = orphan_acks
         # Setmap-like lookup for share naks that had no endpoint
         # <app token>: set(<ghid, recipient tuples>)
-        self._orphan_share_naks = SetMap()
+        self._orphan_share_naks = orphan_naks
         
     def add_ipc_server(self, server_name, server_class, *args, **kwargs):
         ''' Automatically sets up an IPC server connected to the IPCCore
@@ -311,6 +311,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         The callsheet is generated from app_tokens, so that the actual 
         distributor can kick missing tokens back for safekeeping.
         '''
+        logger.debug('Generating callsheet.')
         try:
             obj = self._oracle.get_object(
                 gaoclass = _Dispatchable, 
@@ -330,27 +331,40 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         
         private_owner = self._dispatch.get_parent_token(ghid)
         if private_owner:
+            logger.debug('Ghid has a private owner.')
             callsheet.add(private_owner)
             
-        # elif override_tokens is not None:
-        #     callsheet.update(override_tokens)
-            
         else:
+            logger.debug('Ghid has no private owner.')
             endpoints = set()
-            endpoints.update(self._endpoints_from_api[obj.api_id])
+            logger.debug(
+                'Interested API endpoints: ' + 
+                str(len(self._endpoints_from_api.get_any(obj.api_id)))
+            )
+            endpoints.update(self._endpoints_from_api.get_any(obj.api_id))
+            logger.debug('Object listeners: ' + repr(obj.listeners))
             endpoints.update(obj.listeners)
             for endpoint in endpoints:
                 callsheet.add(self._token_from_endpoint[endpoint])
                 
-        # This keyerror will catch both default of None as well as missing.
-        try:
-            skip_token = self._token_from_endpoint[skip_endpoint]
-        except KeyError:
+        # Normally the keyerror will catch both default of None as well as any 
+        # missing objects, but because it's a weakly referenced lookup, we have
+        # to explicitly skip an undefined skip_endpoint
+        if skip_endpoint is not None:
+            try:
+                skip_token = self._token_from_endpoint[skip_endpoint]
+            except KeyError:
+                skip_token = None
+            else:
+                logger.debug('Skipping token.')
+        else:
             skip_token = None
             
         callsheet.discard(skip_token)
         # What would use this?
         # callsheet.difference_update(skip_tokens)
+        
+        logger.debug('Callsheet generated: ' + repr(callsheet))
         
         return callsheet
         
@@ -360,7 +374,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         '''
         if len(callsheet) == 0:
             logger.info('No applications are available to handle the request.')
-            await self._handle_orphan_distr(distributor, *args, **kwargs)
+            await self._handle_orphan_distr(distributor, *args)
             
         else:
             await self._robodialer(
@@ -541,8 +555,6 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
     async def notify_share_success(self, token, ghid, recipient):
         ''' Notifies the embedded client of a successful share.
         '''
-        raise NotImplementedError('No share notification yet.')
-        
         try:
             endpoint = self._endpoint_from_token[token]
             
@@ -552,14 +564,17 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             self._orphan_share_acks.add(token, sharelog)
             
         else:
-            # This would be where you actually distribute it to that app.
-            pass
+            response = await self.send(
+                session = endpoint,
+                msg = bytes(ghid) + bytes(recipient),
+                request_code = self.REQUEST_CODES['notify_share_success'],
+                # Note: for now, just don't worry about failures.
+                await_reply = False
+            )
         
     async def notify_share_failure(self, token, ghid, recipient):
         ''' Notifies the embedded client of an unsuccessful share.
         '''
-        raise NotImplementedError('No share notification yet.')
-        
         try:
             endpoint = self._endpoint_from_token[token]
             
@@ -569,8 +584,13 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             self._orphan_share_acks.add(token, sharelog)
             
         else:
-            # This would be where you actually distribute it to that app.
-            pass
+            response = await self.send(
+                session = endpoint,
+                msg = bytes(ghid) + bytes(recipient),
+                request_code = self.REQUEST_CODES['notify_share_failure'],
+                # Note: for now, just don't worry about failures.
+                await_reply = False
+            )
         
     async def add_api_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.

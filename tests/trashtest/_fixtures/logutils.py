@@ -40,44 +40,63 @@ import logging
 import datetime
 
 
-def autoconfig(logdirname='logs', loglevel='debug'):
-    fname = sys.argv[0]
-    logdir = pathlib.Path(logdirname)
+def autoconfig(tofile=True, logdirname='logs', loglevel='debug'):
+    if tofile:
+        fname = sys.argv[0]
+        logdir = pathlib.Path(logdirname)
 
-    if (not logdir.exists()) or (not logdir.is_dir()):
-        logdir.mkdir()
+        if (not logdir.exists()) or (not logdir.is_dir()):
+            logdir.mkdir()
 
-    # Note that double slashes don't cause problems.
-    prefix = logdirname + '/' + pathlib.Path(fname).stem
-    ii = 0
-    date = str(datetime.date.today())
-    ext = '.pylog'
-    while pathlib.Path(prefix + '_' + date + '_' + str(ii) + ext).exists():
-        ii += 1
-    logname = prefix + '_' + date + '_' + str(ii) + ext
-    print('USING LOGFILE: ' + logname)
+        # Note that double slashes don't cause problems.
+        prefix = logdirname + '/' + pathlib.Path(fname).stem
+        ii = 0
+        date = str(datetime.date.today())
+        ext = '.pylog'
+        while pathlib.Path(prefix + '_' + date + '_' + str(ii) + ext).exists():
+            ii += 1
+        logname = prefix + '_' + date + '_' + str(ii) + ext
+        print('USING LOGFILE: ' + logname)
+
+        # Make a log handler
+        loghandler = logging.FileHandler(logname)
+        loghandler.setFormatter(
+            logging.Formatter(
+                '%(threadName)-10.10s '
+                '%(name)-17.17s  %(levelname)-5.5s  '
+                '%(message)s'
+            )
+        )
+        
+        # Add to root logger
+        logging.getLogger('').addHandler(loghandler)
 
     # Calculate the logging level
+    loglevel = loglevel.lower()
+    loglevel_enum = {
+        'debug': logging.DEBUG,
+        'info': logging.INFO,
+        'warning': logging.WARNING,
+        'error': logging.ERROR,
+        'shouty': logging.ERROR,
+        'extreme': logging.ERROR
+    }
     try:
-        loglevel = {'debug': logging.DEBUG,
-                    'info': logging.INFO,
-                    'warning': logging.WARNING,
-                    'error': logging.ERROR,}[loglevel.lower()]
+        log_setpoint = loglevel_enum[loglevel]
     except KeyError:
-        loglevel = logging.WARNING
-
-    # Make a log handler
-    loghandler = logging.FileHandler(logname)
-    loghandler.setFormatter(
-        logging.Formatter(
-            '%(threadName)-7s %(name)-12s: %(levelname)-8s %(message)s'
-        )
-    )
-    
-    # Add to root logger
-    logging.getLogger('').addHandler(loghandler)
-    logging.getLogger('').setLevel(loglevel)
+        log_setpoint = logging.WARNING
         
-    # Silence the froth
-    logging.getLogger('asyncio').setLevel(logging.WARNING)
-    logging.getLogger('websockets').setLevel(logging.WARNING)
+    # Silence the froth but keep the good stuff
+    logging.getLogger('').setLevel(log_setpoint)
+    
+    if loglevel == 'shouty':
+        logging.getLogger('asyncio').setLevel(logging.INFO)
+        logging.getLogger('websockets').setLevel(logging.DEBUG)
+        
+    elif loglevel == 'extreme':
+        logging.getLogger('asyncio').setLevel(logging.DEBUG)
+        logging.getLogger('websockets').setLevel(logging.DEBUG)
+        
+    else:
+        logging.getLogger('asyncio').setLevel(logging.WARNING)
+        logging.getLogger('websockets').setLevel(logging.WARNING)

@@ -182,7 +182,7 @@ class Dispatcher:
         # Chicken, meet egg.
         self._ipccore = weakref.proxy(ipc_core)
         
-    def bootstrap(self, all_tokens, startup_objs, private_by_ghid):
+    def bootstrap(self, all_tokens, startup_objs, private_by_ghid, token_lock):
         ''' Initialize distributed state.
         '''
         # Now init distributed state.
@@ -199,7 +199,7 @@ class Dispatcher:
         
         # These need to be distributed but aren't yet. TODO!
         # Distributed lock for adding app tokens
-        self._token_lock = threading.Lock()
+        self._token_lock = token_lock
         
     def new_token(self):
         # Use a dummy api_id to force the while condition to be true initially
@@ -480,7 +480,7 @@ class _Dispatchable(_GAO):
             )
             
         self.apply_state(
-            state = (self.api_id, self.app_token, state)
+            state = (self.api_id, state)
         )
         self.push()
         

@@ -164,6 +164,8 @@ def HGXService(host, port, ipc_port, debug, traceur, foreground=True,
     
     if not aengel:
         aengel = Aengel()
+    
+    core = AgentBootstrap(credential=None, aengel=aengel, debug=debug)
         
     persister = Autocomms(
         autoresponder_class = PersisterBridgeClient,
@@ -175,22 +177,15 @@ def HGXService(host, port, ipc_port, debug, traceur, foreground=True,
         debug = debug,
         aengel = aengel,
     )
-    
-    # TODO: make the bootstrap work without the persister for init, and
-    # then have an add_persister method
-    core = AgentBootstrap(persister, credential=None, aengel=aengel)
-    
-    # TODO: make the bootstrap have an add_ipc method.
-    ipc = Autocomms(
-        autoresponder_class = IPCHost,
-        autoresponder_kwargs = {'dispatch': core.dispatch},
-        connector_class = WSBasicServer,
-        connector_kwargs = {
-            'host': 'localhost',
-            'port': ipc_port,
-        },
+    core.salmonator.add_upstream_remote(persister)
+    core.ipccore.add_ipc_server(
+        'wslocal', 
+        WSBasicServer, 
+        host = 'localhost', 
+        port = ipc_port,
         debug = debug,
         aengel = aengel,
+        threaded = True
     )
     
     # Automatically detect if we're the main thread. If so, wait indefinitely
@@ -198,7 +193,7 @@ def HGXService(host, port, ipc_port, debug, traceur, foreground=True,
     if foreground:
         threading_autojoin()
         
-    return persister, core, ipc
+    return persister, core
 
 
 if __name__ == '__main__':

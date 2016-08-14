@@ -168,7 +168,8 @@ class TestDispatcher(unittest.TestCase):
         self.dispatch.bootstrap(
             all_tokens = set(),
             startup_objs = SetMap(),
-            private_by_ghid = {}
+            private_by_ghid = {},
+            token_lock = threading.Lock()
         )
         
     def test_new_token(self):

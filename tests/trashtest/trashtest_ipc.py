@@ -53,6 +53,7 @@ from hypergolix.dispatch import _AppDef
 from hypergolix.persistence import SalmonatorNoop
 
 from hypergolix.utils import Aengel
+from hypergolix.utils import SetMap
 
 from hypergolix.comms import Autocomms
 from hypergolix.comms import WSBasicServer
@@ -274,7 +275,11 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             self.golcore, self.oracle, self.dispatch, self.rolodex, 
             self.salmonator
         )
-        self.ipccore.bootstrap()
+        self.ipccore.bootstrap(
+            incoming_shares = set(),
+            orphan_acks = SetMap(),
+            orphan_naks = SetMap()
+        )
         
         self.ipccore.add_ipc_server(
             'websockets', 

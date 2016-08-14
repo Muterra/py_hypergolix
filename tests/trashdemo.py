@@ -167,6 +167,7 @@ def make_tests(iterations, debug, raz, des, aengel):
         
         # All responses go from Des -> Raz
         def request_handler(self, obj):
+            # print('Receiving request.')
             # Just to prevent GC
             requests_incoming.appendleft(obj)
             reply = self.deslink.new_obj_threadsafe(
@@ -176,6 +177,7 @@ def make_tests(iterations, debug, raz, des, aengel):
             )
             
             def state_mirror(source_obj):
+                # print('Mirroring state.')
                 reply.update_threadsafe(source_obj.state)
             obj.append_threadsafe_callback(state_mirror)
             
@@ -186,6 +188,7 @@ def make_tests(iterations, debug, raz, des, aengel):
             
         # All requests go from Raz -> Des. All responses go from Des -> Raz.
         def response_handler(self, obj):
+            # print('Receiving response.')
             obj.append_threadsafe_callback(rt_notifier)
             # Just to prevent GC
             responses_incoming.appendleft(obj)
@@ -272,34 +275,22 @@ if __name__ == '__main__':
     server, raz, des, aengel = make_fixtures(args.debug)    
     apptest = make_tests(args.iters, args.debug, raz, des, aengel)
     
-    log_dir = args.logdir
-    if log_dir:
-        ii = 0
-        # Note that double slashes don't cause problems.
-        prefix = log_dir + '/' + 'trashdemo'
-        date = str(datetime.date.today())
-        ext = '.pylog'
-        while pathlib.Path(prefix + '_' + date + '_' + str(ii) + ext).exists():
-            ii += 1
-        logname = prefix + '_' + date + '_' + str(ii) + ext
-        print('USING LOGFILE: ' + logname)
-        
-    else:
-        logname = None
     
-    if logname:
-        loghandler = logging.FileHandler(logname)
-        loghandler.setFormatter(
-            logging.Formatter(
-                '%(threadName)-7s %(name)-12s: %(levelname)-8s %(message)s'
-            )
+    # LOGGING CONFIGURATION!
+    
+    from trashtest._fixtures import logutils
+    
+    if args.logdir:
+        logutils.autoconfig(
+            tofile = True, 
+            logdirname = args.logdir, 
+            loglevel = args.verbosity
         )
-        # Add to root logger
-        logging.getLogger('').addHandler(loghandler)
-        
-    # Silence the froth
-    logging.getLogger('asyncio').setLevel(logging.WARNING)
-    logging.getLogger('websockets').setLevel(logging.WARNING)
+    else:
+        logutils.autoconfig(
+            tofile = False,  
+            loglevel = args.verbosity
+        )
     
     # And finally, run them
     suite = unittest.TestSuite()

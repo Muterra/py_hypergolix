@@ -37,7 +37,7 @@ __all__ = [
 ]
 
 # Global dependencies
-# import collections
+import threading
 
 from Crypto.Protocol.KDF import scrypt
 from Crypto.Hash import SHA512
@@ -47,7 +47,6 @@ from golix import Ghid
 from golix import FirstParty
 
 # Intra-package dependencies
-
 from .core import GolixCore
 from .core import Oracle
 from .core import GhidProxier
@@ -68,6 +67,8 @@ from .persistence import Salmonator
 
 from .dispatch import Dispatcher
 from .dispatch import _Dispatchable
+
+from .ipc import IPCCore
 from .privateer import Privateer
 from .rolodex import Rolodex
 
@@ -96,7 +97,7 @@ class AgentBootstrap:
     
     Also binds everything within a single namespace, etc etc.
     '''
-    def __init__(self, credential, bootstrap=None, aengel=None):
+    def __init__(self, credential, bootstrap=None, aengel=None, debug=False):
         ''' Creates everything and puts it into a singular namespace.
         
         If bootstrap (ghid) is passed, we'll use the credential to 
@@ -112,6 +113,7 @@ class AgentBootstrap:
         self.enforcer = Enforcer()
         self.lawyer = Lawyer()
         self.bookie = Bookie()
+        self.librarian = MemoryLibrarian()
         self.postman = MrPostman()
         self.undertaker = Undertaker()
         self.salmonator = Salmonator()
@@ -119,43 +121,65 @@ class AgentBootstrap:
         self.privateer = Privateer()
         self.oracle = Oracle()
         self.rolodex = Rolodex()
-        self.proxy = GhidProxier()
+        self.ghidproxy = GhidProxier()
         self.dispatch = Dispatcher()
+        self.ipccore = IPCCore(aengel=aengel, threaded=True, debug=debug)
         
         # Now we need to link everything together.
-        self.golcore.assemble(self.librarian)
-        self.percore.assemble(self.doorman, self.enforcer, 
-                                        self.lawyer, self.bookie, 
-                                        self.librarian, self.postman,
-                                        self.undertaker, self.salmonator)
-        self.oracle.assemble(self.golcore)
-        self.privateer.assemble(self.golcore, self.oracle)
-        self.proxy.assemble(self.golcore, self.librarian)
-        self.dispatch.assemble(self.golcore, self.oracle, self.rolodex)
-        self.rolodex.assemble(self.golcore, self.oracle, self.privateer, 
-                            self.dispatch, self.persister, self.proxy)
+        self.percore.assemble(self.doorman, self.enforcer, self.lawyer, 
+                            self.bookie, self.librarian, self.postman,
+                            self.undertaker, self.salmonator)
         self.doorman.assemble(self.librarian)
-        self.postman.assemble(self.golcore, self.rolodex, self.librarian, 
-                            self.bookie)
-        self.undertaker.assemble(self.librarian, self.bookie, self.postman)
-        self.lawyer.assemble(self.librarian)
         self.enforcer.assemble(self.librarian)
+        self.lawyer.assemble(self.librarian)
         self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
-        self.librarian.assemble(self.percore)
-        self.salmonator.assemble(self.golcore, self.percore, 
+        self.librarian.assemble(self.percore, self.salmonator)
+        self.postman.assemble(self.golcore, self.librarian, self.bookie, 
+                            self.rolodex)
+        self.undertaker.assemble(self.librarian, self.bookie, self.postman)
+        self.salmonator.assemble(self.golcore, self.percore, self.doorman,
                                 self.postman, self.librarian)
+        self.golcore.assemble(self.librarian)
+        self.privateer.assemble(self.golcore, self.oracle)
+        self.ghidproxy.assemble(self.librarian, self.salmonator)
+        self.oracle.assemble(self.golcore, self.ghidproxy, self.privateer,
+                            self.percore, self.bookie, self.librarian, 
+                            self.postman, self.salmonator)
+        self.rolodex.assemble(self.golcore, self.privateer, self.dispatch, 
+                            self.percore, self.librarian, self.salmonator,
+                            self.ghidproxy, self.ipccore)
+        self.dispatch.assemble(self.ipccore)
+        self.ipccore.assemble(self.golcore, self.oracle, self.dispatch, 
+                            self.rolodex, self.salmonator)
             
         # Now we need to bootstrap everything.
         if bootstrap is None:
             # Golix core bootstrap.
             # ----------------------------------------------------------
             identity = FirstParty()
-            persister.ingest_gidc(identity.second_party)
+            self.percore.ingest(identity.second_party.packed)
             self.golcore.bootstrap(identity)
             
             # Privateer bootstrap.
             # ----------------------------------------------------------
-            self.privateer.bootstrap()
+            self.privateer.bootstrap(
+                persistent_secrets = {}, 
+                staged_secrets = {}
+            )
+            
+            # Rolodex bootstrap:
+            # ----------------------------------------------------------
+            # Dict-like mapping of all pending requests.
+            # Used to lookup {<request address>: <target address>}
+            pending_requests = self.oracle.new_object(
+                gaoclass = _GAODict,
+                dynamic = True,
+                state = {}
+            )
+            self.rolodex.bootstrap(
+                pending_requests = pending_requests, 
+                outstanding_shares = SetMap()
+            )
             
             # Dispatch bootstrap:
             # ----------------------------------------------------------
@@ -164,22 +188,35 @@ class AgentBootstrap:
             all_tokens = self.oracle.new_object(
                 gaoclass = _GAOSet,
                 dynamic = True,
+                state = set()
             )
             all_tokens.add(b'\x00\x00\x00\x00')
             # SetMap of all objects to be sent to an app upon app startup.
             # TODO: make this distributed state object.
             startup_objs = SetMap()
-            self.dispatch.bootstrap(all_tokens, startup_objs)
             
-            # Rolodex bootstrap:
-            # ----------------------------------------------------------
-            # Dict-like mapping of all pending requests.
-            # Used to lookup {<request address>: <target address>}
-            pending_requests = self.oracle.new_object(
+            # Dict-like lookup for <private obj ghid>: <parent token>
+            private_by_ghid = self.oracle.new_object(
                 gaoclass = _GAODict,
-                dynamic = True
+                dynamic = True,
+                state = {}
             )
-            self.rolodex.bootstrap(pending_requests)
+            
+            # And now bootstrap.
+            self.dispatch.bootstrap(
+                all_tokens = all_tokens, 
+                startup_objs = startup_objs, 
+                private_by_ghid = private_by_ghid,
+                token_lock = threading.Lock()
+            )
+            
+            # IPCCore bootstrap:
+            # ----------------------------------------------------------
+            self.ipccore.bootstrap(
+                incoming_shares = set(),
+                orphan_acks = SetMap(),
+                orphan_naks = SetMap()
+            )
             
         else:
             raise NotImplementedError('Not just yet buddy-o!')

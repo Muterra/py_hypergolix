@@ -120,7 +120,11 @@ class GCoreTest(unittest.TestCase):
         payload = TEST_AGENT1.make_handshake(
             target = cont2_1.ghid,
             secret = secret2_1)
-        self.gcore.open_request(handshake2_1.packed)
+        self.gcore.open_request(
+            self.gcore.unpack_request(
+                handshake2_1.packed
+            )
+        )
         self.gcore.make_request(
             recipient = TEST_AGENT2.ghid, 
             payload = payload)
@@ -147,7 +151,7 @@ class GhidproxyTest(unittest.TestCase):
         self.salmonator = SalmonatorNoop()
         self.gcore = GolixCore()
         
-        self.ghidproxy.assemble(self.librarian)
+        self.ghidproxy.assemble(self.librarian, self.salmonator)
         # A proper fixture for Librarian would also remove these three
         self.librarian.assemble(self.gcore, self.salmonator)
         self.gcore.assemble(self.librarian)
@@ -247,7 +251,7 @@ class GAOTest(unittest.TestCase):
         
         # These are a mix of "necessary" and "unnecessary if well-fixtured"
         self.golcore.assemble(self.librarian)
-        self.ghidproxy.assemble(self.librarian)
+        self.ghidproxy.assemble(self.librarian, self.salmonator)
         self.oracle.assemble(self.golcore, self.ghidproxy, self.privateer, 
                             self.percore, self.bookie, self.librarian, 
                             self.postman, self.salmonator)
@@ -266,7 +270,10 @@ class GAOTest(unittest.TestCase):
         
         # These are both "who-knows-if-necessary-when-fixtured"
         self.golcore.bootstrap(TEST_AGENT1)
-        self.privateer.bootstrap()
+        self.privateer.bootstrap(
+            persistent_secrets = {}, 
+            staged_secrets = {}
+        )
         self.percore.ingest(TEST_AGENT1.second_party.packed)
         
     def test_source(self):
@@ -375,7 +382,7 @@ class OracleTest(unittest.TestCase):
         
         # These are a mix of "necessary" and "unnecessary if well-fixtured"
         self.golcore.assemble(self.librarian)
-        self.ghidproxy.assemble(self.librarian)
+        self.ghidproxy.assemble(self.librarian, self.salmonator)
         self.oracle.assemble(self.golcore, self.ghidproxy, self.privateer, 
                             self.percore, self.bookie, self.librarian, 
                             self.postman, self.salmonator)
@@ -394,7 +401,10 @@ class OracleTest(unittest.TestCase):
         
         # These are both "who-knows-if-necessary-when-fixtured"
         self.golcore.bootstrap(TEST_AGENT1)
-        self.privateer.bootstrap()
+        self.privateer.bootstrap(
+            persistent_secrets = {}, 
+            staged_secrets = {}
+        )
         self.percore.ingest(TEST_AGENT1.second_party.packed)
     
     def test_load(self):

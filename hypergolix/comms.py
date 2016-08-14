@@ -992,7 +992,7 @@ def Autocomms(autoresponder_class, connector_class, autoresponder_args=None,
     Aengel note: stop the connector first, then the autoresponder.
     ''' 
     autoresponder_name, connector_name = \
-        _generate_threadnames('autoresponder', 'connector')
+        _generate_threadnames('auto:re', 'connect')
         
     autoresponder_args = _args_normalizer(autoresponder_args)
     autoresponder_kwargs = _kwargs_normalizer(autoresponder_kwargs)

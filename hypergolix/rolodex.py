@@ -44,8 +44,12 @@ from golix.utils import AsymAck
 from golix.utils import AsymNak
 
 # Local dependencies
+from .exceptions import UnknownParty
+
 from .persistence import _GarqLite
 from .persistence import _GdxxLite
+
+from .utils import call_coroutine_threadsafe
 
 
 # ###############################################
@@ -90,6 +94,7 @@ class Rolodex:
         self._librarian = None
         self._ghidproxy = None
         self._ipccore = None
+        self._salmonator = None
         
         # Persistent dict-like lookup for 
         # request_ghid -> (request_target, request recipient)
@@ -97,7 +102,7 @@ class Rolodex:
         # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
         self._outstanding_shares = None
         
-    def bootstrap(self, pending_requests):
+    def bootstrap(self, pending_requests, outstanding_shares):
         ''' Initialize distributed state.
         '''
         # Persistent dict-like lookup for 
@@ -106,15 +111,16 @@ class Rolodex:
         
         # These need to be distributed but aren't yet. TODO!
         # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
-        self._outstanding_shares = SetMap()
+        self._outstanding_shares = outstanding_shares
         
-    def assemble(self, golix_core, privateer, dispatch, 
-                persistence_core, librarian, ghidproxy, ipc_core):
+    def assemble(self, golix_core, privateer, dispatch, persistence_core, 
+                librarian, salmonator, ghidproxy, ipc_core):
         # Chicken, meet egg.
         self._golcore = weakref.proxy(golix_core)
         self._privateer = weakref.proxy(privateer)
         self._dispatch = weakref.proxy(dispatch)
         self._librarian = weakref.proxy(librarian)
+        self._salmonator = weakref.proxy(salmonator)
         self._percore = weakref.proxy(persistence_core)
         self._ghidproxy = weakref.proxy(ghidproxy)
         self._ipccore = weakref.proxy(ipc_core)
@@ -140,6 +146,14 @@ class Rolodex:
     def _hand_object(self, target, recipient):
         ''' Initiates a handshake request with the recipient.
         '''
+        if recipient not in self._librarian:
+            try:
+                self._salmonator.pull(recipient)
+            except Exception as exc:
+                raise UnknownParty(
+                    'Recipient unknown: ' + str(recipient)
+                ) from exc
+            
         contact = SecondParty.from_packed(
             self._librarian.retrieve(recipient)
         )
@@ -155,7 +169,7 @@ class Rolodex:
                 secret = self._privateer.get(container_ghid)
             )
             
-            request = self._identity.make_request(
+            request = self._golcore._identity.make_request(
                 recipient = contact,
                 request = handshake
             )
@@ -172,13 +186,26 @@ class Rolodex:
     def request_handler(self, subscription, notification):
         ''' Callback to handle any requests.
         '''
+        if notification not in self._librarian:
+            self._salmonator.pull(notification, quiet=True)
+        
         # Note that the notification could also be a GDXX.
         request_or_debind = self._librarian.summarize(notification)
         
         if isinstance(request_or_debind, _GarqLite):
-            # We literally just did a loud summary, so no need to be loud here
             packed = self._librarian.retrieve(notification)
-            payload = self._golcore.open_request(packed)
+            unpacked = self._golcore.unpack_request(packed)
+        
+            # TODO: have this filter based on contacts.
+            if unpacked.author not in self._librarian:
+                try:
+                    self._salmonator.pull(unpacked.author)
+                except Exception as exc:
+                    raise UnknownParty(
+                        'Request author unknown: ' + str(unpacked.author)
+                    ) from exc
+            
+            payload = self._golcore.open_request(unpacked)
             self._handle_request(payload, notification)
             
         elif isinstance(request_or_debind, _GdxxLite):
@@ -298,8 +325,8 @@ class Rolodex:
         callsheet = await self._ipccore.make_callsheet(target)
         # Go ahead and distribute it to the appropriate endpoints.
         await self._ipccore.distribute_to_endpoints(
-            self._ipccore.send_share,
             callsheet,
+            self._ipccore.send_share,
             target,
             sender
         )
@@ -320,8 +347,9 @@ class Rolodex:
         callsheet = self._outstanding_shares.pop_any(sharepair)
         
         # Distribute the share success to all apps that requested its delivery
-        await self._ipchost._robodialer(
-            self._ipchost.notify_share_success,
+        await self._ipccore._robodialer(
+            self._ipccore.notify_share_success,
+            callsheet,
             target,
             recipient
         )
@@ -342,8 +370,9 @@ class Rolodex:
         callsheet = self._outstanding_shares.pop_any(sharepair)
         
         # Distribute the share failure to all apps that requested its delivery
-        await self._ipchost._robodialer(
-            self._ipchost.notify_share_failure,
+        await self._ipccore._robodialer(
+            self._ipccore.notify_share_failure,
+            callsheet,
             target,
             recipient
         )
