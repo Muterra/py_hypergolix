@@ -54,6 +54,7 @@ from .utils import LooperTrooper
 from .utils import run_coroutine_loopsafe
 from .utils import await_sync_future
 from .utils import call_coroutine_threadsafe
+from .utils import _generate_threadnames
 
 
 # ###############################################
@@ -933,29 +934,6 @@ def _kwargs_normalizer(kwargs):
         return kwargs
     
     
-def _generate_threadnames(*prefixes):
-    ''' Generates a matching set of unique threadnames, of the form
-    prefix[0] + '-1', prefix[1] + '-1', etc.
-    '''
-    ctr = 0
-    names = []
-    
-    # Get existing thread NAMES (not the threads themselves!)
-    existing_threadnames = set()
-    for t in threading.enumerate():
-        existing_threadnames.add(t.name)
-        
-    while len(names) != len(prefixes):
-        candidates = [prefix + '-' + str(ctr) for prefix in prefixes]
-        # Check the intersection of candidates and existing names
-        if len(existing_threadnames & set(candidates)) > 0:
-            ctr += 1
-        else:
-            names.extend(candidates)
-            
-    return names
-    
-    
 class AutoresponseConnector:
     ''' Connects an autoresponder to a connector. Use it by subclassing
     both the connector and this class, for example:
@@ -983,16 +961,20 @@ class AutoresponseConnector:
 
 
 def Autocomms(autoresponder_class, connector_class, autoresponder_args=None, 
-    autoresponder_kwargs=None, connector_args=None, connector_kwargs=None, 
-    aengel=None, debug=False):
+    autoresponder_kwargs=None, autoresponder_name=None, connector_args=None, 
+    connector_kwargs=None, connector_name=None, aengel=None, debug=False):
     ''' Marries an autoresponder to a Client/Server. Assigns the client/
     server as autoresponder.connector attribute, and returns the 
     autoresponder.
     
     Aengel note: stop the connector first, then the autoresponder.
     ''' 
+    if autoresponder_name is None:
+        autoresponder_name = 'auto:re'
+    if connector_name is None:
+        connector_name = 'connect'
     autoresponder_name, connector_name = \
-        _generate_threadnames('auto:re', 'connect')
+        _generate_threadnames(autoresponder_name, connector_name)
         
     autoresponder_args = _args_normalizer(autoresponder_args)
     autoresponder_kwargs = _kwargs_normalizer(autoresponder_kwargs)

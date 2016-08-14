@@ -126,6 +126,7 @@ from .utils import call_coroutine_threadsafe
 from .utils import await_sync_future
 from .utils import WeakSetMap
 from .utils import SetMap
+from .utils import _generate_threadnames
 
 from .comms import _AutoresponderSession
 from .comms import Autoresponder
@@ -219,6 +220,10 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         
         # Lookup <api ID>: set(<connection/session/endpoint>)
         self._endpoints_from_api = WeakSetMap()
+        
+        # This lookup directly tracks who has a copy of the object
+        # Lookup <object ghid>: set(<connection/session/endpoint>)
+        self._update_listeners = WeakSetMap()
         
         req_handlers = {
             # Get new app token
@@ -344,8 +349,11 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                 str(len(self._endpoints_from_api.get_any(obj.api_id)))
             )
             endpoints.update(self._endpoints_from_api.get_any(obj.api_id))
-            logger.debug('Object listeners: ' + repr(obj.listeners))
-            endpoints.update(obj.listeners)
+            logger.debug(
+                'Object listeners: ' + 
+                str(self._update_listeners.get_any(obj.ghid))
+            )
+            endpoints.update(self._update_listeners.get_any(obj.ghid))
             for endpoint in endpoints:
                 callsheet.add(self._token_from_endpoint[endpoint])
                 
@@ -356,6 +364,10 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             try:
                 skip_token = self._token_from_endpoint[skip_endpoint]
             except KeyError:
+                logger.warning(
+                    'Skip endpoint was included in making callsheet, but it '
+                    'appears to have been removed during generation.'
+                )
                 skip_token = None
             else:
                 logger.debug('Skipping token.')
@@ -459,6 +471,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                 # apps from crashing the service.
                 await_reply = False
             )
+            # Don't forget to track who has the object
+            self._update_listeners.add(ghid, endpoint)
         
     async def set_token_wrapper(self, endpoint, request_body):
         ''' With the current paradigm of independent app starting, this
@@ -648,7 +662,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             dispatch = self._dispatch,
             ipc_core = self
         )
-        obj.register_listener(endpoint)
+        self._update_listeners.add(ghid, endpoint)
             
         if isinstance(obj.state, Ghid):
             is_link = True
@@ -708,7 +722,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         )
             
         # Add the endpoint as a listener.
-        obj.register_listener(endpoint) 
+        self._update_listeners.add(obj.ghid, endpoint)
         
         # If the object is private, register it as such.
         if private:
@@ -723,10 +737,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                 obj.ghid, 
                 skip_endpoint = endpoint
             )
-            
-            for call_token in callsheet:
-                obj.register_listener(self._endpoint_from_token[call_token])
-                
+             
+            # Note that self._obj_sender handles adding update listeners
             await self.distribute_to_endpoints(
                 callsheet,
                 self.send_object,
@@ -765,16 +777,12 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             ipc_core = self
         )
         obj.update(state)
-        obj.register_listener(endpoint)
         
         if not obj.private:
             callsheet = await self.make_callsheet(
                 obj.ghid, 
                 skip_endpoint = endpoint
             )
-            
-            for call_token in callsheet:
-                obj.register_listener(self._endpoint_from_token[call_token])
                 
             await self.distribute_to_endpoints(
                 callsheet,
@@ -858,7 +866,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             dispatch = self._dispatch,
             ipc_core = self
         )
-        obj.deregister_listener(endpoint)
+        self._update_listeners.discard(ghid, endpoint)
         return b'\x01'
         
     async def delete_object_wrapper(self, endpoint, request_body):
@@ -876,7 +884,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             dispatch = self._dispatch,
             ipc_core = self
         )
-        obj.deregister_listener(endpoint)
+        self._update_listeners.discard(ghid, endpoint)
         obj.delete()
         return b'\x01'
         
@@ -1485,6 +1493,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             target = self._object_handlers[api_id],
             daemon = True,
             args = (obj,),
+            name = _generate_threadnames('embedsup')[0],
         )
         worker.start()
         
@@ -1534,6 +1543,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             target = self._object_handlers[api_id],
             daemon = True,
             args = (obj,),
+            name = _generate_threadnames('embedshr')[0],
         )
         worker.start()
         
@@ -1583,6 +1593,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             target = self._object_handlers[api_id],
             daemon = True,
             args = (obj,),
+            name = _generate_threadnames('embedobj')[0],
         )
         worker.start()
         

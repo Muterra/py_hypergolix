@@ -1086,6 +1086,29 @@ def threading_autojoin():
                 
         except ZeroDivisionError as exc:
             logging.info(str(exc))
+    
+    
+def _generate_threadnames(*prefixes):
+    ''' Generates a matching set of unique threadnames, of the form
+    prefix[0] + '-1', prefix[1] + '-1', etc.
+    '''
+    ctr = 0
+    names = []
+    
+    # Get existing thread NAMES (not the threads themselves!)
+    existing_threadnames = set()
+    for t in threading.enumerate():
+        existing_threadnames.add(t.name)
+        
+    while len(names) != len(prefixes):
+        candidates = [prefix + '-' + str(ctr) for prefix in prefixes]
+        # Check the intersection of candidates and existing names
+        if len(existing_threadnames & set(candidates)) > 0:
+            ctr += 1
+        else:
+            names.extend(candidates)
+            
+    return names
             
             
 import inspect

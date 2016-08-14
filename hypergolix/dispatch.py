@@ -351,12 +351,9 @@ class _Dispatchable(_GAO):
         self._dispatch = dispatch
         # But _ipc_core is not.
         self._ipc_core = weakref.proxy(ipc_core)
+        
         self.state = state
         self.api_id = api_id
-        
-        # This is a weak set for figuring out what endpoints are currently
-        # using the object.
-        self._used_by = weakref.WeakSet()
         
     @property
     def parent_token(self):
@@ -385,23 +382,6 @@ class _Dispatchable(_GAO):
         for any application
         '''
         return bool(self._dispatch.get_startup_tokens(self.ghid))
-        
-    def register_listener(self, endpoint):
-        ''' Registers the endpoint as a listener for the object.
-        '''
-        self._used_by.add(endpoint)
-        
-    def deregister_listener(self, endpoint):
-        ''' Removes the endpoint from object listeners. Need not be 
-        called before GCing the endpoint.
-        '''
-        self._used_by.discard(endpoint)
-        
-    @property
-    def listeners(self):
-        ''' Returns a temporary strong reference to any listeners.
-        '''
-        return frozenset(self._used_by)
         
     def pull(self, *args, **kwargs):
         ''' Refreshes self from upstream. Should NOT be called at object 

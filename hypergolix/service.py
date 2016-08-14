@@ -59,6 +59,7 @@ from .privateer import Privateer
 
 from .utils import Aengel
 from .utils import threading_autojoin
+from .utils import _generate_threadnames
 
 from .comms import Autocomms
 from .comms import WSBasicClient
@@ -95,7 +96,9 @@ def _hgx_server(host, port, debug, traceur, foreground=True, aengel=None):
         
     remote = RemotePersistenceServer()
     server = Autocomms(
+        autoresponder_name = 'reremser',
         autoresponder_class = PersisterBridgeServer,
+        connector_name = 'wsremser',
         connector_class = WSBasicServer,
         connector_kwargs = {
             'host': host,
@@ -119,7 +122,9 @@ def HypergolixLink(ipc_port=7772, debug=False, aengel=None, *args, **kwargs):
         aengel = Aengel()
         
     acomms = Autocomms(
+        autoresponder_name = 'ipcemre',
         autoresponder_class = IPCEmbed,
+        connector_name = 'ipcemws',
         connector_class = WSBasicClient,
         connector_kwargs = {
             'host': 'localhost', # IPC host
@@ -168,7 +173,9 @@ def HGXService(host, port, ipc_port, debug, traceur, foreground=True,
     core = AgentBootstrap(credential=None, aengel=aengel, debug=debug)
         
     persister = Autocomms(
+        autoresponder_name = 'remrecli',
         autoresponder_class = PersisterBridgeClient,
+        connector_name = 'remwscli',
         connector_class = WSBasicClient,
         connector_kwargs = {
             'host': host,
@@ -185,7 +192,8 @@ def HGXService(host, port, ipc_port, debug, traceur, foreground=True,
         port = ipc_port,
         debug = debug,
         aengel = aengel,
-        threaded = True
+        threaded = True,
+        thread_name = _generate_threadnames('ipc-ws')[0],
     )
     
     # Automatically detect if we're the main thread. If so, wait indefinitely

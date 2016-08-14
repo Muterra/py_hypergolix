@@ -154,7 +154,6 @@ class MockDispatchable:
         self.api_id = api_id
         # Don't forget that dispatchables assign state as a _DispatchableState
         self.state = state[1]
-        self.listeners = set()
         self.frozen = frozen
         self.held = held
         self.deleted = deleted
@@ -173,7 +172,6 @@ class MockDispatchable:
             comp &= (self.api_id == other.api_id)
             comp &= (self.state == other.state)
             comp &= (self.private == other.private)
-            comp &= (self.listeners == other.listeners)
             comp &= (self.frozen == other.frozen)
             comp &= (self.held == other.held)
             comp &= (self.deleted == other.deleted)
@@ -186,12 +184,6 @@ class MockDispatchable:
     @property
     def private(self):
         return self.ghid in self.dispatch.parents
-        
-    def register_listener(self, endpoint):
-        self.listeners.add(endpoint)
-        
-    def deregister_listener(self, endpoint):
-        self.listeners.discard(endpoint)
         
     def freeze(self):
         frozen = type(self)(
@@ -206,7 +198,6 @@ class MockDispatchable:
             dynamic = self.dynamic,
             author = self.author,
         )
-        frozen.listeners = copy.copy(self.listeners)
         frozen.frozen = True
         self.oracle.objs[frozen.ghid] = frozen
         return frozen.ghid
@@ -397,8 +388,14 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         dispatchable2 = self.oracle.objs[obj2.address]
         # Note that currently, as we're immediately sending the whole object to
         # apps, they are getting added as listeners immediately.
-        # self.assertEqual(len(dispatchable2.listeners), 1)
-        self.assertEqual(len(dispatchable2.listeners), 2)
+        # self.assertEqual(
+        #     len(self.ipccore._update_listeners.get_any(dispatchable2.ghid)), 
+        #     1
+        # )
+        self.assertEqual(
+            len(self.ipccore._update_listeners.get_any(dispatchable2.ghid)), 
+            2
+        )
         
         # Test object retrieval from app2
         # -----------
@@ -409,7 +406,10 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         
         joint2 = self.app2.get_obj_threadsafe(obj2.address)
         self.assertEqual(obj2, joint2)
-        self.assertEqual(len(dispatchable2.listeners), 2)
+        self.assertEqual(
+            len(self.ipccore._update_listeners.get_any(dispatchable2.ghid)), 
+            2
+        )
         
         # Test object updates
         # -----------
@@ -440,7 +440,10 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         # -----------
         self.app2.discard_obj_threadsafe(joint2)
         self.assertTrue(joint2._inoperable)
-        self.assertEqual(len(dispatchable2.listeners), 1)
+        self.assertEqual(
+            len(self.ipccore._update_listeners.get_any(dispatchable2.ghid)), 
+            1
+        )
         self.assertFalse(dispatchable2.deleted)
         
         # Test object discarding

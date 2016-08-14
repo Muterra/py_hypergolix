@@ -123,7 +123,12 @@ class AgentBootstrap:
         self.rolodex = Rolodex()
         self.ghidproxy = GhidProxier()
         self.dispatch = Dispatcher()
-        self.ipccore = IPCCore(aengel=aengel, threaded=True, debug=debug)
+        self.ipccore = IPCCore(
+            aengel = aengel, 
+            threaded = True, 
+            thread_name = 'ipccore',
+            debug = debug, 
+        )
         
         # Now we need to link everything together.
         self.percore.assemble(self.doorman, self.enforcer, self.lawyer, 

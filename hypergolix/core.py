@@ -62,6 +62,8 @@ from golix._getlow import GARQ
 from golix._getlow import GDXX
 
 # Intra-package dependencies
+from .utils import _generate_threadnames
+
 from .exceptions import RemoteNak
 from .exceptions import HandshakeError
 from .exceptions import HandshakeWarning
@@ -882,6 +884,7 @@ class _GAO(_GAOBase):
             target = self.__touch,
             daemon = True,
             args = (subscription, notification),
+            name = _generate_threadnames('gaotouch')[0],
         )
         worker.start()
             

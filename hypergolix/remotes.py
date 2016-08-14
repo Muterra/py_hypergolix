@@ -123,6 +123,7 @@ from .utils import _JitSetDict
 from .utils import TruthyLock
 from .utils import SetMap
 from .utils import call_coroutine_threadsafe
+from .utils import _generate_threadnames
 
 # from .comms import WSAutoServer
 # from .comms import WSAutoClient
@@ -776,6 +777,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
             target = run_callbacks,
             daemon = True,
             args = (subscribed_ghid, notification_ghid),
+            name = _generate_threadnames('remoupd')[0],
         )
         worker.start()
         
