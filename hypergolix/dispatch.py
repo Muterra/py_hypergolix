@@ -344,10 +344,13 @@ class Dispatcher:
 class _Dispatchable(_GAO):
     ''' A dispatchable object.
     '''
-    def __init__(self, dispatch, api_id=None, private=False, state=None, 
-                *args, **kwargs):
+    def __init__(self, dispatch, ipc_core, api_id=None, private=False, 
+                state=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Dispatch is already a weakref.proxy...
         self._dispatch = dispatch
+        # But _ipc_core is not.
+        self._ipc_core = weakref.proxy(ipc_core)
         self.state = state
         self.api_id = api_id
         

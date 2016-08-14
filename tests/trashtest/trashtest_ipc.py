@@ -147,7 +147,7 @@ class MockDispatch:
 
 
 class MockDispatchable:
-    def __init__(self, dispatch, author, dynamic, api_id, frozen, held, deleted, state, oracle, *args, **kwargs):
+    def __init__(self, dispatch, ipc_core, author, dynamic, api_id, frozen, held, deleted, state, oracle, *args, **kwargs):
         self.ghid = Ghid.from_bytes(b'\x01' + os.urandom(64))
         self.author = author
         self.dynamic = dynamic
@@ -158,6 +158,7 @@ class MockDispatchable:
         self.frozen = frozen
         self.held = held
         self.deleted = deleted
+        self.ipccore = ipc_core
         
         self.oracle = oracle
         self.dispatch = dispatch
@@ -195,6 +196,7 @@ class MockDispatchable:
     def freeze(self):
         frozen = type(self)(
             dispatch = self.dispatch, 
+            ipc_core = self.ipccore,
             oracle = self.oracle, 
             deleted = self.deleted,
             held = self.held,
@@ -202,7 +204,7 @@ class MockDispatchable:
             state = (None, self.state),
             api_id = self.api_id,
             dynamic = self.dynamic,
-            author = self.author
+            author = self.author,
         )
         frozen.listeners = copy.copy(self.listeners)
         frozen.frozen = True

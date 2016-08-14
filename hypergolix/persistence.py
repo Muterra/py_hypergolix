@@ -218,7 +218,7 @@ class PersistenceCore:
         with self._opslock:
             # Validate to make sure that we don't already have an identical
             # object. If so, short-circuit immediately.
-            if obj.ghid in self.librarian:
+            if not self.librarian.validate_gidc(obj):
                 return None
                 
             # First need to enforce target selection
@@ -255,7 +255,7 @@ class PersistenceCore:
         with self._opslock:
             # Validate to make sure that we don't already have an identical
             # object. If so, short-circuit immediately.
-            if obj.ghid in self.librarian:
+            if not self.librarian.validate_geoc(obj):
                 return None
                 
             # First need to enforce target selection
@@ -292,7 +292,7 @@ class PersistenceCore:
         with self._opslock:
             # Validate to make sure that we don't already have an identical
             # object. If so, short-circuit immediately.
-            if obj.ghid in self.librarian:
+            if not self.librarian.validate_gobs(obj):
                 return None
                 
             # First need to enforce target selection
@@ -329,8 +329,7 @@ class PersistenceCore:
         with self._opslock:
             # Validate to make sure that we don't already have an identical
             # object. If so, short-circuit immediately.
-            # NOTE THE DIFFERENCE FROM THE OTHER INGESTERS!
-            if obj.frame_ghid in self.librarian:
+            if not self.librarian.validate_gobd(obj):
                 return None
                 
             # First need to enforce target selection
@@ -367,7 +366,7 @@ class PersistenceCore:
         with self._opslock:
             # Validate to make sure that we don't already have an identical
             # object. If so, short-circuit immediately.
-            if obj.ghid in self.librarian:
+            if not self.librarian.validate_gdxx(obj):
                 return None
                 
             # First need to enforce target selection
@@ -404,7 +403,7 @@ class PersistenceCore:
         with self._opslock:
             # Validate to make sure that we don't already have an identical
             # object. If so, short-circuit immediately.
-            if obj.ghid in self.librarian:
+            if not self.librarian.validate_garq(obj):
                 return None
                 
             # First need to enforce target selection
@@ -1608,6 +1607,60 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         # HOWEVER, unlike usual, don't raise if this isn't a correct object,
         # just don't bother adding it either.
         
+    def validate_gidc(self, obj):
+        ''' GIDC need no validation.
+        '''
+        if not self._restoring:
+            if obj.ghid in self:
+                return None
+        return True
+        
+    def validate_geoc(self, obj):
+        ''' Ensure author is known and valid.
+        '''
+        if not self._restoring:
+            if obj.ghid in self:
+                return None
+        return True
+        
+    def validate_gobs(self, obj):
+        ''' Ensure author is known and valid.
+        '''
+        if not self._restoring:
+            if obj.ghid in self:
+                return None
+        return True
+        
+    def validate_gobd(self, obj):
+        ''' Ensure author is known and valid, and consistent with the
+        previous author for the binding (if it already exists).
+        '''
+        # NOTE THE CHANGE OF FLOW HERE! We check the frame ghid instead of the
+        # standard ghid.
+        if not self._restoring:
+            if obj.frame_ghid in self:
+                return None
+        return True
+        
+    def validate_gdxx(self, obj, target_obj=None):
+        ''' Ensure author is known and valid, and consistent with the
+        previous author for the binding.
+        
+        If other is not None, specifically checks it against that object
+        instead of obtaining it from librarian.
+        '''
+        if not self._restoring:
+            if obj.ghid in self:
+                return None
+        return True
+        
+    def validate_garq(self, obj):
+        ''' Validate recipient.
+        '''
+        if not self._restoring:
+            if obj.ghid in self:
+                return None
+        return True
             
     @abc.abstractmethod
     def add_to_cache(self, ghid, data):

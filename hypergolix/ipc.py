@@ -316,7 +316,9 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             obj = self._oracle.get_object(
                 gaoclass = _Dispatchable, 
                 ghid = ghid,
-                dispatch = self._dispatch)
+                dispatch = self._dispatch,
+                ipc_core = self
+            )
         
         except:
             # At some point we'll need some kind of proper handling for this.
@@ -427,7 +429,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             obj = self._oracle.get_object(
                 gaoclass = _Dispatchable, 
                 ghid = ghid,
-                dispatch = self._dispatch
+                dispatch = self._dispatch,
+                ipc_core = self
             )
             
         except:
@@ -642,7 +645,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         obj = self._oracle.get_object(
             gaoclass = _Dispatchable, 
             ghid = ghid,
-            dispatch = self._dispatch
+            dispatch = self._dispatch,
+            ipc_core = self
         )
         obj.register_listener(endpoint)
             
@@ -696,6 +700,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         obj = self._oracle.new_object(
             gaoclass = _Dispatchable,
             dispatch = self._dispatch,
+            ipc_core = self,
             state = _DispatchableState(api_id, state),
             dynamic = dynamic,
             _legroom = _legroom,
@@ -756,7 +761,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         obj = self._oracle.get_object(
             gaoclass = _Dispatchable, 
             ghid = address,
-            dispatch = self._dispatch
+            dispatch = self._dispatch,
+            ipc_core = self
         )
         obj.update(state)
         obj.register_listener(endpoint)
@@ -816,7 +822,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         obj = self._oracle.get_object(
             gaoclass = _Dispatchable, 
             ghid = ghid,
-            dispatch = self._dispatch
+            dispatch = self._dispatch,
+            ipc_core = self
         )
         frozen_address = obj.freeze()
         
@@ -832,7 +839,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         obj = self._oracle.get_object(
             gaoclass = _Dispatchable, 
             ghid = ghid,
-            dispatch = self._dispatch
+            dispatch = self._dispatch,
+            ipc_core = self
         )
         obj.hold()
         return b'\x01'
@@ -847,7 +855,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         obj = self._oracle.get_object(
             gaoclass = _Dispatchable, 
             ghid = ghid,
-            dispatch = self._dispatch
+            dispatch = self._dispatch,
+            ipc_core = self
         )
         obj.deregister_listener(endpoint)
         return b'\x01'
@@ -864,7 +873,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         obj = self._oracle.get_object(
             gaoclass = _Dispatchable, 
             ghid = ghid,
-            dispatch = self._dispatch
+            dispatch = self._dispatch,
+            ipc_core = self
         )
         obj.deregister_listener(endpoint)
         obj.delete()
