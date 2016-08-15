@@ -478,20 +478,24 @@ class _PersisterBridgeSession(_AutoresponderSession):
             objects we just sent up.
             '''
             if notification_ghid not in self._silenced:
-                await self._transport.send(
-                    session = self,
-                    msg = bytes(subscribed_ghid) + bytes(notification_ghid),
-                    request_code = self._transport.REQUEST_CODES['send_subs_update'],
-                    # Note: for now, just don't worry about failures.
-                    await_reply = False
-                )
-            # await self._transport.send(
-            #     session = self,
-            #     msg = bytes(subscribed_ghid) + bytes(notification_ghid),
-            #     request_code = self._transport.REQUEST_CODES['send_subs_update'],
-            #     # Note: for now, just don't worry about failures.
-            #     await_reply = False
-            # )
+                try:
+                    await self._transport.send(
+                        session = self,
+                        msg = bytes(subscribed_ghid) + 
+                            bytes(notification_ghid),
+                        request_code = 
+                            self._transport.REQUEST_CODES['send_subs_update'],
+                        # Note: for now, just don't worry about failures.
+                        # await_reply = False
+                    )
+                
+                except:
+                    logger.error(
+                        'Application client failed to receive sub update at ' + 
+                        str(subscribed_ghid) + ' for notification ' + 
+                        str(notification_ghid) + ' w/ traceback: \n' + 
+                        ''.join(traceback.format_exc())
+                    )
         
         def send_subs_update(subscribed_ghid, notification_ghid):
             ''' Send the connection its subscription update.

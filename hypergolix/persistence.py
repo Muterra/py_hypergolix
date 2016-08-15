@@ -203,6 +203,8 @@ class PersistenceCore:
             # Note that individual ingest methods are only called directly for 
             # locally-built objects, which do not need a mail run.
             self.postman.schedule(obj)
+        else:
+            logger.debug('Object unchanged; postman scheduling not required.')
             
             # Note: this is not the place for salmonator pushing! Locally 
             # created/updated objects call the individual ingest methods 
@@ -1922,6 +1924,7 @@ class _PostmanBase(metaclass=abc.ABCMeta):
         # subscribed ghid will be identical to the notification ghid.
         with self._opslock_defer:
             self._deferred.add(awaiting_ghid, postcard)
+        logger.debug('Postman update deferred for ' + str(awaiting_ghid))
             
     def _has_deferred(self, obj):
         ''' Checks to see if a subscription is waiting on the obj, and 
@@ -1943,6 +1946,13 @@ class _PostmanBase(metaclass=abc.ABCMeta):
         # TODO: find a more elegant solution.
         if not self._out_for_delivery.is_set():
             self._out_for_delivery.set()
+            logger.debug(
+                'Postman out for delivery on ' + 
+                str(self._scheduled.qsize()) + ' (or more) items. '
+                'Additionally, ' + str(len(self._deferred)) + ' missing ghids '
+                'are blocking updates for other subscriptions.'
+            )
+            
             try:
                 self._delivery_loop()
             finally:
@@ -2015,7 +2025,13 @@ class MrPostman(_PostmanBase):
         if subscription == self._golcore.whoami:
             self._rolodex.request_handler(subscription, notification)
         else:
-            for callback in self._listeners.get_any(subscription):
+            callbacks = self._listeners.get_any(subscription)
+            logger.debug(
+                'MrPostman starting delivery for ' + str(len(callbacks)) + 
+                ' updates on sub ' + str(subscription) + ' with notif ' + 
+                str(notification)
+            )
+            for callback in callbacks:
                 callback(subscription, notification)
         
         
@@ -2335,7 +2351,29 @@ class Salmonator:
         # pulling.
         # This is the lame way of doing this, fo sho
         for remote in self._upstream_remotes:
-            if self._attempt_pull_single(ghid, remote):
+            # Pull, and then see if we got anything back
+            obj = self._attempt_pull_single(ghid, remote)
+            
+            # If we got a gobd, make sure its target is in the librarian
+            if isinstance(obj, _GobdLite):
+                if obj.target not in self._librarian:
+                    # Catch unavailableupstream and log a warning.
+                    # TODO: add logic to retry a few times and then discard
+                    try:
+                        self.pull(obj.target)
+                        
+                    except UnavailableUpstream:
+                        logger.warning(
+                            'Received a subscription notification for ' + 
+                            str(ghid) + ', but the sub\'s target was missing '
+                            'both locally and upstream.'
+                        )
+                        
+                self._postman.do_mail_run()
+                break
+            
+            # For all other successful pulls, just go ahead and do a mail run.
+            elif obj:
                 self._postman.do_mail_run()
                 break
                 
@@ -2344,6 +2382,11 @@ class Salmonator:
                 raise UnavailableUpstream(
                     'Object was unavailable or unacceptable at all '
                     'currently-registered remotes.'
+                )
+            else:
+                logger.warning(
+                    'Object was unavailable or unacceptable upstream, but '
+                    'pull was called quietly: ' + str(ghid)
                 )
         
     def _attempt_pull_single(self, ghid, remote):
@@ -2365,7 +2408,7 @@ class Salmonator:
             # This may or may not be an update we already have.
             try:
                 # Call as remotable=False to avoid infinite loops.
-                self._percore.ingest(data, remotable=False)
+                obj = self._percore.ingest(data, remotable=False)
             
             # Couldn't load. Return False.
             except:
@@ -2378,7 +2421,12 @@ class Salmonator:
             # As soon as we have it, return True so parent can stop checking 
             # other remotes.
             else:
-                return True
+                # Note that ingest can either return None, if we already have
+                # the object, or the object itself, if it's new.
+                if obj is None:
+                    return True
+                else:
+                    return obj
         
     def _inspect(self, ghid):
         ''' Checks librarian for an existing ghid. If it has it, checks

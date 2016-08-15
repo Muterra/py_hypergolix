@@ -746,6 +746,7 @@ class _GAO(_GAOBase):
                 else:
                     modified = self._pull_static(notification)
         
+        logger.debug('Successful pull, modified = ' + str(modified))
         return modified
         
     def _pull_dynamic(self, notification):
@@ -880,6 +881,7 @@ class _GAO(_GAOBase):
         # threaded, just spin this out into a thread to avoid async
         # deadlocks (which we'll otherwise almost certainly encounter)
         # TODO: asyncify all the things
+        logger.debug('Gao touch starting...')
         worker = threading.Thread(
             target = self.__touch,
             daemon = True,
@@ -893,8 +895,10 @@ class _GAO(_GAOBase):
         '''
         # First we need to wait for the update greenlight.
         self._update_greenlight.wait()
+        logger.debug('Cleared gao update greenlight.')
         if notification not in self._silenced:
             self.pull(notification)
+        logger.debug('Gao touch complete.')
         
     def __new(self, bypass_secret=None):
         ''' Creates a new Golix object for self using self._state, 

@@ -160,11 +160,10 @@ class TestDispatcher(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.aengel = Aengel()
-        cls.ipccore = MockIPCCore(threaded=True, aengel=cls.aengel)
         
     def setUp(self):
         self.dispatch = Dispatcher()
-        self.dispatch.assemble(self.ipccore)
+        self.dispatch.assemble()
         self.dispatch.bootstrap(
             all_tokens = set(),
             startup_objs = SetMap(),
@@ -258,8 +257,16 @@ class TestDispatcher(unittest.TestCase):
         
         with self.assertRaises(ValueError, msg='Made an unknown ghid public.'):
             self.dispatch.make_public(make_random_ghid())
+        
+        
+class TestDispatchable(unittest.TestCase):
+    @unittest.expectedFailure
+    def test_dispatchable(self):
+        raise NotImplementedError()
             
+    @unittest.expectedFailure
     def test_notify(self):
+        raise NotImplementedError()
         # Test update notification
         ghid = make_random_ghid()
         self.dispatch.notify(ghid)
@@ -279,12 +286,6 @@ class TestDispatcher(unittest.TestCase):
         self.assertEqual(self.ipccore.endpoints, callsheetbuffer)
         callerbuffer = self.ipccore.caller_buffer.popleft()
         self.assertEqual(callerbuffer, self.ipccore.send_delete)
-        
-        
-class TestDispatchable(unittest.TestCase):
-    @unittest.expectedFailure
-    def test_dispatchable(self):
-        raise NotImplementedError()
         
 
 if __name__ == "__main__":

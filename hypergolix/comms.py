@@ -377,6 +377,11 @@ class _AutoresponderSession:
         # Awaken any further pending responses that they're doomed
         for waiter in self.pending_responses.values():
             await waiter.put(SessionClosed())
+            
+    def __repr__(self):
+        clsname = type(self).__name__
+        sess_str = str(hex(id(self)))
+        return '<' + clsname + ' ' + sess_str + '>'
         
         
 class Autoresponder(LooperTrooper):
@@ -694,7 +699,8 @@ class Autoresponder(LooperTrooper):
                 session = session,
                 msg = response,
                 request_code = response_code,
-                await_reply = False
+                # We're smart enough to know not to wait for a reply on ack/nak
+                # await_reply = False
             )
             
     def session_factory(self):
@@ -813,24 +819,31 @@ class Autoresponder(LooperTrooper):
         connection = self._connection_lookup[session]
         await connection.send_loopsafe(packed_msg)
         
-        # Start waiting for a response
-        response_future = asyncio.ensure_future(
-            self._await_response(session, token)
-        )
+        # Start waiting for a response if it isn't an ack or nak
+        is_acknak = request_code == self._success_code
+        is_acknak |= request_code == self._failure_code
+        if not is_acknak:
+            response_future = asyncio.ensure_future(
+                self._await_response(session, token)
+            )
         
-        # Wait for the response if desired.
-        # Note that this CANNOT be changed to return the future itself, as that
-        # would break when wrapping with loopsafe or threadsafe calls.
-        if await_reply:
-            await asyncio.wait_for(response_future, timeout=None)
-            
-            if response_future.exception():
-                raise response_future.exception()
+            # Wait for the response if desired.
+            # Note that this CANNOT be changed to return the future itself, as 
+            # that would break when wrapping with loopsafe or threadsafe calls.
+            if await_reply:
+                await asyncio.wait_for(response_future, timeout=None)
+                
+                if response_future.exception():
+                    raise response_future.exception()
+                else:
+                    return response_future.result()
+                
             else:
-                return response_future.result()
-            
-        else:
-            return response_future
+                logger.debug(
+                    'Response unawaited; returning future for ' + repr(session) + 
+                    ' request: ' + str(request_code) + ' ' + str(msg[:10])
+                )
+                return response_future
             
     async def send_loopsafe(self, session, msg, request_code, await_reply=True):
         ''' Call send, but wait in a different event loop.

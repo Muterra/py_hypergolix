@@ -308,6 +308,27 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         shut down (manually).
         '''
         self._ipc_servers.pop(server_name)
+        
+    async def notify_update(self, ghid, deleted=False):
+        ''' Updates all ipc endpoints with copies of the object.
+        '''
+        callsheet = set()
+        for listener in self._update_listeners.get_any(ghid):
+            callsheet.add(self._token_from_endpoint[listener])
+        
+        # Go ahead and distribute it to the appropriate endpoints.
+        if deleted:
+            await self.distribute_to_endpoints(
+                callsheet,
+                self.send_delete,
+                ghid
+            )
+        else:
+            await self.distribute_to_endpoints(
+                callsheet,
+                self.send_update,
+                ghid
+            )
     
     async def make_callsheet(self, ghid, skip_endpoint=None, skip_tokens=None):
         ''' Generates a callsheet (set of tokens) for the dispatchable
@@ -315,6 +336,11 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         
         The callsheet is generated from app_tokens, so that the actual 
         distributor can kick missing tokens back for safekeeping.
+        
+        TODO: make this a "private" method -- aka, remove this from the
+        rolodex share handling.
+        TODO: make this exclusively apply to object sharing, NOT to obj
+        updates, which uses _update_listeners directly and exclusively.
         '''
         logger.debug('Generating callsheet.')
         try:
@@ -342,19 +368,28 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             callsheet.add(private_owner)
             
         else:
-            logger.debug('Ghid has no private owner.')
+            logger.debug('Ghid has NO private owner.')
             endpoints = set()
+            
+            # Add any endpoints based on their tracking of the api.
             logger.debug(
                 'Interested API endpoints: ' + 
                 str(len(self._endpoints_from_api.get_any(obj.api_id)))
             )
             endpoints.update(self._endpoints_from_api.get_any(obj.api_id))
+            
+            # Add any endpoints based on their existing listening status.
             logger.debug(
                 'Object listeners: ' + 
                 str(self._update_listeners.get_any(obj.ghid))
             )
             endpoints.update(self._update_listeners.get_any(obj.ghid))
+            
+            # Convert endpoints to tokens.
             for endpoint in endpoints:
+                logger.debug(
+                    'Adding endpoint to callsheet: ' + repr(endpoint)
+                )
                 callsheet.add(self._token_from_endpoint[endpoint])
                 
         # Normally the keyerror will catch both default of None as well as any 
@@ -370,7 +405,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                 )
                 skip_token = None
             else:
-                logger.debug('Skipping token.')
+                logger.debug('Skipping token for ' + repr(skip_endpoint))
         else:
             skip_token = None
             
@@ -453,26 +488,32 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             )
             
         else:
-            response = await self.send(
-                session = endpoint,
-                msg = self._pack_object_def(
-                    obj.ghid,
-                    obj.author,
-                    obj.state,
-                    False, # is_link is currently unsupported
-                    obj.api_id,
-                    None,
-                    obj.dynamic,
-                    None
-                ),
-                request_code = self.REQUEST_CODES[request_code],
-                # Note: for now, just don't worry about failures.
-                # Todo: expect reply, and enclose within try/catch to prevent 
-                # apps from crashing the service.
-                await_reply = False
-            )
-            # Don't forget to track who has the object
-            self._update_listeners.add(ghid, endpoint)
+            try:
+                response = await self.send(
+                    session = endpoint,
+                    msg = self._pack_object_def(
+                        obj.ghid,
+                        obj.author,
+                        obj.state,
+                        False, # is_link is currently unsupported
+                        obj.api_id,
+                        None,
+                        obj.dynamic,
+                        None
+                    ),
+                    request_code = self.REQUEST_CODES[request_code],
+                )
+                
+            except:
+                logger.error(
+                    'Application client failed to receive object at ' + 
+                    str(ghid) + ' w/ the following traceback: \n' + 
+                    ''.join(traceback.format_exc())
+                )
+                
+            else:
+                # Don't forget to track who has the object
+                self._update_listeners.add(ghid, endpoint)
         
     async def set_token_wrapper(self, endpoint, request_body):
         ''' With the current paradigm of independent app starting, this
@@ -561,13 +602,21 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         if not isinstance(ghid, Ghid):
             raise TypeError('ghid must be type Ghid or similar.')
         
-        response = await self.send(
-            session = self,
-            msg = bytes(ghid),
-            request_code = self.REQUEST_CODES['send_delete'],
-            # Note: for now, just don't worry about failures.
-            await_reply = False
-        )
+        try:
+            response = await self.send(
+                session = self,
+                msg = bytes(ghid),
+                request_code = self.REQUEST_CODES['send_delete'],
+                # Note: for now, just don't worry about failures.
+                # await_reply = False
+            )
+                
+        except:
+            logger.error(
+                'Application client failed to receive delete at ' + 
+                str(ghid) + ' w/ the following traceback: \n' + 
+                ''.join(traceback.format_exc())
+            )
         
     async def notify_share_success(self, token, ghid, recipient):
         ''' Notifies the embedded client of a successful share.
@@ -581,13 +630,21 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             self._orphan_share_acks.add(token, sharelog)
             
         else:
-            response = await self.send(
-                session = endpoint,
-                msg = bytes(ghid) + bytes(recipient),
-                request_code = self.REQUEST_CODES['notify_share_success'],
-                # Note: for now, just don't worry about failures.
-                await_reply = False
-            )
+            try:
+                response = await self.send(
+                    session = endpoint,
+                    msg = bytes(ghid) + bytes(recipient),
+                    request_code = self.REQUEST_CODES['notify_share_success'],
+                    # Note: for now, just don't worry about failures.
+                    # await_reply = False
+                )
+                
+            except:
+                logger.error(
+                    'Application client failed to receive share success at ' + 
+                    str(ghid) + ' w/ the following traceback: \n' + 
+                    ''.join(traceback.format_exc())
+                )
         
     async def notify_share_failure(self, token, ghid, recipient):
         ''' Notifies the embedded client of an unsuccessful share.
@@ -601,13 +658,20 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             self._orphan_share_acks.add(token, sharelog)
             
         else:
-            response = await self.send(
-                session = endpoint,
-                msg = bytes(ghid) + bytes(recipient),
-                request_code = self.REQUEST_CODES['notify_share_failure'],
-                # Note: for now, just don't worry about failures.
-                await_reply = False
-            )
+            try:
+                response = await self.send(
+                    session = endpoint,
+                    msg = bytes(ghid) + bytes(recipient),
+                    request_code = self.REQUEST_CODES['notify_share_failure'],
+                    # Note: for now, just don't worry about failures.
+                    # await_reply = False
+                )
+            except:
+                logger.error(
+                    'Application client failed to receive share failure at ' + 
+                    str(ghid) + ' w/ the following traceback: \n' + 
+                    ''.join(traceback.format_exc())
+                )
         
     async def add_api_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.

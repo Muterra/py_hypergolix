@@ -166,8 +166,6 @@ class Dispatcher:
     def __init__(self):
         ''' Yup yup yup yup yup yup yup
         '''
-        self._ipccore = None
-        
         # Temporarily set distributed state to None.
         # Lookup for all known tokens: set(<tokens>)
         self._all_known_tokens = None
@@ -178,9 +176,9 @@ class Dispatcher:
         # Distributed lock for adding app tokens
         self._token_lock = None
         
-    def assemble(self, ipc_core):
-        # Chicken, meet egg.
-        self._ipccore = weakref.proxy(ipc_core)
+    def assemble(self):
+        # Huh. We've nothing to do here yet.
+        pass
         
     def bootstrap(self, all_tokens, startup_objs, private_by_ghid, token_lock):
         ''' Initialize distributed state.
@@ -310,35 +308,6 @@ class Dispatcher:
         May or may not be added in the future.
         '''
         raise NotImplementedError()
-        
-    def notify(self, ghid, deleted=False):
-        ''' Notify the dispatcher of a change to an object, which will
-        then be forwarded to the ipc core.
-        '''
-        call_coroutine_threadsafe(
-            coro = self._notify(ghid, deleted),
-            loop = self._ipccore._loop
-        )
-        
-    async def _notify(self, ghid, deleted=False):
-        ''' Wrapper to inject our handler into _ipccore event loop.
-        '''
-        # Build a callsheet for the target.
-        callsheet = await self._ipccore.make_callsheet(ghid)
-        
-        # Go ahead and distribute it to the appropriate endpoints.
-        if deleted:
-            await self._ipccore.distribute_to_endpoints(
-                self._ipccore.send_delete,
-                callsheet,
-                ghid
-            )
-        else:
-            await self._ipccore.distribute_to_endpoints(
-                self._ipccore.send_update,
-                callsheet,
-                ghid
-            )
             
             
 class _Dispatchable(_GAO):
@@ -349,8 +318,8 @@ class _Dispatchable(_GAO):
         super().__init__(*args, **kwargs)
         # Dispatch is already a weakref.proxy...
         self._dispatch = dispatch
-        # But _ipc_core is not.
-        self._ipc_core = weakref.proxy(ipc_core)
+        # But ipc_core is not.
+        self._ipccore = weakref.proxy(ipc_core)
         
         self.state = state
         self.api_id = api_id
@@ -390,7 +359,12 @@ class _Dispatchable(_GAO):
         '''
         modified = super().pull(*args, **kwargs)
         if modified:
-            self._dispatch.notify(self.ghid)
+            logger.debug('Pull detected modifications. Sending to ipc.')
+            call_coroutine_threadsafe(
+                coro = self._ipccore.notify_update(self.ghid, deleted=False),
+                loop = self._ipccore._loop
+            )
+            logger.debug('IPC completed update notifications.')
         
     @staticmethod
     def _pack(state):
@@ -469,4 +443,7 @@ class _Dispatchable(_GAO):
         
     def apply_delete(self):
         super().apply_delete()
-        self._dispatch.notify(self.ghid, deleted=self)
+        call_coroutine_threadsafe(
+            coro = self._ipccore.notify_update(ghid, deleted=True),
+            loop = self._ipccore._loop
+        )

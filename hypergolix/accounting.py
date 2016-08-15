@@ -153,7 +153,7 @@ class AgentBootstrap:
         self.rolodex.assemble(self.golcore, self.privateer, self.dispatch, 
                             self.percore, self.librarian, self.salmonator,
                             self.ghidproxy, self.ipccore)
-        self.dispatch.assemble(self.ipccore)
+        self.dispatch.assemble()
         self.ipccore.assemble(self.golcore, self.oracle, self.dispatch, 
                             self.rolodex, self.salmonator)
             
