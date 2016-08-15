@@ -268,15 +268,7 @@ if __name__ == '__main__':
     parser.add_argument('unittest_args', nargs='*')
     args = parser.parse_args()
     
-    # Dammit unittest using argparse
-    sys.argv[1:] = args.unittest_args
-    
-    # Okay, let's set up the tests
-    server, raz, des, aengel = make_fixtures(args.debug)    
-    apptest = make_tests(args.iters, args.debug, raz, des, aengel)
-    
-    
-    # LOGGING CONFIGURATION!
+    # LOGGING CONFIGURATION! Do this first so any fixturing errors get handled
     
     from trashtest._fixtures import logutils
     
@@ -291,6 +283,13 @@ if __name__ == '__main__':
             tofile = False,  
             loglevel = args.verbosity
         )
+    
+    # Dammit unittest using argparse
+    sys.argv[1:] = args.unittest_args
+    
+    # Okay, let's set up the tests
+    server, raz, des, aengel = make_fixtures(args.debug)    
+    apptest = make_tests(args.iters, args.debug, raz, des, aengel)
     
     # And finally, run them
     suite = unittest.TestSuite()
