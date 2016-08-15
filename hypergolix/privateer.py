@@ -119,9 +119,13 @@ class Privateer:
         # We need an oracle for ratcheting.
         self._oracle = weakref.proxy(oracle)
         
-    def bootstrap(self, persistent_secrets, staged_secrets):
+    def bootstrap(self, persistent_secrets, staged_secrets, chains):
         ''' Initializes the privateer.
         '''
+        # Keep track of chains (this will need to be distributed)
+        # Lookup <proxy ghid>: <container ghid>
+        self._chains = chains
+        
         # We very obviously need to be able to look up what secrets we have.
         # Lookups: <container ghid>: <container secret>
         self._secrets_persistent = persistent_secrets
@@ -130,10 +134,6 @@ class Privateer:
             self._secrets_persistent, 
             self._secrets_staging,
         )
-        
-        # Keep track of chains (this will need to be distributed)
-        # Lookup <proxy ghid>: <container ghid>
-        self._chains = {}
         
     def new_secret(self):
         # Straight pass-through to the golix new_secret bit.

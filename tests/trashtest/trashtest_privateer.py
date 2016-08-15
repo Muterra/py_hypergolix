@@ -83,7 +83,8 @@ class PrivateerTest(unittest.TestCase):
         self.privateer.assemble(self.golcore, self.oracle)
         self.privateer.bootstrap(
             persistent_secrets = {}, 
-            staged_secrets = {}
+            staged_secrets = {},
+            chains = {}
         )
     
     def test_simple(self):

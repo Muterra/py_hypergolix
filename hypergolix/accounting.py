@@ -169,7 +169,8 @@ class AgentBootstrap:
             # ----------------------------------------------------------
             self.privateer.bootstrap(
                 persistent_secrets = {}, 
-                staged_secrets = {}
+                staged_secrets = {},
+                chains = {}
             )
             
             # Rolodex bootstrap:

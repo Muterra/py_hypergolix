@@ -32,47 +32,13 @@ hypergolix: A python Golix client.
 
 Some thoughts:
 
-All of IPC should use a single autoresponder. 
-    + More likely than not, the same methodology should be applied to 
-        persistence remotes, through the salmonator. Salmonator should
+Misc extras: 
+    + More likely than not, all persistence remotes should also use a 
+        single autoresponder, through the salmonator. Salmonator should
         then be moved into hypergolix.remotes instead of .persistence.
-        
-The IPCHost autoresponder isn't *quite* the same thing as Dispatch.
-    + They're very tightly-coupled, yes, but look at the DoC: dispatch
-        is concerned only with obj <--> endpoint, whereas IPC is focused
-        on how, exactly, the endpoint communicates.
-    + Endpoint registration should be moved into the IPC autoresponder.
-        It should be called via dispatch's "distribute to endpoints" 
-        method, which also needs to move. That will point the IPC host
-        wholly in charge of tracking IPC, and Dispatch wholly in charge
-        of object distribution.
-        
-All of the endpoint logic should be moved into IPCHost.
-    + This definitely also applies to the app_token tracking. Use a 
-        WeakValueDict to get the endpoint from the token. Then, when
-        endpoint connections die (from closure, etc), they automatically
-        are removed from available tokens.
-    + This should also apply to api_ids, except it will need to be a
-        WeakSetMap instead. Each api_id has a single key, and when an
-        endpoint registers that api_id, it is added to the WSM. When the
-        connection dies, so does the api_id mapping.
     + At least for now, applications must ephemerally declare themselves
         capable of supporting a given API. Note, once again, that these
         api_id registrations ONLY APPLY TO UNSOLICITED OBJECT SHARES!
-        
-Definitely add in more component awareness to IPCHost.
-    + At the very least, add oracle and golcore. That way, dispatch can
-        be bypassed for many requests.
-    + Also convert it to use the now-standardized "assemble" API.
-    
-Should stop inferring object "private" status within dispatch.
-    + There's really no reason to send app_token on the wire after the
-        initial declaration
-    + Reduced reliability, testing hassles, etc
-    + This also means there's no good reason to store the app_token 
-        within the _Dispatchable. Could simply and directly rely upon
-        the Dispatcher's bootstrapped stateful privacy tracking object.
-    + Use a private_by_ghid _GAODict() for <ghid>: <owning token> lookup
     
 It'd be nice to remove the msgpack dependency in utils.IPCPackerMixIn.
     + Could use very simple serialization instead.
@@ -93,8 +59,6 @@ IPC Apps should not have access to objects that are not _Dispatchable.
         efficient an abstraction as possible.
     + This basically makes a judgement call that everything should be
         sharable.
-
-
 '''
 
 # External dependencies

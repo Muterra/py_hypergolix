@@ -272,7 +272,8 @@ class GAOTest(unittest.TestCase):
         self.golcore.bootstrap(TEST_AGENT1)
         self.privateer.bootstrap(
             persistent_secrets = {}, 
-            staged_secrets = {}
+            staged_secrets = {},
+            chains = {}
         )
         self.percore.ingest(TEST_AGENT1.second_party.packed)
         
@@ -403,7 +404,8 @@ class OracleTest(unittest.TestCase):
         self.golcore.bootstrap(TEST_AGENT1)
         self.privateer.bootstrap(
             persistent_secrets = {}, 
-            staged_secrets = {}
+            staged_secrets = {},
+            chains = {}
         )
         self.percore.ingest(TEST_AGENT1.second_party.packed)
     
