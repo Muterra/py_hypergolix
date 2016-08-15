@@ -1063,6 +1063,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
     async def whoami_async(self):
         ''' Gets our identity GHID from the hypergolix service.
         '''
+        await self.await_session_async()
         raw_ghid = await self.send(
             session = self.any_session,
             msg = b'',
@@ -1081,6 +1082,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
     async def new_token_async(self):
         ''' Gets a new app_token.
         '''
+        await self.await_session_async()
         app_token = await self.send(
             session = self.any_session,
             msg = b'',
@@ -1100,6 +1102,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
     async def set_token_async(self, app_token):
         ''' Sets an existing token.
         '''
+        await self.await_session_async()
         response = await self.send(
             session = self.any_session,
             msg = app_token,
@@ -1130,6 +1133,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         if not callable(object_handler):
             raise TypeError('object_handler must be callable')
         
+        await self.await_session_async()
         response = await self.send(
             session = self.any_session,
             msg = api_id,
@@ -1189,6 +1193,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         '''
         # Simple enough. super().get_object() will handle converting this to an
         # actual object.
+        await self.await_session_async()
         return (await self.send(
             session = self.any_session,
             msg = bytes(ghid),
@@ -1246,6 +1251,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         
         # Note that currently, we're not re-packing the api_id or app_token.
         # ^^ Not sure what that note is actually about.
+        await self.await_session_async()
         response = await self.send(
             session = self.any_session,
             msg = payload,
@@ -1300,6 +1306,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             None
         )
         
+        await self.await_session_async()
         response = await self.send(
             session = self.any_session,
             msg = msg,
@@ -1367,6 +1374,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         ''' Handles only the sharing of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
+        await self.await_session_async()
         response = await self.send(
             session = self.any_session,
             msg = bytes(obj.address) + bytes(recipient),
@@ -1401,6 +1409,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         # later obj.state being incorrect)
         state_ish = obj.state
         
+        await self.await_session_async()
         response = await self.send(
             session = self.any_session,
             msg = bytes(obj.address),
@@ -1437,6 +1446,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         ''' Handles only the holding of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
+        await self.await_session_async()
         response = await self.send(
             session = self.any_session,
             msg = bytes(obj.address),
@@ -1467,6 +1477,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         ''' Handles only the discarding of an object via the hypergolix
         service.
         '''
+        await self.await_session_async()
         response = await self.send(
             session = self.any_session,
             msg = bytes(obj.address),
@@ -1498,6 +1509,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         ''' Handles only the deleting of an object via the hypergolix
         service. Does not manage anything to do with the AppObj itself.
         '''
+        await self.await_session_async()
         response = await self.send(
             session = self.any_session,
             msg = bytes(obj.address),
@@ -1811,6 +1823,7 @@ class AppObj:
                 threadsafe_callbacks, async_callbacks, _legroom)
         except:
             # Cleanup any failure and reraise
+            await embed.await_session_async()
             await embed.send(
                 session = embed.any_session,
                 msg = bytes(address),

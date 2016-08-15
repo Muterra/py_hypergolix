@@ -793,6 +793,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise RemoteNak
         '''
+        self.await_session_threadsafe()
         response = self.send_threadsafe(
             session = self.any_session,
             msg = b'',
@@ -814,6 +815,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise RemoteNak
         '''
+        self.await_session_threadsafe()
         response = self.send_threadsafe(
             session = self.any_session,
             msg = packed,
@@ -832,6 +834,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         ACK/success is represented by returning the object
         NAK/failure is represented by raise RemoteNak
         '''
+        self.await_session_threadsafe()
         response = self.send_threadsafe(
             session = self.any_session,
             msg = bytes(ghid),
@@ -857,6 +860,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         NAK/failure is represented by raise RemoteNak
         '''
         if ghid not in self._subscriptions:
+            self.await_session_threadsafe()
             response = self.send_threadsafe(
                 session = self.any_session,
                 msg = bytes(ghid),
@@ -888,6 +892,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         if len(self._subscriptions[ghid]) == 0:
             del self._subscriptions[ghid]
             
+            self.await_session_threadsafe()
             response = self.send_threadsafe(
                 session = self.any_session,
                 msg = bytes(ghid),
@@ -918,6 +923,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         '''
         # This would probably be a good time to reconcile states between the
         # persistence provider and our local set of subs!
+        self.await_session_threadsafe()
         response = self.send_threadsafe(
             session = self.any_session,
             msg = b'',
@@ -934,6 +940,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         ACK/success is represented by returning a list of ghids.
         NAK/failure is represented by raise RemoteNak
         '''
+        self.await_session_threadsafe()
         response = self.send_threadsafe(
             session = self.any_session,
             msg = bytes(ghid),
@@ -952,6 +959,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
             2. None if it does not exist
         NAK/failure is represented by raise RemoteNak
         '''
+        self.await_session_threadsafe()
         response = self.send_threadsafe(
             session = self.any_session,
             msg = bytes(ghid),
@@ -970,6 +978,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
             False otherwise
         NAK/failure is represented by raise RemoteNak
         '''
+        self.await_session_threadsafe()
         response = self.send_threadsafe(
             session = self.any_session,
             msg = bytes(ghid),
@@ -990,6 +999,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         ACK/success is represented by a return True
         NAK/failure is represented by raise RemoteNak
         '''
+        self.await_session_threadsafe()
         response = self.send_threadsafe(
             session = self.any_session,
             msg = b'',

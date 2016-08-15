@@ -724,7 +724,10 @@ class Autoresponder(LooperTrooper):
         # Connection lookup maps session -> connection.
         # First treat keys like an iterable
         # Then grab the "first" of those and return it.
-        return next(iter(self._connection_lookup))
+        try:
+            return next(iter(self._connection_lookup))
+        except StopIteration as exc:
+            raise RuntimeError('No session available.') from exc
         
     async def await_session_async(self):
         ''' Waits for a session to be available.
