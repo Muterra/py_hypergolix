@@ -900,49 +900,56 @@ class _GAO(_GAOBase):
             self.pull(notification)
         logger.debug('Gao touch complete.')
         
-    def __new(self, bypass_secret=None):
+    def __new(self):
         ''' Creates a new Golix object for self using self._state, 
         self._dynamic, etc.
         '''
-        # We're doing this so that privateer can make use of GAO for its
-        # own bootstrap object.
-        if bypass_secret is not None:
-            container = self._golcore.make_container(
-                self._pack(self.extract_state()), 
-                bypass_secret
-            )
-        else:
-            secret = self._privateer.new_secret()
-            container = self._golcore.make_container(
-                self._pack(self.extract_state()), 
-                secret
-            )
-            self._privateer.stage(container.ghid, secret)
-            self._privateer.commit(container.ghid)
+        secret = self._privateer.new_secret()
+        container = self._golcore.make_container(
+            self._pack(self.extract_state()), 
+            secret
+        )
+        self._privateer.stage(container.ghid, secret)
+        # Wait until successful publishing to commit the secret.
         
-        if self.dynamic:
-            binding = self._golcore.make_binding_dyn(target=container.ghid)
-            # NOTE THAT THIS IS A GOLIX PRIMITIVE! And that therefore there's a
-            # discrepancy between ghid_dynamic and ghid.
-            self.ghid = binding.ghid_dynamic
-            self.author = self._golcore.whoami
-            # Silence the **frame address** (see above) and add it to historian
-            self.silence(binding.ghid)
-            self._history.appendleft(binding.ghid)
-            self._history_targets.appendleft(container.ghid)
-            # Now assign this dynamic address as a chain owner.
-            self._privateer.make_chain(self.ghid, container.ghid)
-            # Finally, publish the binding and subscribe to it
-            self._percore.ingest_gobd(binding)
+        try:
+            if self.dynamic:
+                binding = self._golcore.make_binding_dyn(target=container.ghid)
+                # NOTE THAT THIS IS A GOLIX PRIMITIVE! And that therefore 
+                # there's a discrepancy between ghid_dynamic and ghid.
+                self.ghid = binding.ghid_dynamic
+                self.author = self._golcore.whoami
+                # Silence the frame address (see above) and add it to historian
+                self.silence(binding.ghid)
+                self._history.appendleft(binding.ghid)
+                self._history_targets.appendleft(container.ghid)
+                # Now assign this dynamic address as a chain owner.
+                self._privateer.make_chain(self.ghid, container.ghid)
+                # Finally, publish the binding and subscribe to it
+                self._percore.ingest_gobd(binding)
+                
+            else:
+                binding = self._golcore.make_binding_stat(
+                    target = container.ghid
+                )
+                self.ghid = container.ghid
+                self.author = self._golcore.whoami
+                self._percore.ingest_gobs(binding)
+                
+            # Finally, publish the container itself.
+            self._percore.ingest_geoc(container)
+            
+        except:
+            logger.error(
+                'Error while creating new golix object: \n' +
+                ''.join(traceback.format_exc())
+            )
+            # Conservatively call unstage instead of abandon
+            self._privateer.unstage(container.ghid)
+            raise
             
         else:
-            binding = self._golcore.make_binding_stat(target=container.ghid)
-            self.ghid = container.ghid
-            self.author = self._golcore.whoami
-            self._percore.ingest_gobs(binding)
-            
-        # Finally, publish the container itself.
-        self._percore.ingest_geoc(container)
+            self._privateer.commit(container.ghid)
         
         # Successful creation. Clear us for updates.
         self._update_greenlight.set()
@@ -955,49 +962,51 @@ class _GAO(_GAOBase):
         automatically roll back the current state. NOTE THAT THIS MAY
         OR MAY NOT BE THE ACTUAL CURRENT STATE!
         '''
+        # Pause updates while doing this.
+        self._update_greenlight.clear()
+        
+        # We need a secret.
         try:
-            # Pause updates while doing this.
-            self._update_greenlight.clear()
+            secret = self._privateer.ratchet_chain(self.ghid)
             
-            # We need a secret.
-            try:
-                secret = self._privateer.ratchet_chain(self.ghid)
+        # TODO: make this a specific error.
+        except:
+            logger.info(
+                'Failed to ratchet secret for ' + str(bytes(self.ghid)) + 
+                '\n' + ''.join(traceback.format_exc())
+            )
+            secret = self._privateer.new_secret()
+            container = self._golcore.make_container(
+                self._pack(self.extract_state()),
+                secret
+            )
+            binding = self._golcore.make_binding_dyn(
+                target = container.ghid,
+                ghid = self.ghid,
+                history = self._history
+            )
+            self._privateer.stage(container.ghid, secret)
+            
+        else:
+            container = self._golcore.make_container(
+                self._pack(self.extract_state()),
+                secret
+            )
+            binding = self._golcore.make_binding_dyn(
+                target = container.ghid,
+                ghid = self.ghid,
+                history = self._history
+            )
+            # And now, as everything was successful, update the ratchet
+            self._privateer.update_chain(self.ghid, container.ghid)
+            
+        # NOTE THE DISCREPANCY between the Golix dynamic binding version
+        # of ghid and ours! This is silencing the frame ghid.
+        self.silence(binding.ghid)
+        self._history.appendleft(binding.ghid)
+        self._history_targets.appendleft(container.ghid)
                 
-            # TODO: make this a specific error.
-            except:
-                logger.info(
-                    'Failed to ratchet secret for ' + str(bytes(self.ghid)) + 
-                    '\n' + ''.join(traceback.format_exc())
-                )
-                secret = self._privateer.new_secret()
-                container = self._golcore.make_container(
-                    self._pack(self.extract_state()),
-                    secret
-                )
-                binding = self._golcore.make_binding_dyn(
-                    target = container.ghid,
-                    ghid = self.ghid,
-                    history = self._history
-                )
-                
-            else:
-                container = self._golcore.make_container(
-                    self._pack(self.extract_state()),
-                    secret
-                )
-                binding = self._golcore.make_binding_dyn(
-                    target = container.ghid,
-                    ghid = self.ghid,
-                    history = self._history
-                )
-                # And now, as everything was successful, update the ratchet
-                self._privateer.update_chain(self.ghid, container.ghid)
-                
-            # NOTE THE DISCREPANCY between the Golix dynamic binding version
-            # of ghid and ours! This is silencing the frame ghid.
-            self.silence(binding.ghid)
-            self._history.appendleft(binding.ghid)
-            self._history_targets.appendleft(container.ghid)
+        try:
             # Publish to persister
             self._percore.ingest_gobd(binding)
             self._percore.ingest_geoc(container)
@@ -1009,6 +1018,9 @@ class _GAO(_GAOBase):
                 'Failed to update object; forcibly restoring state.\n' + 
                 ''.join(traceback.format_exc())
             )
+            
+            # Unstage, don't abandon (just to be conservative)
+            self._privateer.unstage(container.ghid)
             
             container_ghid = self._ghidproxy.resolve(self.ghid)
             secret = self._privateer.get(container_ghid)
@@ -1034,6 +1046,9 @@ class _GAO(_GAOBase):
             
             # Re-raise the original exception that caused the update to fail
             raise
+            
+        else:
+            self._privateer.commit(container.ghid)
             
         finally:
             # Resume accepting updates.

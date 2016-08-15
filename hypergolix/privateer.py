@@ -222,20 +222,12 @@ class Privateer:
                 seed_comp = cls._bitdiff(secret.seed, other.seed)
                 logger.info('Keys are ' + str(key_comp) + '%% different.')
                 logger.info('Seeds are ' + str(seed_comp) + '%% different.')
-                print('Keys are ' + str(key_comp) + '%% different.')
-                print('Seeds are ' + str(seed_comp) + '%% different.')
                 
             else:
                 logger.info('Secret ciphers do not match. Cannot compare.')
-                print('Secret ciphers do not match. Cannot compare.')
             
         except AttributeError:
             logger.error(
-                'Attribute error while diffing secrets. Type mismatch? \n' 
-                '    ' + repr(type(secret)) + '\n'
-                '    ' + repr(type(other))
-            )
-            print(
                 'Attribute error while diffing secrets. Type mismatch? \n' 
                 '    ' + repr(type(secret)) + '\n'
                 '    ' + repr(type(other))
@@ -357,9 +349,10 @@ class Privateer:
             secret = self._ratchet_in_progress.pop(proxy)
             self._chains[proxy] = container
             
-            # NOTE: this bypasses the usual stage -> commit process, because it
-            # can only be used locally during the creation of a new container.
-            self._secrets_persistent[container] = secret
+            # NOTE: this does not bypass the usual stage -> commit process, 
+            # even though it can only be used locally during the creation of a 
+            # new container, because the container creation still calls commit.
+            self._secrets_staging[container] = secret
         
     def reset_chain(self, proxy, container):
         ''' Used to reset a chain back to a pristine state.
