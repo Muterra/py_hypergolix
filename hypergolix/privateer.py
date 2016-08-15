@@ -159,6 +159,7 @@ class Privateer:
         with self._modlock:
             if ghid in self._secrets:
                 if self._secrets[ghid] != secret:
+                    self._calc_and_log_diff(self._secrets[ghid], secret)
                     raise ConflictingSecrets(
                         'Non-matching secret already staged for GHID ' + 
                         str(ghid)
@@ -208,7 +209,82 @@ class Privateer:
                     
                 # Just keep track of shit for this fucking error
                 self._committment_problems[ghid] = TraceLogger.dump_my_trace()
+    
+    @classmethod
+    def _calc_and_log_diff(cls, secret, other):
+        ''' Calculate the difference between two secrets.
+        '''
+        try:
+            cipher_match = (secret.cipher == other.cipher)
             
+            if cipher_match:
+                key_comp = cls._bitdiff(secret.key, other.key)
+                seed_comp = cls._bitdiff(secret.seed, other.seed)
+                logger.info('Keys are ' + str(key_comp) + '%% different.')
+                logger.info('Seeds are ' + str(seed_comp) + '%% different.')
+                print('Keys are ' + str(key_comp) + '%% different.')
+                print('Seeds are ' + str(seed_comp) + '%% different.')
+                
+            else:
+                logger.info('Secret ciphers do not match. Cannot compare.')
+                print('Secret ciphers do not match. Cannot compare.')
+            
+        except AttributeError:
+            logger.error(
+                'Attribute error while diffing secrets. Type mismatch? \n' 
+                '    ' + repr(type(secret)) + '\n'
+                '    ' + repr(type(other))
+            )
+            print(
+                'Attribute error while diffing secrets. Type mismatch? \n' 
+                '    ' + repr(type(secret)) + '\n'
+                '    ' + repr(type(other))
+            )
+            
+    @staticmethod
+    def _bitdiff(this_bytes, other_bytes):
+        ''' Calculates the percent of different bits between two byte
+        strings.
+        '''
+        if len(this_bytes) == 0 or len(other_bytes) == 0:
+            # By returning None, we can explicitly say we couldn't perform the
+            # comparison, whilst also preventing math on a comparison.
+            return None
+        
+        # Mask to extract each bit.
+        masks = [
+            0b00000001,
+            0b00000010,
+            0b00000100,
+            0b00001000,
+            0b00010000,
+            0b00100000,
+            0b01000000,
+            0b10000000,
+        ]
+        
+        # Counters for bits.
+        diffbits = 0
+        totalbits = 0
+        
+        # First iterate over each byte.
+        for this_byte, other_byte in zip(this_bytes, other_bytes):
+            
+            # Now, using the masks, iterate over each bit.
+            for mask in masks:
+                # Extract the bit using bitwise AND.
+                this_masked = mask & this_byte
+                other_masked = mask & other_byte
+                
+                # Do a bool comparison of the bits, and add any != results to
+                # diffbits. Note that 7 + False == 7 and 7 + True == 8
+                diffbits += (this_masked != other_masked)
+                totalbits += 1
+                
+        # Finally, calculate a percent difference
+        doubdiff = diffbits / totalbits
+        return int(doubdiff * 100)
+                    
     def _compare_staged_to_persistent(self, ghid):
         try:
             staged = self._secrets_staging.pop(ghid)
@@ -219,6 +295,7 @@ class Privateer:
             if staged != self._secrets_persistent[ghid]:
                 # Re-stage, just in case.
                 self._secrets_staging[ghid] = staged
+                self._calc_and_log_diff(self._secrets_persistent[ghid], staged)
                 raise ConflictingSecrets(
                     'Non-matching secret already committed for GHID ' +
                     str(ghid)
