@@ -72,7 +72,6 @@ from .ipc import IPCCore
 from .privateer import Privateer
 from .rolodex import Rolodex
 
-from .utils import Aengel
 from .utils import threading_autojoin
 from .utils import SetMap
 
@@ -97,7 +96,7 @@ class AgentBootstrap:
     
     Also binds everything within a single namespace, etc etc.
     '''
-    def __init__(self, credential, bootstrap=None, aengel=None, debug=False):
+    def __init__(self, credential, aengel=None, debug=False):
         ''' Creates everything and puts it into a singular namespace.
         
         If bootstrap (ghid) is passed, we'll use the credential to 
@@ -130,6 +129,14 @@ class AgentBootstrap:
             debug = debug, 
         )
         
+        self.assemble()
+        
+        if not credential.has_account:
+            self.bootstrap_zero(credential)
+        else:
+            self.bootstrap(credential)
+        
+    def assemble(self):
         # Now we need to link everything together.
         self.percore.assemble(self.doorman, self.enforcer, self.lawyer, 
                             self.bookie, self.librarian, self.postman,
@@ -157,92 +164,90 @@ class AgentBootstrap:
         self.ipccore.assemble(self.golcore, self.oracle, self.dispatch, 
                             self.rolodex, self.salmonator)
             
-        # Now we need to bootstrap everything.
-        if bootstrap is None:
-            # Golix core bootstrap.
-            # ----------------------------------------------------------
-            identity = FirstParty()
-            self.percore.ingest(identity.second_party.packed)
-            self.golcore.bootstrap(identity)
+    def bootstrap_zero(self, credential):
+        ''' Bootstrap zero is run on the creation of a new account, to
+        initialize everything and set it up and stuff.
+        '''
+        # Golix core bootstrap.
+        # ----------------------------------------------------------
+        identity = FirstParty()
+        self.percore.ingest(identity.second_party.packed)
+        self.golcore.bootstrap(identity)
+        
+        # Privateer bootstrap.
+        # ----------------------------------------------------------
+        self.privateer.prep_bootstrap()
+        persistent_secrets = self.oracle.new_object(
+            gaoclass = _GAODict,
+            dynamic = True,
+            state = {}
+        )
+        quarantine_secrets = self.oracle.new_object(
+            gaoclass = _GAODict,
+            dynamic = True,
+            state = {}
+        )
+        self.privateer.bootstrap(
+            persistent = persistent_secrets,
+            quarantine = quarantine_secrets,
+            credential = MockCredential(self.privateer)
+        )
+        
+        # Rolodex bootstrap:
+        # ----------------------------------------------------------
+        # Dict-like mapping of all pending requests.
+        # Used to lookup {<request address>: <target address>}
+        pending_requests = self.oracle.new_object(
+            gaoclass = _GAODict,
+            dynamic = True,
+            state = {}
+        )
+        self.rolodex.bootstrap(
+            pending_requests = pending_requests, 
+            outstanding_shares = SetMap()
+        )
+        
+        # Dispatch bootstrap:
+        # ----------------------------------------------------------
+        # Set of all known tokens. Add b'\x00\x00\x00\x00' to prevent its 
+        # use. Persistent across all clients for any given agent.
+        all_tokens = self.oracle.new_object(
+            gaoclass = _GAOSet,
+            dynamic = True,
+            state = set()
+        )
+        all_tokens.add(b'\x00\x00\x00\x00')
+        # SetMap of all objects to be sent to an app upon app startup.
+        # TODO: make this distributed state object.
+        startup_objs = SetMap()
+        
+        # Dict-like lookup for <private obj ghid>: <parent token>
+        private_by_ghid = self.oracle.new_object(
+            gaoclass = _GAODict,
+            dynamic = True,
+            state = {}
+        )
+        
+        # And now bootstrap.
+        self.dispatch.bootstrap(
+            all_tokens = all_tokens, 
+            startup_objs = startup_objs, 
+            private_by_ghid = private_by_ghid,
+            token_lock = threading.Lock()
+        )
+        
+        # IPCCore bootstrap:
+        # ----------------------------------------------------------
+        self.ipccore.bootstrap(
+            incoming_shares = set(),
+            orphan_acks = SetMap(),
+            orphan_naks = SetMap()
+        )
             
-            # Privateer bootstrap.
-            # ----------------------------------------------------------
-            self.privateer.prep_bootstrap()
-            persistent_secrets = self.oracle.new_object(
-                gaoclass = _GAODict,
-                dynamic = True,
-                state = {}
-            )
-            quarantine_secrets = self.oracle.new_object(
-                gaoclass = _GAODict,
-                dynamic = True,
-                state = {}
-            )
-            self.privateer.bootstrap(
-                persistent = persistent_secrets,
-                quarantine = quarantine_secrets,
-                credential = MockCredential(self.privateer)
-            )
-            
-            # self.privateer.bootstrap(
-            #     persistent_secrets = {}, 
-            #     staged_secrets = {},
-            #     chains = {}
-            # )
-            
-            # Rolodex bootstrap:
-            # ----------------------------------------------------------
-            # Dict-like mapping of all pending requests.
-            # Used to lookup {<request address>: <target address>}
-            pending_requests = self.oracle.new_object(
-                gaoclass = _GAODict,
-                dynamic = True,
-                state = {}
-            )
-            self.rolodex.bootstrap(
-                pending_requests = pending_requests, 
-                outstanding_shares = SetMap()
-            )
-            
-            # Dispatch bootstrap:
-            # ----------------------------------------------------------
-            # Set of all known tokens. Add b'\x00\x00\x00\x00' to prevent its 
-            # use. Persistent across all clients for any given agent.
-            all_tokens = self.oracle.new_object(
-                gaoclass = _GAOSet,
-                dynamic = True,
-                state = set()
-            )
-            all_tokens.add(b'\x00\x00\x00\x00')
-            # SetMap of all objects to be sent to an app upon app startup.
-            # TODO: make this distributed state object.
-            startup_objs = SetMap()
-            
-            # Dict-like lookup for <private obj ghid>: <parent token>
-            private_by_ghid = self.oracle.new_object(
-                gaoclass = _GAODict,
-                dynamic = True,
-                state = {}
-            )
-            
-            # And now bootstrap.
-            self.dispatch.bootstrap(
-                all_tokens = all_tokens, 
-                startup_objs = startup_objs, 
-                private_by_ghid = private_by_ghid,
-                token_lock = threading.Lock()
-            )
-            
-            # IPCCore bootstrap:
-            # ----------------------------------------------------------
-            self.ipccore.bootstrap(
-                incoming_shares = set(),
-                orphan_acks = SetMap(),
-                orphan_naks = SetMap()
-            )
-            
-        else:
-            raise NotImplementedError('Not just yet buddy-o!')
+    def bootstrap(self, credential):
+        ''' Called to reinstate an existing account.
+        '''
+        raise NotImplementedError('Not just yet buddy-o!')
         
     def _new_bootstrap_container(self):
         ''' Creates a new container to use for the bootstrap object.
@@ -332,4 +337,17 @@ class Credential:
         ''' Returns a master secret for the passed proxy. Proxy should
         be a bootstrapping container, basically either the one for the
         Golix private key container, or the two Privateer secrets repos.
+        '''
+        
+    @property
+    def has_account(self):
+        ''' Indicates whether or not the credential has already created
+        a hypergolix account. Returns True/False
+        '''
+        
+    @property
+    def account_manifest(self):
+        ''' Returns the ghid of the static object containing the account
+        manifest. Only available if the credential has already created
+        an account.
         '''
