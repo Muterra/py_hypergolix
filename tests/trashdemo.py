@@ -265,6 +265,15 @@ if __name__ == '__main__':
                 '"warning" -> default python verbosity, '
                 '"error" -> quiet.',
     )
+    parser.add_argument(
+        '--traceur', 
+        action = 'store',
+        default = False,
+        type = float,
+        help = 'Set traceur mode, using the passed float as a stack tracing '
+                'interval for deadlock detection. Must be a positive number, '
+                'or it will be ignored.'
+    )
     parser.add_argument('unittest_args', nargs='*')
     args = parser.parse_args()
     
@@ -287,11 +296,21 @@ if __name__ == '__main__':
     # Dammit unittest using argparse
     sys.argv[1:] = args.unittest_args
     
-    # Okay, let's set up the tests
-    server, raz, des, aengel = make_fixtures(args.debug)    
-    apptest = make_tests(args.iters, args.debug, raz, des, aengel)
+    def do_test():
+        # Okay, let's set up the tests
+        server, raz, des, aengel = make_fixtures(args.debug)    
+        apptest = make_tests(args.iters, args.debug, raz, des, aengel)
+        
+        # And finally, run them
+        suite = unittest.TestSuite()
+        suite.addTest(apptest('test_app'))
+        unittest.TextTestRunner().run(suite)
     
-    # And finally, run them
-    suite = unittest.TestSuite()
-    suite.addTest(apptest('test_app'))
-    unittest.TextTestRunner().run(suite)
+    # Clip negative numbers
+    trace_interval = max([args.traceur, 0])
+    if trace_interval:
+        from hypergolix.utils import TraceLogger
+        with TraceLogger(trace_interval):
+            do_test()
+    else:
+        do_test()

@@ -49,6 +49,7 @@ import msgpack
 import abc
 import traceback
 import warnings
+import pickle
 # import atexit
 
 from golix import SecondParty
@@ -335,16 +336,16 @@ class Oracle:
         self._salmonator = weakref.proxy(salmonator)
             
     def get_object(self, gaoclass, ghid, **kwargs):
-        with self._opslock:
-            try:
-                obj = self._lookup[ghid]
-                if not isinstance(obj, gaoclass):
-                    raise TypeError(
-                        'Object has already been resolved, and is not the '
-                        'correct GAO class.'
-                    )
-                    
-            except KeyError:
+        try:
+            obj = self._lookup[ghid]
+            if not isinstance(obj, gaoclass):
+                raise TypeError(
+                    'Object has already been resolved, and is not the '
+                    'correct GAO class.'
+                )
+                
+        except KeyError:
+            with self._opslock:
                 if ghid not in self._librarian:
                     self._salmonator.pull(ghid, quiet=True)
                 
@@ -363,8 +364,8 @@ class Oracle:
                 if obj.dynamic:
                     self._postman.register(obj)
                     self._salmonator.register(obj)
-                
-            return obj
+            
+        return obj
         
     def new_object(self, gaoclass, state, **kwargs):
         ''' Creates a new object and returns it. Passes all *kwargs to 
@@ -997,6 +998,7 @@ class _GAO(_GAOBase):
                 ghid = self.ghid,
                 history = self._history
             )
+            self._privateer.stage(container.ghid, secret)
             # And now, as everything was successful, update the ratchet
             self._privateer.update_chain(self.ghid, container.ghid)
             
@@ -1064,20 +1066,22 @@ class _GAOMsgpackBase(_GAO):
         # TODO: Convert this to a ComboLock (threadsafe and asyncsafe)
         # Note: must be RLock, because we need to take opslock in __setitem__
         # while calling push.
-        self._opslock = threading.Lock()
+        self._opslock = threading.RLock()
         
     def __eq__(self, other):
         ''' Check total equality first, and then fall back on state 
         checking.
         '''
         equal = True
+        
         try:
             equal &= (self.dynamic == other.dynamic)
             equal &= (self.ghid == other.ghid)
             equal &= (self.author == other.author)
             equal &= (self._state == other._state)
+            
         except AttributeError:
-            equal &= (self._state == other)
+            equal = False
         
         return equal
         
@@ -1124,7 +1128,8 @@ class _GAOMsgpackBase(_GAO):
                 msgpack.exceptions.ExtraData,
                 msgpack.exceptions.OutOfData,
                 msgpack.exceptions.PackException,
-                msgpack.exceptions.PackValueError) as exc:
+                msgpack.exceptions.PackValueError,
+                TypeError) as exc:
             raise ValueError(
                 'Failed to pack _GAODict. Incompatible nested object?'
             ) from exc
@@ -1147,19 +1152,89 @@ class _GAOMsgpackBase(_GAO):
                 msgpack.exceptions.ExtraData,
                 msgpack.exceptions.OutOfData,
                 msgpack.exceptions.UnpackException,
-                msgpack.exceptions.UnpackValueError) as exc:
+                msgpack.exceptions.UnpackValueError,
+                TypeError) as exc:
             raise ValueError(
                 'Failed to unpack _GAODict. Incompatible serialization?'
             ) from exc
             
             
-class _GAODict(_GAOMsgpackBase):
+class _GAOPickleBase(_GAO):
+    ''' Golix-aware messagepack base object.
+    '''
+    def __init__(self, *args, **kwargs):
+        # Include these so that we can pass *args and **kwargs to the dict
+        super().__init__(*args, **kwargs)
+        # Note: must be RLock, because we need to take opslock in __setitem__
+        # while calling push.
+        self._opslock = threading.RLock()
+        
+    def __eq__(self, other):
+        ''' Check total equality first, and then fall back on state 
+        checking.
+        '''
+        equal = True
+        
+        try:
+            equal &= (self.dynamic == other.dynamic)
+            equal &= (self.ghid == other.ghid)
+            equal &= (self.author == other.author)
+            equal &= (self._state == other._state)
+            
+        except AttributeError:
+            equal = False
+        
+        return equal
+        
+    def pull(self, *args, **kwargs):
+        with self._opslock:
+            super().pull(*args, **kwargs)
+        
+    def push(self, *args, **kwargs):
+        with self._opslock:
+            super().push(*args, **kwargs)
+        
+    @staticmethod
+    def _pack(state):
+        ''' Packs state into a bytes object. May be overwritten in subs
+        to pack more complex objects. Should always be a staticmethod or
+        classmethod.
+        '''
+        try:
+            return pickle.dumps(state, protocol=4)
+            
+        except:
+            logger.error(
+                'Failed to pickle the GAO w/ traceback: \n' +
+                ''.join(traceback.format_exc())
+            )
+            raise
+        
+    @staticmethod
+    def _unpack(cls, packed):
+        ''' Unpacks state from a bytes object. May be overwritten in 
+        subs to unpack more complex objects. Should always be a 
+        staticmethod or classmethod.
+        '''
+        try:
+            return pickle.loads(packed)
+            
+        except:
+            logger.error(
+                'Failed to unpickle the GAO w/ traceback: \n' +
+                ''.join(traceback.format_exc())
+            )
+            raise
+            
+            
+class _GAODictBase:
     ''' A golix-aware dictionary. For now at least, serializes:
             1. For every change
             2. Using msgpack
     '''
     def __init__(self, *args, **kwargs):
-        self._statelock = threading.Lock()
+        # Statelock needs to be an RLock, because privateer does funny stuff.
+        self._statelock = threading.RLock()
         self._state = {}
         super().__init__(*args, **kwargs)
         
@@ -1259,6 +1334,14 @@ class _GAODict(_GAOMsgpackBase):
             result = self._state.update(*args, **kwargs)
             self.push()
         return result
+        
+        
+class _GAODict(_GAODictBase, _GAOMsgpackBase):
+    pass
+    
+    
+class _GAOPickleDict(_GAODictBase, _GAOPickleBase):
+    pass
             
             
 class _GAOSet(_GAOMsgpackBase):

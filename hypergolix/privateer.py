@@ -94,8 +94,11 @@ class Privateer:
     started.
     '''
     def __init__(self):
+        # NOTE: I'm not particularly happy about the RLock (vs plain locks), 
+        # but the process of updating the internal lookups is highly reentrant.
+        
         # Modification lock for standard objects
-        self._modlock = threading.Lock()
+        self._modlock = threading.RLock()
         # Modification lock for bootstrapping objects
         self._bootlock = threading.Lock()
         
@@ -106,12 +109,17 @@ class Privateer:
         
         # These must be bootstrapped.
         self._secrets_persistent = None
-        self._secrets_staging = None
+        self._secrets_quarantine = None
         self._secrets = None
-        # Keep track of chains (this will need to be distributed)
-        # Lookup <proxy ghid>: <container ghid>
-        self._chains = None
+        # These two are local only, but included to make the code more explicit
+        self._secrets_staging = None
+        self._secrets_local = None
         
+        # Keep track of chains. Note that chains need NOT be distributed, as it
+        # can always be bootstrapped from the combination of persistent secrets
+        # and the dynamic history of the object.
+        # Lookup <proxy ghid>: <container ghid>
+        self._chains = {}
         # Keep track of chain progress. This does not need to be distributed.
         # Lookup <proxy ghid> -> proxy secret
         self._ratchet_in_progress = {}
@@ -135,15 +143,18 @@ class Privateer:
     def prep_bootstrap(self):
         ''' Creates temporary objects for tracking secrets.
         '''
-        self._chains = _GaoDictBootstrap()
         self._secrets_persistent = _GaoDictBootstrap()
-        self._secrets_staging = _GaoDictBootstrap()
+        self._secrets_staging = {}
+        self._secrets_local = {}
+        self._secrets_quarantine = _GaoDictBootstrap()
         self._secrets = collections.ChainMap(
             self._secrets_persistent, 
+            self._secrets_local,
             self._secrets_staging,
+            self._secrets_quarantine,
         )
         
-    def bootstrap(self, persistent, staging, chains, credential):
+    def bootstrap(self, persistent, quarantine, credential):
         ''' Initializes the privateer into a distributed state.
         persistent is a GaoDict
         staged is a GaoDict
@@ -153,28 +164,21 @@ class Privateer:
         # TODO: should this be weakref?
         self._credential = credential
         
-        persists_container = self._ghidproxy.resolve(persistent.ghid)
-        staging_container = self._ghidproxy.resolve(staging.ghid)
-        chains_container = self._ghidproxy.resolve(chains.ghid)
-        # We have to preserve the chain container secret the first time around.
-        chains_secret = self.get(chains_container)
+        persistent_container = self._ghidproxy.resolve(persistent.ghid)
+        quarantine_container = self._ghidproxy.resolve(quarantine.ghid)
         
         # We very obviously need to be able to look up what secrets we have.
         # Lookups: <container ghid>: <container secret>
         self._secrets_persistent = persistent
-        self._secrets_staging = staging
+        self._secrets_staging = {}
+        self._secrets_local = {}
+        self._secrets_quarantine = quarantine
         self._secrets = collections.ChainMap(
             self._secrets_persistent, 
+            self._secrets_local,
             self._secrets_staging,
+            self._secrets_quarantine,
         )
-        
-        # Update secrets to include the chains container for initial bootstrap
-        if chains_container not in self._secrets:
-            self.stage(chains_container, chains_secret)
-        
-        # Keep track of chains (this will need to be distributed)
-        # Lookup <proxy ghid>: <container ghid>
-        self._chains = chains
         
         # Note that we just overwrote any chains that were created when we
         # initially loaded the three above resources. So, we may need to 
@@ -182,15 +186,11 @@ class Privateer:
         # them, since they use a different secrets tracking mechanism.
         self._ensure_bootstrap_chain(
             self._secrets_persistent.ghid, 
-            persists_container
+            persistent_container
         )
         self._ensure_bootstrap_chain(
-            self._secrets_staging.ghid, 
-            staging_container
-        )
-        self._ensure_bootstrap_chain(
-            self._chains.ghid, 
-            chains_container
+            self._secrets_quarantine.ghid, 
+            quarantine_container
         )
             
     def _ensure_bootstrap_chain(self, proxy, container):
@@ -204,9 +204,19 @@ class Privateer:
         ''' Return True if the proxy belongs to a bootstrapping chain.
         '''
         if (proxy == self._secrets_persistent.ghid or 
-            proxy == self._secrets_staging.ghid):
+            proxy == self._secrets_quarantine.ghid):
                 return True
         else:
+            return False
+            
+    def _is_bootstrap_target(self, ghid):
+        try:
+            if (ghid == self._chains[self._secrets_persistent.ghid] or
+                ghid == self._chains[self._secrets_quarantine.ghid]):
+                    return True
+            else:
+                return False
+        except KeyError:
             return False
         
     def new_secret(self):
@@ -231,27 +241,46 @@ class Privateer:
         not equal, raises ConflictingSecrets.
         '''
         with self._modlock:
-            if ghid in self._secrets:
-                if self._secrets[ghid] != secret:
-                    self._calc_and_log_diff(self._secrets[ghid], secret)
-                    raise ConflictingSecrets(
-                        'Non-matching secret already staged for GHID ' + 
-                        str(ghid)
-                    )
-            else:
-                self._secrets_staging[ghid] = secret
+            self._stage(ghid, secret, self._secrets_staging)
+                
+    def _stage(self, ghid, secret, lookup):
+        ''' Raw staging, bypassing modlock. Only accessed directly 
+        during bootstrapping.
+        '''
+        if ghid in self._secrets:
+            if self._secrets[ghid] != secret:
+                self._calc_and_log_diff(self._secrets[ghid], secret)
+                raise ConflictingSecrets(
+                    'Non-matching secret already known for GHID ' + 
+                    str(ghid)
+                )
+        else:
+            lookup[ghid] = secret
+            
+    def quarantine(self, ghid, secret):
+        ''' Store a secret temporarily, but distributedly, separate from
+        the primary secret store. Used only for incoming secrets in 
+        shares that have not yet been opened.
+        '''
+        with self._modlock:
+            self._stage(ghid, secret, self._secrets_quarantine)
             
     def unstage(self, ghid):
         ''' Remove a staged secret, probably due to a SecurityError.
         Returns the secret.
         '''
         with self._modlock:
-            try:
+            if ghid in self._secrets_quarantine:
+                secret = self._secrets_quarantine.pop(ghid)
+            
+            elif ghid in self._secrets_staging:
                 secret = self._secrets_staging.pop(ghid)
-            except KeyError as exc:
+            
+            else:
                 raise SecretUnknown(
                     'No currently staged secret for GHID ' + str(ghid)
-                ) from exc
+                )
+                
         return secret
         
     def commit(self, ghid):
@@ -266,23 +295,40 @@ class Privateer:
         
         This is transactional and atomic; any errors (ex: ValueError 
         above) will return its state to the previous.
+        
+        BOOTSTRAP CHAINS ARE NEVER (fully) COMMITTED. First of all, 
+        there's no need to and it's wasteful, because the bootstrap 
+        chains are deterministically derivable from the credential 
+        master secret. Second of all, it would unavoidably cause an
+        infinitely recursive chain of secret committing. So let's not do
+        that!
+        
         '''
         with self._modlock:
-            if ghid in self._secrets_persistent:
-                self._compare_staged_to_persistent(ghid)
+            # Note that we cannot stage or quarantine a secret that we already
+            # have committed. If that secret matches what we already have, it
+            # will indempotently and silently exit, without staging.
+            if ghid in self._secrets_staging:
+                secret = self._secrets_staging.pop(ghid)
+                
+            elif ghid in self._secrets_quarantine:
+                secret = self._secrets_quarantine.pop(ghid)
+                
             else:
-                try:
-                    secret = self._secrets_staging.pop(ghid)
-                except KeyError as exc:
-                    raise SecretUnknown(
-                        'Secret not currently staged for GHID ' + str(ghid)
-                    ) from exc
-                else:
-                    # It doesn't exist, so commit it directly.
-                    self._secrets_persistent[ghid] = secret
-                    
-                # Just keep track of shit for this fucking error
-                self._committment_problems[ghid] = TraceLogger.dump_my_trace()
+                raise SecretUnknown(
+                    'Secret not currently staged for GHID ' + str(ghid)
+                )
+                
+            # If it's a bootstrap target, just locally commit it.
+            if self._is_bootstrap_target(ghid):
+                self._secrets_local[ghid] = secret
+                
+            # Nope. Commit globally.
+            else:
+                self._secrets_persistent[ghid] = secret
+                
+            # # Just keep track of shit for this fucking error
+            # self._committment_problems[ghid] = TraceLogger.dump_my_trace()
     
     @classmethod
     def _calc_and_log_diff(cls, secret, other):
@@ -350,22 +396,6 @@ class Privateer:
         # Finally, calculate a percent difference
         doubdiff = diffbits / totalbits
         return int(doubdiff * 100)
-                    
-    def _compare_staged_to_persistent(self, ghid):
-        try:
-            staged = self._secrets_staging.pop(ghid)
-        except KeyError:
-            # Nothing is staged. Short-circuit.
-            pass
-        else:
-            if staged != self._secrets_persistent[ghid]:
-                # Re-stage, just in case.
-                self._secrets_staging[ghid] = staged
-                self._calc_and_log_diff(self._secrets_persistent[ghid], staged)
-                raise ConflictingSecrets(
-                    'Non-matching secret already committed for GHID ' +
-                    str(ghid)
-                )
         
     def abandon(self, ghid, quiet=True):
         ''' Remove a secret. If quiet=True, silence any KeyErrors.
@@ -374,24 +404,52 @@ class Privateer:
         fail_test = not quiet
         
         with self._modlock:
-            try:
-                del self._secrets_staging[ghid]
-            except KeyError:
-                fail_test &= True
-                logger.debug('Secret not staged for GHID ' + str(ghid))
-            else:
-                fail_test = False
-                
-            try:
-                del self._secrets_persistent[ghid]
-            except KeyError:
-                fail_test &= True
-                logger.debug('Secret not stored for GHID ' + str(ghid))
-            else:
-                fail_test = False
+            missing_in_persist = not self._abandon(
+                ghid, 
+                self._secrets_persistent,
+                'persistent lookup'
+            )
+            fail_test &= missing_in_persist
+            
+            missing_in_local = not self._abandon(
+                ghid, 
+                self._secrets_local,
+                'local lookup'
+            )
+            fail_test &= missing_in_local
+            
+            missing_in_quaran = not self._abandon(
+                ghid, 
+                self._secrets_quarantine,
+                'quarantine lookup'
+            )
+            fail_test &= missing_in_quaran
+            
+            missing_in_staging = not self._abandon(
+                ghid, 
+                self._secrets_staging,
+                'staging lookup'
+            )
+            fail_test &= missing_in_staging
                 
         if fail_test:
-            raise SecretUnknown('Secret not found for GHID ' + str(ghid))
+            raise SecretUnknown('Secret not found for ' + str(ghid))
+            
+    def _abandon(self, ghid, lookup, lookup_name='lookup'):
+        ''' Abandons a secret for a ghid in a specified lookup. NOT 
+        THREADSAFE! Call only from within self.abandon.
+        '''
+        if ghid in lookup:
+            del lookup[ghid]
+            found = True
+            
+        else:
+            logger.debug(
+                'No secret found in ' + lookup_name + ' for ' + str(ghid) + '.'
+            )
+            found = False
+            
+        return found
         
     def make_chain(self, proxy, container):
         ''' Makes a ratchetable chain. Must be owned by a particular
@@ -418,8 +476,8 @@ class Privateer:
             
         if proxy not in self._chains:
             raise ValueError('No chain for that proxy.')
-                
-        if self._is_bootstrap_chain(self, proxy):
+            
+        if self._is_bootstrap_chain(proxy):
             ratcheted = self._ratchet_bootstrap(proxy)
             
         else:
@@ -468,20 +526,31 @@ class Privateer:
         ''' Updates a chain container address. Must have been ratcheted
         prior to update, and cannot be ratcheted again until updated.
         '''
-        with self._modlock:
-            if proxy not in self._chains:
-                raise ValueError('No chain for proxy.')
+        if self._is_bootstrap_chain(proxy):
+            with self._bootlock:
+                self._update_chain(proxy, container)
                 
-            if proxy not in self._ratchet_in_progress:
-                raise ValueError('No ratchet in progress for proxy.')
-                
-            secret = self._ratchet_in_progress.pop(proxy)
-            self._chains[proxy] = container
+        else:
+            with self._modlock:
+                self._update_chain(proxy, container)
             
-            # NOTE: this does not bypass the usual stage -> commit process, 
-            # even though it can only be used locally during the creation of a 
-            # new container, because the container creation still calls commit.
-            self._secrets_staging[container] = secret
+    def _update_chain(self, proxy, container):
+        ''' Raw update chain. NOT THREADSAFE. Should only be called from
+        update_chain, protected by either modlock or bootlock.
+        '''
+        if proxy not in self._chains:
+            raise ValueError('No chain for proxy.')
+            
+        if proxy not in self._ratchet_in_progress:
+            raise ValueError('No ratchet in progress for proxy.')
+            
+        secret = self._ratchet_in_progress.pop(proxy)
+        self._chains[proxy] = container
+        
+        # NOTE: this does not bypass the usual stage -> commit process, 
+        # even though it can only be used locally during the creation of a 
+        # new container, because the container creation still calls commit.
+        self._secrets_staging[container] = secret
         
     def reset_chain(self, proxy, container):
         ''' Used to reset a chain back to a pristine state.
@@ -548,7 +617,7 @@ class Privateer:
             
         # DON'T take _modlock here or we will be reentrant = deadlock
         try:
-            self.stage(binding.target, known_secret)
+            self.quarantine(binding.target, known_secret)
             # Note that opening the container itself will commit the secret.
         except:
             logger.warning(

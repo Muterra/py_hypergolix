@@ -52,6 +52,7 @@ from .core import Oracle
 from .core import GhidProxier
 from .core import _GAOSet
 from .core import _GAODict
+from .core import _GAOPickleDict
 
 from .persistence import PersistenceCore
 from .persistence import Doorman
@@ -145,7 +146,7 @@ class AgentBootstrap:
         self.salmonator.assemble(self.golcore, self.percore, self.doorman,
                                 self.postman, self.librarian)
         self.golcore.assemble(self.librarian)
-        self.privateer.assemble(self.golcore, self.oracle)
+        self.privateer.assemble(self.golcore, self.ghidproxy, self.oracle)
         self.ghidproxy.assemble(self.librarian, self.salmonator)
         self.oracle.assemble(self.golcore, self.ghidproxy, self.privateer,
                             self.percore, self.bookie, self.librarian, 
@@ -168,6 +169,21 @@ class AgentBootstrap:
             # Privateer bootstrap.
             # ----------------------------------------------------------
             self.privateer.prep_bootstrap()
+            persistent_secrets = self.oracle.new_object(
+                gaoclass = _GAOPickleDict,
+                dynamic = True,
+                state = {}
+            )
+            quarantine_secrets = self.oracle.new_object(
+                gaoclass = _GAOPickleDict,
+                dynamic = True,
+                state = {}
+            )
+            self.privateer.bootstrap(
+                persistent = persistent_secrets,
+                quarantine = quarantine_secrets,
+                credential = MockCredential(self.privateer)
+            )
             
             # self.privateer.bootstrap(
             #     persistent_secrets = {}, 
@@ -266,6 +282,23 @@ class AgentBootstrap:
         ''' Load an Agent from an identity contained within a GEOC.
         '''
         pass
+        
+        
+class MockCredential:
+    ''' Temporary bypass of password inflation for purpose of getting
+    the privateer bootstrap up and running. JUST FOR TESTING PURPOSES.
+    '''
+    def __init__(self, privateer):
+        import weakref
+        self._lookup = {}
+        self._privateer = weakref.proxy(privateer)
+        
+    def get_master(self, proxy):
+        # JIT creation of the proxy secret. JUST FOR TESTING PURPOSES.
+        if proxy not in self._lookup:
+            self._lookup[proxy] = self._privateer.new_secret()
+        return self._lookup[proxy]
+
         
 class Credential:
     ''' Handles password expansion into a master key, master key into

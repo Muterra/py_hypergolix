@@ -246,7 +246,7 @@ class Rolodex:
             # First, we need to figure out what the actual container object's
             # address is, and then stage the secret for it.
             container_ghid = self._ghidproxy.resolve(request.target)
-            self._privateer.stage(
+            self._privateer.quarantine(
                 ghid = container_ghid, 
                 secret = request.secret
             )
