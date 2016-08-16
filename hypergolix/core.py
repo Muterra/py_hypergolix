@@ -1336,11 +1336,11 @@ class _GAODictBase:
         return result
         
         
-class _GAODict(_GAODictBase, _GAOMsgpackBase):
+class _GAOMsgpackDict(_GAODictBase, _GAOMsgpackBase):
     pass
     
     
-class _GAOPickleDict(_GAODictBase, _GAOPickleBase):
+class _GAODict(_GAODictBase, _GAOPickleBase):
     pass
             
             

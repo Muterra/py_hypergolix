@@ -52,7 +52,7 @@ from .core import Oracle
 from .core import GhidProxier
 from .core import _GAOSet
 from .core import _GAODict
-from .core import _GAOPickleDict
+# from .core import _GAOPickleDict
 
 from .persistence import PersistenceCore
 from .persistence import Doorman
@@ -170,12 +170,12 @@ class AgentBootstrap:
             # ----------------------------------------------------------
             self.privateer.prep_bootstrap()
             persistent_secrets = self.oracle.new_object(
-                gaoclass = _GAOPickleDict,
+                gaoclass = _GAODict,
                 dynamic = True,
                 state = {}
             )
             quarantine_secrets = self.oracle.new_object(
-                gaoclass = _GAOPickleDict,
+                gaoclass = _GAODict,
                 dynamic = True,
                 state = {}
             )
