@@ -34,7 +34,6 @@ import collections
 import threading
 import abc
 import weakref
-import msgpack
 import traceback
 import asyncio
 import warnings
@@ -77,82 +76,107 @@ logger = logging.getLogger(__name__)
         
 class IPCPackerMixIn:
     ''' Mix-in class for packing objects for IPC usage.
+    
+    General format:
+    version     1B      int16 unsigned
+    address     65B     ghid
+    author      65B     ghid
+    private     1B      bool
+    dynamic     1B      bool
+    _legroom    1B      int8 unsigned
+    api_id      65B     bytes
+    is_link     1B      bool
+    state       ?B      bytes (implicit length)
     '''
-    def _pack_object_def(self, address, author, state, is_link, api_id, private, dynamic, _legroom):
+    def _pack_object_def(self, address, author, state, is_link, api_id, 
+                        private, dynamic, _legroom):
         ''' Serializes an object definition.
+        
+        This is crude, but it's getting the job done for now. Also, for 
+        the record, I was previously using msgpack, but good lord is it
+        slow.
         '''
-        if author is not None:
-            author = bytes(author)
+        version = b'\x00'
             
-        if address is not None:
+        if address is None:
+            address = bytes(65)
+        else:
             address = bytes(address)
         
-        msg = {
-            'author': author,
-            'address': address,
-            'state': state,
-            'is_link': is_link,
-            'api_id': api_id,
-            'private': private,
-            'dynamic': dynamic,
-            '_legroom': _legroom,
-        }
-        try:
-            packed_msg = msgpack.packb(msg, use_bin_type=True)
+        if author is None:
+            author = bytes(65)
+        else:
+            author = bytes(author)
             
-        except (
-            msgpack.exceptions.BufferFull,
-            msgpack.exceptions.ExtraData,
-            msgpack.exceptions.OutOfData,
-            msgpack.exceptions.PackException,
-            msgpack.exceptions.PackValueError
-        ) as e:
-            raise ValueError(
-                'Couldn\'t pack object definition. Incompatible data format?'
-            ) from e
-            
-        return packed_msg
+        private = bool(private).to_bytes(length=1, byteorder='big')
+        dynamic = bool(dynamic).to_bytes(length=1, byteorder='big')
+        if _legroom is None:
+            _legroom = b'\x00'
+        else:
+            _legroom = int(_legroom).to_bytes(length=1, byteorder='big')
+        if api_id is None:
+            api_id = bytes(65)
+        is_link = bool(is_link).to_bytes(length=1, byteorder='big')
+        # State need not be modified
+        
+        return (version + 
+                address + 
+                author + 
+                private + 
+                dynamic + 
+                _legroom + 
+                api_id + 
+                is_link +
+                state)
         
     def _unpack_object_def(self, data):
         ''' Deserializes an object from bytes.
         '''
         try:
-            unpacked_msg = msgpack.unpackb(data, encoding='utf-8')
+            version = data[0:1]
+            address = data[1:66]
+            author = data[66:131]
+            private = data[131:132]
+            dynamic = data[132:133]
+            _legroom = data[133:134]
+            api_id = data[134:199]
+            is_link = data[199:200]
+            state = data[200:]
             
-        # MsgPack errors mean that we don't have a properly formatted handshake
-        except (msgpack.exceptions.BufferFull,
-                msgpack.exceptions.ExtraData,
-                msgpack.exceptions.OutOfData,
-                msgpack.exceptions.UnpackException,
-                msgpack.exceptions.UnpackValueError) as exc:
-            logger.error(''.join(traceback.format_exc()))
-            raise ValueError(
-                'Unable to unpack object definition. Different serialization?'
-            ) from exc
-            
-        if unpacked_msg['address'] is not None:
-            unpacked_msg['address'] = Ghid.from_bytes(unpacked_msg['address'])
-            
-        if unpacked_msg['author'] is not None:
-            unpacked_msg['author'] = Ghid.from_bytes(unpacked_msg['author'])
-            
-        # We may have already set the attributes.
-        # Wrap this in a try/catch in case we've have.
-        try:
-            return (
-                unpacked_msg['address'], 
-                unpacked_msg['author'], 
-                unpacked_msg['state'], 
-                unpacked_msg['is_link'],
-                unpacked_msg['api_id'], 
-                unpacked_msg['private'], 
-                unpacked_msg['dynamic'], 
-                unpacked_msg['_legroom']
+        except:
+            logger.error(
+                'Unable to unpack IPC object definition w/ traceback:\n'
+                ''.join(traceback.format_exc())
             )
-        except KeyError as e:
-            raise ValueError(
-                'Insufficient keys for object definition unpacking.'
-            ) from e
+            raise
+            
+        # Version stays unmodified (unused)
+        if address == bytes(65):
+            address = None
+        else:
+            address = Ghid.from_bytes(address)
+        if author == bytes(65):
+            author = None
+        else:
+            author = Ghid.from_bytes(author)
+        private = bool(int.from_bytes(private, 'big'))
+        dynamic = bool(int.from_bytes(dynamic, 'big'))
+        _legroom = int.from_bytes(_legroom, 'big')
+        if _legroom == 0:
+            _legroom = None
+        if api_id == bytes(65):
+            api_id = None
+        is_link = bool(int.from_bytes(is_link, 'big'))
+        # state also stays unmodified
+        
+        return (address, 
+                author, 
+                state, 
+                is_link,
+                api_id, 
+                private, 
+                dynamic, 
+                _legroom)
     
     
 class _WeldedSet:
