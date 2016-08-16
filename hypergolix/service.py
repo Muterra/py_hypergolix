@@ -49,7 +49,7 @@ import signal
 
 from golix import Ghid
 
-from .accounting import AgentBootstrap
+from .bootstrapping import AgentBootstrap
 
 from .core import GolixCore
 from .core import Oracle

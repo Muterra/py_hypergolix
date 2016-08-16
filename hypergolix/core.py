@@ -45,7 +45,6 @@ import collections
 import weakref
 import threading
 import os
-import msgpack
 import abc
 import traceback
 import warnings
@@ -1057,108 +1056,6 @@ class _GAO(_GAOBase):
             self._update_greenlight.set()
             
             
-class _GAOMsgpackBase(_GAO):
-    ''' Golix-aware messagepack base object.
-    '''
-    def __init__(self, *args, **kwargs):
-        # Include these so that we can pass *args and **kwargs to the dict
-        super().__init__(*args, **kwargs)
-        # TODO: Convert this to a ComboLock (threadsafe and asyncsafe)
-        # Note: must be RLock, because we need to take opslock in __setitem__
-        # while calling push.
-        self._opslock = threading.RLock()
-        
-    def __eq__(self, other):
-        ''' Check total equality first, and then fall back on state 
-        checking.
-        '''
-        equal = True
-        
-        try:
-            equal &= (self.dynamic == other.dynamic)
-            equal &= (self.ghid == other.ghid)
-            equal &= (self.author == other.author)
-            equal &= (self._state == other._state)
-            
-        except AttributeError:
-            equal = False
-        
-        return equal
-        
-    def pull(self, *args, **kwargs):
-        with self._opslock:
-            super().pull(*args, **kwargs)
-        
-    def push(self, *args, **kwargs):
-        with self._opslock:
-            super().push(*args, **kwargs)
-        
-    @staticmethod
-    def _msgpack_ext_pack(obj):
-        ''' Shitty hack to make msgpack work with ghids.
-        '''
-        if isinstance(obj, Ghid):
-            return msgpack.ExtType(0, bytes(obj))
-        else:
-            raise TypeError('Not a ghid.')
-        
-    @staticmethod
-    def _msgpack_ext_unpack(code, packed):
-        ''' Shitty hack to make msgpack work with ghids.
-        '''
-        if code == 0:
-            return Ghid.from_bytes(packed)
-        else:
-            return msgpack.ExtType(code, data)
-        
-    @classmethod
-    def _pack(cls, state):
-        ''' Packs state into a bytes object. May be overwritten in subs
-        to pack more complex objects. Should always be a staticmethod or
-        classmethod.
-        '''
-        try:
-            return msgpack.packb(
-                state, 
-                use_bin_type = True, 
-                default = cls._msgpack_ext_pack
-            )
-            
-        except (msgpack.exceptions.BufferFull,
-                msgpack.exceptions.ExtraData,
-                msgpack.exceptions.OutOfData,
-                msgpack.exceptions.PackException,
-                msgpack.exceptions.PackValueError,
-                TypeError) as exc:
-            raise ValueError(
-                'Failed to pack _GAODict. Incompatible nested object?'
-            ) from exc
-        
-    @classmethod
-    def _unpack(cls, packed):
-        ''' Unpacks state from a bytes object. May be overwritten in 
-        subs to unpack more complex objects. Should always be a 
-        staticmethod or classmethod.
-        '''
-        try:
-            return msgpack.unpackb(
-                packed, 
-                encoding = 'utf-8',
-                ext_hook = cls._msgpack_ext_unpack
-            )
-            
-        # MsgPack errors mean that we don't have a properly formatted handshake
-        except (msgpack.exceptions.BufferFull,
-                msgpack.exceptions.ExtraData,
-                msgpack.exceptions.OutOfData,
-                msgpack.exceptions.UnpackException,
-                msgpack.exceptions.UnpackValueError,
-                TypeError) as exc:
-            raise ValueError(
-                'Failed to unpack _GAODict. Incompatible serialization?'
-            ) from exc
-            
-            
 class _GAOPickleBase(_GAO):
     ''' Golix-aware messagepack base object.
     '''
@@ -1230,7 +1127,7 @@ class _GAOPickleBase(_GAO):
 class _GAODictBase:
     ''' A golix-aware dictionary. For now at least, serializes:
             1. For every change
-            2. Using msgpack
+            2. Using pickle
     '''
     def __init__(self, *args, **kwargs):
         # Statelock needs to be an RLock, because privateer does funny stuff.
@@ -1334,20 +1231,16 @@ class _GAODictBase:
             result = self._state.update(*args, **kwargs)
             self.push()
         return result
-        
-        
-class _GAOMsgpackDict(_GAODictBase, _GAOMsgpackBase):
-    pass
     
     
 class _GAODict(_GAODictBase, _GAOPickleBase):
     pass
             
             
-class _GAOSet(_GAOMsgpackBase):
+class _GAOSetBase:
     ''' A golix-aware set. For now at least, serializes:
             1. For every change
-            2. Using msgpack
+            2. Using pickle
     '''
     def __init__(self, *args, **kwargs):
         self._state = set()
@@ -1453,15 +1346,8 @@ class _GAOSet(_GAOMsgpackBase):
                 self._legroom, 
                 self._state.intersection(*others)
             )
-        
-    @classmethod
-    def _pack(cls, state):
-        ''' Wait, fucking seriously? Msgpack can't do sets?
-        '''
-        return super()._pack(list(state))
-        
-    @classmethod
-    def _unpack(cls, packed):
-        ''' Wait, fucking seriously? Msgpack can't do sets?
-        '''
-        return set(super()._unpack(packed))
+            
+            
+class _GAOSet(_GAOSetBase, _GAOPickleBase):
+    pass
+    
