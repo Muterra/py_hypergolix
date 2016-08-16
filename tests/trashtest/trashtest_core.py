@@ -255,7 +255,7 @@ class GAOTest(unittest.TestCase):
         self.oracle.assemble(self.golcore, self.ghidproxy, self.privateer, 
                             self.percore, self.bookie, self.librarian, 
                             self.postman, self.salmonator)
-        self.privateer.assemble(self.golcore, self.oracle)
+        self.privateer.assemble(self.golcore, self.ghidproxy, self.oracle)
         self.percore.assemble(self.doorman, self.enforcer, self.lawyer, 
                             self.bookie, self.librarian, self.postman, 
                             self.undertaker, self.salmonator)
@@ -270,8 +270,12 @@ class GAOTest(unittest.TestCase):
         
         # These are both "who-knows-if-necessary-when-fixtured"
         self.golcore.bootstrap(TEST_AGENT1)
-        # Just use the local stuff
         self.privateer.prep_bootstrap()
+        # self.privateer.bootstrap(
+        #     persistent_secrets = {}, 
+        #     staged_secrets = {},
+        #     chains = {}
+        # )
         self.percore.ingest(TEST_AGENT1.second_party.packed)
         
     def test_source(self):
@@ -384,7 +388,7 @@ class OracleTest(unittest.TestCase):
         self.oracle.assemble(self.golcore, self.ghidproxy, self.privateer, 
                             self.percore, self.bookie, self.librarian, 
                             self.postman, self.salmonator)
-        self.privateer.assemble(self.golcore, self.oracle)
+        self.privateer.assemble(self.golcore, self.ghidproxy, self.oracle)
         self.percore.assemble(self.doorman, self.enforcer, self.lawyer, 
                             self.bookie, self.librarian, self.postman, 
                             self.undertaker, self.salmonator)
@@ -399,8 +403,12 @@ class OracleTest(unittest.TestCase):
         
         # These are both "who-knows-if-necessary-when-fixtured"
         self.golcore.bootstrap(TEST_AGENT1)
-        # Just use the local stuff
         self.privateer.prep_bootstrap()
+        # self.privateer.bootstrap(
+        #     persistent_secrets = {}, 
+        #     staged_secrets = {},
+        #     chains = {}
+        # )
         self.percore.ingest(TEST_AGENT1.second_party.packed)
     
     def test_load(self):

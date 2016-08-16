@@ -61,6 +61,10 @@ from _fixtures.identities import TEST_AGENT2
         
 class MockOracle:
     pass
+    
+    
+class MockGhidproxy:
+    pass
         
         
 class MockGolcore:
@@ -78,11 +82,16 @@ class PrivateerTest(unittest.TestCase):
     def setUp(self):
         self.golcore = MockGolcore()
         self.oracle = MockOracle()
+        self.ghidproxy = MockGhidproxy()
         self.privateer = Privateer()
         
-        self.privateer.assemble(self.golcore, self.oracle)
-        # Just do this locally for now.
+        self.privateer.assemble(self.golcore, self.ghidproxy, self.oracle)
         self.privateer.prep_bootstrap()
+        # self.privateer.bootstrap(
+        #     persistent_secrets = {}, 
+        #     staged_secrets = {},
+        #     chains = {}
+        # )
     
     def test_simple(self):
         ''' Beep boop, SweetBot1.0 reporting

@@ -94,10 +94,14 @@ class Privateer:
     started.
     '''
     def __init__(self):
+        # Modification lock for standard objects
         self._modlock = threading.Lock()
+        # Modification lock for bootstrapping objects
+        self._bootlock = threading.Lock()
         
         # These must be linked during assemble.
         self._golcore = None
+        self._ghidproxy = None
         self._oracle = None
         
         # These must be bootstrapped.
@@ -120,9 +124,11 @@ class Privateer:
         '''
         return ghid in self._secrets
         
-    def assemble(self, golix_core, oracle):
+    def assemble(self, golix_core, ghidproxy, oracle):
         # Chicken, meet egg.
         self._golcore = weakref.proxy(golix_core)
+        # We need the ghidproxy for bootstrapping, and ratcheting thereof.
+        self._ghidproxy = weakref.proxy(ghidproxy)
         # We need an oracle for ratcheting.
         self._oracle = weakref.proxy(oracle)
         
@@ -137,21 +143,71 @@ class Privateer:
             self._secrets_staging,
         )
         
-    def bootstrap(self, persistent_secrets, staged_secrets, chains):
-        ''' Initializes the privateer.
+    def bootstrap(self, persistent, staging, chains, credential):
+        ''' Initializes the privateer into a distributed state.
+        persistent is a GaoDict
+        staged is a GaoDict
+        chains is a GaoDict
+        credential is a bootstrapping credential.
         '''
-        # Keep track of chains (this will need to be distributed)
-        # Lookup <proxy ghid>: <container ghid>
-        self._chains = chains
+        # TODO: should this be weakref?
+        self._credential = credential
+        
+        persists_container = self._ghidproxy.resolve(persistent.ghid)
+        staging_container = self._ghidproxy.resolve(staging.ghid)
+        chains_container = self._ghidproxy.resolve(chains.ghid)
+        # We have to preserve the chain container secret the first time around.
+        chains_secret = self.get(chains_container)
         
         # We very obviously need to be able to look up what secrets we have.
         # Lookups: <container ghid>: <container secret>
-        self._secrets_persistent = persistent_secrets
-        self._secrets_staging = staged_secrets
+        self._secrets_persistent = persistent
+        self._secrets_staging = staging
         self._secrets = collections.ChainMap(
             self._secrets_persistent, 
             self._secrets_staging,
         )
+        
+        # Update secrets to include the chains container for initial bootstrap
+        if chains_container not in self._secrets:
+            self.stage(chains_container, chains_secret)
+        
+        # Keep track of chains (this will need to be distributed)
+        # Lookup <proxy ghid>: <container ghid>
+        self._chains = chains
+        
+        # Note that we just overwrote any chains that were created when we
+        # initially loaded the three above resources. So, we may need to 
+        # re-create them. But, we can use a fake container address for two of
+        # them, since they use a different secrets tracking mechanism.
+        self._ensure_bootstrap_chain(
+            self._secrets_persistent.ghid, 
+            persists_container
+        )
+        self._ensure_bootstrap_chain(
+            self._secrets_staging.ghid, 
+            staging_container
+        )
+        self._ensure_bootstrap_chain(
+            self._chains.ghid, 
+            chains_container
+        )
+            
+    def _ensure_bootstrap_chain(self, proxy, container):
+        ''' Makes sure that the proxy is in self._chains, and if it's 
+        missing, adds it.
+        '''
+        if proxy not in self._chains:
+            self.make_chain(proxy, container)
+            
+    def _is_bootstrap_chain(self, proxy):
+        ''' Return True if the proxy belongs to a bootstrapping chain.
+        '''
+        if (proxy == self._secrets_persistent.ghid or 
+            proxy == self._secrets_staging.ghid):
+                return True
+        else:
+            return False
         
     def new_secret(self):
         # Straight pass-through to the golix new_secret bit.
@@ -353,6 +409,61 @@ class Privateer:
         
             self._chains[proxy] = container
         
+    def ratchet_chain(self, proxy):
+        ''' Gets a new secret for the proxy. Returns the secret, and 
+        flags the ratchet as in-progress.
+        '''
+        if proxy in self._ratchet_in_progress:
+            raise ValueError('Must update chain prior to re-ratcheting.')
+            
+        if proxy not in self._chains:
+            raise ValueError('No chain for that proxy.')
+                
+        if self._is_bootstrap_chain(self, proxy):
+            ratcheted = self._ratchet_bootstrap(proxy)
+            
+        else:
+            ratcheted = self._ratchet_standard(proxy)
+            
+        self._ratchet_in_progress[proxy] = ratcheted
+        return ratcheted
+            
+    def _ratchet_standard(self, proxy):
+        ''' Ratchets a secret used in a non-bootstrapping container.
+        '''
+        with self._modlock:
+            # TODO: make sure this is not a race condition.
+            binding = self._oracle.get_object(gaoclass=_GAO, ghid=proxy)
+            last_target = binding._history_targets[0]
+            last_frame = binding._history[0]
+            
+            try:
+                existing_secret = self._secrets[last_target]
+            except KeyError as exc:
+                raise RatchetError('No secret for existing target?') from exc
+            
+            return self._ratchet(
+                secret = existing_secret,
+                proxy = proxy,
+                salt_ghid = last_frame
+            )
+            
+    def _ratchet_bootstrap(self, proxy):
+        ''' Ratchets a secret used in a bootstrapping container.
+        '''
+        with self._bootlock:
+            # TODO: make sure this is not a race condition.
+            binding = self._oracle.get_object(gaoclass=_GAO, ghid=proxy)
+            last_frame = binding._history[0]
+            
+            master_secret = self._credential.get_master(proxy)
+            
+            return self._ratchet(
+                secret = master_secret,
+                proxy = proxy,
+                salt_ghid = last_frame
+            )
+        
     def update_chain(self, proxy, container):
         ''' Updates a chain container address. Must have been ratcheted
         prior to update, and cannot be ratcheted again until updated.
@@ -388,43 +499,21 @@ class Privateer:
                 pass
                 
             self._chains[proxy] = container
-        
-    def ratchet_chain(self, proxy):
-        ''' Gets a new secret for the proxy. Returns the secret, and 
-        flags the ratchet as in-progress.
-        '''
-        with self._modlock:
-            if proxy in self._ratchet_in_progress:
-                raise ValueError('Must update chain prior to re-ratcheting.')
-                
-            if proxy not in self._chains:
-                raise ValueError('No chain for that proxy.')
-            
-            # TODO: make sure this is not a race condition.
-            binding = self._oracle.get_object(gaoclass=_GAO, ghid=proxy)
-            last_target = binding._history_targets[0]
-            last_frame = binding._history[0]
-            
-            try:
-                existing_secret = self._secrets[last_target]
-            except KeyError as exc:
-                raise RatchetError('No secret for existing target?') from exc
-            
-            ratcheted = self._ratchet(
-                secret = existing_secret,
-                proxy = proxy,
-                salt_ghid = last_frame
-            )
-            
-            self._ratchet_in_progress[proxy] = ratcheted
-            
-        return ratcheted
             
     def heal_chain(self, gao, binding):
         ''' Heals the ratchet for a binding using the gao. Call this any 
         time an agent RECEIVES a new EXTERNAL ratcheted object. Stages
         the resulting secret for the most recent frame in binding, BUT
         DOES NOT RETURN (or commit) IT.
+        '''
+        if self._is_bootstrap_chain(gao.ghid):
+            self._heal_bootstrap(gao, binding)
+        
+        else:
+            self._heal_standard(gao, binding)
+            
+    def _heal_standard(self, gao, binding):
+        ''' Heals a chain used in a non-bootstrapping container.
         '''
         # Get a local copy of _history_targets, since it's not currently tsafe
         # TODO: make gao tsafe; fix this leaky abstraction; make sure not race
@@ -464,6 +553,31 @@ class Privateer:
         except:
             logger.warning(
                 'Error while staging new secret for attempted ratchet. The '
+                'ratchet is very likely broken.\n' + 
+                ''.join(traceback.format_exc())
+            )
+        
+    def _heal_bootstrap(self, gao, binding):
+        ''' Heals a chain used in a bootstrapping container.
+        '''
+        with self._bootlock:
+            # We don't need to do anything fancy here. Everything is handled 
+            # through the credential's master secret and the binding itself.
+            master_secret = self._credential.get_master(gao.ghid)
+            last_frame = binding._history[0]
+            new_secret = self._ratchet(
+                secret = master_secret,
+                proxy = gao.ghid,
+                salt_ghid = last_frame
+            )
+            
+        # DON'T take bootlock or modlock here or we'll be reentrant = deadlock
+        try:
+            self.stage(binding.target, known_secret)
+            # Note that opening the container itself will commit the secret.
+        except:
+            logger.critical(
+                'Error while staging new secret for BOOTSTRAP ratchet. The '
                 'ratchet is very likely broken.\n' + 
                 ''.join(traceback.format_exc())
             )

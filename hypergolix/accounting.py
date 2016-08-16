@@ -167,11 +167,13 @@ class AgentBootstrap:
             
             # Privateer bootstrap.
             # ----------------------------------------------------------
-            self.privateer.bootstrap(
-                persistent_secrets = {}, 
-                staged_secrets = {},
-                chains = {}
-            )
+            self.privateer.prep_bootstrap()
+            
+            # self.privateer.bootstrap(
+            #     persistent_secrets = {}, 
+            #     staged_secrets = {},
+            #     chains = {}
+            # )
             
             # Rolodex bootstrap:
             # ----------------------------------------------------------
@@ -293,3 +295,9 @@ class Credential:
         ''' Derives a Secret from the master key.
         '''
         pass
+        
+    def get_master(self, proxy):
+        ''' Returns a master secret for the passed proxy. Proxy should
+        be a bootstrapping container, basically either the one for the
+        Golix private key container, or the two Privateer secrets repos.
+        '''
