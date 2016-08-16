@@ -81,11 +81,8 @@ class PrivateerTest(unittest.TestCase):
         self.privateer = Privateer()
         
         self.privateer.assemble(self.golcore, self.oracle)
-        self.privateer.bootstrap(
-            persistent_secrets = {}, 
-            staged_secrets = {},
-            chains = {}
-        )
+        # Just do this locally for now.
+        self.privateer.prep_bootstrap()
     
     def test_simple(self):
         ''' Beep boop, SweetBot1.0 reporting

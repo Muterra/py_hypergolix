@@ -46,6 +46,8 @@ import collections
 import weakref
 import traceback
 
+from golix import Ghid
+
 # These are used for secret ratcheting only.
 from Crypto.Hash import SHA512
 from Crypto.Protocol.KDF import HKDF
@@ -74,6 +76,11 @@ logger = logging.getLogger(__name__)
 # ###############################################
 # Lib
 # ###############################################
+
+
+class _GaoDictBootstrap(dict):
+    # Just inject a class-level ghid.
+    ghid = Ghid.from_bytes(b'\x01' + bytes(64))
 
 
 class Privateer:
@@ -118,6 +125,17 @@ class Privateer:
         self._golcore = weakref.proxy(golix_core)
         # We need an oracle for ratcheting.
         self._oracle = weakref.proxy(oracle)
+        
+    def prep_bootstrap(self):
+        ''' Creates temporary objects for tracking secrets.
+        '''
+        self._chains = _GaoDictBootstrap()
+        self._secrets_persistent = _GaoDictBootstrap()
+        self._secrets_staging = _GaoDictBootstrap()
+        self._secrets = collections.ChainMap(
+            self._secrets_persistent, 
+            self._secrets_staging,
+        )
         
     def bootstrap(self, persistent_secrets, staged_secrets, chains):
         ''' Initializes the privateer.

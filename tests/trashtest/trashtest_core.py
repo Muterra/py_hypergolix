@@ -270,11 +270,8 @@ class GAOTest(unittest.TestCase):
         
         # These are both "who-knows-if-necessary-when-fixtured"
         self.golcore.bootstrap(TEST_AGENT1)
-        self.privateer.bootstrap(
-            persistent_secrets = {}, 
-            staged_secrets = {},
-            chains = {}
-        )
+        # Just use the local stuff
+        self.privateer.prep_bootstrap()
         self.percore.ingest(TEST_AGENT1.second_party.packed)
         
     def test_source(self):
@@ -402,11 +399,8 @@ class OracleTest(unittest.TestCase):
         
         # These are both "who-knows-if-necessary-when-fixtured"
         self.golcore.bootstrap(TEST_AGENT1)
-        self.privateer.bootstrap(
-            persistent_secrets = {}, 
-            staged_secrets = {},
-            chains = {}
-        )
+        # Just use the local stuff
+        self.privateer.prep_bootstrap()
         self.percore.ingest(TEST_AGENT1.second_party.packed)
     
     def test_load(self):
