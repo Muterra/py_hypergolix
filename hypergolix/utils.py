@@ -940,6 +940,27 @@ class SetMap:
         for key in other:
             new.update(key, other._mapping[key])
         return new
+
+    def __getstate__(self):
+        ''' Ignore self._lock to support pickling. Basically boilerplate
+        copy from the pickle reference docs.
+        '''
+        # Copy the object's state from self.__dict__ which contains
+        # all our instance attributes. Always use the dict.copy()
+        # method to avoid modifying the original state.
+        state = self.__dict__.copy()
+        # Remove the unpicklable entries.
+        del state['_lock']
+        return state
+
+    def __setstate__(self, state):
+        ''' Ignore self._lock to support pickling. Basically boilerplate
+        copy from the pickle reference docs.
+        '''
+        # Restore instance attributes (i.e., filename and lineno).
+        self.__dict__.update(state)
+        # Restore the lock.
+        self._lock = threading.Lock()
             
             
 class _WeakerSet(weakref.WeakSet):

@@ -63,6 +63,7 @@ from golix._getlow import GDXX
 
 # Intra-package dependencies
 from .utils import _generate_threadnames
+from .utils import SetMap
 
 from .exceptions import RemoteNak
 from .exceptions import HandshakeError
@@ -1350,4 +1351,140 @@ class _GAOSetBase:
             
 class _GAOSet(_GAOSetBase, _GAOPickleBase):
     pass
+            
+            
+class _GAOSetMapBase:
+    ''' A golix-aware set. For now at least, serializes:
+            1. For every change
+            2. Using pickle
+    '''
+    def __init__(self, *args, **kwargs):
+        self._state = SetMap()
+        self._statelock = threading.Lock()
+        super().__init__(*args, **kwargs)
+        
+    def apply_state(self, state):
+        ''' Apply the UNPACKED state to self.
+        '''
+        with self._statelock:
+            # self._state.clear_all()
+            # self._state.update()
+            # Nevermind. For now, just replace the damn thing.
+            self._state = state
+        
+    def extract_state(self):
+        ''' Extract self into a packable state.
+        '''
+        # with self._statelock:
+        # Both push and pull take the opslock, and they are the only entry 
+        # points that call extract_state and apply_state, so we should be good
+        # without the lock.
+        return self._state
+            
+    def __contains__(self, key):
+        with self._statelock:
+            return key in self._state
+        
+    def __len__(self):
+        # Straight pass-through
+        return len(self._state)
+        
+    def __iter__(self):
+        for key in self._state:
+            yield key
     
+    def __getitem__(self, key):
+        ''' Pass-through to the core lookup. Will return a frozenset.
+        Raises keyerror if missing.
+        '''
+        with self._statelock:
+            return self._state[key]
+        
+    def get_any(self, key):
+        ''' Pass-through to the core lookup. Will return a frozenset.
+        Will never raise a keyerror; if key not in self, returns empty
+        frozenset.
+        '''
+        with self._statelock:
+            return self._state.get_any(key)
+                
+    def pop_any(self, key):
+        with self._statelock:
+            result = self._state.pop_any(key)
+            if result:
+                self.push()
+            return result
+        
+    def contains_within(self, key, value):
+        ''' Check to see if the key exists, AND the value exists at key.
+        '''
+        with self._statelock:
+            return self._state.contains_within(key, value)
+        
+    def add(self, key, value):
+        ''' Adds the value to the set at key. Creates a new set there if 
+        none already exists.
+        '''
+        with self._statelock:
+            # Actually do some detection to figure out if we need to push.
+            if not self._state.contains_within(key, value):
+                self._state.add(key, value)
+                self.push()
+                
+    def update(self, key, value):
+        ''' Updates the key with the value. Value must support being
+        passed to set.update(), and the set constructor.
+        '''
+        # TODO: add some kind of detection of a delta to make sure this really
+        # changed something
+        with self._statelock:
+            self._state.update(key, value)
+            self.push()
+        
+    def remove(self, key, value):
+        ''' Removes the value from the set at key. Will raise KeyError 
+        if either the key is missing, or the value is not contained at
+        the key.
+        '''
+        with self._statelock:
+            # Note that this will raise a keyerror before push if nothing is 
+            # going to change.
+            self._state.remove(key, value)
+            self.push()
+        
+    def discard(self, key, value):
+        ''' Same as remove, but will never raise KeyError.
+        '''
+        with self._statelock:
+            if self._state.contains_within(key, value):
+                self._state.discard(key, value)
+                self.push()
+        
+    def clear(self, key):
+        ''' Clears the specified key. Raises KeyError if key is not 
+        found.
+        '''
+        with self._statelock:
+            # Note that keyerror will be raised if no delta
+            self._state.clear(key)
+            self.push()
+            
+    def clear_any(self, key):
+        ''' Clears the specified key, if it exists. If not, suppresses
+        KeyError.
+        '''
+        with self._statelock:
+            if key in self._state:
+                self._state.clear_any(key)
+                self.push()
+        
+    def clear_all(self):
+        ''' Clears the entire mapping.
+        '''
+        with self._statelock:
+            self._state.clear_all()
+            self.push()
+            
+            
+class _GAOSetMap(_GAOSetMapBase, _GAOPickleBase):
+    pass

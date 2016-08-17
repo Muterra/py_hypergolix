@@ -52,6 +52,7 @@ from .core import Oracle
 from .core import GhidProxier
 from .core import _GAOSet
 from .core import _GAODict
+from .core import _GAOSetMap
 
 from .persistence import PersistenceCore
 from .persistence import Doorman
@@ -170,12 +171,14 @@ class AgentBootstrap:
         '''
         # Golix core bootstrap.
         # ----------------------------------------------------------
+        
         identity = FirstParty()
         self.percore.ingest(identity.second_party.packed)
         self.golcore.bootstrap(identity)
         
         # Privateer bootstrap.
         # ----------------------------------------------------------
+        
         self.privateer.prep_bootstrap()
         persistent_secrets = self.oracle.new_object(
             gaoclass = _GAODict,
@@ -195,6 +198,7 @@ class AgentBootstrap:
         
         # Rolodex bootstrap:
         # ----------------------------------------------------------
+        
         # Dict-like mapping of all pending requests.
         # Used to lookup {<request address>: <target address>}
         pending_requests = self.oracle.new_object(
@@ -202,13 +206,19 @@ class AgentBootstrap:
             dynamic = True,
             state = {}
         )
+        outstanding_shares = self.oracle.new_object(
+            gaoclass = _GAOSetMap,
+            dynamic = True,
+            state = SetMap()
+        )
         self.rolodex.bootstrap(
             pending_requests = pending_requests, 
-            outstanding_shares = SetMap()
+            outstanding_shares = outstanding_shares
         )
         
         # Dispatch bootstrap:
         # ----------------------------------------------------------
+        
         # Set of all known tokens. Add b'\x00\x00\x00\x00' to prevent its 
         # use. Persistent across all clients for any given agent.
         all_tokens = self.oracle.new_object(
@@ -217,9 +227,13 @@ class AgentBootstrap:
             state = set()
         )
         all_tokens.add(b'\x00\x00\x00\x00')
+        
         # SetMap of all objects to be sent to an app upon app startup.
-        # TODO: make this distributed state object.
-        startup_objs = SetMap()
+        startup_objs = self.oracle.new_object(
+            gaoclass = _GAOSetMap,
+            dynamic = True,
+            state = SetMap()
+        )
         
         # Dict-like lookup for <private obj ghid>: <parent token>
         private_by_ghid = self.oracle.new_object(
@@ -233,15 +247,35 @@ class AgentBootstrap:
             all_tokens = all_tokens, 
             startup_objs = startup_objs, 
             private_by_ghid = private_by_ghid,
+            # TODO: figure out a distributed lock system
             token_lock = threading.Lock()
         )
         
         # IPCCore bootstrap:
         # ----------------------------------------------------------
+        
+        incoming_shares = self.oracle.new_object(
+            gaoclass = _GAOSet,
+            dynamic = True,
+            state = set()
+        )
+        
+        orphan_acks = self.oracle.new_object(
+            gaoclass = _GAOSetMap,
+            dynamic = True,
+            state = SetMap()
+        )
+        
+        orphan_naks = self.oracle.new_object(
+            gaoclass = _GAOSetMap,
+            dynamic = True,
+            state = SetMap()
+        )
+        
         self.ipccore.bootstrap(
-            incoming_shares = set(),
-            orphan_acks = SetMap(),
-            orphan_naks = SetMap()
+            incoming_shares = incoming_shares,
+            orphan_acks = orphan_acks,
+            orphan_naks = orphan_naks
         )
             
     def bootstrap(self, credential):
