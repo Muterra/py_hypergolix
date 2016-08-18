@@ -1048,7 +1048,7 @@ class _GAO(_GAOBase):
             
             # TODO: fix these leaky abstractions.
             self.apply_state(self._unpack(packed_state))
-            binding = self._librarian.summarize(ghid)
+            binding = self._librarian.summarize(self.ghid)
             # Don't forget to fix history as well
             self._advance_history(binding)
             

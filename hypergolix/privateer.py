@@ -259,14 +259,18 @@ class Privateer:
         not equal, raises ConflictingSecrets.
         '''
         with self._modlock:
-            # Enforce container-only.
-            target = self._ghidproxy.resolve(ghid)
-            if ghid != target:
-                raise ValueError(
-                    'Staged ghids must be containers, not proxies: '+ str(ghid)
-                )
-            
             self._stage(ghid, secret, self._secrets_staging)
+            
+    def _ensure_container(self, ghid):
+        ''' Make sure the ghid does, in fact, resolve to a container.
+        Dependent upon ghidproxy having a clear resolution.
+        '''
+        # Enforce container-only.
+        target = self._ghidproxy.resolve(ghid)
+        if ghid != target:
+            raise ValueError(
+                'Staged ghids must be containers, not proxies: '+ str(ghid)
+            )
                 
     def _stage(self, ghid, secret, lookup):
         ''' Raw staging, bypassing modlock. Only accessed directly 
@@ -275,6 +279,13 @@ class Privateer:
         if ghid in self._secrets:
             if self._secrets[ghid] != secret:
                 self._calc_and_log_diff(self._secrets[ghid], secret)
+                
+                if ghid in self._committment_problems:
+                    logger.error(
+                        'Previously known w/ traceback: \n' + 
+                        self._committment_problems[ghid]
+                    )
+                
                 raise ConflictingSecrets(
                     'Non-matching secret already known for ' + str(ghid)
                 )
@@ -287,7 +298,14 @@ class Privateer:
         shares that have not yet been opened.
         '''
         with self._modlock:
+            # With quarantine, we can verify it's a container first, since we
+            # will only see this when pulling from upstream anyways.
+            self._ensure_container(ghid)
             self._stage(ghid, secret, self._secrets_quarantine)
+                
+            # Just keep track of shit for this fucking conflicting secrets 
+            # error that I can't for the life of me figure out
+            self._committment_problems[ghid] = TraceLogger.dump_my_trace()
             
     def unstage(self, ghid):
         ''' Remove a staged secret, probably due to a SecurityError.
@@ -331,6 +349,9 @@ class Privateer:
         
         '''
         with self._modlock:
+            # Go ahead and make sure it's a container.
+            self._ensure_container(ghid)
+            
             # Note that we cannot stage or quarantine a secret that we already
             # have committed. If that secret matches what we already have, it
             # will indempotently and silently exit, without staging.
@@ -357,9 +378,9 @@ class Privateer:
             else:
                 self._secrets_persistent[ghid] = secret
                 
-            # # Just keep track of shit for this fucking conflicting secrets 
-            # # error that I can't for the life of me figure out
-            # self._committment_problems[ghid] = TraceLogger.dump_my_trace()
+            # Just keep track of shit for this fucking conflicting secrets 
+            # error that I can't for the life of me figure out
+            self._committment_problems[ghid] = TraceLogger.dump_my_trace()
     
     @classmethod
     def _calc_and_log_diff(cls, secret, other):

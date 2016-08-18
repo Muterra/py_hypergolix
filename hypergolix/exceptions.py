@@ -164,7 +164,7 @@ class InconsistentAuthor(RemoteNak):
     pass
     
     
-class DoesNotExist(RemoteNak):
+class DoesNotExist(RemoteNak, KeyError):
     ''' This RemoteNak is raised when a persistence provider has received
     a request for a ghid that does not exist in its object store.
     '''

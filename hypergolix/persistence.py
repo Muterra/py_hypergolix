@@ -855,6 +855,9 @@ class Enforcer:
         '''
         try:
             target = self._librarian.summarize(obj.target)
+        # TODO: think more about this, and whether everything has been updated
+        # appropriately to raise a DoesNotExist instead of a KeyError.
+        # This could be more specific and say DoesNotExist
         except KeyError:
             pass
         else:
@@ -1477,7 +1480,7 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
             with self._restoring.mutex:
                 # Bypass lazy-load if restoring and re-raise
                 if self._restoring:
-                    raise
+                    raise DoesNotExist() from exc
                 else:
                     # Lazy-load a new one if possible.
                     self._lazy_load(ghid, exc)
@@ -1739,7 +1742,7 @@ class DiskLibrarian(_LibrarianCore):
         try:
             fpath.unlink()
         except FileNotFoundError as exc:
-            raise KeyError(
+            raise DoesNotExist(
                 'Ghid does not exist at persister: ' + str(ghid)
             ) from exc
         
@@ -1750,7 +1753,7 @@ class DiskLibrarian(_LibrarianCore):
         try:
             return fpath.read_bytes()
         except FileNotFoundError as exc:
-            raise KeyError(
+            raise DoesNotExist(
                 'Ghid does not exist at persister: ' + str(ghid)
             ) from exc
         

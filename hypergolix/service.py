@@ -181,6 +181,9 @@ def HGXService(host, port, ipc_port, debug, traceur, cache_dir,
         )
     else:
         core.bootstrap(user_id=user_id, password=None)
+    logger.info(
+        'Successfully logged in to fingerprint ' + str(core.whoami)
+    )
     
     persister = Autocomms(
         autoresponder_name = 'remrecli',

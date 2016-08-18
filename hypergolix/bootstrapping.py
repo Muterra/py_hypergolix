@@ -137,6 +137,11 @@ class AgentBootstrap:
             debug = debug, 
         )
         
+    @property
+    def whoami(self):
+        # Proxy for golcore whoami.
+        return self.golcore.whoami
+        
     def assemble(self):
         # Now we need to link everything together.
         self.percore.assemble(self.doorman, self.enforcer, self.lawyer, 
