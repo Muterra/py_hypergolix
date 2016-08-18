@@ -60,7 +60,7 @@ from golix import Ghid
 # ###############################################
 
 
-def make_fixtures(debug):
+def make_fixtures(debug, tmpdir_a, tmpdir_b):
     aengel = Aengel()
         
     hgxserver = _hgx_server(
@@ -79,7 +79,8 @@ def make_fixtures(debug):
         traceur = False,
         foreground = False,
         aengel = aengel,
-        cache_dir = './trashtest/_vectors/hgx_save_a',
+        cache_dir = tmpdir_a,
+        user_id = Ghid.from_str('AVzeVIy1zn59Zk2HzmHIHB3G8z10p7P6PeQ2IEYI2jjRrE02Xx0AQJmGFWSxK4AvNGFigrSqLIk8gVWos7d0-wY=')
     )
     hgxdes = HGXService(
         host = 'localhost',
@@ -89,7 +90,8 @@ def make_fixtures(debug):
         traceur = False,
         foreground = False,
         aengel = aengel,
-        cache_dir = './trashtest/_vectors/hgx_save_b',
+        cache_dir = tmpdir_b,
+        user_id = Ghid.from_str('AZBPtunflXWU6pQB4DpaxcqgUwLmqTiYz-e1AEbhH-gZQCvs38AOnT2xun5DBk2j2MLTZjPrWFyYIeWn4cZBO_k=')
     )
         
     return hgxserver, hgxraz, hgxdes, aengel
@@ -298,9 +300,13 @@ if __name__ == '__main__':
     # Dammit unittest using argparse
     sys.argv[1:] = args.unittest_args
     
-    def do_test():
+    def do_test(cache_dir_a, cache_dir_b):
         # Okay, let's set up the tests
-        server, raz, des, aengel = make_fixtures(args.debug)    
+        server, raz, des, aengel = make_fixtures(
+            args.debug, 
+            cache_dir_a, 
+            cache_dir_b
+        )    
         apptest = make_tests(args.iters, args.debug, raz, des, aengel)
         
         # And finally, run them
@@ -308,11 +314,28 @@ if __name__ == '__main__':
         suite.addTest(apptest('test_app'))
         unittest.TextTestRunner().run(suite)
     
-    # Clip negative numbers
-    trace_interval = max([args.traceur, 0])
-    if trace_interval:
-        from hypergolix.utils import TraceLogger
-        with TraceLogger(trace_interval):
-            do_test()
-    else:
-        do_test()
+    # We're going to copy all of the vectors into a temporary directory, so we
+    # don't accidentally mutate them.
+    import tempfile
+    import pathlib
+    import shutil
+    
+    with tempfile.TemporaryDirectory() as cache_dir_a, \
+        tempfile.TemporaryDirectory() as cache_dir_b:
+            save_dir_a = pathlib.Path('./trashtest/_vectors/hgx_save_a')
+            save_dir_b = pathlib.Path('./trashtest/_vectors/hgx_save_b')
+            
+            for fpath in save_dir_a.iterdir():
+                shutil.copy(fpath.as_posix(), cache_dir_a)
+            
+            for fpath in save_dir_b.iterdir():
+                shutil.copy(fpath.as_posix(), cache_dir_b)
+        
+            # Clip negative numbers
+            trace_interval = max([args.traceur, 0])
+            if trace_interval:
+                from hypergolix.utils import TraceLogger
+                with TraceLogger(trace_interval):
+                    do_test(cache_dir_a, cache_dir_b)
+            else:
+                do_test(cache_dir_a, cache_dir_b)

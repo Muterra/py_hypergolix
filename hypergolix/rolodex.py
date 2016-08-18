@@ -286,7 +286,7 @@ class Rolodex:
         except KeyError:
             logger.error(
                 'Received an ACK for an unknown origin: ' + 
-                str(bytes(request.target))
+                str(request.target)
             )
         else:
             self.receipt_ack_handler(target, recipient)
@@ -299,7 +299,7 @@ class Rolodex:
         except KeyError:
             logger.error(
                 'Received a NAK for an unknown origin: ' + 
-                str(bytes(request.target))
+                str(request.target)
             )
         else:
             self.receipt_nak_handler(target, recipient)

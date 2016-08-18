@@ -172,6 +172,9 @@ class Privateer:
         credential_container = self._ghidproxy.resolve(
             self._credential._user_id
         )
+        secondary_manifest_container = self._ghidproxy.resolve(
+            self._credential._secondary_manifest
+        )
         
         # We very obviously need to be able to look up what secrets we have.
         # Lookups: <container ghid>: <container secret>
@@ -206,20 +209,28 @@ class Privateer:
             self._credential._user_id, 
             credential_container
         )
+        self._ensure_bootstrap_chain(
+            self._credential._secondary_manifest, 
+            secondary_manifest_container
+        )
             
     def _ensure_bootstrap_chain(self, proxy, container):
         ''' Makes sure that the proxy is in self._chains, and if it's 
         missing, adds it.
         '''
         if proxy not in self._chains:
-            self.make_chain(proxy, container)
+            # Bypass the usual make_chain mechanism, since we don't hold on to
+            # the secrets for the bootstrap objects.
+            self._chains[proxy] = container
             
     def _is_bootstrap_target(self, ghid):
+        # TODO: fix leaky abstraction
         try:
             if (ghid == self._chains[self._secrets_persistent.ghid] or
                 ghid == self._chains[self._secrets_quarantine.ghid] or
                 ghid == self._chains[self._credential._identity_ghid] or
-                ghid == self._chains[self._credential._user_id]):
+                ghid == self._chains[self._credential._user_id] or
+                ghid == self._chains[self._credential._secondary_manifest]):
                     return True
             else:
                 return False
@@ -239,7 +250,7 @@ class Privateer:
             with self._modlock:
                 return self._secrets[ghid]
         except KeyError as exc:
-            raise SecretUnknown('Secret not found for ' + repr(ghid)) from exc
+            raise SecretUnknown('Secret not found for ' + str(ghid)) from exc
         
     def stage(self, ghid, secret):
         ''' Preliminarily set a secret for a ghid.
@@ -248,6 +259,13 @@ class Privateer:
         not equal, raises ConflictingSecrets.
         '''
         with self._modlock:
+            # Enforce container-only.
+            target = self._ghidproxy.resolve(ghid)
+            if ghid != target:
+                raise ValueError(
+                    'Staged ghids must be containers, not proxies: '+ str(ghid)
+                )
+            
             self._stage(ghid, secret, self._secrets_staging)
                 
     def _stage(self, ghid, secret, lookup):
@@ -258,8 +276,7 @@ class Privateer:
             if self._secrets[ghid] != secret:
                 self._calc_and_log_diff(self._secrets[ghid], secret)
                 raise ConflictingSecrets(
-                    'Non-matching secret already known for GHID ' + 
-                    str(ghid)
+                    'Non-matching secret already known for ' + str(ghid)
                 )
         else:
             lookup[ghid] = secret
@@ -291,14 +308,16 @@ class Privateer:
         return secret
         
     def commit(self, ghid):
-        ''' Store a secret "permanently". The secret must already be
-        staged.
+        ''' Store a secret "permanently". The secret must either:
+        1. Be staged, XOR
+        2. Be quarantined, XOR
+        3. Be committed
         
-        Raises KeyError if ghid is not currently in staging
+        Other states will raise SecretUnknown (a subclass of KeyError).
         
-        This is indempotent; if a ghid is currently in staging AND 
-        already committed, will compare the two and raise ValueError if
-        they don't match.
+        Note that this relies upon staging logic enforcing consistency
+        of secrets! If that changes to allow the staging conflicting 
+        secrets, this will need to be modified.
         
         This is transactional and atomic; any errors (ex: ValueError 
         above) will return its state to the previous.
@@ -321,6 +340,10 @@ class Privateer:
             elif ghid in self._secrets_quarantine:
                 secret = self._secrets_quarantine.pop(ghid)
                 
+            # Check all remaining locations to silence SecretUnknown and return
+            elif ghid in self._secrets:
+                return
+                
             else:
                 raise SecretUnknown(
                     'Secret not currently staged for GHID ' + str(ghid)
@@ -334,7 +357,8 @@ class Privateer:
             else:
                 self._secrets_persistent[ghid] = secret
                 
-            # # Just keep track of shit for this fucking error
+            # # Just keep track of shit for this fucking conflicting secrets 
+            # # error that I can't for the life of me figure out
             # self._committment_problems[ghid] = TraceLogger.dump_my_trace()
     
     @classmethod
@@ -457,6 +481,12 @@ class Privateer:
             found = False
             
         return found
+        
+    def has_chain(self, proxy):
+        ''' Checks to see if the proxy has a chain.
+        '''
+        with self._modlock:
+            return proxy in self._chains
         
     def make_chain(self, proxy, container):
         ''' Makes a ratchetable chain. Must be owned by a particular
@@ -582,11 +612,27 @@ class Privateer:
         the resulting secret for the most recent frame in binding, BUT
         DOES NOT RETURN (or commit) IT.
         '''
-        if self._credential.is_primary(gao.ghid):
-            self._heal_bootstrap(gao, binding)
-        
+            
+        # DON'T take _modlock here or we will be reentrant = deadlock
+        try:
+            if self._credential.is_primary(gao.ghid):
+                self._heal_bootstrap(gao, binding)
+            
+            else:
+                self._heal_standard(gao, binding)
+                
+        except:
+            logger.warning(
+                'Error while staging new secret for attempted ratchet. The '
+                'ratchet is very likely broken.\n' + 
+                ''.join(traceback.format_exc())
+            )
+            
         else:
-            self._heal_standard(gao, binding)
+            # If we have a chain for it, update it! Do this directly, skipping 
+            # the usual ratcheting process, because we already know everything.
+            if gao.ghid in self._chains:
+                self._chains[gao.ghid] = binding.target
             
     def _heal_standard(self, gao, binding):
         ''' Heals a chain used in a non-bootstrapping container.
@@ -623,15 +669,10 @@ class Privateer:
             )
             
         # DON'T take _modlock here or we will be reentrant = deadlock
-        try:
-            self.quarantine(binding.target, known_secret)
-            # Note that opening the container itself will commit the secret.
-        except:
-            logger.warning(
-                'Error while staging new secret for attempted ratchet. The '
-                'ratchet is very likely broken.\n' + 
-                ''.join(traceback.format_exc())
-            )
+        # Do the try/catch for this in the outside method, so that we can
+        # else it.
+        self.quarantine(binding.target, known_secret)
+        # Note that opening the container itself will commit the secret.
         
     def _heal_bootstrap(self, gao, binding):
         ''' Heals a chain used in a bootstrapping container.
@@ -648,15 +689,10 @@ class Privateer:
             )
             
         # DON'T take bootlock or modlock here or we'll be reentrant = deadlock
-        try:
-            self.stage(binding.target, known_secret)
-            # Note that opening the container itself will commit the secret.
-        except:
-            logger.critical(
-                'Error while staging new secret for BOOTSTRAP ratchet. The '
-                'ratchet is very likely broken.\n' + 
-                ''.join(traceback.format_exc())
-            )
+        # Do the try/catch for this in the outside method, so that we can
+        # else it.
+        self.stage(binding.target, known_secret)
+        # Note that opening the container itself will commit the secret.
         
     @staticmethod
     def _ratchet(secret, proxy, salt_ghid):

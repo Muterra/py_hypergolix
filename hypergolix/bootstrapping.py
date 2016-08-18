@@ -40,6 +40,7 @@ __all__ = [
 import threading
 import weakref
 import os
+import random
 
 from Crypto.Protocol.KDF import scrypt
 from Crypto.Hash import SHA512
@@ -66,7 +67,7 @@ from .persistence import Enlitener
 from .persistence import Enforcer
 from .persistence import Lawyer
 from .persistence import Bookie
-# from .persistence import DiskLibrarian
+from .persistence import DiskLibrarian
 from .persistence import MemoryLibrarian
 from .persistence import MrPostman
 from .persistence import Undertaker
@@ -103,7 +104,7 @@ class AgentBootstrap:
     
     Also binds everything within a single namespace, etc etc.
     '''
-    def __init__(self, aengel=None, debug=False):
+    def __init__(self, cache_dir, aengel=None, debug=False):
         ''' Creates everything and puts it into a singular namespace.
         
         If bootstrap (ghid) is passed, we'll use the credential to 
@@ -119,7 +120,7 @@ class AgentBootstrap:
         self.enforcer = Enforcer()
         self.lawyer = Lawyer()
         self.bookie = Bookie()
-        self.librarian = MemoryLibrarian()
+        self.librarian = DiskLibrarian(cache_dir=cache_dir)
         self.postman = MrPostman()
         self.undertaker = Undertaker()
         self.salmonator = Salmonator()
@@ -195,7 +196,7 @@ class AgentBootstrap:
         # Now we need to create the primary bootstrap objects (those which 
         # descend only from the credential's master secrets)
         # DON'T PUBLISH OUR IDENTITY until after we've set up privateer fully!
-        logger.info('Creating primary bootstrap bindings and manifest.')
+        logger.info('Creating primary bootstrap objects.')
         identity_container = self.oracle.new_object(
             gaoclass = _GAODict,
             dynamic = True,
@@ -215,7 +216,14 @@ class AgentBootstrap:
         primary_manifest = self.oracle.new_object(
             gaoclass = _GAO,
             dynamic = True,
+            # _GAOs don't like being committed with no content
             state = b'hello world'
+        )
+        # And the secondary manifest.
+        secondary_manifest = self.oracle.new_object(
+            gaoclass = _GAODict,
+            dynamic = True,
+            state = {}
         )
         
         # We also need to update credential about them before we're ready to 
@@ -224,7 +232,8 @@ class AgentBootstrap:
             primary_manifest.ghid,
             identity_container.ghid,
             persistent_secrets.ghid,
-            quarantine_secrets.ghid
+            quarantine_secrets.ghid,
+            secondary_manifest.ghid
         )
         
         # Now we're ready to bootstrap the privateer to bring it fully online.
@@ -234,21 +243,19 @@ class AgentBootstrap:
             quarantine = quarantine_secrets,
             credential = credential
         )
+        # Now that privateer has been bootstrapped, we should forcibly update
+        # both secrets lookups so that they cannot possibly have a zero history
+        # (which would prevent us from reloading them!)
+        # We don't need to do this with the other containers, because all of 
+        # them will definitely have changes. Quarantine secrets is particularly
+        # susceptible to "not having an extra secret").
+        persistent_secrets.push()
+        quarantine_secrets.push()
         
         # We should immediately update our identity container in case something
         # goes wrong.
         logger.info('Saving private keys to encrypted container.')
         identity_container.update(credential.identity._serialize())
-        
-        # Now that the privateer is fully online, we can create the secondary
-        # manifest.
-        logger.info('Creating the secondary bootstrap manifest.')
-        secondary_manifest = self.oracle.new_object(
-            gaoclass = _GAODict,
-            dynamic = True,
-            state = {}
-        )
-        credential.secondary_manifest = secondary_manifest.ghid
         
         # Okay, now the credential is completed. We should save it in case 
         # anything goes awry
@@ -336,14 +343,14 @@ class AgentBootstrap:
             dynamic = True,
             state = SetMap()
         )
-        secondary_manifest['ipc.orphanacks'] = orphan_acks.ghid
+        secondary_manifest['ipc.orphan_acks'] = orphan_acks.ghid
         
         orphan_naks = self.oracle.new_object(
             gaoclass = _GAOSetMap,
             dynamic = True,
             state = SetMap()
         )
-        secondary_manifest['ipc.orphannaks'] = orphan_naks.ghid
+        secondary_manifest['ipc.orphan_naks'] = orphan_naks.ghid
         
         self.ipccore.bootstrap(
             incoming_shares = incoming_shares,
@@ -359,7 +366,129 @@ class AgentBootstrap:
     def bootstrap(self, user_id, password):
         ''' Called to reinstate an existing account.
         '''
+        # FIRST FIRST, we have to restore the librarian.
+        self.librarian.restore()
+        
+        # Delete this once we start passing an actual password
+        password = b'hello world'
+        
+        # Note that FirstParty digestion methods are all classmethods, so we 
+        # can prep it to be the class, and then bootstrap it to be the actual
+        # credential.
+        logger.info('Prepping Hypergolix for login.')
+        self.golcore.prep_bootstrap(FirstParty)
         self.privateer.prep_bootstrap()
+        
+        # Load the credential
+        logger.info('Loading credential.')
+        credential = Credential.load(
+            self.librarian,
+            self.oracle, 
+            self.privateer, 
+            user_id, 
+            password
+        )
+        del password
+        logger.info(
+            'Credential loaded. Loading symmetric key stores and rebooting '
+            'Golix core.'
+        )
+        
+        # Properly bootstrap golcore and then load the privateer objects
+        self.golcore.bootstrap(credential)
+        
+        persistent_secrets = self.oracle.get_object(
+            gaoclass = _GAODict,
+            ghid = credential._persistent_ghid
+        )
+        quarantine_secrets = self.oracle.get_object(
+            gaoclass = _GAODict,
+            ghid = credential._quarantine_ghid
+        )
+        secondary_manifest = self.oracle.get_object(
+            gaoclass = _GAODict,
+            ghid = credential._secondary_manifest
+        )
+        
+        # Bootstrap privateer.
+        self.privateer.bootstrap(
+            persistent = persistent_secrets,
+            quarantine = quarantine_secrets,
+            credential = credential
+        )
+        
+        # Start loading the other bootstrap objects.
+        logger.info('Golix core restarted. Restoring secondary manifest.')
+        # Rolodex
+        rolodex_pending = secondary_manifest['rolodex.pending']
+        rolodex_outstanding = secondary_manifest['rolodex.outstanding']
+        # Dispatch
+        dispatch_alltokens = secondary_manifest['dispatch.alltokens']
+        dispatch_startup = secondary_manifest['dispatch.startup']
+        dispatch_private = secondary_manifest['dispatch.private']
+        # IPCcore
+        ipc_incoming = secondary_manifest['ipc.incoming']
+        ipc_orphan_acks = secondary_manifest['ipc.orphan_acks']
+        ipc_orphan_naks = secondary_manifest['ipc.orphan_naks']
+        
+        # Reboot rolodex
+        logger.info('Restoring sharing subsystem.')
+        pending_requests = self.oracle.get_object(
+            gaoclass = _GAODict,
+            ghid = rolodex_pending
+        )
+        outstanding_shares = self.oracle.get_object(
+            gaoclass = _GAOSetMap,
+            ghid = rolodex_outstanding
+        )
+        self.rolodex.bootstrap(
+            pending_requests = pending_requests,
+            outstanding_shares = outstanding_shares
+        )
+        
+        # Reboot dispatch
+        logger.info('Restoring object dispatch subsystem.')
+        all_tokens = self.oracle.get_object(
+            gaoclass = _GAOSet,
+            ghid = dispatch_alltokens
+        )
+        startup_objs = self.oracle.get_object(
+            gaoclass = _GAOSetMap,
+            ghid = dispatch_startup
+        )
+        private_by_ghid = self.oracle.get_object(
+            gaoclass = _GAODict,
+            ghid = dispatch_private
+        )
+        self.dispatch.bootstrap(
+            all_tokens = all_tokens, 
+            startup_objs = startup_objs, 
+            private_by_ghid = private_by_ghid,
+            # TODO: figure out a distributed lock system
+            token_lock = threading.Lock()
+        )
+        
+        # Reboot IPCCore
+        logger.info('Restoring inter-process communication core.')
+        incoming_shares = self.oracle.get_object(
+            gaoclass = _GAOSet,
+            ghid = ipc_incoming
+        )
+        orphan_acks = self.oracle.get_object(
+            gaoclass = _GAOSetMap,
+            ghid = ipc_orphan_acks
+        )
+        orphan_naks = self.oracle.get_object(
+            gaoclass = _GAOSetMap,
+            ghid = ipc_orphan_naks
+        )
+        self.ipccore.bootstrap(
+            incoming_shares = incoming_shares,
+            orphan_acks = orphan_acks,
+            orphan_naks = orphan_naks
+        )
+        
+        logger.info('Bootstrap completed successfully. Continuing with setup.')
 
         
 class Credential:
@@ -367,7 +496,7 @@ class Credential:
     purposeful Secrets, etc.
     '''
     def __init__(self, identity, primary_master, identity_master, 
-                persistent_master, quarantine_master):
+                persistent_master, quarantine_master, secondary_master):
         self.identity = identity
         
         # Just set this as an empty ghid for now, so it's always ignored
@@ -383,8 +512,9 @@ class Credential:
         # The ghid and master secret for the privateer quarantine store
         self._quarantine_ghid = None
         self._quarantine_master = quarantine_master
-        # The ghid for the secondary manifest. No master secret needed.
-        self.secondary_manifest = None
+        # The ghid and master secret for the secondary manifest.
+        self._secondary_manifest = None
+        self._secondary_master = secondary_master
         
     def is_primary(self, ghid):
         ''' Checks to see if the ghid is one of the primary bootstrap
@@ -398,10 +528,11 @@ class Credential:
         return (ghid == self._identity_ghid or
                 ghid == self._persistent_ghid or
                 ghid == self._quarantine_ghid or
-                ghid == self._user_id)
+                ghid == self._user_id or
+                ghid == self._secondary_manifest)
         
     def declare_primary(self, user_id, identity_ghid, persistent_ghid, 
-                        quarantine_ghid):
+                        quarantine_ghid, secondary_ghid):
         ''' Declares all of the primary bootstrapping addresses, making
         the credential fully-prepped.
         '''
@@ -409,6 +540,7 @@ class Credential:
         self._identity_ghid = identity_ghid
         self._persistent_ghid = persistent_ghid
         self._quarantine_ghid = quarantine_ghid
+        self._secondary_manifest = secondary_ghid
         
     @property
     def prepped(self):
@@ -419,14 +551,8 @@ class Credential:
         return (self._identity_ghid is not None and
                 self._persistent_ghid is not None and
                 self._quarantine_ghid is not None and
-                self._user_id is not None)
-        
-    @property
-    def complete(self):
-        ''' Checks to see whether the credential is both prepped AND has
-        a defined self.secondary_manifest. 
-        '''
-        return (self.prepped and self.secondary_manifest is not None)
+                self._user_id is not None and
+                self._secondary_manifest is not None)
         
     def get_master(self, proxy):
         ''' Returns a master secret for the passed proxy. Proxy should
@@ -445,6 +571,7 @@ class Credential:
                 self._persistent_ghid: self._persistent_master,
                 self._quarantine_ghid: self._quarantine_master,
                 self._user_id: self._primary_master,
+                self._secondary_manifest: self._secondary_master,
             }
             return lookup[proxy]
         
@@ -470,24 +597,40 @@ class Credential:
             primary_master = primary_master,
             identity_master = identity.new_secret(),
             persistent_master = identity.new_secret(),
-            quarantine_master = identity.new_secret()
+            quarantine_master = identity.new_secret(),
+            secondary_master = identity.new_secret(),
         )
         
         return self
+        
+    @classmethod
+    def _inject_secret(cls, librarian, privateer, proxy, master_secret):
+        ''' Injects a container secret into the temporary storage at the
+        privateer. Calculates it through the proxy and master.
+        '''
+        binding = librarian.summarize(proxy)
+        previous_frame = binding.history[0]
+        container_secret = privateer._ratchet(
+            secret = master_secret, 
+            proxy = proxy,
+            salt_ghid = previous_frame
+        )
+        privateer.stage(binding.target, container_secret)
     
     @classmethod
-    def load(cls, oracle, user_id, password):
+    def load(cls, librarian, oracle, privateer, user_id, password):
         ''' Loads a credential container from the <librarian>, with a 
         ghid of <user_id>, encrypted with scrypted <password>.
         '''
         # User_id resolves the "primary manifest", a dynamic object containing:
-        #   <private key container dynamic ghid>
-        #   <private key container master secret>
-        #   <privateer persistent store dynamic ghid>
-        #   <privateer persistent store master secret>
-        #   <privateer quarantine store dynamic ghid>
-        #   <privateer quarantine master secret>
-        #   <secondary manifest dynamic ghid>
+        #   <private key container dynamic ghid>                65b
+        #   <private key container master secret>               53b
+        #   <privateer persistent store dynamic ghid>           65b
+        #   <privateer persistent store master secret>          53b
+        #   <privateer quarantine store dynamic ghid>           65b
+        #   <privateer quarantine master secret>                53b
+        #   <secondary manifest dynamic ghid>                   65b
+        #   <secondary manifest master secret>                  53b
         #   <random length, random fill padding>
         
         # The primary manifest is encrypted via the privateer.ratchet_bootstrap
@@ -499,14 +642,91 @@ class Credential:
         logger.info(
             'Recovering the primary manifest from the persistence subsystem.'
         )
+        
+        primary_manifest = librarian.summarize(user_id)
+        fingerprint = primary_manifest.author
+        logger.info('Expanding password using scrypt. Please be patient.')
+        primary_master = cls._password_expansion(fingerprint, password)
+        del password
+        
+        # Calculate the primary secret and then inject it into the temporary
+        # storage at privateer
+        cls._inject_secret(
+            librarian, 
+            privateer, 
+            proxy = user_id, 
+            master_secret = primary_master
+        )
+        # We're done with the summary, so go ahead and overwrite this name
         primary_manifest = oracle.get_object(
             gaoclass = _GAO,
             ghid = user_id
         )
-        user_fingerprint = primary_manifest.author
-        logger.info('Expanding password using scrypt. Please be patient.')
-        primary_master = cls._password_expansion(user_fingerprint, password)
-        del password
+        
+        logger.info('Password expanded. Extracting the primary manifest.')
+        manifest = primary_manifest.extract_state()
+        identity_ghid = Ghid.from_bytes(manifest[0:65])
+        identity_master = Secret.from_bytes(manifest[65:118])
+        persistent_ghid = Ghid.from_bytes(manifest[118:183])
+        persistent_master = Secret.from_bytes(manifest[183:236])
+        quarantine_ghid = Ghid.from_bytes(manifest[236:301])
+        quarantine_master = Secret.from_bytes(manifest[301:354])
+        secondary_manifest = Ghid.from_bytes(manifest[354:419])
+        secondary_master = Secret.from_bytes(manifest[419:472])
+        # Inject all the needed secrets.
+        cls._inject_secret(
+            librarian, 
+            privateer, 
+            proxy = identity_ghid, 
+            master_secret = identity_master
+        )
+        cls._inject_secret(
+            librarian, 
+            privateer, 
+            proxy = persistent_ghid, 
+            master_secret = persistent_master
+        )
+        cls._inject_secret(
+            librarian, 
+            privateer, 
+            proxy = quarantine_ghid, 
+            master_secret = quarantine_master
+        )
+        cls._inject_secret(
+            librarian, 
+            privateer, 
+            proxy = secondary_manifest, 
+            master_secret = secondary_master
+        )
+        
+        logger.info('Manifest recovered. Retrieving private keys.')
+        identity_container = oracle.get_object(
+            gaoclass = _GAODict,
+            ghid = identity_ghid
+        )
+        identity = FirstParty._from_serialized(
+            identity_container.extract_state()
+        )
+        
+        logger.info('Rebuilding credential.')
+        self = cls(
+            identity = identity,
+            primary_master = primary_master,
+            identity_master = identity_master,
+            persistent_master = persistent_master,
+            quarantine_master = quarantine_master,
+            secondary_master = secondary_master
+        )
+        
+        self.declare_primary(
+            user_id, 
+            identity_ghid, 
+            persistent_ghid, 
+            quarantine_ghid,
+            secondary_manifest
+        )
+        
+        return self
         
     def save(self, primary_manifest):
         ''' Containerizes the credential, sending it to the persistence
@@ -520,21 +740,34 @@ class Credential:
         #   <privateer quarantine store dynamic ghid>           65b
         #   <privateer quarantine master secret>                53b
         #   <secondary manifest dynamic ghid>                   65b
+        #   <secondary manifest master secret>                  53b
         #   <random length, random fill padding>
         
         # Check to make sure we're capable of doing this
-        if not self.complete:
+        if not self.prepped:
             raise RuntimeError(
-                'Credentials must be fully completed before saving. This '
-                'requires all three primary bootstrap ghids to be defined, as '
-                'well as the secondary manifest ghid.'
+                'Credentials must be fully declared before saving. This '
+                'requires all four primary bootstrap ghids to be defined, as '
+                'well as their master secrets.'
             )
         
-        # Generate random-length, random-content padding
+        # Generate secure-random-length, pseudorandom-content padding
         logger.info('Generating noisy padding.')
-        padding_sizes = range(1024, 3072, 8)
-        padding_choice = int.from_bytes(os.urandom(1), byteorder='big')
-        padding = os.urandom(padding_sizes[padding_choice])
+        # Note that we don't actually need CSRNG for the padding, just the
+        # padding length, since the whole thing is encrypted. We could just as
+        # easily fill it with zeros, but by filling it with pseudorandom noise,
+        # we can remove a recognizable pattern and therefore slighly hinder
+        # brute force attacks against the password.
+        # While we COULD use CSRNG despite all that, entropy is a limited 
+        # resource, and I'd rather conserve it as much as possible.
+        padding_seed = int.from_bytes(os.urandom(2), byteorder='big')
+        padding_min_size = 1024
+        padding_clip_mask = 0b0001111111111111
+        # Clip the seed to an upper range of 13 bits, of 8191, for a maximum
+        # padding length of 8191 + 1024 = 9215 bytes
+        padding_len = padding_min_size + (padding_seed & padding_clip_mask)
+        padding_int = random.getrandbits(padding_len * 8)
+        padding = padding_int.to_bytes(length=padding_len, byteorder='big')
         
         # Serialize the manifest as per above
         logger.info('Serializing primary manifest.')
@@ -544,7 +777,8 @@ class Credential:
                     bytes(self._persistent_master) +
                     bytes(self._quarantine_ghid) + 
                     bytes(self._quarantine_master) + 
-                    bytes(self.secondary_manifest) +
+                    bytes(self._secondary_manifest) +
+                    bytes(self._secondary_master) +
                     padding)
         
         primary_manifest.apply_state(manifest)
@@ -562,7 +796,9 @@ class Credential:
             password = password, 
             salt = bytes(salt_ghid),
             dkLen = 48,
-            N = 2**15,
+            # N = 2**15,
+            # Use this temporarily to get things working
+            N = 1024,
             r = 8,
             p = 1
         )

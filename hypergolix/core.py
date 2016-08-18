@@ -119,6 +119,10 @@ class GolixCore:
         # Chicken, meet egg.
         self._librarian = weakref.proxy(librarian)
         
+    def prep_bootstrap(self, identity):
+        # Temporarily set our identity to a generic firstparty for loading.
+        self._identity = identity
+        
     def bootstrap(self, credential):
         # This must be done ASAGDFP. Must be absolute first thing to bootstrap.
         self._identity = weakref.proxy(credential.identity)
@@ -289,7 +293,7 @@ class GhidProxier:
         except KeyError:
             logger.warning(
                 'Librarian missing resource record; could not verify full '
-                'resolution of ' + str(bytes(ghid)) + '\n' + 
+                'resolution of ' + str(ghid) + '\n' + 
                 ''.join(traceback.format_exc()))
             return ghid
         
@@ -862,8 +866,8 @@ class _GAO(_GAOBase):
         else:
             logger.warning(
                 'Mismatching pull while debinding target: \n'
-                '    obj.ghid:         ' + str(bytes(self.ghid)) + '\n'
-                '    debinding.target: ' + str(bytes(deleter.target))
+                '    obj.ghid:         ' + str(self.ghid) + '\n'
+                '    debinding.target: ' + str(deleter.target)
             )
             modified = False
             
@@ -965,6 +969,14 @@ class _GAO(_GAOBase):
         '''
         # Pause updates while doing this.
         self._update_greenlight.clear()
+        
+        # Note that, if we previously loaded this object, but didn't create it
+        # through this particular contiguous hypergolix session, we will be 
+        # missing a chain for it.
+        
+        if not self._privateer.has_chain(self.ghid):
+            current_target = self._ghidproxy.resolve(self.ghid)
+            self._privateer.make_chain(self.ghid, current_target)
         
         # We need a secret.
         try:
@@ -1109,7 +1121,7 @@ class _GAOPickleBase(_GAO):
             raise
         
     @staticmethod
-    def _unpack(cls, packed):
+    def _unpack(packed):
         ''' Unpacks state from a bytes object. May be overwritten in 
         subs to unpack more complex objects. Should always be a 
         staticmethod or classmethod.
@@ -1229,9 +1241,8 @@ class _GAODictBase:
         
     def update(self, *args, **kwargs):
         with self._statelock:
-            result = self._state.update(*args, **kwargs)
+            self._state.update(*args, **kwargs)
             self.push()
-        return result
     
     
 class _GAODict(_GAODictBase, _GAOPickleBase):

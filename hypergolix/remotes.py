@@ -395,7 +395,7 @@ class MemoryPersister(PersistenceCore):
             return self.librarian.retrieve(ghid)
         except KeyError as exc:
             raise DoesNotExist(
-                '0x0008: Not found at persister: ' + str(bytes(ghid))
+                '0x0008: Not found at persister: ' + str(ghid)
             ) from exc
         
     def list_subs(self):
@@ -870,7 +870,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
             if response != b'\x01':
                 raise RuntimeError(
                     'Unknown response code while subscribing to ' + 
-                    str(bytes(ghid))
+                    str(ghid)
                 )
                 
         self._subscriptions[ghid].add(callback)
@@ -885,7 +885,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         NAK/failure is represented by raise RemoteNak
         '''
         if ghid not in self._subscriptions:
-            raise ValueError('Not currently subscribed to ' + str(bytes(ghid)))
+            raise ValueError('Not currently subscribed to ' + str(ghid))
             
         self._subscriptions[ghid].discard(callback)
         
@@ -908,7 +908,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
             else:
                 raise RuntimeError(
                     'Unknown response code while unsubscribing from ' + 
-                    str(bytes(ghid)) + '\nThe persister might still send '
+                    str(ghid) + '\nThe persister might still send '
                     'updates, but the callback has been removed.'
                 )
                 

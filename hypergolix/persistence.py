@@ -142,7 +142,9 @@ class PersistenceCore:
     object we already have an identical copy to silently exits.
     '''
     def __init__(self):
-        self._opslock = threading.Lock()
+        # REALLY not crazy about this being an RLock, but lazy loading in
+        # librarian is causing problems with anything else.
+        self._opslock = threading.RLock()
         
         self.doorman = None
         self.enlitener = None
@@ -475,7 +477,7 @@ class Doorman:
             author = self._librarian.summarize(obj.author)
         except KeyError as exc:
             raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(bytes(obj.author))
+                '0x0003: Unknown author / recipient: ' + str(obj.author)
             ) from exc
             
         try:
@@ -503,7 +505,7 @@ class Doorman:
             author = self._librarian.summarize(obj.binder)
         except KeyError as exc:
             raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(bytes(obj.binder))
+                '0x0003: Unknown author / recipient: ' + str(obj.binder)
             ) from exc
             
         try:
@@ -531,7 +533,7 @@ class Doorman:
             author = self._librarian.summarize(obj.binder)
         except KeyError as exc:
             raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(bytes(obj.binder))
+                '0x0003: Unknown author / recipient: ' + str(obj.binder)
             ) from exc
             
         try:
@@ -560,7 +562,7 @@ class Doorman:
         except KeyError as exc:
             raise InvalidIdentity(
                 '0x0003: Unknown author / recipient: ' + 
-                str(bytes(obj.debinder))
+                str(obj.debinder)
             ) from exc
             
         try:
@@ -897,8 +899,8 @@ class Enforcer:
             logger.warning(
                 'GDXX was validated by Enforcer, but its target was unknown '
                 'to the librarian. May indicated targeted attack.\n'
-                '    GDXX ghid:   ' + str(bytes(obj.ghid)) + 
-                '    Target ghid: ' + str(bytes(obj.target))
+                '    GDXX ghid:   ' + str(obj.ghid) + 
+                '    Target ghid: ' + str(obj.target)
             )
             # raise InvalidTarget(
             #     '0x0006: Unknown debinding target. Cannot debind an unknown '
@@ -977,7 +979,7 @@ class Lawyer:
         except KeyError as exc:
             logger.info('0x0003: Unknown author / recipient.')
             raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(bytes(obj.author))
+                '0x0003: Unknown author / recipient: ' + str(obj.author)
             ) from exc
         else:
             if not isinstance(author, _GidcLite):
@@ -1016,13 +1018,13 @@ class Lawyer:
             if existing.author != obj.author:
                 logger.info(
                     '0x0007: Inconsistent binding author. \n'
-                    '    Existing author:  ' + str(bytes(existing.author)) +
-                    '\n    Attempted author: ' + str(bytes(obj.author))
+                    '    Existing author:  ' + str(existing.author) +
+                    '\n    Attempted author: ' + str(obj.author)
                 )
                 raise InconsistentAuthor(
                     '0x0007: Inconsistent binding author. \n'
-                    '    Existing author:  ' + str(bytes(existing.author)) +
-                    '\n    Attempted author: ' + str(bytes(obj.author))
+                    '    Existing author:  ' + str(existing.author) +
+                    '\n    Attempted author: ' + str(obj.author)
                 )
         return True
         
@@ -1048,30 +1050,26 @@ class Lawyer:
                 if existing.recipient != obj.author:
                     logger.info(
                         '0x0007: Inconsistent debinding author. \n'
-                        '    Existing recipient:  ' + 
-                        str(bytes(existing.recipient)) +
-                        '\n    Attempted debinder: ' + str(bytes(obj.author))
+                        '    Existing recipient:  ' + str(existing.recipient) +
+                        '\n    Attempted debinder: ' + str(obj.author)
                     )
                     raise InconsistentAuthor(
                         '0x0007: Inconsistent debinding author. \n'
-                        '    Existing recipient:  ' + 
-                        str(bytes(existing.recipient)) +
-                        '\n    Attempted debinder: ' + str(bytes(obj.author))
+                        '    Existing recipient:  ' + str(existing.recipient) +
+                        '\n    Attempted debinder: ' + str(obj.author)
                     )
                 
             else:
                 if existing.author != obj.author:
                     logger.info(
                         '0x0007: Inconsistent debinding author. \n'
-                        '    Existing binder:   ' + 
-                        str(bytes(existing.author)) +
-                        '\n    Attempted debinder: ' + str(bytes(obj.author))
+                        '    Existing binder:   ' + str(existing.author) +
+                        '\n    Attempted debinder: ' + str(obj.author)
                     )
                     raise InconsistentAuthor(
                         '0x0007: Inconsistent debinding author. \n'
-                        '    Existing binder:   ' + 
-                        str(bytes(existing.author)) +
-                        '\n    Attempted debinder: ' + str(bytes(obj.author))
+                        '    Existing binder:   ' + str(existing.author) +
+                        '\n    Attempted debinder: ' + str(obj.author)
                     )
         return True
         
@@ -1082,12 +1080,10 @@ class Lawyer:
             recipient = self._librarian.summarize(obj.recipient)
         except KeyError as exc:
             logger.info(
-                '0x0003: Unknown author / recipient: ' + 
-                str(bytes(obj.recipient))
+                '0x0003: Unknown author / recipient: ' + str(obj.recipient)
             )
             raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + 
-                str(bytes(obj.recipient))
+                '0x0003: Unknown author / recipient: ' + str(obj.recipient)
             ) from exc
         else:
             if not isinstance(recipient, _GidcLite):
@@ -1188,10 +1184,8 @@ class Bookie:
             except:
                 logger.warning(
                     'Removed invalid existing binding. \n'
-                    '    Illegal debinding author: ' + 
-                    str(bytes(debinding.author)) +
-                    '    Valid object author:      ' + 
-                    str(bytes(obj.author))
+                    '    Illegal debinding author: ' + str(debinding.author) +
+                    '    Valid object author:      ' + str(obj.author)
                 )
                 self._illegal_debindings.add(debinding.ghid)
                 self._undertaker.triage(debinding.ghid)
@@ -1718,7 +1712,7 @@ class DiskLibrarian(_LibrarianCore):
     def _make_path(self, ghid):
         ''' Converts the ghid to a file path.
         '''
-        fname = base64.urlsafe_b64encode(bytes(ghid)).decode() + '.ghid'
+        fname = ghid.as_str() + '.ghid'
         fpath = self._cachedir / fname
         return fpath
         
@@ -1746,7 +1740,7 @@ class DiskLibrarian(_LibrarianCore):
             fpath.unlink()
         except FileNotFoundError as exc:
             raise KeyError(
-                'Ghid does not exist at persister: ' + str(bytes(ghid))
+                'Ghid does not exist at persister: ' + str(ghid)
             ) from exc
         
     def get_from_cache(self, ghid):
@@ -1757,7 +1751,7 @@ class DiskLibrarian(_LibrarianCore):
             return fpath.read_bytes()
         except FileNotFoundError as exc:
             raise KeyError(
-                'Ghid does not exist at persister: ' + str(bytes(ghid))
+                'Ghid does not exist at persister: ' + str(ghid)
             ) from exc
         
     def check_in_cache(self, ghid):
@@ -2512,13 +2506,13 @@ class Salmonator:
                     except:
                         logger.warning(
                             'Exception while subscribing to upstream updates '
-                            'for GAO at ' + str(bytes(gao.ghid)) + '\n' +
+                            'for GAO at ' + str(gao.ghid) + '\n' +
                             ''.join(traceback.format_exc())
                         )
                     else:
                         logger.debug(
                             'Successfully subscribed to upstream updates for '
-                            'GAO at ' + str(bytes(gao.ghid))
+                            'GAO at ' + str(gao.ghid)
                         )
                         
             # Add deregister as a finalizer, but don't call it atexit.
@@ -2551,7 +2545,7 @@ class Salmonator:
                 except:
                     logger.warning(
                         'Exception while unsubscribing from upstream updates '
-                        'during GAO cleanup for ' + str(bytes(ghid)) + '\n' +
+                        'during GAO cleanup for ' + str(ghid) + '\n' +
                         ''.join(traceback.format_exc())
                     )
                 

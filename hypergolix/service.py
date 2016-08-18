@@ -137,8 +137,8 @@ def HypergolixLink(ipc_port=7772, debug=False, aengel=None, *args, **kwargs):
     return acomms
     
     
-def HGXService(host, port, ipc_port, debug, traceur, foreground=True, 
-                aengel=None):
+def HGXService(host, port, ipc_port, debug, traceur, cache_dir, 
+                foreground=True, aengel=None, user_id=None):
     ''' This is where all of the UX goes for the service itself. From 
     here, we build a credential, then a bootstrap, and then persisters,
     IPC, etc.
@@ -170,10 +170,17 @@ def HGXService(host, port, ipc_port, debug, traceur, foreground=True,
     if not aengel:
         aengel = Aengel()
     
-    core = AgentBootstrap(aengel=aengel, debug=debug)
+    core = AgentBootstrap(aengel=aengel, debug=debug, cache_dir=cache_dir)
     core.assemble()
-    core.bootstrap_zero(password=None)
-    # core.bootstrap(user_id=None, password=None)
+    
+    if user_id is None:
+        user_id = core.bootstrap_zero(password=None)
+        logger.info(
+            'Identity created. Your user_id is ' + str(user_id) + '. '
+            'Contacting upstream persisters and starting IPC server.'
+        )
+    else:
+        core.bootstrap(user_id=user_id, password=None)
     
     persister = Autocomms(
         autoresponder_name = 'remrecli',

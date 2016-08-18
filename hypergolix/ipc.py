@@ -318,7 +318,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         except:
             # At some point we'll need some kind of proper handling for this.
             logger.error(
-                'Failed to retrieve object at ' + str(bytes(ghid)) + '\n' + 
+                'Failed to retrieve object at ' + str(ghid) + '\n' + 
                 ''.join(traceback.format_exc())
             )
             return set()
@@ -447,7 +447,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         except:
             # At some point we'll need some kind of proper handling for this.
             logger.error(
-                'Failed to retrieve object at ' + str(bytes(ghid)) + '\n' + 
+                'Failed to retrieve object at ' + str(ghid) + '\n' + 
                 ''.join(traceback.format_exc())
             )
             
