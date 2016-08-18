@@ -135,8 +135,8 @@ class _GenericPersistenceTest:
         # ---------------------------------------
         # Publish identity containers
         
-        self.pcore.ingest(gidc1)
-        self.pcore.ingest(gidc2)
+        self.percore.ingest(gidc1)
+        self.percore.ingest(gidc2)
         
         self.assertIn(TEST_READER1.ghid, self.librarian)
         self.assertIn(TEST_READER2.ghid, self.librarian)
@@ -144,58 +144,58 @@ class _GenericPersistenceTest:
         
         # ---------------------------------------
         # Publish bindings and then containers
-        self.pcore.ingest(bind1_1.packed)
-        self.pcore.ingest(bind1_2.packed)
-        self.pcore.ingest(bind2_1.packed)
-        self.pcore.ingest(bind2_2.packed)
+        self.percore.ingest(bind1_1.packed)
+        self.percore.ingest(bind1_2.packed)
+        self.percore.ingest(bind2_1.packed)
+        self.percore.ingest(bind2_2.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed unknown binder.'):
-            self.pcore.ingest(bind3_1.packed)
+            self.percore.ingest(bind3_1.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed unknown binder.'):
-            self.pcore.ingest(bind3_2.packed)
+            self.percore.ingest(bind3_2.packed)
             
-        self.pcore.ingest(cont1_1.packed)
-        self.pcore.ingest(cont1_2.packed)
-        self.pcore.ingest(cont2_1.packed)
-        self.pcore.ingest(cont2_2.packed)
+        self.percore.ingest(cont1_1.packed)
+        self.percore.ingest(cont1_2.packed)
+        self.percore.ingest(cont2_1.packed)
+        self.percore.ingest(cont2_2.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed unknown author.'):
-            self.pcore.ingest(cont3_1.packed)
+            self.percore.ingest(cont3_1.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed unknown author.'):
-            self.pcore.ingest(cont3_2.packed)
+            self.percore.ingest(cont3_2.packed)
         
         # ---------------------------------------
         # Publish impersonation debindings for the second identity
         with self.assertRaises(PersistenceError, msg='Server allowed wrong author debind.'):
-            self.pcore.ingest(debind2_1_bad.packed)
+            self.percore.ingest(debind2_1_bad.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed wrong author debind.'):
-            self.pcore.ingest(debind2_2_bad.packed)
+            self.percore.ingest(debind2_2_bad.packed)
         
         # ---------------------------------------
         # Publish debindings for the second identity
-        self.pcore.ingest(debind2_1.packed)
-        self.pcore.ingest(debind2_2.packed)
+        self.percore.ingest(debind2_1.packed)
+        self.percore.ingest(debind2_2.packed)
             
         self.assertIn(debind2_1.ghid, self.librarian)
         self.assertNotIn(bind2_1.ghid, self.librarian)
         self.assertNotIn(cont2_1.ghid, self.librarian)
         
         with self.assertRaises(PersistenceError, msg='Server allowed binding replay.'):
-            self.pcore.ingest(bind2_1.packed)
+            self.percore.ingest(bind2_1.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed binding replay.'):
-            self.pcore.ingest(bind2_2.packed)
+            self.percore.ingest(bind2_2.packed)
         
         # ---------------------------------------
         # Now our impersonation debindings should work
-        self.pcore.ingest(debind2_1_bad.packed)
-        self.pcore.ingest(debind2_2_bad.packed)
+        self.percore.ingest(debind2_1_bad.packed)
+        self.percore.ingest(debind2_2_bad.packed)
         
         # ---------------------------------------
         # Publish debindings for the valid debindings
-        self.pcore.ingest(dedebind2_1.packed)
-        self.pcore.ingest(dedebind2_2.packed)
+        self.percore.ingest(dedebind2_1.packed)
+        self.percore.ingest(dedebind2_2.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed debinding replay.'):
-            self.pcore.ingest(debind2_1.packed)
+            self.percore.ingest(debind2_1.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed debinding replay.'):
-            self.pcore.ingest(debind2_2.packed)
+            self.percore.ingest(debind2_2.packed)
             
         # Check to verify emptiness
         self.assertNotIn(debind2_1.ghid, self.bookie.debind_status(bind2_1.ghid))
@@ -209,10 +209,10 @@ class _GenericPersistenceTest:
         # ---------------------------------------
         # Now rebind the original objects. Should succeed, and remove the 
         # illegal impersonation bindings while we're at it.
-        self.pcore.ingest(bind2_1.packed)
-        self.pcore.ingest(bind2_2.packed)
-        self.pcore.ingest(cont2_1.packed)
-        self.pcore.ingest(cont2_2.packed)
+        self.percore.ingest(bind2_1.packed)
+        self.percore.ingest(bind2_2.packed)
+        self.percore.ingest(cont2_1.packed)
+        self.percore.ingest(cont2_2.packed)
         
         self.assertIn(bind2_1.ghid, self.librarian)
         self.assertIn(cont2_1.ghid, self.librarian)
@@ -222,19 +222,19 @@ class _GenericPersistenceTest:
         # ---------------------------------------
         # Publish debindings for those debindings' debindings (... fer srlsy?) 
         # and then redebind them
-        self.pcore.ingest(dededebind2_1.packed)
-        self.pcore.ingest(dededebind2_2.packed)
+        self.percore.ingest(dededebind2_1.packed)
+        self.percore.ingest(dededebind2_2.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed dedebinding replay.'):
-            self.pcore.ingest(dedebind2_1.packed)
+            self.percore.ingest(dedebind2_1.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed dedebinding replay.'):
-            self.pcore.ingest(dedebind2_2.packed)
+            self.percore.ingest(dedebind2_2.packed)
             
         # Check to verify emptiness
         self.assertFalse(self.bookie.debind_status(debind2_1.ghid))
         self.assertFalse(self.bookie.debind_status(debind2_2.ghid))
         
-        self.pcore.ingest(debind2_1.packed)
-        self.pcore.ingest(debind2_2.packed)
+        self.percore.ingest(debind2_1.packed)
+        self.percore.ingest(debind2_2.packed)
         
         self.assertIn(debind2_1.ghid, self.librarian)
         self.assertIn(debind2_2.ghid, self.librarian)
@@ -251,33 +251,33 @@ class _GenericPersistenceTest:
         # Publish requests.
         
         # Our fake identity is only Alice, not Bob, so this should not notify
-        self.pcore.ingest(handshake1_1.packed)
+        self.percore.ingest(handshake1_1.packed)
         self.postman.do_mail_run()
         self.assertFalse(subs_notification_checker())
         
         # But this should.
-        self.pcore.ingest(handshake2_1.packed)
+        self.percore.ingest(handshake2_1.packed)
         self.postman.do_mail_run()
         self.assertTrue(subs_notification_checker())
         
         with self.assertRaises(PersistenceError, msg='Server allowed unknown recipient.'):
-            self.pcore.ingest(handshake3_1.packed)
+            self.percore.ingest(handshake3_1.packed)
             
         self.assertIn(handshake1_1.ghid, self.librarian)
         self.assertIn(handshake2_1.ghid, self.librarian)
         
         # ---------------------------------------
         # Debind those requests.
-        self.pcore.ingest(degloveshake1_1.packed)
-        self.pcore.ingest(degloveshake2_1.packed)
+        self.percore.ingest(degloveshake1_1.packed)
+        self.percore.ingest(degloveshake2_1.packed)
             
         self.assertNotIn(handshake1_1.ghid, self.librarian)
         self.assertNotIn(handshake2_1.ghid, self.librarian)
         
         with self.assertRaises(PersistenceError, msg='Server allowed request replay.'):
-            self.pcore.ingest(handshake1_1.packed)
+            self.percore.ingest(handshake1_1.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed request replay.'):
-            self.pcore.ingest(handshake2_1.packed)
+            self.percore.ingest(handshake2_1.packed)
             
         self.assertNotIn(handshake1_1.ghid, self.librarian)
         self.assertNotIn(handshake2_1.ghid, self.librarian)
@@ -288,24 +288,24 @@ class _GenericPersistenceTest:
         self.assertNotIn(cont2_1.ghid, self.librarian)
         self.assertNotIn(cont2_2.ghid, self.librarian)
         # Now let's see what happens if we upload stuff
-        self.pcore.ingest(dyn1_1a.packed)
-        self.pcore.ingest(dyn2_1a.packed)
-        self.pcore.ingest(cont2_1.packed)
+        self.percore.ingest(dyn1_1a.packed)
+        self.percore.ingest(dyn2_1a.packed)
+        self.percore.ingest(cont2_1.packed)
         d11a = self.librarian.summarize(dyn1_1a.ghid_dynamic)
         d21a = self.librarian.summarize(dyn2_1a.ghid_dynamic)
         self.assertEqual(dyn1_1a.ghid, d11a.frame_ghid)
         self.assertEqual(dyn2_1a.ghid, d21a.frame_ghid)
         self.assertIn(cont2_1.ghid, self.librarian)
         # And make sure that the container is retained if we remove the static
-        self.pcore.ingest(debind1_1.packed)
+        self.percore.ingest(debind1_1.packed)
         self.assertNotIn(bind1_1.ghid, self.librarian)
         self.assertIn(cont1_1.ghid, self.librarian)
         self.assertIn(cont2_1.ghid, self.librarian)
         # Now let's try some fraudulent updates
         with self.assertRaises(PersistenceError, msg='Server allowed fraudulent dynamic.'):
-            self.pcore.ingest(dynF_1b.packed)
+            self.percore.ingest(dynF_1b.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed fraudulent dynamic.'):
-            self.pcore.ingest(dynF_2b.packed)
+            self.percore.ingest(dynF_2b.packed)
             
         # Subscribe to updates before actually sending the real ones.
         # Note that subs are auto-handled through registering a gao.
@@ -319,16 +319,16 @@ class _GenericPersistenceTest:
         # Now the real updates.
         # Since we already have an object for this binding, it should immediately
         # notify.
-        self.pcore.ingest(dyn1_1b.packed)
+        self.percore.ingest(dyn1_1b.packed)
         self.postman.do_mail_run()
         self.assertTrue(subs_notification_checker())
         
         # Since we need to upload the object for this binding, it should not notify
         # until we've uploaded the container itself.
-        self.pcore.ingest(dyn2_1b.packed)
+        self.percore.ingest(dyn2_1b.packed)
         self.postman.do_mail_run()
         self.assertFalse(subs_notification_checker())
-        self.pcore.ingest(cont2_2.packed)
+        self.percore.ingest(cont2_2.packed)
         self.postman.do_mail_run()
         self.assertTrue(subs_notification_checker())
         
@@ -344,23 +344,23 @@ class _GenericPersistenceTest:
         
         # Make sure we cannot replay old frames.
         with self.assertRaises(PersistenceError, msg='Server allowed dyn frame replay.'):
-            self.pcore.ingest(dyn1_1a.packed)
+            self.percore.ingest(dyn1_1a.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed dyn frame replay.'):
-            self.pcore.ingest(dyn2_1a.packed)
+            self.percore.ingest(dyn2_1a.packed)
         
         # Now let's try debinding the dynamics.
-        self.pcore.ingest(dyndebind1_1.packed)
+        self.percore.ingest(dyndebind1_1.packed)
         self.postman.do_mail_run()
         self.assertTrue(subs_notification_checker())
         
-        self.pcore.ingest(dyndebind2_1.packed)
+        self.percore.ingest(dyndebind2_1.packed)
         self.postman.do_mail_run()
         self.assertTrue(subs_notification_checker())
         
         with self.assertRaises(PersistenceError, msg='Server allowed debound dyn replay.'):
-            self.pcore.ingest(dyn1_1a.packed)
+            self.percore.ingest(dyn1_1a.packed)
         with self.assertRaises(PersistenceError, msg='Server allowed debound dyn replay.'):
-            self.pcore.ingest(dyn2_1a.packed)
+            self.percore.ingest(dyn2_1a.packed)
         # And check their state.
         self.assertIn(dyndebind1_1.ghid, self.librarian)
         self.assertIn(dyndebind2_1.ghid, self.librarian)
@@ -410,7 +410,7 @@ class _GenericPersistenceTest:
     
 class MemoryLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
     def setUp(self):
-        self.pcore = PersistenceCore()
+        self.percore = PersistenceCore()
         self.doorman = Doorman()
         self.enforcer = Enforcer()
         self.lawyer = Lawyer()
@@ -421,20 +421,20 @@ class MemoryLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
         self.salmonator = Salmonator()
         
         self.rolodex = RolodexMock()
-        self.gcore = GCoreMock(TEST_AGENT1)
+        self.golcore = GCoreMock(TEST_AGENT1)
         
-        self.pcore.assemble(self.doorman, self.enforcer, self.lawyer, 
+        self.percore.assemble(self.doorman, self.enforcer, self.lawyer, 
                             self.bookie, self.librarian, self.postman, 
                             self.undertaker, self.salmonator)
         self.doorman.assemble(self.librarian)
-        self.postman.assemble(self.gcore, self.librarian, self.bookie, 
+        self.postman.assemble(self.golcore, self.librarian, self.bookie, 
                             self.rolodex)
         self.undertaker.assemble(self.librarian, self.bookie, self.postman)
         self.lawyer.assemble(self.librarian)
         self.enforcer.assemble(self.librarian)
         self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
-        self.librarian.assemble(self.pcore, self.salmonator)
-        self.salmonator.assemble(self.pcore, self.pcore, self.doorman, 
+        self.librarian.assemble(self.percore)
+        self.salmonator.assemble(self.percore, self.percore, self.doorman, 
                                 self.postman, self.librarian)
 
     
@@ -444,7 +444,7 @@ class DiskLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
         # restoration test
         clear_ghidcache('/ghidcache_test')
         
-        self.pcore = PersistenceCore()
+        self.percore = PersistenceCore()
         self.doorman = Doorman()
         self.enforcer = Enforcer()
         self.lawyer = Lawyer()
@@ -455,26 +455,26 @@ class DiskLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
         self.salmonator = Salmonator()
         
         self.rolodex = RolodexMock()
-        self.gcore = GCoreMock(TEST_AGENT1)
+        self.golcore = GCoreMock(TEST_AGENT1)
         
-        self.pcore.assemble(self.doorman, self.enforcer, self.lawyer, 
+        self.percore.assemble(self.doorman, self.enforcer, self.lawyer, 
                             self.bookie, self.librarian, self.postman, 
                             self.undertaker, self.salmonator)
         self.doorman.assemble(self.librarian)
-        self.postman.assemble(self.gcore, self.librarian, self.bookie, 
+        self.postman.assemble(self.golcore, self.librarian, self.bookie, 
                             self.rolodex)
         self.undertaker.assemble(self.librarian, self.bookie, self.postman)
         self.lawyer.assemble(self.librarian)
         self.enforcer.assemble(self.librarian)
         self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
-        self.librarian.assemble(self.pcore, self.salmonator)
-        self.salmonator.assemble(self.pcore, self.pcore, self.doorman, 
+        self.librarian.assemble(self.percore)
+        self.salmonator.assemble(self.percore, self.percore, self.doorman, 
                                 self.postman, self.librarian)
         
     def test_restoration(self):
         self.test_trash()
         
-        pcore = PersistenceCore()
+        percore = PersistenceCore()
         doorman = Doorman()
         enforcer = Enforcer()
         lawyer = Lawyer()
@@ -485,19 +485,19 @@ class DiskLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
         salmonator = Salmonator()
         
         rolodex = RolodexMock()
-        gcore = GCoreMock(TEST_AGENT1)
+        golcore = GCoreMock(TEST_AGENT1)
         
-        pcore.assemble(doorman, enforcer, lawyer, 
+        percore.assemble(doorman, enforcer, lawyer, 
                             bookie, librarian, postman, 
                             undertaker, salmonator)
         doorman.assemble(librarian)
-        postman.assemble(gcore, librarian, bookie, rolodex)
+        postman.assemble(golcore, librarian, bookie, rolodex)
         undertaker.assemble(librarian, bookie, postman)
         lawyer.assemble(librarian)
         enforcer.assemble(librarian)
         bookie.assemble(librarian, lawyer, undertaker)
-        librarian.assemble(pcore, salmonator)
-        salmonator.assemble(pcore, pcore, doorman, 
+        librarian.assemble(percore)
+        salmonator.assemble(percore, percore, doorman, 
                                 postman, librarian)
         
         # And now reload errything

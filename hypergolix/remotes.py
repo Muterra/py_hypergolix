@@ -200,7 +200,7 @@ class RemotePersistenceServer:
         self.enforcer.assemble(self.librarian)
         self.lawyer.assemble(self.librarian)
         self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
-        self.librarian.assemble(self.percore, self.salmonator)
+        self.librarian.assemble(self.percore)
         self.postman.assemble(self.librarian, self.bookie)
         self.undertaker.assemble(self.librarian, self.bookie, self.postman)
         # Note that this will break if we ever try to use it, because 

@@ -1378,7 +1378,6 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
     def __init__(self):
         # Link to core, which will be assigned after __init__
         self._percore = None
-        self._salmonator = None
         
         # Operations and restoration lock
         self._restoring = TruthyLock()
@@ -1392,11 +1391,10 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         self._catalog = {}
         self._opslock = threading.Lock()
         
-    def assemble(self, persistence_core, salmonator):
+    def assemble(self, persistence_core):
         # Creates a weakref proxy to core.
         # This is needed for lazy loading and restoring.
         self._percore = weakref.proxy(persistence_core)
-        self._salmonator = weakref.proxy(salmonator)
         
     def force_gc(self, obj):
         ''' Forces erasure of an object. Does not notify the undertaker.

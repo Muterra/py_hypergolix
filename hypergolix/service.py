@@ -170,12 +170,11 @@ def HGXService(host, port, ipc_port, debug, traceur, foreground=True,
     if not aengel:
         aengel = Aengel()
     
-    class MockCreds:
-        # Just here for development purposes.
-        has_account = False
+    core = AgentBootstrap(aengel=aengel, debug=debug)
+    core.assemble()
+    core.bootstrap_zero(password=None)
+    # core.bootstrap(user_id=None, password=None)
     
-    core = AgentBootstrap(credential=MockCreds(), aengel=aengel, debug=debug)
-        
     persister = Autocomms(
         autoresponder_name = 'remrecli',
         autoresponder_class = PersisterBridgeClient,

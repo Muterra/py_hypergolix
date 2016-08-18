@@ -119,9 +119,9 @@ class GolixCore:
         # Chicken, meet egg.
         self._librarian = weakref.proxy(librarian)
         
-    def bootstrap(self, identity):
+    def bootstrap(self, credential):
         # This must be done ASAGDFP. Must be absolute first thing to bootstrap.
-        self._identity = identity
+        self._identity = weakref.proxy(credential.identity)
         
     @property
     def _legroom(self):
@@ -972,8 +972,8 @@ class _GAO(_GAOBase):
             
         # TODO: make this a specific error.
         except:
-            logger.info(
-                'Failed to ratchet secret for ' + str(bytes(self.ghid)) + 
+            logger.warning(
+                'Failed to ratchet secret for ' + str(self.ghid) + 
                 '\n' + ''.join(traceback.format_exc())
             )
             secret = self._privateer.new_secret()

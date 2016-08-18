@@ -166,6 +166,12 @@ class Privateer:
         
         persistent_container = self._ghidproxy.resolve(persistent.ghid)
         quarantine_container = self._ghidproxy.resolve(quarantine.ghid)
+        identity_container = self._ghidproxy.resolve(
+            self._credential._identity_ghid
+        )
+        credential_container = self._ghidproxy.resolve(
+            self._credential._user_id
+        )
         
         # We very obviously need to be able to look up what secrets we have.
         # Lookups: <container ghid>: <container secret>
@@ -192,6 +198,14 @@ class Privateer:
             self._secrets_quarantine.ghid, 
             quarantine_container
         )
+        self._ensure_bootstrap_chain(
+            self._credential._identity_ghid, 
+            identity_container
+        )
+        self._ensure_bootstrap_chain(
+            self._credential._user_id, 
+            credential_container
+        )
             
     def _ensure_bootstrap_chain(self, proxy, container):
         ''' Makes sure that the proxy is in self._chains, and if it's 
@@ -200,19 +214,12 @@ class Privateer:
         if proxy not in self._chains:
             self.make_chain(proxy, container)
             
-    def _is_bootstrap_chain(self, proxy):
-        ''' Return True if the proxy belongs to a bootstrapping chain.
-        '''
-        if (proxy == self._secrets_persistent.ghid or 
-            proxy == self._secrets_quarantine.ghid):
-                return True
-        else:
-            return False
-            
     def _is_bootstrap_target(self, ghid):
         try:
             if (ghid == self._chains[self._secrets_persistent.ghid] or
-                ghid == self._chains[self._secrets_quarantine.ghid]):
+                ghid == self._chains[self._secrets_quarantine.ghid] or
+                ghid == self._chains[self._credential._identity_ghid] or
+                ghid == self._chains[self._credential._user_id]):
                     return True
             else:
                 return False
@@ -477,7 +484,7 @@ class Privateer:
         if proxy not in self._chains:
             raise ValueError('No chain for that proxy.')
             
-        if self._is_bootstrap_chain(proxy):
+        if self._credential.is_primary(proxy):
             ratcheted = self._ratchet_bootstrap(proxy)
             
         else:
@@ -526,7 +533,7 @@ class Privateer:
         ''' Updates a chain container address. Must have been ratcheted
         prior to update, and cannot be ratcheted again until updated.
         '''
-        if self._is_bootstrap_chain(proxy):
+        if self._credential.is_primary(proxy):
             with self._bootlock:
                 self._update_chain(proxy, container)
                 
@@ -575,7 +582,7 @@ class Privateer:
         the resulting secret for the most recent frame in binding, BUT
         DOES NOT RETURN (or commit) IT.
         '''
-        if self._is_bootstrap_chain(gao.ghid):
+        if self._credential.is_primary(gao.ghid):
             self._heal_bootstrap(gao, binding)
         
         else:

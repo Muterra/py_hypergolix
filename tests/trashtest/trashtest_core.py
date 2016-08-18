@@ -81,6 +81,26 @@ class MockRolodex:
     def request_handler(self, subs_ghid, notify_ghid):
         # Noop
         pass
+        
+        
+class MockCredential:
+    ''' Temporary bypass of password inflation for purpose of getting
+    the privateer bootstrap up and running. JUST FOR TESTING PURPOSES.
+    '''
+    def __init__(self, privateer, identity):
+        self.identity = identity
+        self._lookup = {}
+        self._privateer = privateer
+        
+    def get_master(self, proxy):
+        # JIT creation of the proxy secret. JUST FOR TESTING PURPOSES.
+        if proxy not in self._lookup:
+            self._lookup[proxy] = self._privateer.new_secret()
+        return self._lookup[proxy]
+        
+    def is_primary(self, ghid):
+        # Probably always false?
+        return False
 
 
 # ###############################################
@@ -90,14 +110,16 @@ class MockRolodex:
 
 class GCoreTest(unittest.TestCase):
     def setUp(self):
-        self.gcore = GolixCore()
+        self.golcore = GolixCore()
         self.librarian = MemoryLibrarian()
         self.salmonator = SalmonatorNoop()
         
-        self.gcore.assemble(self.librarian)
-        self.librarian.assemble(self.gcore, self.salmonator)
+        self.golcore.assemble(self.librarian)
+        # This is supposed to be percore, but we aren't doing restoration, so
+        # we don't actually need it.
+        self.librarian.assemble(self.golcore)
         
-        self.gcore.bootstrap(TEST_AGENT1)
+        self.golcore.bootstrap(MockCredential(None, TEST_AGENT1))
         self.librarian.store(
             _GidcLite(TEST_AGENT1.ghid, TEST_AGENT1.second_party), 
             TEST_AGENT1.second_party.packed)
@@ -111,36 +133,36 @@ class GCoreTest(unittest.TestCase):
         from _fixtures.remote_exchanges import cont2_1
 
         # Test whoami
-        self.assertEqual(self.gcore.whoami, TEST_AGENT1.ghid)
+        self.assertEqual(self.golcore.whoami, TEST_AGENT1.ghid)
         # Test legroom
-        self.assertGreaterEqual(self.gcore._legroom, 2)
+        self.assertGreaterEqual(self.golcore._legroom, 2)
         
         # Note that all of these are stateless, so they don't need to be actual
         # legitimate targets or anything, just actual GHIDs
         payload = TEST_AGENT1.make_handshake(
             target = cont2_1.ghid,
             secret = secret2_1)
-        self.gcore.open_request(
-            self.gcore.unpack_request(
+        self.golcore.open_request(
+            self.golcore.unpack_request(
                 handshake2_1.packed
             )
         )
-        self.gcore.make_request(
+        self.golcore.make_request(
             recipient = TEST_AGENT2.ghid, 
             payload = payload)
-        self.gcore.open_container(
+        self.golcore.open_container(
             container = cont2_1, 
             secret = secret2_1)
-        self.gcore.make_container(
+        self.golcore.make_container(
             data = b'Hello world',
             secret = TEST_AGENT1.new_secret())
-        self.gcore.make_binding_stat(target=cont2_1.ghid)
-        dynamic1 = self.gcore.make_binding_dyn(target=cont2_1.ghid)
-        dynamic2 = self.gcore.make_binding_dyn(
+        self.golcore.make_binding_stat(target=cont2_1.ghid)
+        dynamic1 = self.golcore.make_binding_dyn(target=cont2_1.ghid)
+        dynamic2 = self.golcore.make_binding_dyn(
             target = cont2_1.ghid, 
             ghid = dynamic1.ghid_dynamic,
             history = [dynamic1.ghid])
-        self.gcore.make_debinding(target=dynamic2.ghid_dynamic)
+        self.golcore.make_debinding(target=dynamic2.ghid_dynamic)
         
         
 class GhidproxyTest(unittest.TestCase):
@@ -149,13 +171,13 @@ class GhidproxyTest(unittest.TestCase):
         self.librarian = MemoryLibrarian()
         # A proper fixture for Librarian would remove these two
         self.salmonator = SalmonatorNoop()
-        self.gcore = GolixCore()
+        self.golcore = GolixCore()
         
         self.ghidproxy.assemble(self.librarian, self.salmonator)
         # A proper fixture for Librarian would also remove these three
-        self.librarian.assemble(self.gcore, self.salmonator)
-        self.gcore.assemble(self.librarian)
-        self.gcore.bootstrap(TEST_AGENT1)
+        self.librarian.assemble(self.golcore)
+        self.golcore.assemble(self.librarian)
+        self.golcore.bootstrap(MockCredential(None, TEST_AGENT1))
     
     def test_trash(self):
         # Test round #1...
@@ -263,14 +285,17 @@ class GAOTest(unittest.TestCase):
         self.enforcer.assemble(self.librarian)
         self.lawyer.assemble(self.librarian)
         self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
-        self.librarian.assemble(self.percore, self.salmonator)
+        self.librarian.assemble(self.percore)
         self.postman.assemble(self.golcore, self.librarian, self.bookie,
                             self.rolodex)
         self.undertaker.assemble(self.librarian, self.bookie, self.postman)
         
         # These are both "who-knows-if-necessary-when-fixtured"
-        self.golcore.bootstrap(TEST_AGENT1)
+        credential = MockCredential(self.privateer, TEST_AGENT1)
+        self.golcore.bootstrap(credential)
         self.privateer.prep_bootstrap()
+        # Just do this manually.
+        self.privateer._credential = credential
         # self.privateer.bootstrap(
         #     persistent_secrets = {}, 
         #     staged_secrets = {},
@@ -396,14 +421,17 @@ class OracleTest(unittest.TestCase):
         self.enforcer.assemble(self.librarian)
         self.lawyer.assemble(self.librarian)
         self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
-        self.librarian.assemble(self.percore, self.salmonator)
+        self.librarian.assemble(self.percore)
         self.postman.assemble(self.golcore, self.librarian, self.bookie,
                             self.rolodex)
         self.undertaker.assemble(self.librarian, self.bookie, self.postman)
         
         # These are both "who-knows-if-necessary-when-fixtured"
-        self.golcore.bootstrap(TEST_AGENT1)
+        credential = MockCredential(self.privateer, TEST_AGENT1)
+        self.golcore.bootstrap(credential)
         self.privateer.prep_bootstrap()
+        # Just do this manually.
+        self.privateer._credential = credential
         # self.privateer.bootstrap(
         #     persistent_secrets = {}, 
         #     staged_secrets = {},
