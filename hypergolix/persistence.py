@@ -902,7 +902,7 @@ class Enforcer:
             logger.warning(
                 'GDXX was validated by Enforcer, but its target was unknown '
                 'to the librarian. May indicated targeted attack.\n'
-                '    GDXX ghid:   ' + str(obj.ghid) + 
+                '    GDXX ghid:   ' + str(obj.ghid) + '\n'
                 '    Target ghid: ' + str(obj.target)
             )
             # raise InvalidTarget(
@@ -2018,7 +2018,7 @@ class MrPostman(_PostmanBase):
         ''' Do the actual subscription update.
         '''
         if subscription == self._golcore.whoami:
-            self._rolodex.request_handler(subscription, notification)
+            self._rolodex.notification_handler(subscription, notification)
         else:
             callbacks = self._listeners.get_any(subscription)
             logger.debug(

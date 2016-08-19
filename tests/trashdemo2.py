@@ -80,7 +80,7 @@ def make_fixtures(debug, tmpdir_a, tmpdir_b):
         foreground = False,
         aengel = aengel,
         cache_dir = tmpdir_a,
-        user_id = Ghid.from_str('AVzeVIy1zn59Zk2HzmHIHB3G8z10p7P6PeQ2IEYI2jjRrE02Xx0AQJmGFWSxK4AvNGFigrSqLIk8gVWos7d0-wY=')
+        user_id = Ghid.from_str('Ac6-9W91yieRZpSqAYPEcv-7lrzI1RVORhIUOOQbd4r4KaIkxPmhOLblIjni5aisnbjWDpwlVRQPVDWzVrEeF7o=')
     )
     hgxdes = HGXService(
         host = 'localhost',
@@ -91,7 +91,7 @@ def make_fixtures(debug, tmpdir_a, tmpdir_b):
         foreground = False,
         aengel = aengel,
         cache_dir = tmpdir_b,
-        user_id = Ghid.from_str('AZBPtunflXWU6pQB4DpaxcqgUwLmqTiYz-e1AEbhH-gZQCvs38AOnT2xun5DBk2j2MLTZjPrWFyYIeWn4cZBO_k=')
+        user_id = Ghid.from_str('AX6h_dnSXUNqpnGWIM8h66ThlzZQRZ288ekZWdhVKoWhZIypGBcQTCXbts_GTzL_5s9k6rcT4rJI9yQ_2WadeTo=')
     )
         
     return hgxserver, hgxraz, hgxdes, aengel
@@ -324,6 +324,8 @@ if __name__ == '__main__':
         tempfile.TemporaryDirectory() as cache_dir_b:
             save_dir_a = pathlib.Path('./trashtest/_vectors/hgx_save_a')
             save_dir_b = pathlib.Path('./trashtest/_vectors/hgx_save_b')
+            
+            assert cache_dir_a != cache_dir_b
             
             for fpath in save_dir_a.iterdir():
                 shutil.copy(fpath.as_posix(), cache_dir_a)

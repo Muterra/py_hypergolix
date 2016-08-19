@@ -91,7 +91,7 @@ def clear_ghidcache(cache_dir):
         
         
 class RolodexMock:
-    def request_handler(self, subs_ghid, notify_ghid):
+    def notification_handler(self, subs_ghid, notify_ghid):
         # Note that we can't necessarily simply look for notify_ghid in the
         # vault, because for dynamic objects, the notify_ghid is the frame_ghid
         # (which is not tracked by the vault).

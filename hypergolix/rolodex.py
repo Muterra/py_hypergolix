@@ -183,7 +183,7 @@ class Rolodex:
         # successfully post.
         self._percore.ingest_garq(request)
         
-    def request_handler(self, subscription, notification):
+    def notification_handler(self, subscription, notification):
         ''' Callback to handle any requests.
         '''
         if notification not in self._librarian:
@@ -193,6 +193,23 @@ class Rolodex:
         request_or_debind = self._librarian.summarize(notification)
         
         if isinstance(request_or_debind, _GarqLite):
+            self._handle_request(notification)
+            
+        elif isinstance(request_or_debind, _GdxxLite):
+            # This case should only be relevant if we have multiple agents 
+            # logged in at separate locations at the same time, processing the
+            # same GARQs.
+            self._handle_debinding(request_or_debind)
+            
+        else:
+            raise RuntimeError(
+                'Unexpected Golix primitive while listening for requests.'
+            )
+            
+    def _handle_request(self, notification):
+        ''' The notification is an asymmetric request. Deal with it.
+        '''
+        try:
             packed = self._librarian.retrieve(notification)
             unpacked = self._golcore.unpack_request(packed)
         
@@ -204,27 +221,26 @@ class Rolodex:
                     raise UnknownParty(
                         'Request author unknown: ' + str(unpacked.author)
                     ) from exc
-            
-            payload = self._golcore.open_request(unpacked)
-            self._handle_request(payload, notification)
-            
-        elif isinstance(request_or_debind, _GdxxLite):
-            # This case should only be relevant if we have multiple agents 
-            # logged in at separate locations at the same time, processing the
-            # same GARQs.
-            # For now we just need to remove any pending requests for the 
-            # debinding's target.
-            try:
-                del self._pending_requests[request_or_debind.target]
-            except KeyError:
-                pass
-            
-        else:
-            raise RuntimeError(
-                'Unexpected Golix primitive while listening for requests.'
-            )
         
-    def _handle_request(self, payload, source_ghid):
+            payload = self._golcore.open_request(unpacked)
+            self._dispatch_payload(payload, notification)
+
+        # Don't forget to (always) debind.            
+        finally:
+            debinding = self._golcore.make_debinding(notification)
+            self._percore.ingest_gdxx(debinding)
+        
+    def _handle_debinding(self, debinding):
+        ''' The notification is a debinding. Deal with it.
+        '''
+        # For now we just need to remove any pending requests for the 
+        # debinding's target.
+        try:
+            del self._pending_requests[debinding.target]
+        except KeyError:
+            pass
+        
+    def _dispatch_payload(self, payload, source_ghid):
         ''' Appropriately handles a request payload.
         '''
         if isinstance(payload, AsymHandshake):

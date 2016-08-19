@@ -79,7 +79,7 @@ def make_fixtures(debug):
         traceur = False,
         foreground = False,
         aengel = aengel,
-        cache_dir = './trashtest/_vectors/hgx_save_a1',
+        cache_dir = './trashtest/_vectors/hgx_save_a',
     )
     hgxdes = HGXService(
         host = 'localhost',
@@ -89,7 +89,7 @@ def make_fixtures(debug):
         traceur = False,
         foreground = False,
         aengel = aengel,
-        cache_dir = './trashtest/_vectors/hgx_save_b1',
+        cache_dir = './trashtest/_vectors/hgx_save_b',
     )
         
     return hgxserver, hgxraz, hgxdes, aengel

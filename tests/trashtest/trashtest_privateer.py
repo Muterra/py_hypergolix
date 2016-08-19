@@ -64,7 +64,8 @@ class MockOracle:
     
     
 class MockGhidproxy:
-    pass
+    def resolve(self, ghid):
+        return ghid
         
         
 class MockGolcore:
