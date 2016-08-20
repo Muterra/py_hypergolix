@@ -2235,6 +2235,26 @@ class Undertaker:
         ''' GARQ do not affect GC.
         '''
         return True
+        
+        
+class UnderReaper(Undertaker):
+    ''' An undertaker that also propagates garbage collection of 
+    container objects into abandonment of their secrets, by way of the
+    inquisition.
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._privateer = None
+    
+    def assemble(self, librarian, bookie, postman, privateer, *args, **kwargs):
+        super().assemble(librarian, bookie, postman, *args, **kwargs)
+        self._privateer = weakref.proxy(privateer)
+        
+    def _gc_execute(self, obj):
+        super()._gc_execute(obj)
+        # To the reaper!
+        if obj.ghid in self._privateer:
+            self._privateer.abandon(obj.ghid)
 
 
 class Salmonator:

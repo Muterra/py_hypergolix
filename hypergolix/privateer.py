@@ -123,9 +123,6 @@ class Privateer:
         # Keep track of chain progress. This does not need to be distributed.
         # Lookup <proxy ghid> -> proxy secret
         self._ratchet_in_progress = {}
-        
-        # Just here for diagnosing a testing problem
-        self._committment_problems = {}
             
     def __contains__(self, ghid):
         ''' Check if we think we know a secret for the ghid.
@@ -279,13 +276,6 @@ class Privateer:
         if ghid in self._secrets:
             if self._secrets[ghid] != secret:
                 self._calc_and_log_diff(self._secrets[ghid], secret)
-                
-                if ghid in self._committment_problems:
-                    logger.error(
-                        'Previously known w/ traceback: \n' + 
-                        self._committment_problems[ghid]
-                    )
-                
                 raise ConflictingSecrets(
                     'Non-matching secret already known for ' + str(ghid)
                 )
@@ -301,11 +291,10 @@ class Privateer:
             # With quarantine, we can verify it's a container first, since we
             # will only see this when pulling from upstream anyways.
             self._ensure_container(ghid)
+            logger.debug(
+                'Quarantining secret for ' + str(ghid)
+            )
             self._stage(ghid, secret, self._secrets_quarantine)
-                
-            # Just keep track of shit for this fucking conflicting secrets 
-            # error that I can't for the life of me figure out
-            self._committment_problems[ghid] = TraceLogger.dump_my_trace()
             
     def unstage(self, ghid):
         ''' Remove a staged secret, probably due to a SecurityError.
@@ -359,6 +348,10 @@ class Privateer:
                 secret = self._secrets_staging.pop(ghid)
                 
             elif ghid in self._secrets_quarantine:
+                logger.debug(
+                    'Removing quarantined secret for ' + str(ghid) + ' prior '
+                    'to committment.'
+                )
                 secret = self._secrets_quarantine.pop(ghid)
                 
             # Check all remaining locations to silence SecretUnknown and return
@@ -372,15 +365,17 @@ class Privateer:
                 
             # If it's a bootstrap target, just locally commit it.
             if self._is_bootstrap_target(ghid):
+                logger.debug(
+                    'Committing bootstrap secret to in-memory storage.'
+                )
                 self._secrets_local[ghid] = secret
                 
             # Nope. Commit globally.
             else:
+                logger.debug(
+                    'Globally committing secret for ' + str(ghid)
+                )
                 self._secrets_persistent[ghid] = secret
-                
-            # Just keep track of shit for this fucking conflicting secrets 
-            # error that I can't for the life of me figure out
-            self._committment_problems[ghid] = TraceLogger.dump_my_trace()
     
     @classmethod
     def _calc_and_log_diff(cls, secret, other):
@@ -632,28 +627,37 @@ class Privateer:
         time an agent RECEIVES a new EXTERNAL ratcheted object. Stages
         the resulting secret for the most recent frame in binding, BUT
         DOES NOT RETURN (or commit) IT.
+        
+        Note that this is necessarily being called before the object is
+        available at the oracle. It should, however, be available at 
+        both the ghidproxy and the librarian.
+        
+        NOTE that the binding is the LITEWEIGHT version from the 
+        librarian already, so its ghid is already the dynamic one.
         '''
-            
-        # DON'T take _modlock here or we will be reentrant = deadlock
-        try:
-            if self._credential.is_primary(gao.ghid):
-                self._heal_bootstrap(gao, binding)
-            
-            else:
-                self._heal_standard(gao, binding)
+        target = self._ghidproxy.resolve(binding.ghid)
+        if target not in self:
+            # DON'T take _modlock here or we will be reentrant = deadlock
+            try:
+                if self._credential.is_primary(gao.ghid):
+                    self._heal_bootstrap(gao, binding)
                 
-        except:
-            logger.warning(
-                'Error while staging new secret for attempted ratchet. The '
-                'ratchet is very likely broken.\n' + 
-                ''.join(traceback.format_exc())
-            )
-            
-        else:
-            # If we have a chain for it, update it! Do this directly, skipping 
-            # the usual ratcheting process, because we already know everything.
-            if gao.ghid in self._chains:
-                self._chains[gao.ghid] = binding.target
+                else:
+                    self._heal_standard(gao, binding)
+                    
+            except:
+                logger.warning(
+                    'Error while staging new secret for attempted ratchet. '
+                    'The ratchet is very likely broken.\n' + 
+                    ''.join(traceback.format_exc())
+                )
+                
+            else:
+                # If we have a chain for it, update it! Do this directly, 
+                # skipping the usual ratcheting process, because we already 
+                # know everything.
+                if gao.ghid in self._chains:
+                    self._chains[gao.ghid] = binding.target
             
     def _heal_standard(self, gao, binding):
         ''' Heals a chain used in a non-bootstrapping container.

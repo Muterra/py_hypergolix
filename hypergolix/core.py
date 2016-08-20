@@ -98,7 +98,7 @@ class GolixCore:
     ''' Wrapper around Golix library that automates much of the state
     management, holds the Agent's identity, etc etc.
     '''
-    DEFAULT_LEGROOM = 3
+    DEFAULT_LEGROOM = 7
     
     def __init__(self):
         ''' Create a new agent. Persister should subclass _PersisterBase
@@ -551,55 +551,6 @@ class _GAO(_GAOBase):
             # Let the accountant know that we have a new bootstrap address.
             accountant.set_bootstrap_address(_bootstrap[0], self.ghid)
             
-    def freeze(self):
-        ''' Creates a static binding for the most current state of a 
-        dynamic binding. Returns the frozen ghid.
-        '''
-        if not self.dynamic:
-            raise TypeError('Cannot freeze a static GAO.')
-            
-        container_ghid = self._ghidproxy.resolve(self.ghid)
-        binding = self._golcore.make_binding_stat(container_ghid)
-        self._percore.ingest_gobs(binding)
-        
-        return container_ghid
-        
-    def delete(self):
-        ''' Attempts to permanently remove (aka debind) the object.
-        ''' 
-        if self.dynamic:
-            debinding = self._golcore.make_debinding(self.ghid)
-            self._percore.ingest_gdxx(debinding)
-            
-        else:
-            # Get frozenset of binding ghids
-            bindings = self._bookie.bind_status()
-            
-            for binding in bindings:
-                obj = self._librarian.summarize(binding)
-                if isinstance(obj, _GobsLite):
-                    if obj.author == self._golcore.whoami:
-                        debinding = self._golcore.make_debinding(obj.ghid)
-                        self._percore.ingest_gdxx(debinding)
-            
-        self.apply_delete()
-                
-    @staticmethod
-    def _attempt_open_container(golcore, privateer, secret, packed):
-        try:
-            # TODO: fix this leaky abstraction.
-            unpacked = golcore._identity.unpack_container(packed)
-            packed_state = golcore.open_container(unpacked, secret)
-        
-        except SecurityError:
-            privateer.abandon(unpacked.ghid)
-            raise
-            
-        else:
-            privateer.commit(unpacked.ghid)
-            
-        return packed_state, unpacked.author
-            
     @classmethod
     def from_ghid(cls, ghid, golix_core, ghidproxy, privateer, 
                 persistence_core, bookie, librarian, _legroom=None, 
@@ -653,6 +604,55 @@ class _GAO(_GAOBase):
         self._update_greenlight.set()
         
         return self
+            
+    def freeze(self):
+        ''' Creates a static binding for the most current state of a 
+        dynamic binding. Returns the frozen ghid.
+        '''
+        if not self.dynamic:
+            raise TypeError('Cannot freeze a static GAO.')
+            
+        container_ghid = self._ghidproxy.resolve(self.ghid)
+        binding = self._golcore.make_binding_stat(container_ghid)
+        self._percore.ingest_gobs(binding)
+        
+        return container_ghid
+        
+    def delete(self):
+        ''' Attempts to permanently remove (aka debind) the object.
+        ''' 
+        if self.dynamic:
+            debinding = self._golcore.make_debinding(self.ghid)
+            self._percore.ingest_gdxx(debinding)
+            
+        else:
+            # Get frozenset of binding ghids
+            bindings = self._bookie.bind_status()
+            
+            for binding in bindings:
+                obj = self._librarian.summarize(binding)
+                if isinstance(obj, _GobsLite):
+                    if obj.author == self._golcore.whoami:
+                        debinding = self._golcore.make_debinding(obj.ghid)
+                        self._percore.ingest_gdxx(debinding)
+            
+        self.apply_delete()
+                
+    @staticmethod
+    def _attempt_open_container(golcore, privateer, secret, packed):
+        try:
+            # TODO: fix this leaky abstraction.
+            unpacked = golcore._identity.unpack_container(packed)
+            packed_state = golcore.open_container(unpacked, secret)
+        
+        except SecurityError:
+            privateer.abandon(unpacked.ghid)
+            raise
+            
+        else:
+            privateer.commit(unpacked.ghid)
+            
+        return packed_state, unpacked.author
         
     def halt_updates(self):
         # TODO: this is going to create a resource leak in a race condition:
@@ -735,7 +735,7 @@ class _GAO(_GAOBase):
             else:
                 raise TypeError('Deleted GAOs cannot be pushed.')
         
-    def pull(self, notification=None):
+    def pull(self):
         ''' Refreshes self from upstream. Should NOT be called at object 
         instantiation for any existing objects. Should instead be called
         directly, or through _weak_touch for any new status.
@@ -746,53 +746,66 @@ class _GAO(_GAOBase):
                 
             else:
                 if self.dynamic:
-                    modified = self._pull_dynamic(notification)
+                    modified = self._pull_dynamic()
                         
                 else:
-                    modified = self._pull_static(notification)
+                    modified = self._pull_static()
         
         logger.debug('Successful pull, modified = ' + str(modified))
         return modified
         
-    def _pull_dynamic(self, notification):
-        ''' Note that this is redundant with persister_core handling
-        update silencing.
-        
-        TODO: remove redundancy.
+    def _pull_dynamic(self):
+        ''' Checks for the most recent update to self, regardless of 
+        whatever notification was or was not received.
         '''
-        if notification is None:
-            check_address = self.ghid
-        else:
-            check_address = notification
-        check_obj = self._librarian.summarize(check_address)
+        # Attempt to get the notification. This SHOULD always succeed, but for
+        # reasons that are increasingly difficult to diagnose, it doesn't quite
+        # always go according to plan.
+        try:
+            # TODO: should a summary call for a dynamic ghid that has been 
+            # debound return its debinding?
+            summary = self._librarian.summarize(self.ghid)
         
-        # First check to see if we're deleting the object.
-        if isinstance(check_obj, _GdxxLite):
-            modified = self._attempt_delete(check_obj)
-            
-        # This is the redundant bit. Well... maybe it isn't, if we allow for
-        # explicit pull calls, outside of just doing an update check. Anyways,
-        # Now we check if it's something we already know about.
-        elif check_obj.frame_ghid in self._history:
+        # Could not find the notification object. Log the error and mark it as
+        # unmodified. Is this evidence of a debind coming in from upstream?
+        except DoesNotExist:
+            logger.error(
+                'The GAO itself was unavailable while pulling an update. This '
+                'is a likely indication of an upstream delete for the object, ' 
+                'located at ' + str(self.ghid) + ', with traceback: \n' + 
+                ''.join(traceback.format_exc())
+            )
             modified = False
         
-        # Huh, looks like it is, in fact, new.
+        # We successfully retrieved the notification object, so let's handle it
         else:
-            modified = True
-            self._privateer.heal_chain(gao=self, binding=check_obj)
-            secret = self._privateer.get(check_obj.target)
-            packed = self._librarian.retrieve(check_obj.target)
-            packed_state, author = self._attempt_open_container(
-                self._golcore, 
-                self._privateer, 
-                secret, 
-                packed
-            )
+            # First check to see if we're deleting the object.
+            if isinstance(summary, _GdxxLite):
+                modified = self._attempt_delete(summary)
+                
+            # This is the redundant bit. Well... maybe it isn't, if we allow 
+            # for explicit pull calls, outside of just doing an update check. 
+            # Anyways, now we check if it's something we already know about.
+            elif summary.frame_ghid in self._history:
+                modified = False
             
-            # Don't forget to extract state before applying it
-            self.apply_state(self._unpack(packed_state))
-            # Also don't forget to update history.
-            self._advance_history(check_obj)
+            # Huh, looks like it is, in fact, new.
+            else:
+                modified = True
+                self._privateer.heal_chain(gao=self, binding=summary)
+                secret = self._privateer.get(summary.target)
+                packed = self._librarian.retrieve(summary.target)
+                packed_state, author = self._attempt_open_container(
+                    self._golcore, 
+                    self._privateer, 
+                    secret, 
+                    packed
+                )
+                
+                # Don't forget to extract state before applying it
+                self.apply_state(self._unpack(packed_state))
+                # Also don't forget to update history.
+                self._advance_history(summary)
             
         return modified
         
@@ -873,7 +886,7 @@ class _GAO(_GAOBase):
             
         return modified
         
-    def _pull_static(self, notification):
+    def _pull_static(self):
         ''' Currently, doesn't actually do anything. Just assumes that 
         our local state is correct, and returns modified=False.
         '''
@@ -886,7 +899,6 @@ class _GAO(_GAOBase):
         # threaded, just spin this out into a thread to avoid async
         # deadlocks (which we'll otherwise almost certainly encounter)
         # TODO: asyncify all the things
-        logger.debug('Gao touch starting...')
         worker = threading.Thread(
             target = self.__touch,
             daemon = True,
@@ -900,10 +912,42 @@ class _GAO(_GAOBase):
         '''
         # First we need to wait for the update greenlight.
         self._update_greenlight.wait()
-        logger.debug('Cleared gao update greenlight.')
-        if notification not in self._silenced:
-            self.pull(notification)
-        logger.debug('Gao touch complete.')
+        
+        # This path shouldn't happen (right?), but just in case it does...
+        if notification in self._history:
+            logger.debug(
+                'GAO touch ignored for old frame at subscription ' + 
+                str(subscription) + ' with notification ' + str(notification)
+            )
+            
+        # Definitely-probably a new notification now
+        else:
+            # Attempt to get the object from the librarian.
+            try:
+                summary = self._librarian.summarize(notification)
+            
+            # Could not find the notification object. Log the error and mark it as
+            # unmodified. Is this evidence of a debind coming in from upstream?
+            except DoesNotExist:
+                logger.error(
+                    'The notification object was unavailable while pulling an '
+                    'update for a dynamic gao at ' + str(self.ghid) + ' with '
+                    'notification ' + str(notification) + ' and traceback: \n' + 
+                    ''.join(traceback.format_exc())
+                )
+            
+            # Successfully got the object from the librarian.
+            else:
+                if isinstance(summary, _GdxxLite):
+                    modified = self._attempt_delete(summary)
+                else:
+                    modified = self.pull()
+                    
+                logger.debug(
+                    'GAO touch (modified=' + str(modified) + ') finished for '
+                    'subscription ' + str(subscription) + ' at notification ' + 
+                    str(notification)
+                )
         
     def __new(self):
         ''' Creates a new Golix object for self using self._state, 
@@ -1098,7 +1142,7 @@ class _GAOPickleBase(_GAO):
         
     def pull(self, *args, **kwargs):
         with self._opslock:
-            super().pull(*args, **kwargs)
+            return super().pull(*args, **kwargs)
         
     def push(self, *args, **kwargs):
         with self._opslock:

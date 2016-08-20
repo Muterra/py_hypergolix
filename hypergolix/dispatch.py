@@ -365,6 +365,7 @@ class _Dispatchable(_GAO):
                 loop = self._ipccore._loop
             )
             logger.debug('IPC completed update notifications.')
+        return modified
         
     @staticmethod
     def _pack(state):
