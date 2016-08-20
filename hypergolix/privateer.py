@@ -49,8 +49,10 @@ import traceback
 from golix import Ghid
 
 # These are used for secret ratcheting only.
-from Crypto.Hash import SHA512
-from Crypto.Protocol.KDF import HKDF
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf import hkdf
+from cryptography.hazmat.backends import default_backend
+CRYPTO_BACKEND = default_backend()
 
 # Intra-package dependencies
 from .core import _GAO
@@ -742,14 +744,16 @@ class Privateer:
         len_seed = len(secret.seed)
         len_key = len(secret.key)
         source = bytes(secret.seed + secret.key)
-        ratcheted = HKDF(
-            master = source,
+        
+        instance = hkdf.HKDF(
+            algorithm = hashes.SHA512(),
+            length = len_seed + len_key,
             salt = bytes(salt_ghid),
-            key_len = len_seed + len_key,
-            hashmod = SHA512,
-            num_keys = 1,
-            context = bytes(proxy)
+            info = bytes(proxy),
+            backend = CRYPTO_BACKEND
         )
+        ratcheted = instance.derive(source)
+        
         return cls(
             cipher = cipher,
             version = version,

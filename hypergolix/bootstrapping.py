@@ -42,10 +42,6 @@ import weakref
 import os
 import random
 
-from Crypto.Protocol.KDF import scrypt
-from Crypto.Hash import SHA512
-from Crypto.Protocol.KDF import HKDF
-
 import pyscrypt
 
 from golix import Ghid

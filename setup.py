@@ -113,7 +113,7 @@ setup(
     install_requires=[
         'golix>=0.1.1',
         'websockets>=3.1',
-        'msgpack-python>=0.4.7',
+        'cryptography>=1.4',
     ],
 
     # List additional groups of dependencies here (e.g. development
