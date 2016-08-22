@@ -44,6 +44,8 @@ import random
 import datetime
 import pathlib
 
+import cProfile
+
 
 import IPython
 import warnings
@@ -103,6 +105,8 @@ def make_fixtures(debug, tmpdir_a, tmpdir_b):
 
 
 def make_tests(iterations, debug, raz, des, aengel):
+    inner_profiler = cProfile.Profile()
+    outer_profiler = cProfile.Profile()
     timer = collections.deque([0,0], maxlen=2)
 
     # Declare API
@@ -182,7 +186,9 @@ def make_tests(iterations, debug, raz, des, aengel):
             
             def state_mirror(source_obj):
                 # print('Mirroring state.')
+                inner_profiler.enable()
                 reply.update_threadsafe(source_obj.state)
+                inner_profiler.disable()
             obj.append_threadsafe_callback(state_mirror)
             
             reply.share_threadsafe(recipient=self.raz)
@@ -212,23 +218,39 @@ def make_tests(iterations, debug, raz, des, aengel):
             time.sleep(1.5)
             times = []
             
+            outer_profiler.enable()
             for ii in range(iterations):
                 with self.subTest(i=ii):
                     msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
                     msg = msg.encode('utf-8')
-                    # Zero out the timer first
+                    # Zero out the timer first and enable the profiler
+                    inner_profiler.enable()
                     self.timer.extendleft([0,0,time.monotonic()])
                     obj.update_threadsafe(msg)
+                    inner_profiler.disable()
                     self.assertTrue(rt_waiter())
                     self.assertTrue(rt_checker(msg))
                     times.append(self.timer[0] - self.timer[1])
                     # Max update frequencies can cause problems yo
                     time.sleep(.25)
+            outer_profiler.disable()
                     
+            print('---------------------------------------------------')
             print('Max time: ', max(times))
             print('Min time: ', min(times))
             print('Mean time:', statistics.mean(times))
             print('Med time: ', statistics.median(times))
+            print('\n')
+            
+            print('---------------------------------------------------')
+            print('Cropped profile')
+            inner_profiler.print_stats('cumulative')
+            print('\n')
+            
+            print('---------------------------------------------------')
+            print('Wide-angle profile')
+            outer_profiler.print_stats('cumulative')
+            print('\n')
     
     return DemoReplicatorTest
     
@@ -307,6 +329,7 @@ if __name__ == '__main__':
             cache_dir_a, 
             cache_dir_b
         )    
+        
         apptest = make_tests(args.iters, args.debug, raz, des, aengel)
         
         # And finally, run them
