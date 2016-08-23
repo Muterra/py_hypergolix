@@ -117,24 +117,29 @@ def _hgx_server(host, port, debug, traceur, foreground=True, aengel=None):
         return remote, server
     
     
-def HypergolixLink(ipc_port=7772, debug=False, aengel=None, *args, **kwargs):
+def HypergolixLink(ipc_port=7772, debug=False, aengel=None):
     if not aengel:
         aengel = Aengel()
         
-    acomms = Autocomms(
-        autoresponder_name = 'ipcemre',
-        autoresponder_class = IPCEmbed,
-        connector_name = 'ipcemws',
-        connector_class = WSBasicClient,
-        connector_kwargs = {
-            'host': 'localhost', # IPC host
-            'port': ipc_port, # IPC port
-        },
+    embed = IPCEmbed(
+        aengel = aengel, 
+        threaded = True, 
+        thread_name = _generate_threadnames('em-aure')[0],
+        debug = debug, 
+    )
+    
+    embed.add_ipc_threadsafe(
+        client_class = WSBasicClient,
+        host = 'localhost',
+        port = ipc_port,
         debug = debug,
         aengel = aengel,
+        threaded = True,
+        thread_name = _generate_threadnames('emb-ws')[0]
     )
-    acomms.aengel = aengel
-    return acomms
+        
+    embed.aengel = aengel
+    return embed
     
     
 def HGXService(host, port, ipc_port, debug, traceur, cache_dir, 

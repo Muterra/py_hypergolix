@@ -169,7 +169,7 @@ class Dispatcher:
         # Temporarily set distributed state to None.
         # Lookup for all known tokens: set(<tokens>)
         self._all_known_tokens = None
-        # Lookup (set-map-like) for <app token>: set(<startup ghids>)
+        # Lookup (dict-like) for <app token>: <startup ghid>
         self._startup_by_token = None
         # Lookup (dict-like) for <obj ghid>: <private owner>
         self._private_by_ghid = None
@@ -244,8 +244,13 @@ class Dispatcher:
         with self._token_lock:
             if token not in self._all_known_tokens:
                 raise UnknownToken()
+            elif token in self._startup_by_token:
+                raise ValueError(
+                    'Startup object already defined for that application. '
+                    'Deregister it before registering a new startup object.'
+                )
             else:
-                self._startup_by_token.add(token, ghid)
+                self._startup_by_token[token] = ghid
                 
     def deregister_startup(self, token, ghid):
         ''' Deregisters a ghid to be used as a startup object for token.
@@ -253,18 +258,24 @@ class Dispatcher:
         with self._token_lock:
             if token not in self._all_known_tokens:
                 raise UnknownToken()
+            elif token not in self._startup_by_token:
+                raise ValueError(
+                    'Startup object has not been defined for that application.'
+                )
             else:
-                self._startup_by_token.discard(token, ghid)
+                del self._startup_by_token[token]
         
-    def get_startup_objs(self, token):
-        ''' Returns a frozenset of any objects used by the token at 
-        startup. If none have been registered, returns an empty one.
+    def get_startup_obj(self, token):
+        ''' Returns the ghid of the declared startup object for that 
+        token, or None if none has been declared.
         ''' 
         with self._token_lock:
             if token not in self._all_known_tokens:
                 raise UnknownToken()
+            elif token not in self._startup_by_token:
+                return None
             else:
-                return self._startup_by_token.get_any(token)
+                return self._startup_by_token[token]
         
     def register_private(self, token, ghid):
         ''' Called by oracle's new_object to register an object as 
@@ -301,14 +312,6 @@ class Dispatcher:
         except KeyError:
             return None
             
-    def get_startup_tokens(self, ghid):
-        ''' Returns a frozenset of any app tokens that use the ghid as a
-        startup object. If none do, returns an empty set.
-        
-        May or may not be added in the future.
-        '''
-        raise NotImplementedError()
-            
             
 class _Dispatchable(_GAO):
     ''' A dispatchable object.
@@ -336,21 +339,6 @@ class _Dispatchable(_GAO):
         ''' Returns true/false if the object is private.
         '''
         return bool(self._dispatch.get_parent_token(self.ghid))
-        
-    @property
-    def startup_tokens(self):
-        ''' Read-only proxy to dispatch to check if we're used as a 
-        startup object for any tokens. Always returns a frozenset, which
-        will be empty if it's unused.
-        '''
-        return self._dispatch.get_startup_tokens(self.ghid)
-        
-    @property
-    def is_startup(self):
-        ''' Returns true/false if the object is used as a startup object
-        for any application
-        '''
-        return bool(self._dispatch.get_startup_tokens(self.ghid))
         
     def pull(self, *args, **kwargs):
         ''' Refreshes self from upstream. Should NOT be called at object 

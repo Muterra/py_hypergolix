@@ -31,6 +31,10 @@ hypergolix: A python Golix client.
 
 '''
 
+# TODO: audit entire library for late-binding closure safety, particularly with
+# internal function definitions. See the wrapped share handlers within
+# ipc.IPCEmbed.register_share_handler_loopsafe as an example of proper safety.
+
 # Add in core module
 from .core import *
 # TODO: change this to select HERE what, exactly, we want as a toplevel 
@@ -45,6 +49,7 @@ from . import dispatch
 from . import exceptions
 from . import inquisition
 from . import ipc
+from . import objproxy
 from . import persistence
 from . import privateer
 from . import remotes

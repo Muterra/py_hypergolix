@@ -100,6 +100,8 @@ from .dispatch import _Dispatchable
 from .dispatch import _DispatchableState
 from .dispatch import _AppDef
 
+from .objproxy import ObjProxyBase
+
 
 # ###############################################
 # Boilerplate
@@ -196,6 +198,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             b'$T': self.set_token_wrapper,
             # Register an API
             b'$A': self.add_api_wrapper,
+            # Deegister an API
+            b'XA': self.remove_api_wrapper,
             # Register a startup object
             b'$O': self.register_startup_wrapper,
             # Whoami?
@@ -500,8 +504,9 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         self._endpoint_from_token[app_token] = endpoint
         self._token_from_endpoint[endpoint] = app_token
         
-        for ghid in self._dispatch.get_startup_objs(app_token):
-            await self.send_startup(endpoint, ghid)
+        startup_ghid = self._dispatch.get_startup_obj(app_token)
+        if startup_ghid is not None:
+            await self.send_startup(endpoint, startup_ghid)
         
         return b'\x01'
     
@@ -652,6 +657,21 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         
         return b'\x01'
         
+    async def remove_api_wrapper(self, endpoint, request_body):
+        ''' Wraps self.dispatch.new_token into a bytes return.
+        
+        Requires existing app token.
+        '''
+        if endpoint not in self._token_from_endpoint:
+            raise IPCError('Must register app token prior to removing APIs.')
+            
+        if len(request_body) != 65:
+            raise ValueError('Invalid API ID format.')
+            
+        self._endpoints_from_api.discard(request_body, endpoint)
+        
+        return b'\x01'
+        
     async def whoami_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.whoami into a bytes return.
         
@@ -769,7 +789,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             # Note that self._obj_sender handles adding update listeners
             await self.distribute_to_endpoints(
                 callsheet,
-                self.send_object,
+                self.send_share,
                 obj.ghid
             )
         
@@ -918,14 +938,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         
         
 class IPCEmbed(Autoresponder, IPCPackerMixIn):
-    ''' The thing you actually put in your app. Pair with a client in an
-    Autocomms to establish IPC over that transport.
-    
-    Note that each embed has exactly one endpoint. I guess there's not
-    really any reason an application couldn't use multiple embeds, but
-    there really should never be a reason to do that?
-    
-    Todo: asyncify.
+    ''' The thing you actually put in your app. 
     '''
     REQUEST_CODES = {
         # # Get new app token
@@ -934,6 +947,8 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         'set_token': b'$T',
         # Register an API
         'register_api': b'$A',
+        # Register an API
+        'deregister_api': b'XA',
         # Register a startup object
         'register_startup': b'$O',
         # Whoami?
@@ -960,23 +975,26 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
     
     def __init__(self, *args, **kwargs):
         ''' Initializes self.
-        '''
-        try:    
-            self._token = None
-            self._legroom = 3
-        
-        # Something strange using _TestEmbed is causing this, suppress it for
-        # now until technical debt can be reduced
-        except AttributeError:
-            pass
+        '''  
+        self._token = None
+        self._whoami = None
+        self._ipc = None
+        self._startup_obj = None
+        self._legroom = 7
         
         # Lookup for ghid -> object
         self._objs_by_ghid = weakref.WeakValueDictionary()
         
-        # Track registered callbacks for new objects
-        self._object_handlers = {}
+        # All of the various object handlers
+        # Lookup api_id: async awaitable share handler
+        self._share_handlers = {}
+        # Lookup api_id: object class
+        self._share_typecast = {}
         
-        # Create an executor for awaiting threadsafe callbacks
+        # Currently unused
+        self._nonlocal_handlers = {}
+        
+        # Create an executor for awaiting threadsafe callbacks and handlers
         self._executor = concurrent.futures.ThreadPoolExecutor()
         
         # Note that these are only for unsolicited contact from the server.
@@ -1004,10 +1022,98 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             # Note: can also add error_lookup = {b'er': RuntimeError}
             *args, **kwargs
         )
+        
+    @property
+    def whoami(self):
+        ''' Read-only access to self._whoami with a raising wrapper if
+        it is undefined.
+        '''
+        if self._whoami is not None:
+            return self._whoami
+        else:
+            raise RuntimeError(
+                'Whoami has not been defined. Most likely, no IPC client is '
+                'currently available.'
+            )
+        
+    async def _get_whoami(self):
+        ''' Pulls identity fingerprint from hypergolix IPC.
+        '''
+        raw_ghid = await self.send(
+            session = self.any_session,
+            msg = b'',
+            request_code = self.REQUEST_CODES['whoami']
+        )
+        return Ghid.from_bytes(raw_ghid)
+        
+    async def _add_ipc(self, client_class, *args, **kwargs):
+        ''' Automatically sets up an IPC client connected to hypergolix.
+        Just give it the client_class, eg WSBasicClient, and all of the 
+        *args and **kwargs will be passed to the client's __init__.
+        '''
+        if self._ipc is not None:
+            raise RuntimeError(
+                'Must clear existing ipc before establishing a new one.'
+            )
+        
+        # We could maybe do this elsewhere, but adding an IPC client isn't 
+        # really performance-critical, especially not now.
+        class LinkedClient(AutoresponseConnector, client_class):
+            async def loop_stop(client, *args, **kwargs):
+                ''' Clear both the app token and whoami in the embedded
+                link when the loop stops. Ideally, this would also be
+                called when a connection drops. TODO: that. Or, perhaps
+                something similar, but after we've assimilated multiple
+                loopertroopers into a single event loop.
+                '''
+                # This is a closure around parent self.
+                self._startup_obj = None
+                self._whoami = None
+                await super().loop_stop(*args, **kwargs)
+            
+        self._ipc = LinkedClient(autoresponder=self, *args, **kwargs)
+        await self.await_session_async()
+        self._whoami = await self._get_whoami()
+        
+    async def add_ipc_loopsafe(self, *args, **kwargs):
+        await run_coroutine_loopsafe(
+            coro = self._add_ipc(*args, **kwargs),
+            target_loop = self._loop
+        )
+        
+    def add_ipc_threadsafe(self, *args, **kwargs):
+        call_coroutine_threadsafe(
+            coro = self._add_ipc(*args, **kwargs),
+            loop = self._loop
+        )
+            
+    async def _clear_ipc(self):
+        ''' Disconnects and removes the current IPC.
+        '''
+        # NOTE THAT THIS WILL NEED TO CHANGE if the _ipc client is ever brought
+        # into the same event loop as the IPCEmbed autoresponder.
+        if self._ipc is None:
+            raise RuntimeError('No existing IPC to clear.')
+            
+        self._ipc.stop_threadsafe_nowait()
+        self._ipc = None
+        self._whoami = None
+        
+    async def clear_ipc_loopsafe(self, *args, **kwargs):
+        await run_coroutine_loopsafe(
+            coro = self._clear_ipc(*args, **kwargs),
+            target_loop = self._loop
+        )
+        
+    def clear_ipc_threadsafe(self, *args, **kwargs):
+        call_coroutine_threadsafe(
+            coro = self._clear_ipc(*args, **kwargs),
+            loop = self._loop
+        )
     
     @property
     def app_token(self):
-        ''' Get your app token, or if you have none, register a new one.
+        ''' Read-only access to the current app token.
         '''
         if self._token is None:
             return RuntimeError(
@@ -1015,38 +1121,13 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             )
         else:
             return self._token
-    
-    def whoami_threadsafe(self):
-        ''' Threadsafe wrapper for whoami.
-        '''
-        return call_coroutine_threadsafe(
-            self.whoami_async(),
-            loop = self._loop,
-        )
         
-    async def whoami_async(self):
-        ''' Gets our identity GHID from the hypergolix service.
-        '''
-        await self.await_session_async()
-        raw_ghid = await self.send(
-            session = self.any_session,
-            msg = b'',
-            request_code = self.REQUEST_CODES['whoami']
-        )
-        return Ghid.from_bytes(raw_ghid)
-    
-    def new_token_threadsafe(self):
-        ''' Threadsafe wrapper for new_token.
-        '''
-        return call_coroutine_threadsafe(
-            self.new_token_async(),
-            loop = self._loop,
-        )
+    async def _get_new_token(self):
+        ''' Registers a new token with Hypergolix. Call this once per
+        application, and then reuse each time the application restarts.
         
-    async def new_token_async(self):
-        ''' Gets a new app_token.
+        Returns the token, and also caches it with self.app_token.
         '''
-        await self.await_session_async()
         app_token = await self.send(
             session = self.any_session,
             msg = b'',
@@ -1055,440 +1136,270 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         self._token = app_token
         return app_token
     
-    def set_token_threadsafe(self, *args, **kwargs):
-        ''' Threadsafe wrapper for set_token.
+    def get_new_token_threadsafe(self):
+        ''' Threadsafe wrapper for new_token.
         '''
         return call_coroutine_threadsafe(
-            self.set_token_async(*args, **kwargs),
+            coro = self._get_new_token(),
             loop = self._loop,
         )
-        
-    async def set_token_async(self, app_token):
-        ''' Sets an existing token.
+    
+    async def get_new_token_loopsafe(self):
+        ''' Loopsafe wrapper for new_token.
         '''
-        await self.await_session_async()
+        return (await run_coroutine_loopsafe(
+            coro = self._get_new_token(),
+            target_loop = self._loop,
+        ))
+        
+    async def _set_existing_token(self, app_token):
+        ''' Sets the app token for an existing application. Should be
+        called every time the application restarts.
+        '''
         response = await self.send(
             session = self.any_session,
             msg = app_token,
             request_code = self.REQUEST_CODES['set_token']
         )
+        
         # If we haven't errored out...
         self._token = app_token
-        return response
         
-    def register_api_threadsafe(self, *args, **kwargs):
+        # Note that, due to:
+        #   1. the way the request/response system works
+        #   2. the ipc host sending any startup obj during token registration
+        #   3. the ipc host awaiting OUR ack from the startup-object-sending
+        #       before acking the original token setting
+        #   4. us awaiting that last ack
+        # we are guaranteed to already have any declared startup object.
+        if self._startup_obj is not None:
+            return self._startup_obj
+        else:
+            return None
+    
+    def set_existing_token_threadsafe(self, *args, **kwargs):
+        ''' Threadsafe wrapper for self._set_existing_token.
+        '''
         return call_coroutine_threadsafe(
-            self.register_api_async(*args, **kwargs),
+            self._set_existing_token(*args, **kwargs),
             loop = self._loop,
         )
         
-    async def register_api_async(self, api_id, object_handler=None):
-        ''' Registers an API ID with the hypergolix service for this 
-        application.
-        
-        Note that object handlers must be threadsafe.
+    async def set_existing_token_loopsafe(self, *args, **kwargs):
+        ''' Loopsafe wrapper for self._set_existing_token.
         '''
-        if len(api_id) != 65:
-            raise ValueError('Invalid API ID.')
-        
-        if object_handler is None:
-            object_handler = lambda *args, **kwargs: None
+        return (await run_coroutine_loopsafe(
+            coro = self._set_existing_token(*args, **kwargs),
+            target_loop = self._loop,
+        ))
             
-        if not callable(object_handler):
-            raise TypeError('object_handler must be callable')
-        
-        await self.await_session_async()
+    def _normalize_api_id(self, api_id):
+        ''' Wraps the api_id appropriately, making sure the first byte
+        is '\x00' and that it is an appropriate length.
+        '''
+        if len(api_id) == 65:
+            if api_id[0:1] != b'\x00':
+                raise ValueError(
+                    'Improper api_id. First byte of full 65-byte field must '
+                    'be x00.'
+                )
+        elif len(api_id) == 64:
+            api_id = b'\x00' + api_id
+            
+        else:
+            raise ValueError('Improper length of api_id.')
+            
+        return api_id
+    
+    async def _register_api(self, api_id):
+        ''' Registers the api_id with the hypergolix service, allowing
+        this application to receive shares from it.
+        '''
+        # Don't need to call this twice...
+        # api_id = self._normalize_api_id(api_id)
+            
         response = await self.send(
             session = self.any_session,
             msg = api_id,
             request_code = self.REQUEST_CODES['register_api']
         )
         if response == b'\x01':
-            self._object_handlers[api_id] = object_handler
             return True
         else:
             raise RuntimeError('Unknown error while registering API.')
-        
-    def get_obj_threadsafe(self, *args, **kwargs):
-        ''' Loads an object into local memory from the hypergolix 
-        service.
-        '''
-        return call_coroutine_threadsafe(
-            self.get_obj_async(*args, **kwargs),
-            loop = self._loop,
-        )
-        
-    async def get_obj_async(self, ghid):
-        ''' Loads an object into local memory from the hypergolix 
-        service.
-        '''
-        response = await self._get_object(ghid)
-        (
-            address,
-            author,
-            state, 
-            is_link, 
-            api_id, 
-            private, 
-            dynamic, 
-            _legroom
-        ) = self._unpack_object_def(response)
             
-        if is_link:
-            link = Ghid.from_bytes(state)
-            state = await self.get_object_async(link)
-        
-        return AppObj(
-            embed = self, # embed
-            address = address, 
-            state = state, 
-            author = author, 
-            api_id = api_id, 
-            private = private, 
-            dynamic = dynamic,
-            _legroom = _legroom,
-            threadsafe_callbacks = [],
-            async_callbacks = [],
-        )
-        
-    async def _get_object(self, ghid):
-        ''' Loads an object into local memory from the hypergolix 
-        service.
+    async def _deregister_api(self, api_id):
+        ''' Stops updates for the api_id from the hypergolix service.
         '''
-        # Simple enough. super().get_object() will handle converting this to an
-        # actual object.
-        await self.await_session_async()
-        return (await self.send(
-            session = self.any_session,
-            msg = bytes(ghid),
-            request_code = self.REQUEST_CODES['get_object']
-        ))
-        
-    def new_obj_threadsafe(self, *args, **kwargs):
-        ''' Alternative constructor for AppObj that does not require 
-        passing the embed explicitly.
-        '''
-        # We don't need to do anything special here, since AppObj will call
-        # _new_object for us.
-        return AppObj.from_threadsafe(embed=self, *args, **kwargs)
-        
-    async def new_obj_async(self, *args, **kwargs):
-        ''' Alternative constructor for AppObj that does not require 
-        passing the embed explicitly.
-        '''
-        # We don't need to do anything special here, since AppObj will call
-        # _new_object for us.
-        return (await AppObj.from_async(embed=self, *args, **kwargs))
-        
-    async def _new_object(self, state, api_id, private, dynamic, _legroom):
-        ''' Handles only the creation of a new object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        
-        return address, author
-        '''
-        if private:
-            app_token = self.app_token
-            
-        else:
-            app_token = bytes(4)
-            if api_id is None:
-                raise TypeError(
-                    'api_id must be defined for a non-private object.'
-                )
-            
-        if isinstance(state, AppObj):
-            state = state.address
-            is_link = True
-        else:
-            is_link = False
-            
-        payload = self._pack_object_def(
-            None,
-            None,
-            state,
-            is_link,
-            api_id,
-            private,
-            dynamic,
-            _legroom
-        )
-        
-        # Note that currently, we're not re-packing the api_id or app_token.
-        # ^^ Not sure what that note is actually about.
-        await self.await_session_async()
         response = await self.send(
             session = self.any_session,
-            msg = payload,
-            request_code = self.REQUEST_CODES['new_object']
+            msg = api_id,
+            request_code = self.REQUEST_CODES['deregister_api']
         )
-            
-        # Note that the upstream ipc_host will automatically send us updates.
-        
-        address = Ghid.from_bytes(response)
-        author = await self.whoami_async()
-        return address, author
-        
-    def update_obj_threadsafe(self, *args, **kwargs):
-        return call_coroutine_threadsafe(
-            self.update_obj_async(*args, **kwargs),
-            loop = self._loop,
-        )
-        
-    async def update_obj_async(self, obj, state):
-        ''' Wrapper for obj.update.
-        '''
-        # is_owned will call whoami which will deadlock
-        # TODO: fix or reconsider strategy
-        # if not obj.is_owned:
-        #     raise TypeError(
-        #         'Cannot update an object that was not created by the '
-        #         'attached Agent.'
-        #     )
-            
-        # First operate on the object, since it's easier to undo local changes
-        await obj._update(state)
-        await self._update_object(obj, state)
-        # Todo: add try-catch to revert update after failed upstream push
-        
-        return True
-        
-    async def _update_object(self, obj, state):
-        ''' Handles only the updating of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        if isinstance(state, AppObj):
-            state = bytes(state.address)
-        
-        msg = self._pack_object_def(
-            obj.address,
-            None,
-            state,
-            obj.is_link,
-            None,
-            None,
-            None,
-            None
-        )
-        
-        await self.await_session_async()
-        response = await self.send(
-            session = self.any_session,
-            msg = msg,
-            request_code = self.REQUEST_CODES['update_object']
-        )
-        
-        if response != b'\x01':
-            raise RuntimeError('Unknown error while updating object.')
-            
-        # This breaks our DoC but effectively insulates us from calling any 
-        # callbacks on an invalid update.
-        await obj._notify_callbacks()
-        return True
-        
-    def sync_obj_threadsafe(self, *args, **kwargs):
-        return call_coroutine_threadsafe(
-            self.sync_obj_async(*args, **kwargs),
-            loop = self._loop,
-        )
-        
-    async def sync_obj_async(self, obj):
-        ''' Checks for an update to a dynamic object, and if one is 
-        available, performs an update.
-        '''
-        await obj._sync_object()
-        await self._sync_object(obj)
-        
-        return True
-
-    async def _sync_object(self, obj):
-        ''' Handles only the syncing of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        raise NotImplementedError(
-            'Manual object syncing is not yet supported. Approximate it with '
-            'get_object?'
-        )
-        # Note: this is probably all trash.
-        if obj.is_dynamic:
-            pass
-        else:
-            other = self._get_object(obj.address)
-            if other.state != obj.state:
-                raise RuntimeError(
-                    'Local object state appears to be corrupted.'
-                )
-        
-    def share_obj_threadsafe(self, *args, **kwargs):
-        return call_coroutine_threadsafe(
-            self.share_obj_async(*args, **kwargs),
-            loop = self._loop,
-        )
-        
-    async def share_obj_async(self, obj, recipient):
-        ''' Shares an object with someone else.
-        '''
-        # Todo: add try-catch to undo local changes after failed upstream share
-        # First operate on the object, since it's easier to undo local changes
-        await obj._share(recipient)
-        await self._share_object(obj, recipient)
-        
-        return True
-
-    async def _share_object(self, obj, recipient):
-        ''' Handles only the sharing of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        await self.await_session_async()
-        response = await self.send(
-            session = self.any_session,
-            msg = bytes(obj.address) + bytes(recipient),
-            request_code = self.REQUEST_CODES['share_object']
-        )
-        
         if response == b'\x01':
             return True
         else:
-            raise RuntimeError('Unknown error while updating object.')
+            raise RuntimeError('Unknown error while deregistering API.')
+    
+    async def _register_share_handler(self, api_id, cls, handler):
+        ''' Call this to register a handler for an object shared by a
+        different hypergolix identity, or the same hypergolix identity
+        but a different application. Any api_id can have at most one 
+        share handler, across ALL forms of callback (internal, 
+        threadsafe, loopsafe).
         
-    def freeze_obj_threadsafe(self, *args, **kwargs):
-        return call_coroutine_threadsafe(
-            self.freeze_obj_async(*args, **kwargs),
-            loop = self._loop,
-        )
+        typecast determines what kind of ObjProxy class the object will
+        be cast into before being passed to the handler.
         
-    async def freeze_obj_async(self, obj):
-        ''' Converts a dynamic object to a static object.
+        This HANDLER will be called from within the IPC embed's internal
+        event loop.
+        
+        This METHOD must be called from within the IPC embed's internal
+        event loop.
         '''
-        await obj._freeze()
-        frozen = await self._freeze_object(obj)
+        api_id = self._normalize_api_id(api_id)
+        await self._register_api(api_id)
         
-        return frozen
-
-    async def _freeze_object(self, obj):
-        ''' Handles only the freezing of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
+        # Any handlers passed to us this way can already be called natively 
+        # from withinour own event loop, so they just need to be wrapped such 
+        # that they never raise.
+        async def wrap_handler(*args, handler=handler, **kwargs):
+            try:
+                await handler(*args, **kwargs)
+                
+            except:
+                logger.error(
+                    'Error while running share handler. Traceback: \n' +
+                    ''.join(traceback.format_exc())
+                )
+        
+        # Hey, look at this! Because we're running a single-threaded event loop
+        # and not ceding flow control to the loop, we don't need to worry about
+        # synchro primitives here!
+        self._share_handlers[api_id] = wrap_handler
+        self._share_typecast[api_id] = cls
+    
+    def register_share_handler_threadsafe(self, api_id, cls, handler):
+        ''' Call this to register a handler for an object shared by a
+        different hypergolix identity, or the same hypergolix identity
+        but a different application. Any api_id can have at most one 
+        share handler, across ALL forms of callback (internal, 
+        threadsafe, loopsafe).
+        
+        typecast determines what kind of ObjProxy class the object will
+        be cast into before being passed to the handler.
+        
+        This HANDLER will be called from within a single-use, dedicated
+        thread.
+        
+        This METHOD must be called from a different thread than the IPC 
+        embed's internal event loop.
         '''
-        # TODO: make better fix for race condition in applying state freezing. 
-        # (Freeze, and while awaiting response, update state; results in 
-        # later obj.state being incorrect)
-        state_ish = obj.state
-        
-        await self.await_session_async()
-        response = await self.send(
-            session = self.any_session,
-            msg = bytes(obj.address),
-            request_code = self.REQUEST_CODES['freeze_object']
+        # For simplicity, wrap the handler, so that any shares can be called
+        # normally from our own event loop.
+        async def wrapped_handler(*args, func=handler):
+            ''' Wrap the handler in run_in_executor.
+            '''
+            await self._loop.run_in_executor(
+                self._executor,
+                func,
+                *args
+            )
+            
+        call_coroutine_threadsafe(
+            coro = self._register_share_handler(
+                api_id, 
+                cls, 
+                wrapped_handler
+            ),
+            loop = self._loop
         )
-        return AppObj(
-            embed = self,
-            address = Ghid.from_bytes(response),
-            state = state_ish,
-            author = obj.author,
-            api_id = obj.api_id,
-            private = obj.private,
-            dynamic = False,
-            _legroom = 0,
-            threadsafe_callbacks = [],
-            async_callbacks = [],
-        )
+    
+    async def register_share_handler_loopsafe(self, api_id, cls, handler, 
+            target_loop):
+        ''' Call this to register a handler for an object shared by a
+        different hypergolix identity, or the same hypergolix identity
+        but a different application. Any api_id can have at most one 
+        share handler, across ALL forms of callback (internal, 
+        threadsafe, loopsafe).
         
-    def hold_obj_threadsafe(self, *args, **kwargs):
-        return call_coroutine_threadsafe(
-            self.hold_obj_async(*args, **kwargs),
-            loop = self._loop,
-        )
+        typecast determines what kind of ObjProxy class the object will
+        be cast into before being passed to the handler.
         
-    async def hold_obj_async(self, obj):
-        ''' Binds an object, preventing its deletion.
+        This HANDLER will be called within the specified event loop, 
+        also implying the specified event loop context (ie thread).
+        
+        This METHOD must be called from a different event loop than the 
+        IPC embed's internal event loop. It is internally loopsafe, and
+        need not be wrapped by run_coroutine_loopsafe.
         '''
-        await obj._hold()
-        await self._hold_object(obj)
-        
-        return True
-
-    async def _hold_object(self, obj):
-        ''' Handles only the holding of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        await self.await_session_async()
-        response = await self.send(
-            session = self.any_session,
-            msg = bytes(obj.address),
-            request_code = self.REQUEST_CODES['hold_object']
+        # For simplicity, wrap the handler, so that any shares can be called
+        # normally from our own event loop.
+        async def wrapped_handler(*args, loop=target_loop, coro=handler):
+            ''' Wrap the handler in run_in_executor.
+            '''
+            await run_coroutine_loopsafe(
+                coro = coro(*args),
+                target_loop = loop
+            )
+            
+        await run_coroutine_loopsafe(
+            coro = self._register_share_handler(
+                api_id, 
+                cls, 
+                wrapped_handler
+            ),
+            loop = self._loop
         )
+    
+    async def _register_nonlocal_handler(self, api_id, handler):
+        ''' Call this to register a handler for any private objects 
+        created by the same hypergolix identity and the same hypergolix 
+        application, but at a separate, concurrent session.
         
-        if response == b'\x01':
-            return True
-        else:
-            raise RuntimeError('Unknown error while updating object.')
+        This HANDLER will be called from within the IPC embed's internal
+        event loop.
         
-    def discard_obj_threadsafe(self, *args, **kwargs):
-        return call_coroutine_threadsafe(
-            self.discard_obj_async(*args, **kwargs),
-            loop = self._loop,
-        )
-        
-    async def discard_obj_async(self, obj):
-        ''' Attempts to delete an object. May not succeed, if another 
-        Agent has bound to it.
+        This METHOD must be called from within the IPC embed's internal
+        event loop.
         '''
-        await obj._discard()
-        await self._discard_object(obj)
+        raise NotImplementedError()
+        api_id = self._normalize_api_id(api_id)
         
-        return True
+        # self._nonlocal_handlers = {}
+    
+    def register_nonlocal_handler_threadsafe(self, api_id, handler):
+        ''' Call this to register a handler for any private objects 
+        created by the same hypergolix identity and the same hypergolix 
+        application, but at a separate, concurrent session.
         
-    async def _discard_object(self, obj):
-        ''' Handles only the discarding of an object via the hypergolix
-        service.
+        This HANDLER will be called from within a single-use, dedicated
+        thread.
+        
+        This METHOD must be called from a different thread than the IPC 
+        embed's internal event loop.
         '''
-        await self.await_session_async()
-        response = await self.send(
-            session = self.any_session,
-            msg = bytes(obj.address),
-            request_code = self.REQUEST_CODES['discard_object']
-        )
+        raise NotImplementedError()
+        api_id = self._normalize_api_id(api_id)
         
-        if response != b'\x01':
-            raise RuntimeError('Unknown error while updating object.')
+        # self._nonlocal_handlers = {}
+    
+    async def register_nonlocal_handler_loopsafe(self, api_id, handler, loop):
+        ''' Call this to register a handler for any private objects 
+        created by the same hypergolix identity and the same hypergolix 
+        application, but at a separate, concurrent session.
         
-        del self._objs_by_ghid[obj.address]
-        return True
+        This HANDLER will be called within the specified event loop, 
+        also implying the specified event loop context (ie thread).
         
-    def delete_obj_threadsafe(self, *args, **kwargs):
-        return call_coroutine_threadsafe(
-            self.delete_obj_async(*args, **kwargs),
-            loop = self._loop,
-        )
-        
-    async def delete_obj_async(self, obj):
-        ''' Attempts to delete an object. May not succeed, if another 
-        Agent has bound to it.
+        This METHOD must be called from a different event loop than the 
+        IPC embed's internal event loop. It is internally loopsafe, and
+        need not be wrapped by run_coroutine_loopsafe.
         '''
-        await obj._delete()
-        await self._delete_object(obj)
+        raise NotImplementedError()
+        api_id = self._normalize_api_id(api_id)
         
-        return True
-
-    async def _delete_object(self, obj):
-        ''' Handles only the deleting of an object via the hypergolix
-        service. Does not manage anything to do with the AppObj itself.
-        '''
-        await self.await_session_async()
-        response = await self.send(
-            session = self.any_session,
-            msg = bytes(obj.address),
-            request_code = self.REQUEST_CODES['delete_object']
-        )
-        
-        if response != b'\x01':
-            raise RuntimeError('Unknown error while updating object.')
-        
-        try:
-            del self._objs_by_ghid[obj.address]
-        except KeyError:
-            pass
-        
-        return True
+        # self._nonlocal_handlers = {}
         
     async def deliver_startup_wrapper(self, session, request_body):
         ''' Deserializes an incoming object delivery, dispatches it to
@@ -1512,33 +1423,290 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             state = self.get_object(link)
             
         # Okay, now let's create an object for it
-        obj = AppObj(
-            embed = self, 
-            address = address, 
+        obj = ObjProxyBase(
+            hgxlink = self, 
             state = state, 
-            author = author, 
             api_id = api_id, 
-            private = False,
             dynamic = dynamic,
-            _legroom = None,
-            threadsafe_callbacks = [],
-            async_callbacks = [],
+            private = False,
+            ghid = address, 
+            binder = author, 
+            # _legroom = None,
         )
-            
-        # Well this is a huge hack. But something about the event loop 
-        # itself is fucking up control flow and causing the world to hang
-        # here.
-        # TODO: fix this.
-        worker = threading.Thread(
-            target = self._object_handlers[api_id],
-            daemon = True,
-            args = (obj,),
-            name = _generate_threadnames('embedsup')[0],
-        )
-        worker.start()
+        
+        # Set the startup obj internally so that _set_existing_token has access
+        # to it.
+        self._startup_obj = obj
         
         # Successful delivery. Return true
         return b'\x01'
+        
+    async def _get(self, cls, ghid):
+        ''' Loads an object into local memory from the hypergolix 
+        service.
+        
+        TODO: support implicit typecast based on api_id.
+        '''
+        response = await self.send(
+            session = self.any_session,
+            msg = bytes(ghid),
+            request_code = self.REQUEST_CODES['get_object']
+        )
+        
+        (
+            address,
+            author,
+            state, 
+            is_link, 
+            api_id, 
+            private, 
+            dynamic, 
+            _legroom
+        ) = self._unpack_object_def(response)
+            
+        if is_link:
+            # First discard the object, since we can't support it.
+            response = await self.send(
+                session = self.any_session,
+                msg = bytes(address),
+                request_code = self.REQUEST_CODES['discard_object']
+            )
+            
+            # Now raise.
+            raise NotImplementedError(
+                'Hypergolix does not yet support nested links to other '
+                'dynamic objects.'
+            )
+            # link = Ghid.from_bytes(state)
+            # state = await self._get(link)
+        
+        state = await cls._hgx_unpack(state)
+        return cls(
+            hgxlink = self,
+            state = state, 
+            api_id = api_id, 
+            dynamic = dynamic,
+            private = private, 
+            ghid = address, 
+            binder = author, 
+            # _legroom = _legroom,
+        )
+        
+    def get_threadsafe(self, cls, ghid):
+        ''' Loads an object into local memory from the hypergolix 
+        service.
+        '''
+        return call_coroutine_threadsafe(
+            coro = self._get(cls, ghid),
+            loop = self._loop,
+        )
+        
+    async def get_loopsafe(self, cls, ghid):
+        ''' Loads an object into local memory from the hypergolix 
+        service.
+        '''
+        return (await run_coroutine_loopsafe(
+            coro = self._get(cls, ghid),
+            target_loop = self._loop,
+        ))
+    
+    async def _new(self, cls, state, api_id=None, dynamic=True, private=False,
+                    *args, **kwargs):
+        ''' Create the object, yo.
+        '''
+        if api_id is None:
+            api_id = cls._hgx_DEFAULT_API_ID
+        
+        obj = cls(
+            hgxlink = self, 
+            state = state, 
+            api_id = api_id,
+            dynamic = dynamic,
+            private = private,
+            *args, **kwargs
+        )
+        await obj._hgx_update()
+        self._objs_by_ghid[obj.hgx_ghid] = obj
+        return obj
+        
+    def new_threadsafe(self, *args, **kwargs):
+        return call_coroutine_threadsafe(
+            coro = self._new(*args, **kwargs),
+            loop = self._loop,
+        )
+        
+    async def new_loopsafe(self, *args, **kwargs):
+        return (await run_coroutine_loopsafe(
+            coro = self._new(*args, **kwargs),
+            target_loop = self._loop,
+        ))
+        
+    async def _make_new(self, obj):
+        ''' Submits a request for making a new object, and returns the
+        resulting (address, binder).
+        '''
+        state = await obj._hgx_pack(
+            obj._proxy_3141592
+        )
+        
+        payload = self._pack_object_def(
+            None,
+            None,
+            state,
+            False, # is_link
+            self._normalize_api_id(obj._api_id_3141592), # api_id
+            obj.hgx_private,
+            obj.hgx_dynamic,
+            self._legroom
+        )
+        # Do this before making the request in case we disconnect immediately
+        # after making it.
+        binder = self.whoami
+        # Now actually make the object.
+        response = await self.send(
+            session = self.any_session,
+            msg = payload,
+            request_code = self.REQUEST_CODES['new_object']
+        )
+        
+        address = Ghid.from_bytes(response)
+        return address, binder
+        
+    async def _make_update(self, obj):
+        ''' Submits a request for updating an object. Does no LBYL 
+        checking if dynamic, etc; just goes for it.
+        '''
+        state = await obj._hgx_pack(
+            obj._proxy_3141592
+        )
+        msg = self._pack_object_def(
+            obj.hgx_ghid,
+            None, # Author
+            state,
+            False, # is_link
+            None, # api_id
+            None, # private
+            None, # dynamic
+            None # legroom
+        )
+        
+        response = await self.send(
+            session = self.any_session,
+            msg = msg,
+            request_code = self.REQUEST_CODES['update_object']
+        )
+        
+        if response != b'\x01':
+            raise RuntimeError('Unknown error while updating object.')
+            
+        # Let the object worry about callbacks.
+            
+        return True
+        
+    async def _make_sync(self, obj):
+        ''' Initiates a forceful upstream sync.
+        ''' 
+        response = await self.send(
+            session = self.any_session,
+            msg = bytes(obj.hgx_ghid),
+            request_code = self.REQUEST_CODES['sync_object']
+        )
+        
+        if response != b'\x01':
+            raise RuntimeError('Unknown error while updating object.')
+        
+    async def _make_share(self, obj, recipient):
+        ''' Handles only the sharing of an object via the hypergolix
+        service. Does not manage anything to do with the proxy itself.
+        '''
+        response = await self.send(
+            session = self.any_session,
+            msg = bytes(obj.hgx_ghid) + bytes(recipient),
+            request_code = self.REQUEST_CODES['share_object']
+        )
+        
+        if response == b'\x01':
+            return True
+        else:
+            raise RuntimeError('Unknown error while updating object.')
+    
+    async def _make_freeze(self, obj):
+        ''' Handles only the freezing of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        response = await self.send(
+            session = self.any_session,
+            msg = bytes(obj.hgx_ghid),
+            request_code = self.REQUEST_CODES['freeze_object']
+        )
+        
+        frozen = await self._get(
+            cls type(obj), 
+            ghid = Ghid.from_bytes(response)
+        )
+        
+        return frozen
+        
+    async def _make_hold(self, obj):
+        ''' Handles only the holding of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        response = await self.send(
+            session = self.any_session,
+            msg = bytes(obj.hgx_ghid),
+            request_code = self.REQUEST_CODES['hold_object']
+        )
+        
+        if response == b'\x01':
+            return True
+        else:
+            raise RuntimeError('Unknown error while holding object.')
+            
+    async def _make_discard(self, obj):
+        ''' Handles only the discarding of an object via the hypergolix
+        service.
+        '''
+        response = await self.send(
+            session = self.any_session,
+            msg = bytes(obj.hgx_ghid),
+            request_code = self.REQUEST_CODES['discard_object']
+        )
+        
+        if response != b'\x01':
+            raise RuntimeError('Unknown error while updating object.')
+        
+        # It's a weakvaluedict. Doing this doesn't make the object any freer,
+        # but it prevents us from fixing any future problems with it.
+        
+        # try:
+        #     del self._objs_by_ghid[obj.hgx_ghid]
+        # except KeyError:
+        #     pass
+            
+        return True
+        
+    async def _make_delete(self, obj):
+        ''' Handles only the deleting of an object via the hypergolix
+        service. Does not manage anything to do with the AppObj itself.
+        '''
+        response = await self.send(
+            session = self.any_session,
+            msg = bytes(obj.hgx_ghid),
+            request_code = self.REQUEST_CODES['delete_object']
+        )
+        
+        if response != b'\x01':
+            raise RuntimeError('Unknown error while updating object.')
+        
+        # It's a weakvaluedict. Doing this doesn't make the object any freer,
+        # but it prevents us from fixing any future problems with it.
+        
+        # try:
+        #     del self._objs_by_ghid[obj.address]
+        # except KeyError:
+        #     pass
+        
+        return True
         
     async def deliver_share_wrapper(self, session, request_body):
         ''' Deserializes an incoming object delivery, dispatches it to
@@ -1557,35 +1725,29 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         
         # Resolve any links
         if is_link:
-            link = Ghid.from_bytes(state)
-            # Note: this may cause things to freeze, because async
-            state = self.get_object(link)
+            raise NotImplementedError()
             
-        # Okay, now let's create an object for it
-        obj = AppObj(
-            embed = self, 
-            address = address, 
-            state = state, 
-            author = author, 
-            api_id = api_id, 
-            private = False,
-            dynamic = dynamic,
-            _legroom = None,
-            threadsafe_callbacks = [],
-            async_callbacks = [],
-        )
+        # This is async, which is single-threaded, so there's no race condition
+        try:
+            handler = self._share_handlers[api_id]
+            cls = self._share_typecast[api_id]
             
-        # Well this is a huge hack. But something about the event loop 
-        # itself is fucking up control flow and causing the world to hang
-        # here.
-        # TODO: fix this.
-        worker = threading.Thread(
-            target = self._object_handlers[api_id],
-            daemon = True,
-            args = (obj,),
-            name = _generate_threadnames('embedshr')[0],
-        )
-        worker.start()
+        except KeyError:
+            await self._deregister_api(api_id)
+            
+        else:
+            state = await cls._hgx_unpack(state)
+            obj = cls(
+                hgxlink = self,
+                state = state,
+                api_id = api_id,
+                dynamic = dynamic,
+                private = False,
+                ghid = address,
+                binder = author
+            )
+            # Run this concurrently, so that we can release the req/res session
+            asyncio.ensure_future(handler(obj))
         
         # Successful delivery. Return true
         return b'\x01'
@@ -1593,52 +1755,12 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
     async def deliver_object_wrapper(self, session, request_body):
         ''' Deserializes an incoming object delivery, dispatches it to
         the application, and serializes a response to the IPC host.
+        
+        Note that (despite the terrible name) this is only called when a
+        concurrent instance of the same application with the same 
+        hypergolix agent creates a (private) object.
         '''
-        (
-            address,
-            author,
-            state, 
-            is_link, 
-            api_id,
-            private, # Will be unused and set to None 
-            dynamic,
-            _legroom # Will be unused and set to None
-        ) = self._unpack_object_def(request_body)
-        
-        # Resolve any links
-        if is_link:
-            link = Ghid.from_bytes(state)
-            # Note: this may cause things to freeze, because async
-            state = self.get_object(link)
-            
-        # Okay, now let's create an object for it
-        obj = AppObj(
-            embed = self, 
-            address = address, 
-            state = state, 
-            author = author, 
-            api_id = api_id, 
-            private = False,
-            dynamic = dynamic,
-            _legroom = None,
-            threadsafe_callbacks = [],
-            async_callbacks = [],
-        )
-            
-        # Well this is a huge hack. But something about the event loop 
-        # itself is fucking up control flow and causing the world to hang
-        # here.
-        # TODO: fix this.
-        worker = threading.Thread(
-            target = self._object_handlers[api_id],
-            daemon = True,
-            args = (obj,),
-            name = _generate_threadnames('embedobj')[0],
-        )
-        worker.start()
-        
-        # Successful delivery. Return true
-        return b'\x01'
+        raise NotImplementedError()
 
     async def update_object_wrapper(self, session, request_body):
         ''' Deserializes an incoming object update, updates the AppObj
@@ -1655,20 +1777,26 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             dynamic, # Will be unused and set to None 
             _legroom # Will be unused and set to None
         ) = self._unpack_object_def(request_body)
-                
-        if address in self._objs_by_ghid:
+        
+        try:
+            obj = self._objs_by_ghid[address]
+        except KeyError:
+            # Just discard the object, since we don't actually have a copy of
+            # it locally.
+            response = await self.send(
+                session = self.any_session,
+                msg = bytes(address),
+                request_code = self.REQUEST_CODES['discard_object']
+            )
+        else:
             if is_link:
-                link = Ghid.from_bytes(state)
-                # Note: this may cause things to freeze, because async
-                state = self.get_object(link)
-            
-            await self._objs_by_ghid[address]._update(state)
-            await self._objs_by_ghid[address]._notify_callbacks()
-            
-            # self._ws_loop.call_soon_threadsafe(, state)
-            # self._objs_by_ghid[address]._update(state)
-            
-            # python tests/trashtest/trashtest_ipc_hosts.py
+                # Uhhhhhh... Raise? It's not really appropriate to discard...
+                raise NotImplementedError(
+                    'Cannot yet support objects with nested dynamic links.'
+                )
+                
+            else:
+                await obj._force_pull_3141592(state)
             
         return b'\x01'
         
@@ -1677,7 +1805,14 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         the object.
         '''
         ghid = Ghid.from_bytes(request_body)
-        await self._objs_by_ghid[ghid]._delete()
+        
+        try:
+            obj = self._objs_by_ghid[ghid]
+        except KeyError:
+            pass
+        else:
+            await obj._force_delete_3141592()
+            
         return b'\x01'
 
     async def notify_share_failure_wrapper(self, session, request_body):
@@ -1693,7 +1828,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         host.
         '''
         return b''
-
+        
 
 class AppObj:
     ''' A class for objects to be used by apps. Can be updated (if the 

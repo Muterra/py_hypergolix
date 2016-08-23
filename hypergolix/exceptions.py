@@ -64,6 +64,7 @@ __all__ = [
     'DispatchWarning',
     # These are IPC/embed errors
     'IPCError',
+    'DeadObject',
     # These are comms errors
     'CommsError',
     'RequestError',
@@ -235,6 +236,29 @@ class DispatchWarning(HypergolixException, RuntimeWarning):
 class IPCError(HypergolixException, RuntimeError):
     ''' Raised when something goes wrong with IPC or embed (bad 
     commands, etc).
+    '''
+    pass
+    
+    
+class DeadObject(IPCError, TypeError):
+    ''' Raised when operations are attempted on a local object that is
+    already dead.
+    '''
+    pass
+    
+    
+class LocallyImmutable(IPCError, TypeError):
+    ''' Raised when an object is locally immutable. That means either:
+    1. the object is static
+    2. the object is not "owned" by the currently-logged-in Hypergolix
+        process.
+    '''
+    pass
+    
+    
+class Unsharable(IPCError, TypeError):
+    ''' Raised when an object cannot be shared, typically because it is
+    private.
     '''
     pass
     

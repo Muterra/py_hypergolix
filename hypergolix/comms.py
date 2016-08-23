@@ -727,7 +727,9 @@ class Autoresponder(LooperTrooper):
         try:
             return next(iter(self._connection_lookup))
         except StopIteration as exc:
-            raise RuntimeError('No session available.') from exc
+            raise RuntimeError(
+                'No session available. Must first connect to client/server.'
+            ) from exc
         
     async def await_session_async(self):
         ''' Waits for a session to be available.

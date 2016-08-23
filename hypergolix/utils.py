@@ -53,10 +53,7 @@ from .exceptions import HandshakeError
 
 # Control * imports.
 __all__ = [
-    'StaticObject',
-    'DynamicObject',
-    'RawObj',
-    'AppObj',
+    # 'StaticObject',
 ]
 
 
