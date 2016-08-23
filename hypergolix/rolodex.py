@@ -329,66 +329,38 @@ class Rolodex:
         its own dedicated rolodex pipeline.
         '''
         call_coroutine_threadsafe(
-            coro = self._share_handler(target, sender),
+            coro = self._ipccore.process_share(target, sender),
             loop = self._ipccore._loop
-        )
-        
-    async def _share_handler(self, target, sender):
-        ''' Wrapper to inject our share_handler into the _ipccore's 
-        event loop.
-        '''
-        # Build a callsheet for the target.
-        callsheet = await self._ipccore.make_callsheet(target)
-        # Go ahead and distribute it to the appropriate endpoints.
-        await self._ipccore.distribute_to_endpoints(
-            callsheet,
-            self._ipccore.send_share,
-            target,
-            sender
         )
     
     def receipt_ack_handler(self, target, recipient):
         ''' Receives a share ack from the rolodex and passes it on to 
         the application that requested the share.
         '''
-        call_coroutine_threadsafe(
-            coro = self._receipt_ack_handler(target, recipient),
-            loop = self._ipccore._loop
-        )
-            
-    async def _receipt_ack_handler(self, target, recipient):
-        ''' Wrapper to inject our handler into the _ipccore event loop.
-        '''
         sharepair = _SharePair(target, recipient)
-        callsheet = self._outstanding_shares.pop_any(sharepair)
+        tokens = self._outstanding_shares.pop_any(sharepair)
         
-        # Distribute the share success to all apps that requested its delivery
-        await self._ipccore._robodialer(
-            self._ipccore.notify_share_success,
-            callsheet,
-            target,
-            recipient
+        call_coroutine_threadsafe(
+            coro = self._ipccore.process_share_success(
+                target, 
+                recipient, 
+                tokens
+            ),
+            loop = self._ipccore._loop
         )
     
     def receipt_nak_handler(self, target, recipient):
         ''' Receives a share nak from the rolodex and passes it on to 
         the application that requested the share.
         '''
-        call_coroutine_threadsafe(
-            coro = self._receipt_nak_handler(target, recipient),
-            loop = self._ipccore._loop
-        )
-            
-    async def _receipt_nak_handler(self, target, recipient):
-        ''' Wrapper to inject our handler into the _ipccore event loop.
-        '''
         sharepair = _SharePair(target, recipient)
-        callsheet = self._outstanding_shares.pop_any(sharepair)
+        tokens = self._outstanding_shares.pop_any(sharepair)
         
-        # Distribute the share failure to all apps that requested its delivery
-        await self._ipccore._robodialer(
-            self._ipccore.notify_share_failure,
-            callsheet,
-            target,
-            recipient
+        call_coroutine_threadsafe(
+            coro = self._ipccore.process_share_failure(
+                target,
+                recipient,
+                tokens
+            ),
+            loop = self._ipccore._loop
         )

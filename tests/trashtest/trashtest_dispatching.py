@@ -128,6 +128,11 @@ class MockIPCCore(LooperTrooper):
         '''
         await self._shutdown_init_flag.wait()
         
+    async def process_share(self, target, sender):
+        ''' Mockmockmock
+        '''
+        pass
+        
     async def make_callsheet(self, target):
         ''' Mocking callsheet.
         '''
@@ -166,7 +171,7 @@ class TestDispatcher(unittest.TestCase):
         self.dispatch.assemble()
         self.dispatch.bootstrap(
             all_tokens = set(),
-            startup_objs = SetMap(),
+            startup_objs = {},
             private_by_ghid = {},
             token_lock = threading.Lock()
         )
@@ -205,30 +210,25 @@ class TestDispatcher(unittest.TestCase):
                                 msg='Failed to block unknown app.'):
             self.dispatch.register_startup(token, ghid)
         self.assertNotIn(token, self.dispatch._startup_by_token)
-        self.assertNotIn(ghid, self.dispatch._startup_by_token.get_any(token))
         
         token = self.dispatch.new_token()
         ghid = make_random_ghid()
         self.dispatch._all_known_tokens.add(token)
         self.dispatch.register_startup(token, ghid)
         self.assertIn(token, self.dispatch._startup_by_token)
-        self.assertIn(ghid, self.dispatch._startup_by_token.get_any(token))
+        self.assertEqual(ghid, self.dispatch._startup_by_token[token])
         
-        ghids = self.dispatch.get_startup_objs(token)
-        self.assertIn(ghid, ghids)
-        self.assertEqual(len(ghids), 1)
+        ghid2 = self.dispatch.get_startup_obj(token)
+        self.assertEqual(ghid, ghid2)
+        
+        self.dispatch.deregister_startup(token)
+        self.assertEqual(self.dispatch.get_startup_obj(token), None)
         
         ghid = make_random_ghid()
         self.dispatch.register_startup(token, ghid)
         
-        ghids = self.dispatch.get_startup_objs(token)
-        self.assertIn(ghid, ghids)
-        self.assertEqual(len(ghids), 2)
-        
-        self.dispatch.deregister_startup(token, ghid)
-        ghids = self.dispatch.get_startup_objs(token)
-        self.assertNotIn(ghid, ghids)
-        self.assertEqual(len(ghids), 1)
+        ghid2 = self.dispatch.get_startup_obj(token)
+        self.assertEqual(ghid, ghid2)
         
     def test_reg_private(self):
         ghid = make_random_ghid()

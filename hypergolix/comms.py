@@ -379,9 +379,16 @@ class _AutoresponderSession:
             await waiter.put(SessionClosed())
             
     def __repr__(self):
+        # Example: <_AutoresponderSession 0x52b2978>
         clsname = type(self).__name__
         sess_str = str(hex(id(self)))
         return '<' + clsname + ' ' + sess_str + '>'
+        
+    def __str__(self):
+        # Example: _AutoresponderSession(0x52b2978)
+        clsname = type(self).__name__
+        sess_str = str(hex(id(self)))
+        return clsname + '(' + sess_str + ')'
         
         
 class Autoresponder(LooperTrooper):

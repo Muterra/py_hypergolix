@@ -174,9 +174,10 @@ class ObjProxyBase:
         9.  hgx_binder
         10. hgx_persistence
         11. hgx_isalive
-        12. _hgx_update
-        13. hgx_update_threadsafe
-        14. hgx_update_loopsafe
+        12. hgx_update
+        12. _hgx_push
+        13. hgx_push_threadsafe
+        14. hgx_push_loopsafe
         15. _hgx_register_callback
         16. hgx_register_callback_threadsafe
         17. hgx_register_callback_loopsafe
@@ -254,8 +255,8 @@ class ObjProxyBase:
     def __init__(self, hgxlink, state, api_id, dynamic, private, ghid=None, 
                 binder=None):
         ''' Allocates the object locally, but does NOT create it. You
-        have to explicitly call hgx_update, hgx_update_threadsafe, or
-        hgx_update_loopsafe to actually create the sync'd object and get
+        have to explicitly call hgx_push, hgx_push_threadsafe, or
+        hgx_push_loopsafe to actually create the sync'd object and get
         a ghid.
         '''
         # Do this so we don't get circular references and can therefore support
@@ -346,6 +347,11 @@ class ObjProxyBase:
         be deleted.
         '''
         raise NotImplementedError()
+        
+    def hgx_update(self, value):
+        ''' Forcibly updates the proxy object to something else.
+        '''
+        self._proxy_3141592 = value
 
     def _hgx_register_callback(self, callback):
         ''' Register a callback to be called whenever an upstream update
@@ -422,16 +428,14 @@ class ObjProxyBase:
         '''
         self._callback_3141592 = None
         
-    async def _hgx_update(self):
+    async def _hgx_push(self):
         ''' Pushes object state upstream.
         '''
-        # Error traps for dead objects and non-owned objects
+        # Error traps for dead object
         if not self._isalive_3141592:
             raise DeadObject()
-        if self._hgxlink_3141592.whoami != self.hgx_binder:
-            raise LocallyImmutable('No access rights to mutate object.')
             
-        # We own the object and it is still alive.
+        # The object is still alive.
         if self._ghid_3141592 is None:
             # It's even new!
             ghid, binder = await self._hgxlink_3141592._make_new(obj=self)
@@ -440,25 +444,31 @@ class ObjProxyBase:
         
         # The object is not new. Is it static?
         else:
-            if not self._dynamic_3141592:
+            # Error trap if the object isn't "owned" by us
+            if self._hgxlink_3141592.whoami != self.hgx_binder:
+                raise LocallyImmutable('No access rights to mutate object.')
+            
+            # Error trap if it's static
+            elif not self._dynamic_3141592:
                 raise LocallyImmutable('Cannot update a static object.')
             
+            # All traps passed. Make the call.
             else:
                 await self._hgxlink_3141592._make_update(obj=self)
 
-    def hgx_update_threadsafe(self):
+    def hgx_push_threadsafe(self):
         '''
         '''
         call_coroutine_threadsafe(
-            coro = self._hgx_update(),
+            coro = self._hgx_push(),
             loop = self._hgxlink_3141592._loop
         )
 
-    async def hgx_update_loopsafe(self):
+    async def hgx_push_loopsafe(self):
         '''
         '''
         await run_coroutine_loopsafe(
-            coro = self._hgx_update(),
+            coro = self._hgx_push(),
             target_loop = self._hgxlink_3141592._loop
         )
 
@@ -672,7 +682,16 @@ class ObjProxyBase:
         
         # If there is an update callback defined, run it concurrently.
         if self._callback_3141592 is not None:
+            logger.debug(
+                'Update pulled for ' + str(self._ghid_3141592) + '. Running '
+                'callback.'
+            )
             asyncio.ensure_future(self._callback_3141592(self))
+        else:
+            logger.debug(
+                'Update pulled for ' + str(self._ghid_3141592) + ', but it '
+                'has no callback.'
+            )
             
     def __repr__(self):
         classname = type(self).__name__
@@ -776,7 +795,7 @@ class ObjProxyBase:
         '''
         # Try to GET the attribute with US, the actual proxy.
         try:
-            super().__getattribute__(self, name)
+            super().__getattribute__(name)
         
         # We failed to get it here. Pass the setattr to the referenced object.
         except AttributeError:
@@ -800,7 +819,7 @@ class ObjProxyBase:
         '''
         # Try to GET the attribute with US, the actual proxy.
         try:
-            super().__getattribute__(self, name)
+            super().__getattribute__(name)
         
         # We failed to get it here. Pass the setattr to the referenced object.
         except AttributeError:

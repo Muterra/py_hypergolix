@@ -62,6 +62,8 @@ from hypergolix.comms import WSBasicClient
 from hypergolix.ipc import IPCCore
 from hypergolix.ipc import IPCEmbed
 
+from hypergolix.objproxy import ObjProxyBase
+
 from golix import Ghid
 
 # from hypergolix.embeds import WebsocketsEmbed
@@ -286,27 +288,37 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         )
         
         # AND THUS BEGINS CLIENT/APPLICATION SETUP!
-        self.app1 = Autocomms(
-            autoresponder_class = IPCEmbed,
-            connector_class = WSBasicClient,
-            connector_kwargs = {
-                'host': 'localhost',
-                'port': 4628,
-            },
+        self.app1 = IPCEmbed(
+            aengel = self.aengel,
+            debug = True,
+            threaded = True,
+            thread_name = 'app1em'
+        )
+        self.app1.add_ipc_threadsafe(
+            WSBasicClient,
+            host = 'localhost',
+            port = 4628,
             debug = True,
             aengel = self.aengel,
+            threaded = True,
+            thread_name = 'app1WS',
         )
         # self.app1endpoint = self.ipccore.any_session
         
-        self.app2 = Autocomms(
-            autoresponder_class = IPCEmbed,
-            connector_class = WSBasicClient,
-            connector_kwargs = {
-                'host': 'localhost',
-                'port': 4628,
-            },
+        self.app2 = IPCEmbed(
+            aengel = self.aengel,
+            debug = True,
+            threaded = True,
+            thread_name = 'app2em'
+        )
+        self.app2.add_ipc_threadsafe(
+            WSBasicClient,
+            host = 'localhost',
+            port = 4628,
             debug = True,
             aengel = self.aengel,
+            threaded = True,
+            thread_name = 'app2WS',
         )
         # endpoints = set(self.ipccore.sessions)
         # self.app2endpoint = list(endpoints - {self.app1endpoint})[0]
@@ -316,18 +328,17 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
     def test_client1(self):
         # Test app tokens.
         # -----------
-        self.app1.new_token_threadsafe()
-        token1 = self.app1.app_token
+        token1 = self.app1.get_new_token_threadsafe()
         self.assertIn(token1, self.dispatch.tokens)
         self.assertIn(token1, self.ipccore._endpoint_from_token)
         self.assertTrue(isinstance(token1, bytes))
         
         with self.assertRaises(RuntimeError, 
             msg='IPC allowed concurrent token re-registration.'):
-                self.app2.set_token_threadsafe(token1)
+                self.app2.set_existing_token_threadsafe(token1)
                 
         # Good, that didn't work
-        self.app2.new_token_threadsafe()
+        self.app2.get_new_token_threadsafe()
         token2 = self.app2.app_token
         self.assertIn(token2, self.dispatch.tokens)
         self.assertIn(token2, self.ipccore._endpoint_from_token)
@@ -342,50 +353,61 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         
         # Test whoami
         # -----------
-        whoami = self.app1.whoami_threadsafe()
+        whoami = self.app1.whoami
         self.assertEqual(whoami, TEST_AGENT1.ghid)
         
         # Test registering an api_id
         # -----------
-        self.app1.register_api_threadsafe(self.__api_id, self._objhandler_1)
-        self.app2.register_api_threadsafe(self.__api_id, self._objhandler_2)
+        self.app1.register_share_handler_threadsafe(
+            self.__api_id, 
+            ObjProxyBase,
+            self._objhandler_1
+        )
+        self.app2.register_share_handler_threadsafe(
+            self.__api_id, 
+            ObjProxyBase,
+            self._objhandler_2
+        )
         registered_apis = \
             self.ipccore._endpoints_from_api.get_any(self.__api_id)
         self.assertEqual(len(registered_apis), 2)
         
         # Test creating a private, static new object with that api_id
         # -----------
-        obj1 = self.app1.new_obj_threadsafe(
+        obj1 = self.app1.new_threadsafe(
+            cls = ObjProxyBase,
             state = pt0,
             api_id = self.__api_id,
             dynamic = False,
             private = True
         )
-        self.assertIn(obj1.address, self.oracle.objs)
+        self.assertIn(obj1.hgx_ghid, self.oracle.objs)
         # Private registration = app2 should not get a notification.
         self.assertFalse(self.notification_checker_2(.25))
         # Nor should app1, who created it.
         self.assertFalse(self.notification_checker_1(.05))
-        self.assertNotIn(obj1.address, self.dispatch.startups)
+        self.assertNotIn(obj1.hgx_ghid, self.dispatch.startups)
         # Private, so we should see it.
-        self.assertIn(obj1.address, self.dispatch.parents)
+        self.assertIn(obj1.hgx_ghid, self.dispatch.parents)
         
         # And again, but dynamic, and not private.
         # -----------
-        obj2 = self.app1.new_obj_threadsafe(
+        obj2 = self.app1.new_threadsafe(
+            cls = ObjProxyBase,
             state = pt1,
             api_id = self.__api_id,
-            dynamic = True
+            dynamic = True,
         )
-        self.assertIn(obj2.address, self.oracle.objs)
+        self.assertTrue(obj2.hgx_dynamic)
+        self.assertIn(obj2.hgx_ghid, self.oracle.objs)
         # Since app2 also registered this API, it should get a notification.
         self.assertTrue(self.notification_checker_2())
         # But app1 should not, because it created the object.
         self.assertFalse(self.notification_checker_1(.05))
-        self.assertNotIn(obj2.address, self.dispatch.startups)
-        self.assertNotIn(obj2.address, self.dispatch.parents)
+        self.assertNotIn(obj2.hgx_ghid, self.dispatch.startups)
+        self.assertNotIn(obj2.hgx_ghid, self.dispatch.parents)
         # Also make sure we have listeners for it
-        dispatchable2 = self.oracle.objs[obj2.address]
+        dispatchable2 = self.oracle.objs[obj2.hgx_ghid]
         # Note that currently, as we're immediately sending the whole object to
         # apps, they are getting added as listeners immediately.
         # self.assertEqual(
@@ -401,10 +423,10 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         # -----------
         # Huh, interestingly this shouldn't fail, if the second app is able to
         # directly guess the right address for the private object.
-        joint1 = self.app2.get_obj_threadsafe(obj1.address)
+        joint1 = self.app2.get_threadsafe(ObjProxyBase, obj1.hgx_ghid)
         self.assertEqual(obj1, joint1)
         
-        joint2 = self.app2.get_obj_threadsafe(obj2.address)
+        joint2 = self.app2.get_threadsafe(ObjProxyBase, obj2.hgx_ghid)
         self.assertEqual(obj2, joint2)
         self.assertEqual(
             len(self.ipccore._update_listeners.get_any(dispatchable2.ghid)), 
@@ -413,33 +435,37 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         
         # Test object updates
         # -----------
-        self.app1.update_obj_threadsafe(obj2, pt2)
+        obj2.hgx_update(pt2)
+        obj2.hgx_push_threadsafe()
+        # Note that we have to wait for the callback background process to 
+        # complete
+        time.sleep(.1)
         self.assertEqual(obj2, joint2)
         
         # Test object sharing
         # -----------
-        self.app1.share_obj_threadsafe(obj2, TEST_AGENT2.ghid)
-        self.assertIn(obj2.address, self.rolodex.shared_objects)
-        recipient, requesting_token = self.rolodex.shared_objects[obj2.address]
+        obj2.hgx_share_threadsafe(TEST_AGENT2.ghid)
+        self.assertIn(obj2.hgx_ghid, self.rolodex.shared_objects)
+        recipient, requesting_token = self.rolodex.shared_objects[obj2.hgx_ghid]
         self.assertEqual(recipient, TEST_AGENT2.ghid)
         self.assertEqual(requesting_token, token1)
         
         # Test object freezing
         # -----------
-        frozen2 = self.app1.freeze_obj_threadsafe(obj2)
-        self.assertEqual(frozen2.state, obj2.state)
-        self.assertIn(frozen2.address, self.oracle.objs)
+        frozen2 = obj2.hgx_freeze_threadsafe()
+        self.assertEqual(frozen2, obj2)
+        self.assertIn(frozen2.hgx_ghid, self.oracle.objs)
         
         # Test object holding
         # -----------
-        self.app2.hold_obj_threadsafe(frozen2)
-        dispatchable3 = self.oracle.objs[frozen2.address]
+        frozen2.hgx_hold_threadsafe()
+        dispatchable3 = self.oracle.objs[frozen2.hgx_ghid]
         self.assertTrue(dispatchable3.held)
         
         # Test object discarding
         # -----------
-        self.app2.discard_obj_threadsafe(joint2)
-        self.assertTrue(joint2._inoperable)
+        joint2.hgx_discard_threadsafe()
+        self.assertFalse(joint2._isalive_3141592)
         self.assertEqual(
             len(self.ipccore._update_listeners.get_any(dispatchable2.ghid)), 
             1
@@ -448,10 +474,10 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         
         # Test object discarding
         # -----------
-        dispatchable1 = self.oracle.objs[obj1.address]
-        self.app1.delete_obj_threadsafe(obj1)
+        dispatchable1 = self.oracle.objs[obj1.hgx_ghid]
+        obj1.hgx_delete_threadsafe()
         self.assertTrue(dispatchable1.deleted)
-        self.assertTrue(obj1._inoperable)
+        self.assertFalse(obj1._isalive_3141592)
         
         # --------------------------------------------------------------------
         # Comment this out if no interactivity desired
@@ -464,6 +490,6 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
 
 if __name__ == "__main__":
     from _fixtures import logutils
-    logutils.autoconfig()
+    logutils.autoconfig('debug')
     
     unittest.main()

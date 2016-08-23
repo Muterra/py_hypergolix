@@ -252,7 +252,7 @@ class Dispatcher:
             else:
                 self._startup_by_token[token] = ghid
                 
-    def deregister_startup(self, token, ghid):
+    def deregister_startup(self, token):
         ''' Deregisters a ghid to be used as a startup object for token.
         '''
         with self._token_lock:

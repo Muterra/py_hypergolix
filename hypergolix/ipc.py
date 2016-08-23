@@ -280,9 +280,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
     async def notify_update(self, ghid, deleted=False):
         ''' Updates all ipc endpoints with copies of the object.
         '''
-        callsheet = set()
-        for listener in self._update_listeners.get_any(ghid):
-            callsheet.add(self._token_from_endpoint[listener])
+        callsheet = self._update_listeners.get_any(ghid)
         
         # Go ahead and distribute it to the appropriate endpoints.
         if deleted:
@@ -297,8 +295,59 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                 self.send_update,
                 ghid
             )
+            
+    async def process_share(self, target, sender):
+        ''' Manage everything about processing incoming shares.
+        '''
+        # Build a callsheet for the target.
+        callsheet = await self._make_callsheet(target)
+        # Go ahead and distribute it to the appropriate endpoints.
+        await self._ipccore.distribute_to_endpoints(
+            callsheet,
+            self._ipccore.send_share,
+            target,
+            sender
+        )
+        
+    async def process_share_success(self, target, recipient, tokens):
+        ''' Wrapper to notify all requestors of share success.
+        '''
+        callsheet = set()
+        for token in tokens:
+            # Escape any keys that have gone missing during the rat race
+            try:
+                callsheet.add(self._endpoint_from_token[token])
+            except KeyError:
+                pass
+        
+        # Distribute the share success to all apps that requested its delivery
+        await self._robodialer(
+            self.notify_share_success,
+            callsheet,
+            target,
+            recipient
+        )
     
-    async def make_callsheet(self, ghid, skip_endpoint=None, skip_tokens=None):
+    async def process_share_failure(self, target, recipient, tokens):
+        ''' Wrapper to notify all requestors of share failure.
+        '''
+        callsheet = set()
+        for token in tokens:
+            # Escape any keys that have gone missing during the rat race
+            try:
+                callsheet.add(self._endpoint_from_token[token])
+            except KeyError:
+                pass
+        
+        # Distribute the share success to all apps that requested its delivery
+        await self._robodialer(
+            self.notify_share_failure,
+            callsheet,
+            target,
+            recipient
+        )
+    
+    async def _make_callsheet(self, ghid, skip_endpoint=None):
         ''' Generates a callsheet (set of tokens) for the dispatchable
         obj.
         
@@ -310,7 +359,6 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         TODO: make this exclusively apply to object sharing, NOT to obj
         updates, which uses _update_listeners directly and exclusively.
         '''
-        logger.debug('Generating callsheet.')
         try:
             obj = self._oracle.get_object(
                 gaoclass = _Dispatchable, 
@@ -332,54 +380,35 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         
         private_owner = self._dispatch.get_parent_token(ghid)
         if private_owner:
-            logger.debug('Ghid has a private owner.')
-            callsheet.add(private_owner)
+            try:
+                private_endpoint = self._endpoint_from_token[private_owner]
+            except KeyError:
+                logger.warning(
+                    'Could not retrieve the object\'s private owner, with '
+                    'traceback: \n' + ''.join(traceback.format_exc())
+                )
+            else:
+                callsheet.add(private_endpoint)
             
         else:
-            logger.debug('Ghid has NO private owner.')
-            endpoints = set()
-            
             # Add any endpoints based on their tracking of the api.
             logger.debug(
-                'Interested API endpoints: ' + 
-                str(len(self._endpoints_from_api.get_any(obj.api_id)))
+                'Object has no private owner; generating list of approx. ' + 
+                str(len(self._endpoints_from_api.get_any(obj.api_id))) + 
+                ' interested API endpoints.'
             )
-            endpoints.update(self._endpoints_from_api.get_any(obj.api_id))
+            callsheet.update(self._endpoints_from_api.get_any(obj.api_id))
             
             # Add any endpoints based on their existing listening status.
             logger.debug(
-                'Object listeners: ' + 
-                str(self._update_listeners.get_any(obj.ghid))
+                'Adding an additional approx ' + 
+                str(len(self._update_listeners.get_any(obj.ghid))) + 
+                ' explicit object listeners.'
             )
-            endpoints.update(self._update_listeners.get_any(obj.ghid))
+            callsheet.update(self._update_listeners.get_any(obj.ghid))
             
-            # Convert endpoints to tokens.
-            for endpoint in endpoints:
-                logger.debug(
-                    'Adding endpoint to callsheet: ' + repr(endpoint)
-                )
-                callsheet.add(self._token_from_endpoint[endpoint])
-                
-        # Normally the keyerror will catch both default of None as well as any 
-        # missing objects, but because it's a weakly referenced lookup, we have
-        # to explicitly skip an undefined skip_endpoint
-        if skip_endpoint is not None:
-            try:
-                skip_token = self._token_from_endpoint[skip_endpoint]
-            except KeyError:
-                logger.warning(
-                    'Skip endpoint was included in making callsheet, but it '
-                    'appears to have been removed during generation.'
-                )
-                skip_token = None
-            else:
-                logger.debug('Skipping token for ' + repr(skip_endpoint))
-        else:
-            skip_token = None
-            
-        callsheet.discard(skip_token)
-        # What would use this?
-        # callsheet.difference_update(skip_tokens)
+        # And discard any skip_endpoint, if it's there.
+        callsheet.discard(skip_endpoint)
         
         logger.debug('Callsheet generated: ' + repr(callsheet))
         
@@ -403,22 +432,22 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             
     async def _robodialer(self, caller, callsheet, *args):
         tasks = []
-        for token in callsheet:
-            # For each token...
+        for endpoint in callsheet:
+            # For each endpoint...
             tasks.append(
                 # ...in parallel, schedule a single execution
                 asyncio.ensure_future(
                     # Of a _distribute_single call to the distributor.
-                    caller(token, *args)
+                    caller(endpoint, *args)
                 )
             )
         await asyncio.gather(*tasks)
                     
-    async def _distr_single(self, token, distributor, *args):
+    async def _distr_single(self, endpoint, distributor, *args):
         ''' Distributes a single request to a single token.
         '''
         try:
-            await distributor(self._endpoint_from_token[token], *args)
+            await distributor(endpoint, *args)
             
         except:
             logger.error(
@@ -698,11 +727,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
     async def get_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.get_object into a bytes return.
         
-        Requires an existing app token.
+        Does not require an existing app token.
         '''
-        if endpoint not in self._token_from_endpoint:
-            raise IPCError('Must register app token prior to getting objects.')
-            
         ghid = Ghid.from_bytes(request_body)
         obj = self._oracle.get_object(
             gaoclass = _Dispatchable, 
@@ -737,11 +763,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
     async def new_object_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_object into a bytes return.
         
-        Requires an existing app token.
+        Does not require an existing app token.
         '''
-        if endpoint not in self._token_from_endpoint:
-            raise IPCError('Must register app token prior to making objects.')
-        
         (
             address, # Unused and set to None.
             author, # Unused and set to None.
@@ -774,6 +797,10 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         
         # If the object is private, register it as such.
         if private:
+            logger.debug(
+                'Creating private object for ' + str(endpoint) + 
+                '; bypassing distribution.'
+            )
             self._dispatch.register_private(app_token, obj.ghid)
             
         # Otherwise, make sure to notify any other interested parties.
@@ -781,7 +808,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             # TODO: change send_object to just send the ghid, not the object
             # itself, so that the app doesn't have to be constantly discarding
             # stuff it didn't create?
-            callsheet = await self.make_callsheet(
+            callsheet = await self._make_callsheet(
                 obj.ghid, 
                 skip_endpoint = endpoint
             )
@@ -790,19 +817,16 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             await self.distribute_to_endpoints(
                 callsheet,
                 self.send_share,
-                obj.ghid
+                obj.ghid,
+                self._golcore.whoami
             )
         
         return bytes(obj.ghid)
         
     async def update_object_wrapper(self, endpoint, request_body):
-        ''' Wraps self.dispatch.new_token into a bytes return.
-        
-        Requires existing app token.
+        ''' Called to handle downstream application update requests.
         '''
-        if endpoint not in self._token_from_endpoint:
-            raise IPCError('Must register app token before updating objects.')
-            
+        logger.debug('Handling update request from ' + str(endpoint))
         (
             address,
             author, # Unused and set to None.
@@ -827,7 +851,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         obj.update(state)
         
         if not obj.private:
-            callsheet = await self.make_callsheet(
+            logger.debug('Object is NOT private; distributing.')
+            callsheet = await self._make_callsheet(
                 obj.ghid, 
                 skip_endpoint = endpoint
             )
@@ -837,6 +862,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                 self.send_update,
                 obj.ghid
             )
+        else:
+            logger.debug('Object IS private; skipping distribution.')
         
         return b'\x01'
         
@@ -845,9 +872,6 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         a new copy of the object was available, it will be sent 
         independently.
         '''
-        if endpoint not in self._token_from_endpoint:
-            raise IPCError('Must register app token before syncing objects.')
-            
         ghid = Ghid.from_bytes(request_body)
         self._salmonator.pull(ghid)
         return b'\x01'
@@ -869,11 +893,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
     async def freeze_object_wrapper(self, endpoint, request_body):
         ''' Wraps object freezing.
         
-        Requires an app token.
+        Does not require an existing app token.
         '''
-        if endpoint not in self._token_from_endpoint:
-            raise IPCError('Must register app token before freezing objects.')
-            
         ghid = Ghid.from_bytes(request_body)
         obj = self._oracle.get_object(
             gaoclass = _Dispatchable, 
@@ -886,11 +907,10 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         return bytes(frozen_address)
         
     async def hold_object_wrapper(self, endpoint, request_body):
-        ''' Wraps object holding. Requires an app token.
+        ''' Wraps object holding.
+        
+        Does not require an existing app token.
         '''
-        if endpoint not in self._token_from_endpoint:
-            raise IPCError('Must register app token before holding objects.')
-            
         ghid = Ghid.from_bytes(request_body)
         obj = self._oracle.get_object(
             gaoclass = _Dispatchable, 
@@ -902,11 +922,10 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         return b'\x01'
         
     async def discard_object_wrapper(self, endpoint, request_body):
-        ''' Wraps object discarding. Requires an app token.
+        ''' Wraps object discarding. 
+        
+        Does not require an existing app token.
         '''
-        if endpoint not in self._token_from_endpoint:
-            raise IPCError('Register an app token before discarding objects.')
-            
         ghid = Ghid.from_bytes(request_body)
         obj = self._oracle.get_object(
             gaoclass = _Dispatchable, 
@@ -920,11 +939,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
     async def delete_object_wrapper(self, endpoint, request_body):
         ''' Wraps object deletion with a packable format.
         
-        Requires an app token.
+        Does not require an existing app token.
         '''
-        if endpoint not in self._token_from_endpoint:
-            raise IPCError('Must register app token before deleting objects.')
-            
         ghid = Ghid.from_bytes(request_body)
         obj = self._oracle.get_object(
             gaoclass = _Dispatchable, 
@@ -1433,6 +1449,10 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             binder = author, 
             # _legroom = None,
         )
+            
+        # Don't forget to add it to local lookup, since we're not rerouting
+        # the update through get_object.
+        self._objs_by_ghid[address] = obj
         
         # Set the startup obj internally so that _set_existing_token has access
         # to it.
@@ -1481,7 +1501,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             # state = await self._get(link)
         
         state = await cls._hgx_unpack(state)
-        return cls(
+        obj = cls(
             hgxlink = self,
             state = state, 
             api_id = api_id, 
@@ -1491,6 +1511,11 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             binder = author, 
             # _legroom = _legroom,
         )
+            
+        # Don't forget to add it to local lookup so we can apply updates.
+        self._objs_by_ghid[address] = obj
+        
+        return obj
         
     def get_threadsafe(self, cls, ghid):
         ''' Loads an object into local memory from the hypergolix 
@@ -1525,7 +1550,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             private = private,
             *args, **kwargs
         )
-        await obj._hgx_update()
+        await obj._hgx_push()
         self._objs_by_ghid[obj.hgx_ghid] = obj
         return obj
         
@@ -1641,7 +1666,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         )
         
         frozen = await self._get(
-            cls type(obj), 
+            cls = type(obj), 
             ghid = Ghid.from_bytes(response)
         )
         
@@ -1733,6 +1758,10 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             cls = self._share_typecast[api_id]
             
         except KeyError:
+            logger.warning(
+                'Received a share for an API_ID that was lacking a handler or '
+                'typecast. Deregistering the API_ID.'
+            )
             await self._deregister_api(api_id)
             
         else:
@@ -1746,6 +1775,11 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
                 ghid = address,
                 binder = author
             )
+            
+            # Don't forget to add it to local lookup, since we're not rerouting
+            # the update through get_object.
+            self._objs_by_ghid[address] = obj
+            
             # Run this concurrently, so that we can release the req/res session
             asyncio.ensure_future(handler(obj))
         
@@ -1780,14 +1814,21 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         
         try:
             obj = self._objs_by_ghid[address]
+            
         except KeyError:
             # Just discard the object, since we don't actually have a copy of
             # it locally.
+            logger.warning(
+                'Received an object update, but the object was no longer '
+                'contained in memory. Discarding its subscription: ' + 
+                str(address) + '.'
+            )
             response = await self.send(
                 session = self.any_session,
                 msg = bytes(address),
                 request_code = self.REQUEST_CODES['discard_object']
             )
+            
         else:
             if is_link:
                 # Uhhhhhh... Raise? It's not really appropriate to discard...
@@ -1796,6 +1837,9 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
                 )
                 
             else:
+                logger.debug(
+                    'Received update for ' + str(address) + '; forcing pull.'
+                )
                 await obj._force_pull_3141592(state)
             
         return b'\x01'
