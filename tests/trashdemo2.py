@@ -55,6 +55,8 @@ from hypergolix.service import HGXService
 from hypergolix.service import HypergolixLink
 from hypergolix.utils import Aengel
 
+from hypergolix.objproxy import ObjProxyBase
+
 from golix import Ghid
 
 # ###############################################
@@ -82,7 +84,7 @@ def make_fixtures(debug, tmpdir_a, tmpdir_b):
         foreground = False,
         aengel = aengel,
         cache_dir = tmpdir_a,
-        user_id = Ghid.from_str('Ac6-9W91yieRZpSqAYPEcv-7lrzI1RVORhIUOOQbd4r4KaIkxPmhOLblIjni5aisnbjWDpwlVRQPVDWzVrEeF7o=')
+        user_id = Ghid.from_str('AQaNl4v6Ng6-1_4qPL964SzJWuTn1Cg4eTPbQiHSFNag18tERtO0_IztVghvko37t8_NWchVJgvoDs5Nq-Yfe_I=')
     )
     hgxdes = HGXService(
         host = 'localhost',
@@ -93,7 +95,7 @@ def make_fixtures(debug, tmpdir_a, tmpdir_b):
         foreground = False,
         aengel = aengel,
         cache_dir = tmpdir_b,
-        user_id = Ghid.from_str('AX6h_dnSXUNqpnGWIM8h66ThlzZQRZ288ekZWdhVKoWhZIypGBcQTCXbts_GTzL_5s9k6rcT4rJI9yQ_2WadeTo=')
+        user_id = Ghid.from_str('Ac7UHA_FFMndtcqqtLvzg8hyJAKd4eyJHdpx4U3N8NOWGELtRHnHJ3qGCA07szpFoLt07isXwHPQFXTNRHAECRo=')
     )
         
     return hgxserver, hgxraz, hgxdes, aengel
@@ -125,7 +127,7 @@ def make_tests(iterations, debug, raz, des, aengel):
     def rt_notifier(obj):
         timer.appendleft(time.monotonic())
         roundtrip_flag.set()
-        roundtrip_check.append(obj.state)
+        roundtrip_check.append(obj._proxy_3141592)
     def rt_waiter(timeout=1):
         result = roundtrip_flag.wait(timeout)
         roundtrip_flag.clear()
@@ -150,27 +152,24 @@ def make_tests(iterations, debug, raz, des, aengel):
                 aengel = aengel
             )
             
-            cls.raz = cls.razlink.whoami_threadsafe()
-            cls.des = cls.deslink.whoami_threadsafe()
+            cls.raz = cls.razlink.whoami
+            cls.des = cls.deslink.whoami
             
         def setUp(self):
             self.assertNotEqual(self.raz, self.des)
-            self.assertNotEqual(
-                self.razlink.whoami_threadsafe(), 
-                self.deslink.whoami_threadsafe()
-            )
-            self.razlink.new_token_threadsafe()
-            self.deslink.new_token_threadsafe()
+            self.razlink.get_new_token_threadsafe()
+            self.deslink.get_new_token_threadsafe()
     
         # All requests go from Raz -> Des
         def make_request(self, msg):
-            obj = self.razlink.new_obj_threadsafe(
+            obj = self.razlink.new_threadsafe(
+                cls = ObjProxyBase,
                 state = msg,
                 dynamic = True,
                 api_id = request_api
             )
             time.sleep(.1)
-            obj.share_threadsafe(self.des)
+            obj.hgx_share_threadsafe(self.des)
             return obj
         
         # All responses go from Des -> Raz
@@ -178,20 +177,22 @@ def make_tests(iterations, debug, raz, des, aengel):
             # print('Receiving request.')
             # Just to prevent GC
             requests_incoming.appendleft(obj)
-            reply = self.deslink.new_obj_threadsafe(
-                state = obj.state,
+            reply = self.deslink.new_threadsafe(
+                cls = ObjProxyBase,
+                state = obj,
                 dynamic = True,
                 api_id = response_api
             )
             
             def state_mirror(source_obj):
                 # print('Mirroring state.')
+                reply.hgx_update(source_obj)
                 inner_profiler.enable()
-                reply.update_threadsafe(source_obj.state)
+                reply.hgx_push_threadsafe()
                 inner_profiler.disable()
-            obj.append_threadsafe_callback(state_mirror)
+            obj.hgx_register_callback_threadsafe(state_mirror)
             
-            reply.share_threadsafe(recipient=self.raz)
+            reply.hgx_share_threadsafe(recipient=self.raz)
             
             # Just to prevent GC
             responses_outgoing.appendleft(reply)
@@ -199,7 +200,7 @@ def make_tests(iterations, debug, raz, des, aengel):
         # All requests go from Raz -> Des. All responses go from Des -> Raz.
         def response_handler(self, obj):
             # print('Receiving response.')
-            obj.append_threadsafe_callback(rt_notifier)
+            obj.hgx_register_callback_threadsafe(rt_notifier)
             # Just to prevent GC
             responses_incoming.appendleft(obj)
             
@@ -207,10 +208,16 @@ def make_tests(iterations, debug, raz, des, aengel):
             ''' Yknow, pretend to make an app and shit. Basically, an 
             automated version of echo-101/demo-4.py
             '''
-            # self.razlink.register_api_threadsafe(request_api, self.request_handler)
-            self.razlink.register_api_threadsafe(response_api, self.response_handler)
-            self.deslink.register_api_threadsafe(request_api, self.request_handler)
-            # self.deslink.register_api_threadsafe(response_api, self.response_handler)
+            self.razlink.register_share_handler_threadsafe(
+                response_api, 
+                ObjProxyBase, 
+                self.response_handler
+            )
+            self.deslink.register_share_handler_threadsafe(
+                request_api, 
+                ObjProxyBase,
+                self.request_handler
+            )
             
             msg = b'hello'
             obj = self.make_request(msg)
@@ -223,16 +230,29 @@ def make_tests(iterations, debug, raz, des, aengel):
                 with self.subTest(i=ii):
                     msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
                     msg = msg.encode('utf-8')
-                    # Zero out the timer first and enable the profiler
+                    
+                    # Prep the object with an update
+                    obj.hgx_update(msg)
+                    
+                    # Zero out the timer and enable the profiler
                     inner_profiler.enable()
                     self.timer.extendleft([0,0,time.monotonic()])
-                    obj.update_threadsafe(msg)
-                    inner_profiler.disable()
-                    self.assertTrue(rt_waiter())
-                    self.assertTrue(rt_checker(msg))
+                    
+                    # Call an update
+                    obj.hgx_push_threadsafe()
+                    # Wait for response
+                    success = rt_waiter()
+                    # Stop the timer
                     times.append(self.timer[0] - self.timer[1])
+                    # Stop the profiler
+                    inner_profiler.disable()
+                    
+                    # Check for success
+                    self.assertTrue(success)
+                    self.assertTrue(rt_checker(msg))
+                    
                     # Max update frequencies can cause problems yo
-                    time.sleep(.25)
+                    time.sleep(.1)
             outer_profiler.disable()
                     
             print('---------------------------------------------------')

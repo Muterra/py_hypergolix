@@ -302,9 +302,9 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         # Build a callsheet for the target.
         callsheet = await self._make_callsheet(target)
         # Go ahead and distribute it to the appropriate endpoints.
-        await self._ipccore.distribute_to_endpoints(
+        await self.distribute_to_endpoints(
             callsheet,
-            self._ipccore.send_share,
+            self.send_share,
             target,
             sender
         )
@@ -616,60 +616,42 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                 ''.join(traceback.format_exc())
             )
         
-    async def notify_share_success(self, token, ghid, recipient):
+    async def notify_share_success(self, endpoint, ghid, recipient):
         ''' Notifies the embedded client of a successful share.
         '''
         try:
-            endpoint = self._endpoint_from_token[token]
+            response = await self.send(
+                session = endpoint,
+                msg = bytes(ghid) + bytes(recipient),
+                request_code = self.REQUEST_CODES['notify_share_success'],
+                # Note: for now, just don't worry about failures.
+                # await_reply = False
+            )
             
-        except KeyError:
-            logger.info('Requesting app currently unavailable for share ack.')
-            sharelog = _ShareLog(ghid, recipient)
-            self._orphan_share_acks.add(token, sharelog)
-            
-        else:
-            try:
-                response = await self.send(
-                    session = endpoint,
-                    msg = bytes(ghid) + bytes(recipient),
-                    request_code = self.REQUEST_CODES['notify_share_success'],
-                    # Note: for now, just don't worry about failures.
-                    # await_reply = False
-                )
-                
-            except:
-                logger.error(
-                    'Application client failed to receive share success at ' + 
-                    str(ghid) + ' w/ the following traceback: \n' + 
-                    ''.join(traceback.format_exc())
-                )
+        except:
+            logger.error(
+                'Application client failed to receive share success at ' + 
+                str(ghid) + ' w/ the following traceback: \n' + 
+                ''.join(traceback.format_exc())
+            )
         
-    async def notify_share_failure(self, token, ghid, recipient):
+    async def notify_share_failure(self, endpoint, ghid, recipient):
         ''' Notifies the embedded client of an unsuccessful share.
         '''
         try:
-            endpoint = self._endpoint_from_token[token]
-            
-        except KeyError:
-            logger.info('Requesting app currently unavailable for share nak.')
-            sharelog = _ShareLog(ghid, recipient)
-            self._orphan_share_acks.add(token, sharelog)
-            
-        else:
-            try:
-                response = await self.send(
-                    session = endpoint,
-                    msg = bytes(ghid) + bytes(recipient),
-                    request_code = self.REQUEST_CODES['notify_share_failure'],
-                    # Note: for now, just don't worry about failures.
-                    # await_reply = False
-                )
-            except:
-                logger.error(
-                    'Application client failed to receive share failure at ' + 
-                    str(ghid) + ' w/ the following traceback: \n' + 
-                    ''.join(traceback.format_exc())
-                )
+            response = await self.send(
+                session = endpoint,
+                msg = bytes(ghid) + bytes(recipient),
+                request_code = self.REQUEST_CODES['notify_share_failure'],
+                # Note: for now, just don't worry about failures.
+                # await_reply = False
+            )
+        except:
+            logger.error(
+                'Application client failed to receive share failure at ' + 
+                str(ghid) + ' w/ the following traceback: \n' + 
+                ''.join(traceback.format_exc())
+            )
         
     async def add_api_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.

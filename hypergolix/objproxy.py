@@ -263,6 +263,11 @@ class ObjProxyBase:
         # our persistence declaration
         self._hgxlink_3141592 = weakref.proxy(hgxlink)
         
+        # For now, do this to extract the state from any proxy objects, instead
+        # of nesting them. Even though nesting them would be better long-term.
+        if isinstance(state, ObjProxyBase):
+            state = state._proxy_3141592
+        
         self._proxy_3141592 = state
         self._callback_3141592 = None
         self._ghid_3141592 = ghid
@@ -351,6 +356,11 @@ class ObjProxyBase:
     def hgx_update(self, value):
         ''' Forcibly updates the proxy object to something else.
         '''
+        # For now, do this to extract the state from any proxy objects, instead
+        # of nesting them. Even though nesting them would be better long-term.
+        if isinstance(value, ObjProxyBase):
+            value = value._proxy_3141592
+        
         self._proxy_3141592 = value
 
     def _hgx_register_callback(self, callback):
