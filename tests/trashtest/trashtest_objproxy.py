@@ -123,11 +123,13 @@ class ProxyTest(unittest.TestCase):
     def test_equality(self):
         ''' Test equality of proxy and original object
         '''
-        # Also test equality of two identical proxies
-        self.assertEqual(
+        # Also test equality of two identical proxies with different ghids
+        self.assertNotEqual(
             self.do_proxy_obj(1),
             self.do_proxy_obj(1)
         )
+        
+        # But everything else should compare equally.
         self.assertEqual(
             *(self.do_proxy_pair(1))
         )
@@ -148,6 +150,53 @@ class ProxyTest(unittest.TestCase):
         self.assertLess(self.do_proxy_obj(1), 2)
         self.assertLessEqual(self.do_proxy_obj(1), 1)
         self.assertLessEqual(self.do_proxy_obj(1), 2)
+        
+        obj = 7
+        prox = self.do_proxy_obj(obj)
+        
+        self.assertEqual(prox, obj)
+        prox += 1
+        self.assertEqual(prox, 8)
+        self.assertTrue(isinstance(prox, NoopProxy))
+        
+    def test_mapping(self):
+        obj = {
+            1: 1,
+            2: 2,
+            3: 3,
+            4: 4,
+        }
+        
+        prox = self.do_proxy_obj(obj)
+        
+        self.assertEqual(prox[1], obj[1])
+        
+        del prox[4]
+        
+        with self.assertRaises(KeyError):
+            prox[4]
+            
+        prox[4] = 4
+        
+        self.assertEqual(prox, obj)
+        
+    def test_list(self):
+        obj = [1, 2, 3, 4,]
+        obj2 = [1, 2, 3, 4,]
+        prox = self.do_proxy_obj(obj)
+        prox2 = self.do_proxy_obj(obj2)
+        
+        self.assertEqual(prox, obj)
+        prox.append(5)
+        self.assertEqual(prox[4], obj[4])
+        prox.extend([6,7,8])
+        self.assertEqual(prox, obj)
+        prox += [1,2,3]
+        self.assertEqual(prox, obj)
+        obj3 = prox.copy()
+        
+        prox += prox2
+        self.assertEqual(prox, obj3 + prox2)
         
 
 if __name__ == "__main__":
