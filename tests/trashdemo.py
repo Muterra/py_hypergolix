@@ -53,7 +53,7 @@ from hypergolix.service import HGXService
 from hypergolix.service import HypergolixLink
 from hypergolix.utils import Aengel
 
-from hypergolix.objproxy import ObjProxyBase
+from hypergolix.objproxy import NoopProxy
 
 from golix import Ghid
 
@@ -157,7 +157,7 @@ def make_tests(iterations, debug, raz, des, aengel):
         # All requests go from Raz -> Des
         def make_request(self, msg):
             obj = self.razlink.new_threadsafe(
-                cls = ObjProxyBase,
+                cls = NoopProxy,
                 state = msg,
                 dynamic = True,
                 api_id = request_api
@@ -172,7 +172,7 @@ def make_tests(iterations, debug, raz, des, aengel):
             # Just to prevent GC
             requests_incoming.appendleft(obj)
             reply = self.deslink.new_threadsafe(
-                cls = ObjProxyBase,
+                cls = NoopProxy,
                 state = obj,
                 dynamic = True,
                 api_id = response_api
@@ -180,7 +180,7 @@ def make_tests(iterations, debug, raz, des, aengel):
             
             def state_mirror(source_obj):
                 # print('Mirroring state.')
-                reply.hgx_update(source_obj)
+                reply.hgx_state = source_obj
                 reply.hgx_push_threadsafe()
             obj.hgx_register_callback_threadsafe(state_mirror)
             
@@ -203,12 +203,12 @@ def make_tests(iterations, debug, raz, des, aengel):
             # self.razlink.register_api_threadsafe(request_api, self.request_handler)
             self.razlink.register_share_handler_threadsafe(
                 response_api, 
-                ObjProxyBase, 
+                NoopProxy, 
                 self.response_handler
             )
             self.deslink.register_share_handler_threadsafe(
                 request_api, 
-                ObjProxyBase,
+                NoopProxy,
                 self.request_handler
             )
             # self.deslink.register_api_threadsafe(response_api, self.response_handler)
@@ -225,7 +225,7 @@ def make_tests(iterations, debug, raz, des, aengel):
                     msg = msg.encode('utf-8')
                     
                     # Prep the object with an update
-                    obj.hgx_update(msg)
+                    obj.hgx_state = msg
                     
                     # Zero out the timer
                     self.timer.extendleft([0,0,time.monotonic()])

@@ -100,7 +100,7 @@ from .dispatch import _Dispatchable
 from .dispatch import _DispatchableState
 from .dispatch import _AppDef
 
-from .objproxy import ObjProxyBase
+from .objproxy import HGXObjBase
 
 
 # ###############################################
@@ -1421,7 +1421,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             state = self.get_object(link)
             
         # Okay, now let's create an object for it
-        obj = ObjProxyBase(
+        obj = HGXObjBase(
             hgxlink = self, 
             state = state, 
             api_id = api_id, 

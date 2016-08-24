@@ -149,108 +149,11 @@ _USER_NAMESPACE_2 = {
 }
 
 
-class ObjProxyBase:
-    ''' ObjProxies, partly inspired by weakref.proxies, are a mechanism
-    by which normal python objects can be "dropboxed" into hypergolix.
-    The proxy object, and not the original object, must be referenced.
-    
-    Several "magic method" / "dunder methods" are explicitly sent to the
-    proxy object. If the proxy object does not support those methods,
-    they will raise... something or other (it's a little hard to tell, 
-    and varies on a case-by-case basis). These are:
-        1. __str__
-        2. __format__
-    
-    Proxies pass through all attribute access to their proxied objects,
-    with the exception of:
-        1.  __init__
-        2.  __repr__
-        3.  __hash__ (see note [1] below)
-        4.  __eq__ (see note [2] below)
-        5.  hgx_ghid
-        6.  hgx_api_id
-        7.  hgx_private
-        8.  hgx_dynamic
-        9.  hgx_binder
-        10. hgx_persistence
-        11. hgx_isalive
-        12. hgx_update
-        12. _hgx_push
-        13. hgx_push_threadsafe
-        14. hgx_push_loopsafe
-        15. _hgx_register_callback
-        16. hgx_register_callback_threadsafe
-        17. hgx_register_callback_loopsafe
-        18. hgx_clear_callback
-        19. _hgx_sync
-        20. hgx_sync_threadsafe
-        21. hgx_sync_loopsafe
-        22. _hgx_share
-        23. hgx_share_threadsafe
-        24. hgx_share_loopsafe
-        25. _hgx_freeze
-        26. hgx_freeze_threadsafe
-        27. hgx_freeze_loopsafe
-        28. _hgx_hold
-        29. hgx_hold_threadsafe
-        30. hgx_hold_loopsafe
-        31. _hgx_discard
-        32. hgx_discard_threadsafe
-        33. hgx_discard_loopsafe
-        34. _hgx_delete
-        35. hgx_delete_threadsafe
-        36. hgx_delete_loopsafe
-        39. _hgx_pack
-        40. _hgx_unpack
-        41. _hgx_DEFAULT_API_ID
-    (as well as some name-mangled internal attributes; see note [3] 
-    below).
-    
-    [1] Proxies are hashable if their ghids are defined, but unhashable 
-    otherwise. Note, however, that their hashes have nothing to do with
-    their proxied objects. Also note that 
-        isinstance(obj, collections.Hashable)
-    will always identify ObjProxies as hashable, regardless of their 
-    actual runtime behavior.
-    
-    [2] Equality comparisons, on the other hand, reference the proxy's 
-    state directly. So if the states compare equally, the two ObjProxies 
-    will compare equally, regardless of the proxy state (ghid, api_id, 
-    etc).
-    
-    [3] The primary concern here is NOT enforcing access restrictions,
-    which you cannot do in python anyways (we're all consenting adults!)
-    but rather to prevent name conflicts, particularly since we're 
-    passing through attribute access to arbitrary proxy objets. As such,
-    instead of manually enumerating all of the possible implementation
-    detail methods, we're name mangling them by postpending '_3141592' 
-    to the method name. We're doing this instead of the default python
-    name mangling, because we'd like them to be trivially available to
-    subclasses (if necessary).
-    
-    Side note: support for ie __enter__ and __exit__ aren't capable with
-    pass-through lookup unless they are declared at class definition 
-    time. They may require metaclass fiddling or something. Or, we could
-    just inelegantly declare them and "hope for the best" calling the
-    referent's __enter__/__exit__. It also doesn't work to assign them 
-    as properties/attributes after the fact.
+class HGXObjBase:
+    ''' This is a base object to make an object hypergolix-aware.
     '''
+    _HASHMIX_3141592 = 3141592
     _hgx_DEFAULT_API_ID = bytes(64)
-    
-    # Declare a static namespace, so that all of these attributes will 
-    # be accessible HERE using getattr/setattr. Because the proxy lookup
-    # for setattr (in particular) first checks to see if we can find it
-    # locally, by setting the namespace like this for the class itself,
-    # we can trick the lookup into succeeding.
-    _hgxlink_3141592 = None
-    _proxy_3141592 = None
-    _ghid_3141592 = None
-    _binder_3141592 = None
-    _api_id_3141592 = None
-    _private_3141592 = None
-    _dynamic_3141592 = None
-    _isalive_3141592 = None
-    _callback_3141592 = None
     
     def __init__(self, hgxlink, state, api_id, dynamic, private, ghid=None, 
                 binder=None):
@@ -263,11 +166,6 @@ class ObjProxyBase:
         # our persistence declaration
         self._hgxlink_3141592 = weakref.proxy(hgxlink)
         
-        # For now, do this to extract the state from any proxy objects, instead
-        # of nesting them. Even though nesting them would be better long-term.
-        if isinstance(state, ObjProxyBase):
-            state = state._proxy_3141592
-        
         self._proxy_3141592 = state
         self._callback_3141592 = None
         self._ghid_3141592 = ghid
@@ -276,6 +174,22 @@ class ObjProxyBase:
         self._private_3141592 = bool(private)
         self._dynamic_3141592 = bool(dynamic)
         self._isalive_3141592 = True
+        
+    @property
+    def hgx_state(self):
+        ''' Simple pass-through to the internal state. This is a strong
+        reference, so if the state is mutable, modifications will be
+        applied to the state; however, push() must still be explicitly
+        called.
+        '''
+        return self._proxy_3141592
+        
+    @hgx_state.setter
+    def hgx_state(self, value):
+        ''' Allow direct overwriting of the internal state. Does not 
+        ensure serializability, nor does it push upstream.
+        '''
+        self._proxy_3141592 = value
         
     @property
     def hgx_ghid(self):
@@ -352,16 +266,6 @@ class ObjProxyBase:
         be deleted.
         '''
         raise NotImplementedError()
-        
-    def hgx_update(self, value):
-        ''' Forcibly updates the proxy object to something else.
-        '''
-        # For now, do this to extract the state from any proxy objects, instead
-        # of nesting them. Even though nesting them would be better long-term.
-        if isinstance(value, ObjProxyBase):
-            value = value._proxy_3141592
-        
-        self._proxy_3141592 = value
 
     def _hgx_register_callback(self, callback):
         ''' Register a callback to be called whenever an upstream update
@@ -706,6 +610,194 @@ class ObjProxyBase:
     def __repr__(self):
         classname = type(self).__name__
         return (
+            '<' + classname + ' at ' + str(self.hgx_ghid) + ' with state ' + 
+            repr(self._proxy_3141592) + '>'
+        )
+        
+    def __hash__(self):
+        ''' Have a hash, if our ghid address is defined; otherwise, 
+        return None (which will in turn cause Python to raise a 
+        TypeError in the parent call).
+        
+        The hashmix is a random value that has been included to allow 
+        faster hash bucket differentiation between ghids and objproxies.
+        '''
+        if self.hgx_ghid is not None:
+            return hash(self.hgx_ghid) ^ self._HASHMIX_3141592
+        else:
+            return None
+            
+    def __eq__(self, other):
+        ''' Equality comparisons on HGXObjBase will return True if and
+        only if:
+        1. They both have an .hgx_ghid attribute (else, typeerror)
+        2. The .hgx_ghid attribute compares equally
+        3. They both have an .hgx_state attribute (else, typeerror)
+        4. The .hgx_state attribute compares equally
+        5. They both have an .hgx_binder attribute (else, typeerror)
+        6. The .hgx_binder attribute compares equally
+        '''
+        try:
+            # We can talk about equality until the cows come home.
+            equality = (self.hgx_ghid == other.hgx_ghid)
+            # What is equality?
+            equality &= (self.hgx_binder == other.hgx_binder)
+            # What is home?
+            equality &= (self.hgx_state == other.hgx_state)
+            # What are cows?
+            
+        except AttributeError as exc:
+            raise TypeError(
+                'Incomparable types: ' + 
+                type(self).__name__ + ', ' + 
+                type(other).__name__
+            ) from exc
+            
+        return equality
+
+
+class NoopProxy(HGXObjBase):
+    ''' HGX proxies, partly inspired by weakref.proxies, are a mechanism
+    by which normal python objects can be "dropboxed" into hypergolix.
+    The proxy object, and not the original object, must be referenced.
+    
+    Several "magic method" / "dunder methods" are explicitly sent to the
+    proxy object. If the proxy object does not support those methods,
+    they will raise... something or other (it's a little hard to tell, 
+    and varies on a case-by-case basis). These are:
+        1. __str__
+        2. __format__
+    
+    Proxies pass through all attribute access to their proxied objects,
+    with the exception of:
+        1.  __init__
+        2.  __repr__
+        3.  __hash__ (see note [1] below)
+        4.  __eq__ (see note [2] below)
+        5.  hgx_ghid
+        6.  hgx_api_id
+        7.  hgx_private
+        8.  hgx_dynamic
+        9.  hgx_binder
+        10. hgx_persistence
+        11. hgx_isalive
+        12. hgx_update
+        12. _hgx_push
+        13. hgx_push_threadsafe
+        14. hgx_push_loopsafe
+        15. _hgx_register_callback
+        16. hgx_register_callback_threadsafe
+        17. hgx_register_callback_loopsafe
+        18. hgx_clear_callback
+        19. _hgx_sync
+        20. hgx_sync_threadsafe
+        21. hgx_sync_loopsafe
+        22. _hgx_share
+        23. hgx_share_threadsafe
+        24. hgx_share_loopsafe
+        25. _hgx_freeze
+        26. hgx_freeze_threadsafe
+        27. hgx_freeze_loopsafe
+        28. _hgx_hold
+        29. hgx_hold_threadsafe
+        30. hgx_hold_loopsafe
+        31. _hgx_discard
+        32. hgx_discard_threadsafe
+        33. hgx_discard_loopsafe
+        34. _hgx_delete
+        35. hgx_delete_threadsafe
+        36. hgx_delete_loopsafe
+        39. _hgx_pack
+        40. _hgx_unpack
+        41. _hgx_DEFAULT_API_ID
+    (as well as some name-mangled internal attributes; see note [3] 
+    below).
+    
+    [1] Proxies are hashable if their ghids are defined, but unhashable 
+    otherwise. Note, however, that their hashes have nothing to do with
+    their proxied objects. Also note that 
+        isinstance(obj, collections.Hashable)
+    will always identify ObjProxies as hashable, regardless of their 
+    actual runtime behavior.
+    
+    [2] Equality comparisons, on the other hand, reference the proxy's 
+    state directly. So if the states compare equally, the two ObjProxies 
+    will compare equally, regardless of the proxy state (ghid, api_id, 
+    etc).
+    
+    [3] The primary concern here is NOT enforcing access restrictions,
+    which you cannot do in python anyways (we're all consenting adults!)
+    but rather to prevent name conflicts, particularly since we're 
+    passing through attribute access to arbitrary proxy objets. As such,
+    instead of manually enumerating all of the possible implementation
+    detail methods, we're name mangling them by postpending '_3141592' 
+    to the method name. We're doing this instead of the default python
+    name mangling, because we'd like them to be trivially available to
+    subclasses (if necessary).
+    
+    Side note: support for ie __enter__ and __exit__ aren't capable with
+    pass-through lookup unless they are declared at class definition 
+    time. They may require metaclass fiddling or something. Or, we could
+    just inelegantly declare them and "hope for the best" calling the
+    referent's __enter__/__exit__. It also doesn't work to assign them 
+    as properties/attributes after the fact.
+    '''
+    _hgx_DEFAULT_API_ID = bytes(63) + b'\x01'
+    _HASHMIX_3141592 = 936930316
+    
+    # Declare a static namespace, so that all of these attributes will 
+    # be accessible HERE using getattr/setattr. Because the proxy lookup
+    # for setattr (in particular) first checks to see if we can find it
+    # locally, by setting the namespace like this for the class itself,
+    # we can trick the lookup into succeeding.
+    _hgxlink_3141592 = None
+    _proxy_3141592 = None
+    _ghid_3141592 = None
+    _binder_3141592 = None
+    _api_id_3141592 = None
+    _private_3141592 = None
+    _dynamic_3141592 = None
+    _isalive_3141592 = None
+    _callback_3141592 = None
+    
+    def __init__(self, hgxlink, state, api_id, dynamic, private, ghid=None, 
+                binder=None):
+        ''' Allocates the object locally, but does NOT create it. You
+        have to explicitly call hgx_push, hgx_push_threadsafe, or
+        hgx_push_loopsafe to actually create the sync'd object and get
+        a ghid.
+        '''
+        # For now, do this to extract the state from any proxy objects, instead
+        # of nesting them. Even though nesting them would be better long-term.
+        if isinstance(state, HGXObjBase):
+            state = state._proxy_3141592
+            
+        super().__init__(hgxlink, state, api_id, dynamic, private, ghid, binder)
+        
+    @property
+    def hgx_state(self):
+        ''' Simple pass-through to the internal state. This is a strong
+        reference, so if the state is mutable, modifications will be
+        applied to the state; however, push() must still be explicitly
+        called.
+        '''
+        return self._proxy_3141592
+        
+    @hgx_state.setter
+    def hgx_state(self, value):
+        ''' Allow direct overwriting of the internal state. Does not 
+        ensure serializability, nor does it push upstream.
+        '''
+        # For now, do this to extract the state from any proxy objects, instead
+        # of nesting them. Even though nesting them would be better long-term.
+        if isinstance(value, HGXObjBase):
+            value = value._proxy_3141592
+        
+        self._proxy_3141592 = value
+            
+    def __repr__(self):
+        classname = type(self).__name__
+        return (
             '<' + classname + ' at ' + str(self.hgx_ghid) + ', proxying ' + 
             repr(self._proxy_3141592) + '>'
         )
@@ -720,30 +812,15 @@ class ObjProxyBase:
         '''
         return self._proxy_3141592.__format__(*args, **kwargs)
         
-    def __hash__(self):
-        ''' Have a hash, if our ghid address is defined; otherwise, 
-        return None (which will in turn cause Python to raise a 
-        TypeError in the parent call).
-        
-        936930316 is a random value that has been included to allow 
-        faster hash bucket differentiation between ghids and objproxies.
-        '''
-        if self.hgx_ghid is not None:
-            return hash(self.hgx_ghid) ^ 936930316
-        else:
-            return None
-        
     def __eq__(self, other):
         ''' Pass the equality comparison straight into the state.
         '''
-        # If the other instance also has an _proxy_3141592 attribute, compare
-        # to that, such that two proxies with the same object state will always
-        # compare equally
+        # If the other instance is also an HGXObjBase, do a full comparison.
         try:
-            return self._proxy_3141592 == other._proxy_3141592
+            return super().__eq__(other)
             
         # If not, just compare our proxy state directly to the other object.
-        except AttributeError:
+        except TypeError:
             return self._proxy_3141592 == other
         
     def __gt__(self, other):
@@ -840,7 +917,7 @@ class ObjProxyBase:
             raise AttributeError('Cannot delete proxy-internal attributes.')
 
 
-class PickleProxy(ObjProxyBase):
+class PickleProxy(NoopProxy):
     ''' An ObjProxy that uses Pickle for serialization. DO NOT, UNDER 
     ANY CIRCUMSTANCE, LOAD A PICKLEPROXY FROM AN UNTRUSTED SOURCE. As
     pickled objects can control their own pickling process, and python 
@@ -850,14 +927,14 @@ class PickleProxy(ObjProxyBase):
     '''
     @classmethod
     def recast(cls, obj):
-        ''' Re-cast an ObjProxyBase into a PickleProxy.
+        ''' Re-cast an HGXObjBase into a PickleProxy.
         '''
 
 
-class JsonProxy(ObjProxyBase):
+class JsonProxy(NoopProxy):
     ''' An ObjProxy that uses json for serialization.
     '''
     @classmethod
     def recast(cls, obj):
-        ''' Re-cast an ObjProxyBase into a JsonProxy.
+        ''' Re-cast an HGXObjBase into a JsonProxy.
         '''
