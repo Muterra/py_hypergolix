@@ -798,8 +798,8 @@ class NoopProxy(HGXObjBase):
     def __repr__(self):
         classname = type(self).__name__
         return (
-            '<' + classname + ' at ' + str(self.hgx_ghid) + ', proxying ' + 
-            repr(self._proxy_3141592) + '>'
+            '<' + classname + ' to ' + repr(self._proxy_3141592) + 
+            ' at ' + str(self.hgx_ghid) + '>'
         )
             
     def __setattr__(self, name, value):
@@ -907,14 +907,100 @@ class NoopProxy(HGXObjBase):
             return self._proxy_3141592 <= other
         
     def __dir__(self):
-        this_dir = super().__dir__()
-        prox_dir = dir(self._proxy_3141592)
+        ''' Implement a dir that attempts to only list the methods that
+        will actually succeed -- ie, cut out any automatically-generated
+        special/magic/dunder methods that have not also been defined at
+        the referenced object.
+        '''
+        # Get all of our normal dirs.
+        this_dir = set(super().__dir__())
+        # Get all of our proxy's dirs.
+        prox_dir = set(dir(self._proxy_3141592))
         
-        return this_dir
+        # Remove any of our explicit pass-through special/magic/dunder methods
+        total_dir = this_dir - self._ALL_METAD_3141592
+        # Add in all of the proxy_dir
+        total_dir.update(prox_dir)
         
-    # BEGIN (semi?) AUTOMATICALLY-GENERATED METHODRY HERE!
+        return total_dir
+        
+    # BEGIN AUTOMATICALLY-GENERATED METHODRY HERE!
     # ----------------------------------------------------
         
+    _ALL_METAD_3141592 = {
+        '__bool__',
+        '__bytes__',
+        '__str__',
+        '__format__',
+        '__len__',
+        '__length_hint__',
+        '__call__',
+        '__getitem__',
+        '__missing__',
+        '__setitem__',
+        '__delitem__',
+        '__iter__',
+        '__reversed__',
+        '__contains__',
+        '__enter__',
+        '__exit__',
+        '__aenter__',
+        '__aexit__',
+        '__await__',
+        '__aiter__',
+        '__anext__',
+        '__add__',
+        '__sub__',
+        '__mul__',
+        '__matmul__',
+        '__truediv__',
+        '__floordiv__',
+        '__mod__',
+        '__divmod__',
+        '__pow__',
+        '__lshift__',
+        '__rshift__',
+        '__and__',
+        '__xor__',
+        '__or__',
+        '__radd__',
+        '__rsub__',
+        '__rmul__',
+        '__rmatmul__',
+        '__rtruediv__',
+        '__rfloordiv__',
+        '__rmod__',
+        '__rdivmod__',
+        '__rpow__',
+        '__rlshift__',
+        '__rrshift__',
+        '__rand__',
+        '__rxor__',
+        '__ror__',
+        '__iadd__',
+        '__isub__',
+        '__imul__',
+        '__imatmul__',
+        '__itruediv__',
+        '__ifloordiv__',
+        '__imod__',
+        '__ipow__',
+        '__ilshift__',
+        '__irshift__',
+        '__iand__',
+        '__ixor__',
+        '__ior__',
+        '__neg__',
+        '__pos__',
+        '__abs__',
+        '__invert__',
+        '__complex__',
+        '__int__',
+        '__float__',
+        '__round__',
+        '__index__',
+    }
+
     def __bool__(self):
         ''' Wrap __bool__ to pass into the _proxy object.
         

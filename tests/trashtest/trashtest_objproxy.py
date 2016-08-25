@@ -98,6 +98,22 @@ class ProxyTest(unittest.TestCase):
     def setUp(self):
         self.embed = MockEmbed()
         
+    def test_handwritten(self):
+        ''' Test stuff like repr, dir, etc that have been written by 
+        hand within the proxy definition, as opposed to explicit (but 
+        programmatically generated) magic/dunder/special method defs.
+        '''
+        prox = self.do_proxy_obj({})
+        
+        # Check to make sure that all of the reference's things are in the dir.
+        proxdir = dir(prox)
+        for should_exist in dir({}):
+            self.assertIn(should_exist, proxdir)
+        # TODO: also ensure that all of the proxy object's stuff is there too.
+        
+        # Just go ahead and check this for errors; nothing special
+        repr(prox)
+        
     def test_basic(self):
         prox = self.do_proxy_obj('hello world')
         self.assertEqual(prox._proxy_3141592, 'hello world')

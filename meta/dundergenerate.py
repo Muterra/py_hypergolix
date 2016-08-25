@@ -316,11 +316,13 @@ unaryish_template = \
             
 """
 
+all_genrates = []
 outstr = ''
     
 # Hit all of the otherless stuff
 for dunder_tuple in otherless:
     dunder, argspec, opspec, closespec = dunder_tuple
+    all_genrates.append(dunder)
     
     tempstr = otherless_template.replace('$dunder$', dunder)
     tempstr = tempstr.replace('$argspec$', argspec)
@@ -332,6 +334,7 @@ for dunder_tuple in otherless:
 # Now move on to the othered stuff, but only forwards
 for dunder_tuple in othered:
     dunder, opera, func = dunder_tuple
+    all_genrates.append(dunder)
     
     if opera is not None:
         tempstr = othered_template_oper.replace('$dunder$', dunder)
@@ -347,6 +350,7 @@ for dunder_tuple in othered:
 for dunder, dunder_tuple in zip(rothered, othered):
     # Note that dunder is already declared above
     __, opera, func = dunder_tuple
+    all_genrates.append(dunder)
     
     if opera is not None:
         tempstr = rothered_template_oper.replace('$dunder$', dunder)
@@ -361,6 +365,7 @@ for dunder, dunder_tuple in zip(rothered, othered):
 # All of the incremental assignment operators
 for dunder_tuple in incrd:
     dunder, opera = dunder_tuple
+    all_genrates.append(dunder)
     tempstr = incrd_template.replace('$dunder$', dunder)
     tempstr = tempstr.replace('$dunder_oper$', opera)
     outstr += tempstr
@@ -368,9 +373,17 @@ for dunder_tuple in incrd:
 # And finally, the unary (or similar) operators
 for dunder_tuple in unaryish:
     dunder, opera = dunder_tuple
+    all_genrates.append(dunder)
     tempstr = unaryish_template.replace('$dunder$', dunder)
     tempstr = tempstr.replace('$dunder_oper$', opera)
     outstr += tempstr
     
+# And generate a class-defined set of all of the auto-generated methods
+prefix = '    _ALL_METAD_3141592 = {\n'
+for dunder in all_genrates:
+    prefix += ('        \'' + dunder + '\',\n')
+prefix += '    }\n\n'
+    
 with open('dunders.py', 'w+') as f:
+    f.write(prefix)
     f.write(outstr)
