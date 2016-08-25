@@ -5,14 +5,24 @@ and productive, don't try to do this manually.
 # Directly format as per:
 otherless = [
     # def               (self                    ):
+    ('__bool__',            '',                     
+                                # self._proxy_3141592
+                'return bool(',                     ')'),
+    
+    # def               (self                    ):
     ('__bytes__',           '',                     
                                 # self._proxy_3141592
                 'return bytes(',                    ')'),
     
     # def               (self                    ):
-    ('__bool__',            '',                     
+    ('__str__',             '',                     
                                 # self._proxy_3141592
-                'return bool(',                     ')'),
+                'return str(',                      ')'),
+    
+    # def               (self                    ):
+    ('__format__',          ', *args, **kwargs',                     
+                                # self._proxy_3141592
+                'return format(',                   ', *args, **kwargs)'),
     
     # def               (self                    ):
     ('__len__',             '',                     
