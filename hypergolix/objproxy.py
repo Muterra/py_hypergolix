@@ -33,9 +33,10 @@ hypergolix: A python Golix client.
 # Global dependencies
 import weakref
 import traceback
-import threading
 import asyncio
 import operator
+import json
+import pickle
 
 from golix import Ghid
 
@@ -2166,7 +2167,7 @@ class NoopProxy(HGXObjBase):
         return operator.index(self._proxy_3141592)
             
 
-class HGXPickleObj(HGXObjBase):
+class PickleObj(HGXObjBase):
     ''' An ObjProxy that uses Pickle for serialization. DO NOT, UNDER 
     ANY CIRCUMSTANCE, LOAD A PICKLEPROXY FROM AN UNTRUSTED SOURCE. As
     pickled objects can control their own pickling process, and python 
@@ -2174,20 +2175,79 @@ class HGXPickleObj(HGXObjBase):
     used as a rootkit (within the privilege confines of the current 
     python process).
     '''
+    @staticmethod
+    async def _hgx_pack(data):
+        ''' Packs the object into bytes. For the base proxy, treat the 
+        input as bytes and return immediately.
+        '''
+        try:
+            return pickle.dumps(data, protocol=4)
+            
+        except:
+            logger.error(
+                'Failed to pickle the object w/ traceback: \n' +
+                ''.join(traceback.format_exc())
+            )
+            raise
+    
+    @staticmethod
+    async def _hgx_unpack(packed):
+        ''' Unpacks the object from bytes. For the base proxy, treat the 
+        input as bytes and return immediately.
+        '''
+        try:
+            return pickle.loads(packed)
+            
+        except:
+            logger.error(
+                'Failed to unpickle the object w/ traceback: \n' +
+                ''.join(traceback.format_exc())
+            )
+            raise
         
         
-class PickleProxy(HGXPickleObj, NoopProxy):
+class PickleProxy(PickleObj, NoopProxy):
     ''' Make a proxy object that serializes with pickle.
     '''
     pass
 
 
-class HGXJsonObj(HGXObjBase):
+class JsonObj(HGXObjBase):
     ''' An ObjProxy that uses json for serialization.
     '''
+    @staticmethod
+    async def _hgx_pack(data):
+        ''' Packs the object into bytes. For the base proxy, treat the 
+        input as bytes and return immediately.
+        '''
+        try:
+            # Use the most compact json possible.
+            return json.dumps(data, separators=(',', ':')).encode('utf-8')
+            
+        except:
+            logger.error(
+                'Failed to pickle the object w/ traceback: \n' +
+                ''.join(traceback.format_exc())
+            )
+            raise
+    
+    @staticmethod
+    async def _hgx_unpack(packed):
+        ''' Unpacks the object from bytes. For the base proxy, treat the 
+        input as bytes and return immediately.
+        '''
+        try:
+            return json.loads(packed.decode('utf-8'))
+            
+        except:
+            logger.error(
+                'Failed to unpickle the object w/ traceback: \n' +
+                ''.join(traceback.format_exc())
+            )
+            raise
         
         
-class JsonProxy(HGXJsonObj, NoopProxy):
+class JsonProxy(JsonObj, NoopProxy):
     ''' Make a proxy object that serializes with json.
     '''
     pass
