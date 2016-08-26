@@ -1033,6 +1033,15 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
                 'Whoami has not been defined. Most likely, no IPC client is '
                 'currently available.'
             )
+            
+    def subscribe_to_updates(self, obj):
+        ''' Called (primarily internally) to automatically subscribe the
+        object to updates from upstream. Except really, right now, this
+        just makes sure that we're tracking it in our local object
+        lookup so that we can actually **apply** the updates we're 
+        already receiving.
+        '''
+        self._objs_by_ghid[obj.hgx_ghid] = obj
         
     async def _get_whoami(self):
         ''' Pulls identity fingerprint from hypergolix IPC.
@@ -1434,7 +1443,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             
         # Don't forget to add it to local lookup, since we're not rerouting
         # the update through get_object.
-        self._objs_by_ghid[address] = obj
+        self.subscribe_to_updates(obj)
         
         # Set the startup obj internally so that _set_existing_token has access
         # to it.
@@ -1495,7 +1504,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         )
             
         # Don't forget to add it to local lookup so we can apply updates.
-        self._objs_by_ghid[address] = obj
+        self.subscribe_to_updates(obj)
         
         return obj
         
@@ -1533,7 +1542,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             *args, **kwargs
         )
         await obj._hgx_push()
-        self._objs_by_ghid[obj.hgx_ghid] = obj
+        self.subscribe_to_updates(obj)
         return obj
         
     def new_threadsafe(self, *args, **kwargs):
@@ -1760,7 +1769,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             
             # Don't forget to add it to local lookup, since we're not rerouting
             # the update through get_object.
-            self._objs_by_ghid[address] = obj
+            self.subscribe_to_updates(obj)
             
             # Run this concurrently, so that we can release the req/res session
             asyncio.ensure_future(handler(obj))

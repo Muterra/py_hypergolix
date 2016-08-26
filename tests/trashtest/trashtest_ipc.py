@@ -435,7 +435,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         
         # Test object updates
         # -----------
-        obj2.hgx_update(pt2)
+        obj2.hgx_state = pt2
         obj2.hgx_push_threadsafe()
         # Note that we have to wait for the callback background process to 
         # complete
@@ -453,7 +453,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         # Test object freezing
         # -----------
         frozen2 = obj2.hgx_freeze_threadsafe()
-        self.assertEqual(frozen2, obj2)
+        self.assertEqual(frozen2.hgx_state, obj2.hgx_state)
         self.assertIn(frozen2.hgx_ghid, self.oracle.objs)
         
         # Test object holding

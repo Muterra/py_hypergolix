@@ -40,11 +40,13 @@ import collections
 import logging
 import weakref
 
-from hypergolix.objproxy import NoopProxy
+from hypergolix.utils import LooperTrooper
+from hypergolix.utils import Aengel
 
-# These are fixture imports
+from hypergolix.objproxy import NoopProxy
+from hypergolix.objproxy import HGXObjBase
+
 from golix import Ghid
-from golix.utils import Secret
 
 
 # ###############################################
@@ -53,17 +55,23 @@ from golix.utils import Secret
 
 
 from _fixtures.ghidutils import make_random_ghid
-
-from _fixtures.identities import TEST_AGENT1
-from _fixtures.identities import TEST_AGENT2
         
         
-class MockEmbed:
+class MockEmbed(LooperTrooper):
     def new_threadsafe(self, *args, **kwargs):
         obj = NoopProxy(hgxlink=self, *args, **kwargs)
         obj._ghid_3141592 = make_random_ghid()
         obj._binder_3141592 = make_random_ghid()
         return obj
+        
+    def subscribe_to_updates(self, *args, **kwargs):
+        # This is unused for these tests.
+        pass
+        
+    async def loop_run(self):
+        ''' Just await closure forever.
+        '''
+        await self._shutdown_init_flag.wait()
         
         
 class MockObject:
@@ -78,6 +86,15 @@ class MockObject:
 class ProxyTest(unittest.TestCase):
     ''' For now, just test the proxying stuff, and not the comms stuff.
     '''
+    @classmethod
+    def setUpClass(cls):
+        cls.aengel = Aengel()
+        cls.embed = MockEmbed(
+            threaded = True,
+            thread_name = 'mockembed',
+            aengel = cls.aengel,
+        )
+        
     def do_proxy_pair(self, state):
         ''' Fixture for making a proxy object, and returning both it and
         the original object.
@@ -94,9 +111,6 @@ class ProxyTest(unittest.TestCase):
             dynamic = True,
             private = False
         )
-    
-    def setUp(self):
-        self.embed = MockEmbed()
         
     def test_handwritten(self):
         ''' Test stuff like repr, dir, etc that have been written by 
@@ -113,6 +127,20 @@ class ProxyTest(unittest.TestCase):
         
         # Just go ahead and check this for errors; nothing special
         repr(prox)
+        
+    def test_recasting(self):
+        ''' Test upcasting and downcasting the objects.
+        '''
+        prox = self.do_proxy_obj(b'1')
+        reprox = HGXObjBase.hgx_recast_threadsafe(prox)
+        
+        self.assertEqual(reprox.hgx_state, b'1')
+        self.assertEqual(reprox.hgx_ghid, prox.hgx_ghid)
+        
+        rereprox = NoopProxy.hgx_recast_threadsafe(reprox)
+        
+        self.assertEqual(rereprox.hgx_state, b'1')
+        self.assertEqual(rereprox.hgx_ghid, reprox.hgx_ghid)
         
     def test_basic(self):
         prox = self.do_proxy_obj('hello world')
