@@ -114,6 +114,7 @@ setup(
         'golix>=0.1.1',
         'websockets>=3.1',
         'cryptography>=1.4',
+        'pyscrypt', # upgrade this to something else!
     ],
 
     # List additional groups of dependencies here (e.g. development

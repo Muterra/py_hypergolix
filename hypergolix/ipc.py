@@ -696,13 +696,15 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         it will return successfully immediately, regardless of whether
         or not the share was eventually accepted by the recipient.
         '''
-        if endpoint not in self._token_from_endpoint:
+        ghid = Ghid.from_bytes(request_body)
+        try:
+            requesting_token = self._token_from_endpoint[endpoint]
+            
+        except KeyError as exc:
             raise IPCError(
                 'Must register app token before registering startup objects.'
-            )
+            ) from exc
             
-        ghid = Ghid.from_bytes(request_body)
-        requesting_token = self._token_from_endpoint[endpoint]
         self._dispatch.register_startup(requesting_token, ghid)
         return b'\x01'
         
@@ -758,8 +760,6 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             _legroom
         ) = self._unpack_object_def(request_body)
         
-        app_token = self._token_from_endpoint[endpoint]
-        
         if is_link:
             raise NotImplementedError('Linked objects are not yet supported.')
             state = Ghid.from_bytes(state)
@@ -779,11 +779,20 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         
         # If the object is private, register it as such.
         if private:
-            logger.debug(
-                'Creating private object for ' + str(endpoint) + 
-                '; bypassing distribution.'
-            )
-            self._dispatch.register_private(app_token, obj.ghid)
+            try:
+                app_token = self._token_from_endpoint[endpoint]
+            
+            except KeyError as exc:
+                raise IPCError(
+                    'Must register app token before creating private objects.'
+                ) from exc
+                
+            else:
+                logger.debug(
+                    'Creating private object for ' + str(endpoint) + 
+                    '; bypassing distribution.'
+                )
+                self._dispatch.register_private(app_token, obj.ghid)
             
         # Otherwise, make sure to notify any other interested parties.
         else:
@@ -863,12 +872,17 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         it will return successfully immediately, regardless of whether
         or not the share was eventually accepted by the recipient.
         '''
-        if endpoint not in self._token_from_endpoint:
-            raise IPCError('Must register app token before sharing objects.')
-            
         ghid = Ghid.from_bytes(request_body[0:65])
         recipient = Ghid.from_bytes(request_body[65:130])
-        requesting_token = self._token_from_endpoint[endpoint]
+        
+        try:
+            requesting_token = self._token_from_endpoint[endpoint]
+            
+        except KeyError as exc:
+            raise IPCError(
+                'Must register app token before sharing objects.'
+            ) from exc
+            
         self._rolodex.share_object(ghid, recipient, requesting_token)
         return b'\x01'
         

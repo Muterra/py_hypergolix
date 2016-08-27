@@ -367,9 +367,6 @@ class AgentBootstrap:
         # FIRST FIRST, we have to restore the librarian.
         self.librarian.restore()
         
-        # Delete this once we start passing an actual password
-        password = b'hello world'
-        
         # Note that FirstParty digestion methods are all classmethods, so we 
         # can prep it to be the class, and then bootstrap it to be the actual
         # credential.

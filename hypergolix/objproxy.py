@@ -155,7 +155,7 @@ class ObjBase:
     ''' This is a base object to make an object hypergolix-aware.
     '''
     _HASHMIX_3141592 = 3141592
-    _hgx_DEFAULT_API_ID = bytes(64)
+    _hgx_DEFAULT_API_ID = bytes(63) + b'\x01'
     
     def __init__(self, hgxlink, state, api_id, dynamic, private, ghid=None, 
                 binder=None):
@@ -857,7 +857,6 @@ class NoopProxy(ObjBase):
     
     TODO: fix __dir__
     '''
-    _hgx_DEFAULT_API_ID = bytes(63) + b'\x01'
     _HASHMIX_3141592 = 936930316
     
     # Declare a static namespace, so that all of these attributes will 
@@ -2175,6 +2174,8 @@ class PickleObj(ObjBase):
     used as a rootkit (within the privilege confines of the current 
     python process).
     '''
+    _hgx_DEFAULT_API_ID = bytes(63) + b'\x02'
+    
     @staticmethod
     async def _hgx_pack(data):
         ''' Packs the object into bytes. For the base proxy, treat the 
@@ -2215,6 +2216,8 @@ class PickleProxy(PickleObj, NoopProxy):
 class JsonObj(ObjBase):
     ''' An ObjProxy that uses json for serialization.
     '''
+    _hgx_DEFAULT_API_ID = bytes(63) + b'\x03'
+    
     @staticmethod
     async def _hgx_pack(data):
         ''' Packs the object into bytes. For the base proxy, treat the 
