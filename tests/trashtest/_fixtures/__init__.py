@@ -34,4 +34,6 @@ hypergolix: A python Golix client.
 '''
 
 from . import identities
-from . import logutils
+from . import ghidutils
+from . import remote_exchanges
+# from . import logutils

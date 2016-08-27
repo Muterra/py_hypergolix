@@ -166,7 +166,7 @@ class AgentBootstrap:
         self.ipccore.assemble(self.golcore, self.oracle, self.dispatch, 
                             self.rolodex, self.salmonator)
             
-    def bootstrap_zero(self, password):
+    def bootstrap_zero(self, password, _scrypt_hardness=None):
         ''' Bootstrap zero is run on the creation of a new account, to
         initialize everything and set it up and stuff.
         
@@ -174,16 +174,13 @@ class AgentBootstrap:
         
         Note: this whole thing is extremely sensitive to order. There's
         definitely a little bit of black magic in here.
-        '''
-        # Delete this once we start passing an actual password
-        password = b'hello world'
-        
+        '''        
         # Primary bootstrap (golix core, privateer, and secondary manifest)
         # ----------------------------------------------------------
         
         # First create a new credential
         logger.info('Generating a new credential.')
-        credential = Credential.new(password)
+        credential = Credential.new(password, _scrypt_hardness)
         del password
         # Now publish its public keys to percore, so we can create objects
         logger.info('Publishing credential public keys.')
@@ -364,7 +361,7 @@ class AgentBootstrap:
         # And don't forget to return the user_id
         return primary_manifest.ghid
             
-    def bootstrap(self, user_id, password):
+    def bootstrap(self, user_id, password, _scrypt_hardness=None):
         ''' Called to reinstate an existing account.
         '''
         # FIRST FIRST, we have to restore the librarian.
@@ -387,7 +384,8 @@ class AgentBootstrap:
             self.oracle, 
             self.privateer, 
             user_id, 
-            password
+            password,
+            _scrypt_hardness = _scrypt_hardness,
         )
         del password
         logger.info(
@@ -577,7 +575,7 @@ class Credential:
             return lookup[proxy]
         
     @classmethod
-    def new(cls, password):
+    def new(cls, password, _scrypt_hardness=None):
         ''' Generates a new credential. Does NOT containerize it, nor 
         does it send it to the persistence system, etc etc. JUST gets it
         up and going.
@@ -588,7 +586,11 @@ class Credential:
         # Expand the password into the primary master key
         logger.info('Expanding password using scrypt. Please be patient.')
         # Note: with pure python scrypt, this is taking me approx 90-120 sec
-        primary_master = cls._password_expansion(identity.ghid, password)
+        primary_master = cls._password_expansion(
+            identity.ghid, 
+            password, 
+            _scrypt_hardness,
+        )
         logger.info('Password expanded.')
         # Might as well do this immediately
         del password
@@ -619,7 +621,8 @@ class Credential:
         privateer.stage(binding.target, container_secret)
     
     @classmethod
-    def load(cls, librarian, oracle, privateer, user_id, password):
+    def load(cls, librarian, oracle, privateer, user_id, password, 
+            _scrypt_hardness=None):
         ''' Loads a credential container from the <librarian>, with a 
         ghid of <user_id>, encrypted with scrypted <password>.
         '''
@@ -647,7 +650,11 @@ class Credential:
         primary_manifest = librarian.summarize(user_id)
         fingerprint = primary_manifest.author
         logger.info('Expanding password using scrypt. Please be patient.')
-        primary_master = cls._password_expansion(fingerprint, password)
+        primary_master = cls._password_expansion(
+            fingerprint, 
+            password,
+            _scrypt_hardness
+        )
         del password
         
         # Calculate the primary secret and then inject it into the temporary
@@ -787,19 +794,26 @@ class Credential:
         primary_manifest.push()
             
     @staticmethod
-    def _password_expansion(salt_ghid, password):
+    def _password_expansion(salt_ghid, password, hardness=None):
         ''' Expands the author's ghid and password into a master key for
         use in generating specific keys.
+        
+        Hardness allows you to modify the scrypt inflation parameter. It
+        defaults to something resembling a reasonable general-purpose 
+        value for 2016.
         '''
+        # Use 2**14 for t<=100ms, 2**20 for t<=5s.
+        if hardness is None:
+            hardness = 2**15
+        else:
+            hardness = int(hardness)
+        
         # Scrypt the password. Salt against the author GHID.
-        # Use 2**14 for t<=100ms, 2**20 for t<=5s
         combined = pyscrypt.hash(
             password = password, 
             salt = bytes(salt_ghid),
             dkLen = 48,
-            # N = 2**15,
-            # Use this temporarily to get things working
-            N = 1024,
+            N = hardness,
             r = 8,
             p = 1
         )

@@ -152,6 +152,7 @@ class WSBasicTrashTest(unittest.TestCase):
             port = 9318,
             receiver = server_notifier,
             threaded = True,
+            tls = False
             # debug = True
         )
         
@@ -160,6 +161,7 @@ class WSBasicTrashTest(unittest.TestCase):
             port = 9318, 
             receiver = client1_notifier,
             threaded = True,
+            tls = False
             # debug = True
         )
         
@@ -168,6 +170,7 @@ class WSBasicTrashTest(unittest.TestCase):
             port = 9318, 
             receiver = client2_notifier,
             threaded = True,
+            tls = False
             # debug = True
         )
         
@@ -243,6 +246,7 @@ class WSAutoTrashtest(unittest.TestCase):
             connector_kwargs = {
                 'host': 'localhost',
                 'port': 9319,
+                'tls': False,
             },
             debug = True,
             aengel = cls.aengel,
@@ -255,6 +259,7 @@ class WSAutoTrashtest(unittest.TestCase):
             connector_kwargs = {
                 'host': 'localhost',
                 'port': 9319,
+                'tls': False,
             },
             debug = True,
             aengel = cls.aengel,
@@ -267,6 +272,7 @@ class WSAutoTrashtest(unittest.TestCase):
             connector_kwargs = {
                 'host': 'localhost',
                 'port': 9319,
+                'tls': False,
             },
             debug = True,
             aengel = cls.aengel,
@@ -359,7 +365,7 @@ def merged_stderr_stdout():  # $ exec 2>&1
     return stdout_redirected(to=sys.stdout, stdout=sys.stderr)
 
 if __name__ == "__main__":
-    from _fixtures import logutils
+    from hypergolix import logutils
     logutils.autoconfig()
     
     # from hypergolix.utils import TraceLogger

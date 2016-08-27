@@ -122,7 +122,7 @@ class ConnectorBase(LooperTrooper):
     Todo: refactor websockets stuff into a mix-in so that this class can
     be used for different transports.
     '''
-    def __init__(self, host, port, receiver, *args, **kwargs):
+    def __init__(self, host, port, receiver, tls=True, *args, **kwargs):
         ''' Yeah, the usual.
         host -> str: hostname for the server
         port -> int: port for the server
@@ -133,13 +133,24 @@ class ConnectorBase(LooperTrooper):
         '''
         self._ws_port = port
         self._ws_host = host
+        
+        if tls:
+            self._ws_protocol = 'wss://'
+        else:
+            self._ws_protocol = 'ws://'
+        
+        self._ws_tls = bool(tls)
         self._receiver = receiver
             
         super().__init__(*args, **kwargs)
             
     @property
     def _ws_loc(self):
-        return 'ws://' + self._ws_host + ':' + str(self._ws_port) + '/'
+        return (
+            self._ws_protocol + 
+            self._ws_host + ':' + 
+            str(self._ws_port) + '/'
+        )
         
     @property
     def connection_factory(self):

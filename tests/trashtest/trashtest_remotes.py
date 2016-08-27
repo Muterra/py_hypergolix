@@ -447,6 +447,7 @@ class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
                 'port': 5358,
                 # 48 bits = 1% collisions at 2.4 e 10^6 connections
                 'birthday_bits': 48,
+                'tls': False
             },
             debug = True,
             aengel = cls.aengel,
@@ -459,6 +460,7 @@ class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
             connector_kwargs = {
                 'host': 'localhost',
                 'port': 5358,
+                'tls': False,
             },
             debug = True,
             aengel = cls.aengel,
@@ -469,6 +471,7 @@ class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
             connector_kwargs = {
                 'host': 'localhost',
                 'port': 5358,
+                'tls': False,
             },
             debug = True,
             aengel = cls.aengel,
@@ -480,7 +483,7 @@ class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
         
 
 if __name__ == "__main__":
-    from _fixtures import logutils
+    from hypergolix import logutils
     logutils.autoconfig()
     
     # from hypergolix.utils import TraceLogger

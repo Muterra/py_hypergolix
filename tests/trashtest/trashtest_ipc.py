@@ -284,6 +284,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             aengel = self.aengel,
             debug = True,
             threaded = True,
+            tls = False,
             thread_name = 'IPC server'
         )
         
@@ -299,6 +300,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             host = 'localhost',
             port = 4628,
             debug = True,
+            tls = False,
             aengel = self.aengel,
             threaded = True,
             thread_name = 'app1WS',
@@ -316,6 +318,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
             host = 'localhost',
             port = 4628,
             debug = True,
+            tls = False,
             aengel = self.aengel,
             threaded = True,
             thread_name = 'app2WS',
@@ -489,7 +492,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         #     IPython.embed()
 
 if __name__ == "__main__":
-    from _fixtures import logutils
+    from hypergolix import logutils
     logutils.autoconfig('debug')
     
     unittest.main()

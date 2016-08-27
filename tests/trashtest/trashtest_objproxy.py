@@ -44,7 +44,7 @@ from hypergolix.utils import LooperTrooper
 from hypergolix.utils import Aengel
 
 from hypergolix.objproxy import NoopProxy
-from hypergolix.objproxy import HGXObjBase
+from hypergolix.objproxy import ObjBase
 from hypergolix.objproxy import PickleObj
 from hypergolix.objproxy import JsonObj
 
@@ -138,7 +138,7 @@ class ProxyTest(unittest.TestCase):
         ''' Test upcasting and downcasting the objects.
         '''
         prox = self.do_proxy_obj(b'1')
-        reprox = HGXObjBase.hgx_recast_threadsafe(prox)
+        reprox = ObjBase.hgx_recast_threadsafe(prox)
         
         self.assertEqual(reprox.hgx_state, b'1')
         self.assertEqual(reprox.hgx_ghid, prox.hgx_ghid)
@@ -152,7 +152,7 @@ class ProxyTest(unittest.TestCase):
         ''' Use recasting to test PickleObj
         '''
         prox = self.do_proxy_obj(1, PickleObj)
-        reprox = HGXObjBase.hgx_recast_threadsafe(prox)
+        reprox = ObjBase.hgx_recast_threadsafe(prox)
         rereprox = PickleObj.hgx_recast_threadsafe(reprox)
         
         self.assertEqual(rereprox.hgx_state, 1)
@@ -161,7 +161,7 @@ class ProxyTest(unittest.TestCase):
         ''' Use recasting to test JsonObj
         '''
         prox = self.do_proxy_obj(1, JsonObj)
-        reprox = HGXObjBase.hgx_recast_threadsafe(prox)
+        reprox = ObjBase.hgx_recast_threadsafe(prox)
         rereprox = JsonObj.hgx_recast_threadsafe(reprox)
         
         self.assertEqual(rereprox.hgx_state, 1)
@@ -268,7 +268,7 @@ class ProxyTest(unittest.TestCase):
         
 
 if __name__ == "__main__":
-    from _fixtures import logutils
+    from hypergolix import logutils
     logutils.autoconfig()
     
     # from hypergolix.utils import TraceLogger

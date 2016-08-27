@@ -51,8 +51,8 @@ import IPython
 import warnings
 
 from hypergolix.service import _hgx_server
-from hypergolix.service import HGXService
-from hypergolix.service import HypergolixLink
+from hypergolix.app import HGXService
+from hypergolix import HGXLink
 from hypergolix.utils import Aengel
 
 from hypergolix.objproxy import NoopProxy
@@ -78,22 +78,28 @@ def make_fixtures(debug, tmpdir_a, tmpdir_b):
     hgxraz = HGXService(
         host = 'localhost',
         port = 6022,
+        tls = False,
         ipc_port = 6023,
         debug = debug,
         traceur = False,
         foreground = False,
         aengel = aengel,
+        _scrypt_hardness = 1024,
+        password = 'hello world',
         cache_dir = tmpdir_a,
         user_id = Ghid.from_str('AQaNl4v6Ng6-1_4qPL964SzJWuTn1Cg4eTPbQiHSFNag18tERtO0_IztVghvko37t8_NWchVJgvoDs5Nq-Yfe_I=')
     )
     hgxdes = HGXService(
         host = 'localhost',
         port = 6022,
+        tls = False,
         ipc_port = 6024,
         debug = debug,
         traceur = False,
         foreground = False,
         aengel = aengel,
+        _scrypt_hardness = 1024,
+        password = 'hello world',
         cache_dir = tmpdir_b,
         user_id = Ghid.from_str('Ac7UHA_FFMndtcqqtLvzg8hyJAKd4eyJHdpx4U3N8NOWGELtRHnHJ3qGCA07szpFoLt07isXwHPQFXTNRHAECRo=')
     )
@@ -141,12 +147,12 @@ def make_tests(iterations, debug, raz, des, aengel):
         def setUpClass(cls):
             cls.timer = timer
             
-            cls.razlink = HypergolixLink(
+            cls.razlink = HGXLink(
                 ipc_port = 6023, 
                 debug = debug, 
                 aengel = aengel
             )
-            cls.deslink = HypergolixLink(
+            cls.deslink = HGXLink(
                 ipc_port = 6024, 
                 debug = debug, 
                 aengel = aengel
@@ -325,7 +331,7 @@ if __name__ == '__main__':
     
     # LOGGING CONFIGURATION! Do this first so any fixturing errors get handled
     
-    from trashtest._fixtures import logutils
+    from hypergolix import logutils
     
     if args.logdir:
         logutils.autoconfig(

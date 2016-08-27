@@ -228,7 +228,7 @@ class PrivateerTest(unittest.TestCase):
         
 
 if __name__ == "__main__":
-    from _fixtures import logutils
+    from hypergolix import logutils
     logutils.autoconfig()
     
     # from hypergolix.utils import TraceLogger
