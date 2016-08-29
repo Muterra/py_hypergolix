@@ -55,7 +55,7 @@ from hypergolix.app import HGXService
 from hypergolix import HGXLink
 from hypergolix.utils import Aengel
 
-from hypergolix.objproxy import NoopProxy
+from hypergolix.objproxy import ProxyBase
 
 from golix import Ghid
 
@@ -169,7 +169,7 @@ def make_tests(iterations, debug, raz, des, aengel):
         # All requests go from Raz -> Des
         def make_request(self, msg):
             obj = self.razlink.new_threadsafe(
-                cls = NoopProxy,
+                cls = ProxyBase,
                 state = msg,
                 dynamic = True,
                 api_id = request_api
@@ -184,7 +184,7 @@ def make_tests(iterations, debug, raz, des, aengel):
             # Just to prevent GC
             requests_incoming.appendleft(obj)
             reply = self.deslink.new_threadsafe(
-                cls = NoopProxy,
+                cls = ProxyBase,
                 state = obj,
                 dynamic = True,
                 api_id = response_api
@@ -216,12 +216,12 @@ def make_tests(iterations, debug, raz, des, aengel):
             '''
             self.razlink.register_share_handler_threadsafe(
                 response_api, 
-                NoopProxy, 
+                ProxyBase, 
                 self.response_handler
             )
             self.deslink.register_share_handler_threadsafe(
                 request_api, 
-                NoopProxy,
+                ProxyBase,
                 self.request_handler
             )
             

@@ -195,7 +195,7 @@ othered_template_oper = \
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 $dunder_oper$ other._proxy_3141592
         
         else:
@@ -214,7 +214,7 @@ othered_template_func = \
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return $dunder_func$(
                 self._proxy_3141592, 
                 other._proxy_3141592,
@@ -245,7 +245,7 @@ rothered_template_oper = \
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 $dunder_oper$ self._proxy_3141592
@@ -268,7 +268,7 @@ rothered_template_func = \
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return $dunder_func$(other._proxy_3141592, self._proxy_3141592)
@@ -291,7 +291,7 @@ incrd_template = \
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 $dunder_oper$ other._proxy_3141592

@@ -52,7 +52,7 @@ __all__ = [
     'HGXLink',
     'Ghid',
     'ObjBase', 
-    'NoopProxy',
+    'ProxyBase',
     'PickleObj',
     'PickleProxy',
     'JsonObj',
@@ -88,7 +88,7 @@ from .service import HGXLink
 from golix import Ghid
 
 from .objproxy import ObjBase
-from .objproxy import NoopProxy
+from .objproxy import ProxyBase
 from .objproxy import PickleObj
 from .objproxy import PickleProxy
 from .objproxy import JsonObj

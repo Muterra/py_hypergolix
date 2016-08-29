@@ -62,7 +62,7 @@ from hypergolix.comms import WSBasicClient
 from hypergolix.ipc import IPCCore
 from hypergolix.ipc import IPCEmbed
 
-from hypergolix.objproxy import NoopProxy
+from hypergolix.objproxy import ProxyBase
 
 from golix import Ghid
 
@@ -363,12 +363,12 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         # -----------
         self.app1.register_share_handler_threadsafe(
             self.__api_id, 
-            NoopProxy,
+            ProxyBase,
             self._objhandler_1
         )
         self.app2.register_share_handler_threadsafe(
             self.__api_id, 
-            NoopProxy,
+            ProxyBase,
             self._objhandler_2
         )
         registered_apis = \
@@ -378,7 +378,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         # Test creating a private, static new object with that api_id
         # -----------
         obj1 = self.app1.new_threadsafe(
-            cls = NoopProxy,
+            cls = ProxyBase,
             state = pt0,
             api_id = self.__api_id,
             dynamic = False,
@@ -396,7 +396,7 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         # And again, but dynamic, and not private.
         # -----------
         obj2 = self.app1.new_threadsafe(
-            cls = NoopProxy,
+            cls = ProxyBase,
             state = pt1,
             api_id = self.__api_id,
             dynamic = True,
@@ -426,10 +426,10 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         # -----------
         # Huh, interestingly this shouldn't fail, if the second app is able to
         # directly guess the right address for the private object.
-        joint1 = self.app2.get_threadsafe(NoopProxy, obj1.hgx_ghid)
+        joint1 = self.app2.get_threadsafe(ProxyBase, obj1.hgx_ghid)
         self.assertEqual(obj1, joint1)
         
-        joint2 = self.app2.get_threadsafe(NoopProxy, obj2.hgx_ghid)
+        joint2 = self.app2.get_threadsafe(ProxyBase, obj2.hgx_ghid)
         self.assertEqual(obj2, joint2)
         self.assertEqual(
             len(self.ipccore._update_listeners.get_any(dispatchable2.ghid)), 

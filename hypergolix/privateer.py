@@ -760,3 +760,9 @@ class Privateer:
             key = ratcheted[:len_key],
             seed = ratcheted[len_key:]
         )
+        
+        
+class MarqueRevoker:
+    ''' Handles the removal of secrets when their targets are removed,
+    deleted, or otherwise made inaccessible.
+    '''

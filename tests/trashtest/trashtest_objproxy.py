@@ -43,7 +43,7 @@ import weakref
 from hypergolix.utils import LooperTrooper
 from hypergolix.utils import Aengel
 
-from hypergolix.objproxy import NoopProxy
+from hypergolix.objproxy import ProxyBase
 from hypergolix.objproxy import ObjBase
 from hypergolix.objproxy import PickleObj
 from hypergolix.objproxy import JsonObj
@@ -108,7 +108,7 @@ class ProxyTest(unittest.TestCase):
         all of the proxy stuff.
         '''
         if cls is None:
-            cls = NoopProxy
+            cls = ProxyBase
         
         return self.embed.new_threadsafe(
             cls = cls,
@@ -143,7 +143,7 @@ class ProxyTest(unittest.TestCase):
         self.assertEqual(reprox.hgx_state, b'1')
         self.assertEqual(reprox.hgx_ghid, prox.hgx_ghid)
         
-        rereprox = NoopProxy.hgx_recast_threadsafe(reprox)
+        rereprox = ProxyBase.hgx_recast_threadsafe(reprox)
         
         self.assertEqual(rereprox.hgx_state, b'1')
         self.assertEqual(rereprox.hgx_ghid, reprox.hgx_ghid)
@@ -225,7 +225,7 @@ class ProxyTest(unittest.TestCase):
         self.assertEqual(prox, obj)
         prox += 1
         self.assertEqual(prox, 8)
-        self.assertTrue(isinstance(prox, NoopProxy))
+        self.assertTrue(isinstance(prox, ProxyBase))
         
     def test_mapping(self):
         obj = {

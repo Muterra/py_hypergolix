@@ -250,7 +250,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 + other._proxy_3141592
         
         else:
@@ -266,7 +266,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 - other._proxy_3141592
         
         else:
@@ -282,7 +282,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 * other._proxy_3141592
         
         else:
@@ -298,7 +298,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 @ other._proxy_3141592
         
         else:
@@ -314,7 +314,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 / other._proxy_3141592
         
         else:
@@ -330,7 +330,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 // other._proxy_3141592
         
         else:
@@ -346,7 +346,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 % other._proxy_3141592
         
         else:
@@ -362,7 +362,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return divmod(
                 self._proxy_3141592, 
                 other._proxy_3141592,
@@ -388,7 +388,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return pow(
                 self._proxy_3141592, 
                 other._proxy_3141592,
@@ -414,7 +414,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 << other._proxy_3141592
         
         else:
@@ -430,7 +430,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 >> other._proxy_3141592
         
         else:
@@ -446,7 +446,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 & other._proxy_3141592
         
         else:
@@ -462,7 +462,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 ^ other._proxy_3141592
         
         else:
@@ -478,7 +478,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             return self._proxy_3141592 | other._proxy_3141592
         
         else:
@@ -496,7 +496,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 + self._proxy_3141592
@@ -516,7 +516,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 - self._proxy_3141592
@@ -536,7 +536,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 * self._proxy_3141592
@@ -556,7 +556,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 @ self._proxy_3141592
@@ -576,7 +576,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 / self._proxy_3141592
@@ -596,7 +596,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 // self._proxy_3141592
@@ -616,7 +616,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 % self._proxy_3141592
@@ -636,7 +636,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return divmod(other._proxy_3141592, self._proxy_3141592)
@@ -656,7 +656,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return pow(other._proxy_3141592, self._proxy_3141592)
@@ -676,7 +676,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 << self._proxy_3141592
@@ -696,7 +696,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 >> self._proxy_3141592
@@ -716,7 +716,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 & self._proxy_3141592
@@ -736,7 +736,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 ^ self._proxy_3141592
@@ -756,7 +756,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 | self._proxy_3141592
@@ -776,7 +776,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 += other._proxy_3141592
@@ -798,7 +798,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 -= other._proxy_3141592
@@ -820,7 +820,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 *= other._proxy_3141592
@@ -842,7 +842,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 @= other._proxy_3141592
@@ -864,7 +864,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 /= other._proxy_3141592
@@ -886,7 +886,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 //= other._proxy_3141592
@@ -908,7 +908,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 %= other._proxy_3141592
@@ -930,7 +930,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 **= other._proxy_3141592
@@ -952,7 +952,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 <<= other._proxy_3141592
@@ -974,7 +974,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 >>= other._proxy_3141592
@@ -996,7 +996,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 &= other._proxy_3141592
@@ -1018,7 +1018,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 ^= other._proxy_3141592
@@ -1040,7 +1040,7 @@
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a 
         # much safer bet.
-        if isinstance(other, NoopProxy):
+        if isinstance(other, ProxyBase):
             # Other proxies are very likely to fail, since the reveresed call 
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 |= other._proxy_3141592
