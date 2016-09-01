@@ -311,6 +311,9 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         
     async def process_share_success(self, target, recipient, tokens):
         ''' Wrapper to notify all requestors of share success.
+        
+        Note that tokens will only include applications that have a 
+        declared app token.
         '''
         callsheet = set()
         for token in tokens:
@@ -330,6 +333,9 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
     
     async def process_share_failure(self, target, recipient, tokens):
         ''' Wrapper to notify all requestors of share failure.
+        
+        Note that tokens will only include applications that have a 
+        declared app token.
         '''
         callsheet = set()
         for token in tokens:
@@ -655,12 +661,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         
     async def add_api_wrapper(self, endpoint, request_body):
         ''' Wraps self.dispatch.new_token into a bytes return.
-        
-        Requires existing app token.
         '''
-        if endpoint not in self._token_from_endpoint:
-            raise IPCError('Must register app token prior to adding APIs.')
-            
         if len(request_body) != 65:
             raise ValueError('Invalid API ID format.')
             
@@ -879,9 +880,14 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             requesting_token = self._token_from_endpoint[endpoint]
             
         except KeyError as exc:
-            raise IPCError(
-                'Must register app token before sharing objects.'
-            ) from exc
+            # Instead of forbidding unregistered apps from sharing objects, 
+            # go for it, but document that you will never be notified of a 
+            # share success or failure without an app token.
+            requesting_token = None
+            
+            # raise IPCError(
+            #     'Must register app token before sharing objects.'
+            # ) from exc
             
         self._rolodex.share_object(ghid, recipient, requesting_token)
         return b'\x01'

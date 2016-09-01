@@ -153,6 +153,13 @@ _USER_NAMESPACE_2 = {
 
 class ObjBase:
     ''' This is a base object to make an object hypergolix-aware.
+    
+    TODO: separate this out into a DoublePlusBase class that exposes 
+    only name-mangled methods, and then turn this into a wrapper around
+    that, so that the ObjBase objects can expose more concise access to
+    attributes and methods than "hgx_<something>", ie ObjBase.state 
+    instead of (better yet, in addition to) ObjBase.hgx_state. Then, the
+    proxybase can also subclass DoublePlusBase.
     '''
     _HASHMIX_3141592 = 3141592
     _hgx_DEFAULT_API_ID = bytes(63) + b'\x01'
@@ -179,115 +186,8 @@ class ObjBase:
         self._api_id_3141592 = api_id
         self._private_3141592 = bool(private)
         self._dynamic_3141592 = bool(dynamic)
+        # TODO: move this into hgxlink.subscribe_to_updates
         self._isalive_3141592 = True
-        
-    @classmethod
-    async def _hgx_recast(cls, obj):
-        ''' Takes the passed obj, and attempts to re-cast it as this
-        class. Only works for up/down classing; you cannot directly, for
-        example, convert between a JsonProxy and a PickleProxy, because
-        they have divergent inheritance. Returns a new instance of the
-        object, recast as the class you're calling from. Preserves any
-        update callbacks, even though they might break from the type
-        change.
-        
-        NOTE THAT THIS WILL RENDER THE PREVIOUS OBJECT DEAD! The "old"
-        object will also stop receiving updates from hgxlink.
-        
-        As examples:
-            + ObjBase.hgx_recast(<PickleProxy object>) returns the object 
-                recast as an ObjBase
-            + PickleProxy.hgx_recast(<ObjBase object>) returns the object
-                recast as a PickleProxy
-            + PickleProxy.hgx_recast(<JsonProxy object>) raises TypeError
-        '''
-        # We are going from child to parent
-        if issubclass(type(obj), cls):
-            # Re-pack the object, and then unpack it.
-            state = await obj._hgx_pack(obj._proxy_3141592)
-            state = await cls._hgx_unpack(state)
-        
-        # We are going from parent to child
-        elif issubclass(cls, type(obj)):
-            # Simply recreate the object with an unpacked state
-            state = await cls._hgx_unpack(obj._proxy_3141592)
-            
-        # We have divergent heritage
-        else:
-            raise TypeError(
-                'HGX objects can only be recast into ancestor or descendant '
-                'classes. They cannot be recast into classes with divergent '
-                'heritage.'
-            )
-            
-        # Use the state from above to create a new copy of the object.
-        recast = cls(
-            hgxlink = obj._hgxlink_3141592,
-            state = state,
-            api_id = obj._api_id_3141592,
-            dynamic = obj._dynamic_3141592,
-            private = obj._private_3141592,
-            ghid = obj._ghid_3141592,
-            binder = obj._binder_3141592,
-        )
-        # Copy over the existing isalive and callback.
-        recast._callback_3141592 = obj._callback_3141592
-        recast._isalive_3141592 = obj._isalive_3141592
-        # Now transfer the subscription to the new object and render the old 
-        # inoperable
-        obj._hgxlink_3141592.subscribe_to_updates(recast)
-        obj._render_inop_3141592()
-        
-        return recast
-        
-    @classmethod
-    def hgx_recast_threadsafe(cls, obj):
-        ''' Takes the passed obj, and attempts to re-cast it as this
-        class. Only works for up/down classing; you cannot directly, for
-        example, convert between a JsonProxy and a PickleProxy, because
-        they have divergent inheritance. Returns a new instance of the
-        object, recast as the class you're calling from. Preserves any
-        update callbacks, even though they might break from the type
-        change.
-        
-        NOTE THAT THIS WILL RENDER THE PREVIOUS OBJECT DEAD! The "old"
-        object will also stop receiving updates from hgxlink.
-        
-        As examples:
-            + ObjBase.hgx_recast(<PickleProxy object>) returns the object 
-                recast as an ObjBase
-            + PickleProxy.hgx_recast(<ObjBase object>) returns the object
-                recast as a PickleProxy
-            + PickleProxy.hgx_recast(<JsonProxy object>) raises TypeError
-        '''
-        return call_coroutine_threadsafe(
-            coro = cls._hgx_recast(obj),
-            loop = obj._hgxlink_3141592._loop
-        )
-        
-    async def hgx_recast_loopsafe(cls, obj):
-        ''' Takes the passed obj, and attempts to re-cast it as this
-        class. Only works for up/down classing; you cannot directly, for
-        example, convert between a JsonProxy and a PickleProxy, because
-        they have divergent inheritance. Returns a new instance of the
-        object, recast as the class you're calling from. Preserves any
-        update callbacks, even though they might break from the type
-        change.
-        
-        NOTE THAT THIS WILL RENDER THE PREVIOUS OBJECT DEAD! The "old"
-        object will also stop receiving updates from hgxlink.
-        
-        As examples:
-            + ObjBase.hgx_recast(<PickleProxy object>) returns the object 
-                recast as an ObjBase
-            + PickleProxy.hgx_recast(<ObjBase object>) returns the object
-                recast as a PickleProxy
-            + PickleProxy.hgx_recast(<JsonProxy object>) raises TypeError
-        '''
-        return (await run_coroutine_loopsafe(
-            coro = cls._hgx_recast(obj),
-            target_loop = obj._hgxlink_3141592._loop
-        ))
         
     @property
     def hgx_state(self):
@@ -381,6 +281,118 @@ class ObjBase:
         be deleted.
         '''
         raise NotImplementedError()
+        
+    @classmethod
+    async def _hgx_recast(cls, obj):
+        ''' Takes the passed obj, and attempts to re-cast it as this
+        class. Only works for up/down classing; you cannot directly, for
+        example, convert between a JsonProxy and a PickleProxy, because
+        they have divergent inheritance. Returns a new instance of the
+        object, recast as the class you're calling from. Preserves any
+        update callbacks, even though they might break from the type
+        change.
+        
+        NOTE THAT THIS WILL RENDER THE PREVIOUS OBJECT DEAD! The "old"
+        object will also stop receiving updates from hgxlink.
+        
+        As examples:
+            + ObjBase.hgx_recast(<PickleProxy object>) returns the object 
+                recast as an ObjBase
+            + PickleProxy.hgx_recast(<ObjBase object>) returns the object
+                recast as a PickleProxy
+            + PickleProxy.hgx_recast(<JsonProxy object>) raises TypeError
+        '''
+        # We are going from child to parent
+        if issubclass(type(obj), cls):
+            # Re-pack the object, and then unpack it.
+            state = await obj._hgx_pack(obj._proxy_3141592)
+            state = await cls._hgx_unpack(state)
+        
+        # We are going from parent to child
+        elif issubclass(cls, type(obj)):
+            # We still need to do this, in case something got weird with 
+            # serialization.
+            # Re-pack the object, and then unpack it.
+            state = await obj._hgx_pack(obj._proxy_3141592)
+            state = await cls._hgx_unpack(state)
+            
+        # We have divergent heritage
+        else:
+            raise TypeError(
+                'HGX objects can only be recast into ancestor or descendant '
+                'classes. They cannot be recast into classes with divergent '
+                'heritage.'
+            )
+            
+        # Use the state from above to create a new copy of the object.
+        recast = cls(
+            hgxlink = obj._hgxlink_3141592,
+            state = state,
+            api_id = obj._api_id_3141592,
+            dynamic = obj._dynamic_3141592,
+            private = obj._private_3141592,
+            ghid = obj._ghid_3141592,
+            binder = obj._binder_3141592,
+        )
+        # Copy over the existing isalive and callback.
+        recast._callback_3141592 = obj._callback_3141592
+        recast._isalive_3141592 = obj._isalive_3141592
+        # Now transfer the subscription to the new object and render the old 
+        # inoperable
+        obj._hgxlink_3141592.subscribe_to_updates(recast)
+        obj._render_inop_3141592()
+        
+        return recast
+        
+    @classmethod
+    def hgx_recast_threadsafe(cls, obj):
+        ''' Takes the passed obj, and attempts to re-cast it as this
+        class. Only works for up/down classing; you cannot directly, for
+        example, convert between a JsonProxy and a PickleProxy, because
+        they have divergent inheritance. Returns a new instance of the
+        object, recast as the class you're calling from. Preserves any
+        update callbacks, even though they might break from the type
+        change.
+        
+        NOTE THAT THIS WILL RENDER THE PREVIOUS OBJECT DEAD! The "old"
+        object will also stop receiving updates from hgxlink.
+        
+        As examples:
+            + ObjBase.hgx_recast(<PickleProxy object>) returns the object 
+                recast as an ObjBase
+            + PickleProxy.hgx_recast(<ObjBase object>) returns the object
+                recast as a PickleProxy
+            + PickleProxy.hgx_recast(<JsonProxy object>) raises TypeError
+        '''
+        return call_coroutine_threadsafe(
+            coro = cls._hgx_recast(obj),
+            loop = obj._hgxlink_3141592._loop
+        )
+        
+    @classmethod
+    async def hgx_recast_loopsafe(cls, obj):
+        ''' Takes the passed obj, and attempts to re-cast it as this
+        class. Only works for up/down classing; you cannot directly, for
+        example, convert between a JsonProxy and a PickleProxy, because
+        they have divergent inheritance. Returns a new instance of the
+        object, recast as the class you're calling from. Preserves any
+        update callbacks, even though they might break from the type
+        change.
+        
+        NOTE THAT THIS WILL RENDER THE PREVIOUS OBJECT DEAD! The "old"
+        object will also stop receiving updates from hgxlink.
+        
+        As examples:
+            + ObjBase.hgx_recast(<PickleProxy object>) returns the object 
+                recast as an ObjBase
+            + PickleProxy.hgx_recast(<ObjBase object>) returns the object
+                recast as a PickleProxy
+            + PickleProxy.hgx_recast(<JsonProxy object>) raises TypeError
+        '''
+        return (await run_coroutine_loopsafe(
+            coro = cls._hgx_recast(obj),
+            target_loop = obj._hgxlink_3141592._loop
+        ))
 
     def _hgx_register_callback(self, callback):
         ''' Register a callback to be called whenever an upstream update
@@ -394,7 +406,7 @@ class ObjBase:
         This METHOD may be called anywhere.
         '''
         # Any handlers passed to us this way can already be called natively 
-        # from withinour own event loop, so they just need to be wrapped such 
+        # from within our own event loop, so they just need to be wrapped such 
         # that they never raise.
         async def wrap_callback(*args, callback=callback, **kwargs):
             try:
@@ -659,11 +671,11 @@ class ObjBase:
         )
     
     @staticmethod
-    async def _hgx_pack(data):
+    async def _hgx_pack(state):
         ''' Packs the object into bytes. For the base proxy, treat the 
         input as bytes and return immediately.
         '''
-        return data
+        return state
     
     @staticmethod
     async def _hgx_unpack(packed):
@@ -726,8 +738,8 @@ class ObjBase:
     def __repr__(self):
         classname = type(self).__name__
         return (
-            '<' + classname + ' at ' + str(self.hgx_ghid) + ' with state ' + 
-            repr(self._proxy_3141592) + '>'
+            '<' + classname + ' with state ' + repr(self._proxy_3141592) + 
+            ' at ' + str(self.hgx_ghid) + '>'
         )
         
     def __hash__(self):
@@ -854,8 +866,6 @@ class ProxyBase(ObjBase):
     Side note: as per python docs, support for magic methods ("dunder",
     or "double underscore" methods) is only reliable if declared 
     directly and explicitly within the class.
-    
-    TODO: fix __dir__
     '''
     _HASHMIX_3141592 = 936930316
     
@@ -2177,12 +2187,12 @@ class PickleObj(ObjBase):
     _hgx_DEFAULT_API_ID = bytes(63) + b'\x02'
     
     @staticmethod
-    async def _hgx_pack(data):
+    async def _hgx_pack(state):
         ''' Packs the object into bytes. For the base proxy, treat the 
         input as bytes and return immediately.
         '''
         try:
-            return pickle.dumps(data, protocol=4)
+            return pickle.dumps(state, protocol=4)
             
         except:
             logger.error(
@@ -2219,13 +2229,13 @@ class JsonObj(ObjBase):
     _hgx_DEFAULT_API_ID = bytes(63) + b'\x03'
     
     @staticmethod
-    async def _hgx_pack(data):
+    async def _hgx_pack(state):
         ''' Packs the object into bytes. For the base proxy, treat the 
         input as bytes and return immediately.
         '''
         try:
             # Use the most compact json possible.
-            return json.dumps(data, separators=(',', ':')).encode('utf-8')
+            return json.dumps(state, separators=(',', ':')).encode('utf-8')
             
         except:
             logger.error(

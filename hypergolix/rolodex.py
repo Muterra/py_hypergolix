@@ -141,7 +141,9 @@ class Rolodex:
             
         # For now, this is just doing a handshake with some typechecking.
         self._hand_object(*sharepair)
-        self._outstanding_shares.add(sharepair, requesting_token)
+        
+        if requesting_token is not None:
+            self._outstanding_shares.add(sharepair, requesting_token)
         
     def _hand_object(self, target, recipient):
         ''' Initiates a handshake request with the recipient.
