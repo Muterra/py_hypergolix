@@ -79,12 +79,61 @@ class Deamonizing_test(unittest.TestCase):
         ''' Test making appropriate ranges for file auto-closure. 
         Platform-independent.
         '''
-        raise NotImplementedError()
+        # This would be better done with hypothesis, but that can come later.
+        argsets = []
+        expected_results = []
         
-    def test_autoclose_fs(self):
-        ''' Test auto-closing files. Platform-independent.
-        '''
-        raise NotImplementedError()
+        argsets.append(
+            (0, 5, [])
+        )
+        expected_results.append(
+            [
+                (0, 5),
+            ]
+        )
+        
+        argsets.append(
+            (3, 10, [1, 2])
+        )
+        expected_results.append(
+            [
+                (3, 10),
+            ]
+        )
+        
+        argsets.append(
+            (3, 7, [4,])
+        )
+        expected_results.append(
+            [
+                (3, 4),
+                (5, 7),
+            ]
+        )
+        
+        argsets.append(
+            (3, 14, [4, 5, 10])
+        )
+        expected_results.append(
+            [
+                (3, 4),
+                (6, 10),
+                (11, 14),
+            ]
+        )
+        
+        argsets.append(
+            (1, 3, [1, 2, 3])
+        )
+        expected_results.append(
+            [
+            ]
+        )
+        
+        for argset, expected_result in zip(argsets, expected_results):
+            with self.subTest(argset):
+                actual_result = _make_range_tuples(*argset)
+                self.assertEqual(actual_result, expected_result)
         
     def test_flush_stds(self):
         ''' Test flushing stds. Platform-independent.
@@ -93,6 +142,12 @@ class Deamonizing_test(unittest.TestCase):
         
     def test_redirect_stds(self):
         ''' Test redirecting stds. Platform-independent.
+        '''
+        raise NotImplementedError()
+        
+    @unittest.skipIf(not _SUPPORTED_PLATFORM, 'Unsupported platform.')
+    def test_autoclose_fs(self):
+        ''' Test auto-closing files. Platform-specific.
         '''
         raise NotImplementedError()
     

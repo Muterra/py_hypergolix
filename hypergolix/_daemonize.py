@@ -42,7 +42,31 @@ This was written with heavy consultation of the following resources:
 '''
 
 # Global dependencies
-# import argparse
+import os
+import sys
+import signal
+import logging
+import atexit
+import traceback
+import shutil
+
+# Intra-package dependencies
+from .utils import platform_specificker
+
+_SUPPORTED_PLATFORM = platform_specificker(
+    linux_choice = True,
+    win_choice = False,
+    cygwin_choice = False,
+    osx_choice = True,
+    # Dunno if this is a good idea but might as well try
+    other_choice = True
+)
+
+if _SUPPORTED_PLATFORM:
+    import fcntl
+    import pwd
+    import grp
+    import resource
 
 
 # ###############################################
@@ -62,21 +86,7 @@ __all__ = [
 # ###############################################
 # Library
 # ###############################################
-
-# #!/usr/bin/python
-
-import fcntl
-import os
-import pwd
-import grp
-import sys
-import signal
-import resource
-import logging
-import atexit
-import traceback
-import shutil
-
+    
 
 def _default_to(check, default):
     ''' If check is None, apply default; else, return check.
@@ -279,8 +289,8 @@ class Daemonizer:
         # Now create a lookup to transform our masks into file access levels
         access_lookup = {
             read_mask: os.O_RDONLY,
-            write_mask = os.O_WRONLY,
-            rw_mask = os.O_RDWR
+            write_mask: os.O_WRONLY,
+            rw_mask: os.O_RDWR
         }
         
         # Now, use our mask lookup to translate into actual file descriptors
@@ -484,12 +494,19 @@ def _make_range_tuples(start, stop, exclude):
     ranges = []
     seeker = start
     for ii in exclude:
-        this_range = (seeker, ii)
-        ranges.append(this_range)
+        # Only add actual slices (it wouldn't matter if we added empty ones, 
+        # but there's also no reason to).
+        if seeker != ii:
+            this_range = (seeker, ii)
+            ranges.append(this_range)
+            
+        # But always do this.
         seeker = ii + 1
+        
     # Don't forget to add the final range!
-    final_range = (seeker, stop)
-    ranges.append(final_range)
+    if seeker < stop:
+        final_range = (seeker, stop)
+        ranges.append(final_range)
         
     return ranges
         
@@ -573,8 +590,8 @@ def _redirect_stds(stdin_goto, stdout_goto, stderr_goto):
     # Now create a lookup to transform our masks into file access levels
     access_lookup = {
         read_mask: os.O_RDONLY,
-        write_mask = os.O_WRONLY,
-        rw_mask = os.O_RDWR
+        write_mask: os.O_WRONLY,
+        rw_mask: os.O_RDWR
     }
     
     # Now, use our mask lookup to translate into actual file descriptors
