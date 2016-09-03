@@ -86,15 +86,6 @@ __all__ = [
 # ###############################################
 # Library
 # ###############################################
-    
-
-def _default_to(check, default):
-    ''' If check is None, apply default; else, return check.
-    '''
-    if check is None:
-        return default
-    else:
-        return check
 
 
 class Daemonizer:
@@ -379,6 +370,16 @@ class Daemonizer:
         
         
         
+    
+# Etc
+
+def _default_to(check, default):
+    ''' If check is None, apply default; else, return check.
+    '''
+    if check is None:
+        return default
+    else:
+        return check
         
         
 # Daemonization and helpers
@@ -565,7 +566,8 @@ def _flush_stds():
         # Honestly not sure if we should exit here.
         
 def _redirect_stds(stdin_goto, stdout_goto, stderr_goto):
-    ''' Set stdin, stdout, sterr
+    ''' Set stdin, stdout, sterr. If any of the paths don't exist, 
+    create them first.
     '''
     # The general strategy here is to:
     # 1. figure out which unique paths we need to open for the redirects
@@ -596,6 +598,11 @@ def _redirect_stds(stdin_goto, stdout_goto, stderr_goto):
     
     # Now, use our mask lookup to translate into actual file descriptors
     for stream in streams:
+        # First create the file if its missing.
+        if not os.path.exists(stream):
+            with open(stream, 'w'):
+                pass
+        
         # Transform the mask into the actual access level.
         access = access_lookup[streams[stream]]
         # Open the file with that level of access.
@@ -635,6 +642,9 @@ def daemonize(pid_file, chdir=None, stdin_goto=None, stdout_goto=None,
         3. will prevent other from having any permission
     See https://en.wikipedia.org/wiki/Umask
     '''
+    if not _SUPPORTED_PLATFORM:
+        raise OSError('Daemonization is unsupported on your platform.')
+    
     ####################################################################
     # Prep the arguments
     ####################################################################
@@ -754,6 +764,9 @@ def daemote(pid_file, user, group):
     
     The pid_file will be chown'ed so it can still be cleaned up.
     '''
+    if not _SUPPORTED_PLATFORM:
+        raise OSError('Daemotion is unsupported on your platform.')
+    
     # No need to do anything special, just chown the pidfile
     # This will also catch any bad group, user names
     shutil.chown(pid_file, user, group)

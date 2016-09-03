@@ -36,6 +36,9 @@ hypergolix: A python Golix client.
 import unittest
 import collections
 import logging
+import tempfile
+import sys
+import os
 
 from hypergolix.utils import platform_specificker
 
@@ -138,12 +141,58 @@ class Deamonizing_test(unittest.TestCase):
     def test_flush_stds(self):
         ''' Test flushing stds. Platform-independent.
         '''
-        raise NotImplementedError()
+        # Should this do any kind of verification or summat?
+        _flush_stds()
         
     def test_redirect_stds(self):
         ''' Test redirecting stds. Platform-independent.
         '''
-        raise NotImplementedError()
+        stdin = sys.stdin
+        stdout = sys.stdout
+        stderr = sys.stderr
+        
+        # Get some file descriptors to use to cache stds
+        with tempfile.NamedTemporaryFile() as stdin_tmp, \
+            tempfile.NamedTemporaryFile() as stdout_tmp, \
+            tempfile.NamedTemporaryFile() as stderr_tmp:
+                stdin_fd = stdin_tmp.fileno()
+                stdout_fd = stdout_tmp.fileno()
+                stderr_fd = stderr_tmp.fileno()
+                
+        os.dup2(0, stdin_fd)
+        os.dup2(1, stdout_fd)
+        os.dup2(2, stderr_fd)
+        
+        # Perform the actual tests
+        with tempfile.TemporaryDirectory() as dirname:
+            try:
+                with self.subTest('Separate streams'):
+                    _redirect_stds(
+                        dirname + '/stdin.txt',
+                        dirname + '/stdout.txt',
+                        dirname + '/stderr.txt'
+                    )
+                
+                with self.subTest('Shared streams'):
+                    _redirect_stds(
+                        dirname + '/stdin2.txt',
+                        dirname + '/stdshr.txt',
+                        dirname + '/stdshr.txt'
+                    )
+                
+                with self.subTest('Combined streams'):
+                    _redirect_stds(
+                        dirname + '/stdcomb.txt',
+                        dirname + '/stdcomb.txt',
+                        dirname + '/stdcomb.txt'
+                    )
+        
+            # Restore our original stdin, stdout, stderr. Do this before dir
+            # cleanup or we'll get cleanup errors.
+            finally:
+                os.dup2(stdin_fd, 0)
+                os.dup2(stdout_fd, 1)
+                os.dup2(stderr_fd, 2)
         
     @unittest.skipIf(not _SUPPORTED_PLATFORM, 'Unsupported platform.')
     def test_autoclose_fs(self):
