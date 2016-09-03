@@ -1152,7 +1152,7 @@ def _generate_threadnames(*prefixes):
             
     return names
             
-            
+# I think this is deprecated and unused?
 import inspect
 class _Proxy:
     ''' weakref.proxy doesn't support context managers? Balls to that!
@@ -1211,3 +1211,27 @@ class _Proxy:
     def __delattr__(self, *args, **kwargs):
         proxy = super().__getattribute__('__hgxproxyref__')()
         proxy.__delattr__(*args, **kwargs)
+        
+        
+def platform_specificker(linux_choice, win_choice, cygwin_choice, osx_choice, 
+                        other_choice):
+    ''' For the three choices, returns whichever is appropriate for this
+    platform.
+    
+    "Other" means a non-linux Unix system, see python.sys docs: 
+        
+        For Unix systems, except on Linux, this is the lowercased OS 
+        name as returned by uname -s with the first part of the version 
+        as returned by uname -r appended, e.g. 'sunos5' or 'freebsd8', 
+        at the time when Python was built.
+    '''
+    if sys.platform.startswith('linux'):
+        return linux_choice
+    elif sys.platform.startswith('win32'):
+        return win_choice
+    elif sys.platform.startswith('cygwin'):
+        return cygwin_choice
+    elif sys.platform.startswith('darwin'):
+        return osx_choice
+    else:
+        return other_choice
