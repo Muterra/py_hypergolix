@@ -127,7 +127,7 @@ class Daemonizer:
         for killing the resulting daemon.
         '''
         # Get a lock on the PIDfile before forking anything.
-        self._lock_pidfile()
+        self._acquire_pidfile()
         # Register this as soon as possible in case something goes wrong.
         atexit.register(self._cleanup)
         # Note that because fratricidal fork is calling os._exit(), our parents
@@ -189,7 +189,7 @@ class Daemonizer:
         # How nice of os to include this for us!
         os.closerange(3, fdlimit)
                     
-    def _lock_pidfile(self):
+    def _acquire_pidfile(self):
         ''' Gets a lock for the PIDfile. This ensures that only one 
         instance of this particular daemon is running at any given time.
         '''
@@ -384,8 +384,8 @@ def _default_to(check, default):
         
 # Daemonization and helpers
                     
-def _lock_pidfile(pid_file):
-    ''' Gets a lock for the PIDfile. This ensures that only one 
+def _acquire_pidfile(pid_file):
+    ''' Opens and locks the pid_file. This ensures that only one
     instance of this particular daemon is running at any given time.
     '''
     # We're going to switch modes depending on if the file exists or not.
@@ -402,12 +402,12 @@ def _lock_pidfile(pid_file):
         else:
             locked_pid = open(pid_file, 'w+')
             
-    except (IOError, OSError):
+    except (IOError, OSError) as exc:
         logger.critical(
             'Unable to create/open the PID file w/ traceback: \n' + 
             ''.join(traceback.format_exc())
         )
-        sys.exit(1)
+        raise SystemExit('Unable to create/open PID file.') from exc
         
     # Acquire an exclusive lock. Do not block to acquire it. Failure will 
     # raise an OSError (older versions raised IOError?).
@@ -416,12 +416,12 @@ def _lock_pidfile(pid_file):
         # when all open file descriptors of it are closed.
         fcntl.flock(locked_pid, fcntl.LOCK_EX | fcntl.LOCK_NB)
         
-    except (IOError, OSError):
+    except (IOError, OSError) as exc:
         logger.critical(
             'Unable to lock the PID file w/ traceback: \n' + 
             ''.join(traceback.format_exc())
         )
-        sys.exit(1)
+        raise SystemExit('Unable to lock PID file.') from exc
         
     return locked_pid
         
@@ -450,7 +450,7 @@ def _fratricidal_fork():
             'Fork failed with traceback: \n' + 
             ''.join(traceback.format_exc())
         )
-        sys.exit(1)
+        raise SystemExit('Failed to fork.') from exc
     
     # If PID != 0, this is the parent process, and we should IMMEDIATELY 
     # die.
@@ -475,7 +475,7 @@ def _filial_usurpation(chdir, umask):
     if new_sid == -1:
         # A new pid of -1 is bad news bears
         logger.critical('Failed setsid call.')
-        sys.exit(1)
+        raise SystemExit('Failed setsid call.')
         
     # Set the permissions mask
     os.umask(umask)
@@ -511,9 +511,14 @@ def _make_range_tuples(start, stop, exclude):
         
     return ranges
         
-def _autoclose_files(shielded, fallback_limit=1024):
+def _autoclose_files(shielded=None, fallback_limit=1024):
     ''' Automatically close any open file descriptors.
+    
+    shielded is iterable.
     '''
+    # Process shielded.
+    shielded = _default_to(shielded, [])
+    
     # Figure out the maximum number of files to try to close.
     # This returns a tuple of softlimit, hardlimit; the hardlimit is always
     # greater.
@@ -677,7 +682,7 @@ def daemonize(pid_file, chdir=None, stdin_goto=None, stdout_goto=None,
     ####################################################################
     
     # Get a lock on the PIDfile before forking anything.
-    locked_pidfile = _lock_pidfile(pid_file)
+    locked_pidfile = _acquire_pidfile(pid_file)
     # Make sure we don't accidentally autoclose it though.
     shielded_fds.add(locked_pidfile.fileno())
     
@@ -704,12 +709,23 @@ def daemonize(pid_file, chdir=None, stdin_goto=None, stdout_goto=None,
     _autoclose_files(shielded_fds, fd_fallback_limit)
     _redirect_stds(stdin_goto, stdout_goto, stderr_goto)
     
-    def handle_sigterm(signum, frame):
+    
+# Signal handlers
+
+def autosignal(sigterm=None):
+    ''' Sets up an automatic signal handling system. Will exit on 
+    sigterm, calling whatever function you passed (if any).
+    '''
+    def handle_sigterm(signum, frame, action=sigterm):
         ''' Call sys.exit when a sigterm is received. Or don't! Who 
         knows!
         '''
         logger.warning('Caught signal. Exiting.')
-        sys.exit()
+        
+        if action is not None:
+            action()
+        
+        raise SystemExit()
         
     # Should this be advanced to just after forking?
     signal.signal(signal.SIGTERM, self._handle_sigterm)
