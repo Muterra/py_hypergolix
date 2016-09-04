@@ -257,10 +257,12 @@ class Deamonizing_test(unittest.TestCase):
     def test_acquire_file(self):
         ''' Test that locking the pidfile worked. Platform-specific.
         '''
-        ctx1 = multiprocessing.Event()
-        ctx2 = multiprocessing.Event()
-        ct_exit = multiprocessing.Event()
-        # parent_conn, child_conn = multiprocessing.Pipe()
+        mp_ctx = multiprocessing.get_context('spawn')
+        
+        ctx1 = mp_ctx.Event()
+        ctx2 = mp_ctx.Event()
+        ct_exit = mp_ctx.Event()
+        # parent_conn, child_conn = mp_ctx.Pipe()
         
         with tempfile.TemporaryDirectory() as dirname:
             fpath = dirname + '/testpid.txt'
@@ -297,8 +299,10 @@ class Deamonizing_test(unittest.TestCase):
         ''' Test "fratricidal" (okay, parricidal) forking (fork and 
         parent dies). Platform-specific.
         '''
-        pid_q = multiprocessing.Queue()
-        ct_exit = multiprocessing.Event()
+        mp_ctx = multiprocessing.get_context('spawn')
+        
+        pid_q = mp_ctx.Queue()
+        ct_exit = mp_ctx.Event()
         inter_pid = os.fork()
         
         # This is the root parent.
@@ -329,11 +333,13 @@ class Deamonizing_test(unittest.TestCase):
         ''' Test decoupling child from parent environment. Platform-
         specific.
         '''
+        mp_ctx = multiprocessing.get_context('spawn')
+        
         umask = 0o027
         chdir = os.path.abspath('/')
         
-        prop_q = multiprocessing.Queue()
-        ct_exit = multiprocessing.Event()
+        prop_q = mp_ctx.Queue()
+        ct_exit = mp_ctx.Event()
         
         child_pid = os.fork()
         
@@ -378,13 +384,15 @@ class Deamonizing_test(unittest.TestCase):
     def test_daemonize(self):
         ''' Test daemonization. Platform-specific.
         '''
+        mp_ctx = multiprocessing.get_context('spawn')
+        
         with tempfile.TemporaryDirectory() as dirname:
             pid_file = dirname + '/testpid.pid'
             token = 2718282
-            response_q = multiprocessing.Queue()
-            ct_exit = multiprocessing.Event()
+            response_q = mp_ctx.Queue()
+            ct_exit = mp_ctx.Event()
             
-            p = multiprocessing.Process(target=test_daemon, args=(
+            p = mp_ctx.Process(target=test_daemon, args=(
                 pid_file,
                 token,
                 response_q,
