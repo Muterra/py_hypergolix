@@ -226,7 +226,7 @@ class Deamonizing_test(unittest.TestCase):
             fps.append(tempfile.TemporaryFile())
             
         try:
-            kept = [0, 7, 14]
+            kept = [0, 7, 13]
             kept = [fps[ii].fileno() for ii in kept]
             _autoclose_files(shielded=kept)
             
@@ -287,7 +287,7 @@ class Deamonizing_test(unittest.TestCase):
                     # Tell the parent it's safe to close.
                     ct_exit.set()
                     # Exit child without cleanup.
-                    os._exit()
+                    os._exit(0)
                 
             # This will only happen in the parent process, due to os._exit call
             ct_exit.wait(timeout=60)
@@ -324,7 +324,7 @@ class Deamonizing_test(unittest.TestCase):
                 ct_exit.wait(timeout=5)
             finally:
                 # Exit without cleanup.
-                os._exit()
+                os._exit(0)
         
     @unittest.skipIf(not _SUPPORTED_PLATFORM, 'Unsupported platform.')
     def test_filial_usurp(self):
@@ -376,7 +376,7 @@ class Deamonizing_test(unittest.TestCase):
                 ct_exit.wait(timeout=5)
                 
             finally:
-                os._exit()
+                os._exit(0)
         
     @unittest.skipIf(not _SUPPORTED_PLATFORM, 'Unsupported platform.')
     def test_daemonize(self):
