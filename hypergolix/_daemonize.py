@@ -421,6 +421,7 @@ def _acquire_pidfile(pid_file):
             'Unable to lock the PID file w/ traceback: \n' + 
             ''.join(traceback.format_exc())
         )
+        locked_pid.close()
         raise SystemExit('Unable to lock PID file.') from exc
         
     return locked_pid
@@ -514,7 +515,7 @@ def _make_range_tuples(start, stop, exclude):
 def _autoclose_files(shielded=None, fallback_limit=1024):
     ''' Automatically close any open file descriptors.
     
-    shielded is iterable.
+    shielded is iterable of file descriptors.
     '''
     # Process shielded.
     shielded = _default_to(shielded, [])
