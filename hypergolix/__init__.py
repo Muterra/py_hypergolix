@@ -65,6 +65,7 @@ __all__ = [
 # ###############################################
 
 # Submodules
+from . import _daemonize
 from . import accounting
 from . import app
 from . import bootstrapping
