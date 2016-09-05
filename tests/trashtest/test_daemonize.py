@@ -243,7 +243,7 @@ class Deamonizing_test(unittest.TestCase):
             # Do it again with no files shielded from closure.                    
             _autoclose_files()
             for keeper in kept:
-                with self.subtest('Cleanup: ' + str(keeper)):
+                with self.subTest('Cleanup: ' + str(keeper)):
                     self.assertTrue(fps[keeper].closed)
         
         # Clean up any unsuccessful tests. Note idempotency of fp.close().
