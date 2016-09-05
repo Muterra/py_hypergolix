@@ -226,12 +226,12 @@ class Deamonizing_test(unittest.TestCase):
             fps.append(tempfile.TemporaryFile())
             
         try:
-            kept = [0, 7, 13]
-            kept = [fps[ii].fileno() for ii in kept]
+            keepers = [0, 7, 13]
+            kept = [fps[ii].fileno() for ii in keepers]
             _autoclose_files(shielded=kept)
             
             for ii in range(num_files):
-                if ii in kept:
+                if ii in keepers:
                     with self.subTest('Persistent: ' + str(ii)):
                         # Make sure all kept files were, in fact, kept
                         self.assertFalse(fps[ii].closed)
@@ -242,7 +242,7 @@ class Deamonizing_test(unittest.TestCase):
 
             # Do it again with no files shielded from closure.                    
             _autoclose_files()
-            for keeper in kept:
+            for keeper in keepers:
                 with self.subTest('Cleanup: ' + str(keeper)):
                     self.assertTrue(fps[keeper].closed)
         
