@@ -221,40 +221,43 @@ class Deamonizing_test(unittest.TestCase):
         ''' Test auto-closing files. Platform-specific.
         '''
         num_files = 14
-        fps = []
-        shielded_fps = []
+        fs = []
+        shielded_fs = []
+        shielded_fds = []
         keepers = [0, 7, 13]
         for ii in range(num_files):
             if ii in keepers:
-                shielded_fps.append(tempfile.TemporaryFile())
+                thisf = tempfile.TemporaryFile()
+                shielded_fs.append(thisf)
+                shielded_fds.append(thisf.fileno())
             else:
-                fps.append(tempfile.TemporaryFile())
+                fds.append(tempfile.TemporaryFile())
             
         try:
-            _autoclose_files(shielded=shielded_fps)
+            _autoclose_files(shielded=shielded_fds)
             
-            for fp in shielded_fps:
-                with self.subTest('Persistent: ' + str(fp)):
+            for f in shielded_fs:
+                with self.subTest('Persistent: ' + str(f)):
                     # Make sure all kept files were, in fact, kept
-                    self.assertFalse(fp.closed)
+                    self.assertFalse(f.closed)
                     
-            for fp in fps:
-                with self.subTest('Removed: ' + str(fp)):
+            for f in fs:
+                with self.subTest('Removed: ' + str(f)):
                     # Make sure all other files were, in fact, removed
-                    self.assertTrue(fp.closed)
+                    self.assertTrue(f.closed)
 
             # Do it again with no files shielded from closure.                    
             _autoclose_files()
-            for fp in shielded_fps:
-                with self.subTest('Cleanup: ' + str(fp)):
-                    self.assertTrue(fp.closed)
+            for f in shielded_fs:
+                with self.subTest('Cleanup: ' + str(f)):
+                    self.assertTrue(f.closed)
         
-        # Clean up any unsuccessful tests. Note idempotency of fp.close().
+        # Clean up any unsuccessful tests. Note idempotency of fd.close().
         finally:
-            for fp in fps:
-                fp.close()
-            for fp in shielded_fps:
-                fp.close()
+            for f in fs:
+                f.close()
+            for f in shielded_fs:
+                f.close()
     
     @unittest.skipIf(not _SUPPORTED_PLATFORM, 'Unsupported platform.')
     def test_acquire_file(self):
@@ -314,6 +317,8 @@ class Deamonizing_test(unittest.TestCase):
             ct_exit.set()
             self.assertNotEqual(inter_pid, child_pid)
             
+            # Wait to ensure shutdown of other process.
+            time.sleep(.5)
             # Make sure the intermediate process is dead.
             with self.assertRaises(OSError):
                 # Send it a signal to check existence (os.kill is badly named)
@@ -349,7 +354,8 @@ class Deamonizing_test(unittest.TestCase):
         # This is the parent.
         if child_pid != 0:
             try:
-                my_sid = os.getsid()
+                my_pid = os.getpid()
+                my_sid = os.getsid(my_pid)
                 child_sid = prop_q.get(timeout=5)
                 child_umask = prop_q.get(timeout=5)
                 child_wdir = prop_q.get(timeout=5)
@@ -366,7 +372,8 @@ class Deamonizing_test(unittest.TestCase):
             try:
                 _filial_usurpation(chdir, umask)
                 # Get our session id
-                sid = os.getsid()
+                my_pid = os.getpid()
+                sid = os.getsid(my_pid)
                 # reset umask and get our set one.
                 umask = os.umask(0)
                 # Get our working directory.
@@ -405,7 +412,7 @@ class Deamonizing_test(unittest.TestCase):
             
             try:
                 # Wait for the daemon to respond with the token we gave it
-                parrotted_token = response_q.get(timeout=5)
+                parrotted_token = response_q.get(timeout=10)
                 # Make sure the token matches
                 self.assertEqual(parrotted_token, token)
                 # Make sure the pid file exists
