@@ -222,33 +222,38 @@ class Deamonizing_test(unittest.TestCase):
         '''
         num_files = 14
         fps = []
-        for __ in range(num_files):
-            fps.append(tempfile.TemporaryFile())
+        shielded_fps = []
+        keepers = [0, 7, 13]
+        for ii in range(num_files):
+            if ii in keepers:
+                shielded_fps.append(tempfile.TemporaryFile())
+            else:
+                fps.append(tempfile.TemporaryFile())
             
         try:
-            keepers = [0, 7, 13]
-            kept = [fps[ii].fileno() for ii in keepers]
-            _autoclose_files(shielded=kept)
+            _autoclose_files(shielded=shielded_fps)
             
-            for ii in range(num_files):
-                if ii in keepers:
-                    with self.subTest('Persistent: ' + str(ii)):
-                        # Make sure all kept files were, in fact, kept
-                        self.assertFalse(fps[ii].closed)
-                else:
-                    with self.subTest('Removed: ' + str(ii)):
-                        # Make sure all other files were, in fact, removed
-                        self.assertTrue(fps[ii].closed)
+            for fp in shielded_fps:
+                with self.subTest('Persistent: ' + str(fp)):
+                    # Make sure all kept files were, in fact, kept
+                    self.assertFalse(fp.closed)
+                    
+            for fp in fps:
+                with self.subTest('Removed: ' + str(fp)):
+                    # Make sure all other files were, in fact, removed
+                    self.assertTrue(fp.closed)
 
             # Do it again with no files shielded from closure.                    
             _autoclose_files()
-            for keeper in keepers:
-                with self.subTest('Cleanup: ' + str(keeper)):
-                    self.assertTrue(fps[keeper].closed)
+            for fp in shielded_fps:
+                with self.subTest('Cleanup: ' + str(fp)):
+                    self.assertTrue(fp.closed)
         
         # Clean up any unsuccessful tests. Note idempotency of fp.close().
         finally:
             for fp in fps:
+                fp.close()
+            for fp in shielded_fps:
                 fp.close()
     
     @unittest.skipIf(not _SUPPORTED_PLATFORM, 'Unsupported platform.')
