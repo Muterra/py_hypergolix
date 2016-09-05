@@ -42,8 +42,6 @@ import os
 import time
 import multiprocessing
 
-from hypergolix.utils import platform_specificker
-
 from hypergolix._daemonize import daemonize
 from hypergolix._daemonize import _SUPPORTED_PLATFORM
 from hypergolix._daemonize import _acquire_pidfile
