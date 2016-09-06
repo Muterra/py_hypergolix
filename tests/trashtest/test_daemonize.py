@@ -40,7 +40,7 @@ import tempfile
 import sys
 import os
 import time
-import multiprocessing
+import shutil
 
 from hypergolix._daemonize import daemonize
 from hypergolix._daemonize import _SUPPORTED_PLATFORM
@@ -59,52 +59,55 @@ from hypergolix._daemonize import _redirect_stds
 # ###############################################
 
 
-# Nothing to see here
-# These are not the droids you are looking for
-# etc
-
-
-MP_SPAWN = multiprocessing.get_context('spawn')
-
-
 def childproc_daemon(pid_file, token, res_path):
     ''' The test daemon quite simply daemonizes itself, does some stuff 
     to confirm its existence, waits for a signal to die, and then dies.
     '''
     # Daemonize ourselves
     daemonize(pid_file)
+    
+    from hypergolix import logutils
+    logname = logutils.autoconfig(suffix='daemon')
+    
     # Write the token to the response path
-    with open(res_path, 'w') as f:
-        f.write(str(token) + '\n')
-        
-    # Wait 1 second so that the parent can make sure our PID file exists
-    time.sleep(1)
+    try:
+        with open(res_path, 'w') as f:
+            f.write(str(token) + '\n')
+            
+        # Wait 1 second so that the parent can make sure our PID file exists
+        time.sleep(1)
+    
+    except:
+        logging.error(
+            'Failure writing token w/ traceback: \n' + 
+            ''.join(traceback.format_exc())
+        )
     
     
-def childproc_acquire(fpath, ctx1, ctx2, ct_exit):
+def childproc_acquire(fpath):
     ''' Child process for acquiring the pidfile.
     '''
     try:
         pidfile = _acquire_pidfile(fpath)
-        ctx1.set()
-        ctx2.wait(timeout=60)
         
     finally:
+        # Wait 1 second so that the parent can make sure our PID file exists
+        time.sleep(1)
         # Manually close the pidfile.
         pidfile.close()
-        # Tell the parent it's safe to close.
-        ct_exit.set()
         
         
-def childproc_fratfork(pid_q, ct_exit):
+def childproc_fratfork(res_path):
     # Fork again, killing the intermediate.
     _fratricidal_fork()
+    
     my_pid = os.getpid()
-    pid_q.put(my_pid)
-    ct_exit.wait(timeout=5)
+    with open(res_path, 'w') as f:
+        f.write(str(my_pid) + '\n')
 
         
-def childproc_filialusurp(umask, chdir, prop_q, ct_exit):
+def childproc_filialusurp(umask, chdir, umask_path, sid_path, wdir_path, 
+                        pid_path):
     _filial_usurpation(chdir, umask)
     # Get our session id
     my_pid = os.getpid()
@@ -115,12 +118,21 @@ def childproc_filialusurp(umask, chdir, prop_q, ct_exit):
     wdir = os.path.abspath(os.getcwd())
     
     # Update parent
-    prop_q.put(sid)
-    prop_q.put(umask)
-    prop_q.put(wdir)
-    
-    # Wait for the signal and then exit
-    ct_exit.wait(timeout=5)
+    # Write the umask to the response path
+    with open(umask_path, 'w') as f:
+        f.write(str(umask) + '\n')
+        
+    # Write the sid to the response path
+    with open(sid_path, 'w') as f:
+        f.write(str(sid) + '\n')
+        
+    # Write the working dir to the response path
+    with open(wdir_path, 'w') as f:
+        f.write(wdir + '\n')
+        
+    # Write the pid to the response path
+    with open(pid_path, 'w') as f:
+        f.write(str(my_pid) + '\n')
 
 
 # ###############################################
@@ -129,6 +141,19 @@ def childproc_filialusurp(umask, chdir, prop_q, ct_exit):
         
         
 class Deamonizing_test(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        ''' Prep for abortability.
+        '''
+        cls.skip_remaining = False
+    
+    def setUp(self):
+        ''' Add a check that a test has not called for an exit, keeping
+        forks from doing a bunch of nonsense.
+        '''
+        if self.skip_remaining:
+            raise unittest.SkipTest('Internal call to skip remaining.')
+    
     def test_make_ranges(self):
         ''' Test making appropriate ranges for file auto-closure. 
         Platform-independent.
@@ -267,29 +292,29 @@ class Deamonizing_test(unittest.TestCase):
     def test_acquire_file(self):
         ''' Test that locking the pidfile worked. Platform-specific.
         '''
-        ctx1 = MP_SPAWN.Event()
-        ctx2 = MP_SPAWN.Event()
-        ct_exit = MP_SPAWN.Event()
-        # parent_conn, child_conn = MP_SPAWN.Pipe()
-        
         with tempfile.TemporaryDirectory() as dirname:
             fpath = dirname + '/testpid.txt'
             
-            # Don't use os-level forking because it screws up multiprocessing
-            p = MP_SPAWN.Process(target=childproc_acquire, args=(
-                fpath,
-                ctx1,
-                ctx2,
-                ct_exit
-            ))
-            p.start()
+            # Multiprocessing ain't workin, yo
+            pid = os.fork()
             
-            ctx1.wait(timeout=1)
-            self.assertTrue(os.path.exists(fpath))
-            with self.assertRaises(SystemExit):
-                pidfile = _acquire_pidfile(fpath)
-            ctx2.set()
-            ct_exit.wait(timeout=60)
+            # Parent process
+            if pid != 0:
+                # Give the child a moment to start up.
+                time.sleep(.5)
+                
+                self.assertTrue(os.path.exists(fpath))
+                with self.assertRaises(SystemExit):
+                    pidfile = _acquire_pidfile(fpath)
+                    
+                # Ensure no zombies. See os.waitpid manpage.
+                os.waitpid(-1, 0)
+            
+            # Child process
+            else:
+                self.skip_remaining = True
+                childproc_acquire(fpath)
+                os._exit(0)
         
     @unittest.skipIf(not _SUPPORTED_PLATFORM, 'Unsupported platform.')
     def test_filial_usurp(self):
@@ -299,36 +324,85 @@ class Deamonizing_test(unittest.TestCase):
         umask = 0o027
         chdir = os.path.abspath('/')
         
-        prop_q = MP_SPAWN.Queue()
-        ct_exit = MP_SPAWN.Event()
-
-        # Don't use os-level forking because it screws up multiprocessing
-        p = MP_SPAWN.Process(target=childproc_filialusurp, args=(
-            umask,
-            chdir,
-            prop_q,
-            ct_exit
-        ))
-        p.start()
-        
-        try:
-            my_pid = os.getpid()
-            my_sid = os.getsid(my_pid)
-            child_sid = prop_q.get(timeout=5)
-            child_umask = prop_q.get(timeout=5)
-            child_wdir = prop_q.get(timeout=5)
+        with tempfile.TemporaryDirectory() as dirname:
+            umask_path = dirname + '/umask.txt'
+            sid_path = dirname + '/sid.txt'
+            wdir_path = dirname + '/wdir.txt'
+            pid_path = dirname + '/pid.txt'
             
-            self.assertNotEqual(my_sid, child_sid)
-            self.assertEqual(child_umask, umask)
-            self.assertEqual(child_wdir, chdir)
-        
-        finally:
-            ct_exit.set()
+            # Multiprocessing ain't workin, yo
+            pid = os.fork()
+            
+            # Parent process
+            if pid != 0:
+                my_pid = os.getpid()
+                my_sid = os.getsid(my_pid)
+                
+                # Give the child a moment to start up.
+                time.sleep(.5)
+                
+                try:
+                    with open(umask_path, 'r') as res:
+                        child_umask = int(res.read())
+                
+                except (IOError, OSError) as exc:
+                    raise AssertionError from exc
+                
+                try:
+                    with open(sid_path, 'r') as res:
+                        child_sid = int(res.read())
+                
+                except (IOError, OSError) as exc:
+                    raise AssertionError from exc
+                
+                try:
+                    with open(wdir_path, 'r') as res:
+                        child_wdir = res.read()
+                
+                except (IOError, OSError) as exc:
+                    raise AssertionError from exc
+                
+                try:
+                    with open(pid_path, 'r') as res:
+                        child_pid = int(res.read())
+                
+                except (IOError, OSError) as exc:
+                    raise AssertionError from exc
+                    
+                self.assertNotEqual(my_sid, child_sid)
+                self.assertEqual(child_umask, umask)
+                self.assertTrue(child_wdir.startswith(chdir))
+                    
+                # Ensure no zombies. See os.waitpid manpage.
+                os.waitpid(child_pid, 0)
+            
+            # Child process
+            else:
+                self.skip_remaining = True
+                childproc_filialusurp(
+                    umask, 
+                    chdir, 
+                    umask_path, 
+                    sid_path, 
+                    wdir_path,
+                    pid_path
+                )
+                os._exit(0)
         
     @unittest.skipIf(not _SUPPORTED_PLATFORM, 'Unsupported platform.')
     def test_autoclose_fs(self):
         ''' Test auto-closing files. Platform-specific.
         '''
+        # We need to shield all of our loggers first!
+        logger_fds = []
+        for handler in logging.root.handlers:
+            if isinstance(handler, logging.StreamHandler):
+                logger_fds.append(handler.stream.fileno())
+            elif isinstance(handler, logging.SyslogHandler):
+                logger_fds.append(handler.socket.fileno())
+            elif isinstance(handler, logging.FileHandler):
+                logger_fds.append(handler.stream.fileno())
+        
         all_fds = []
         num_files = 14
         fs = []
@@ -347,7 +421,7 @@ class Deamonizing_test(unittest.TestCase):
                 fs.append(thisf)
             
         try:
-            _autoclose_files(shielded=shielded_fds)
+            _autoclose_files(shielded=shielded_fds+logger_fds)
             
             for f in shielded_fs:
                 with self.subTest('Persistent: ' + str(f)):
@@ -363,7 +437,7 @@ class Deamonizing_test(unittest.TestCase):
                         os.fstat(f.fileno())
 
             # Do it again with no files shielded from closure.                    
-            _autoclose_files()
+            _autoclose_files(shielded=logger_fds)
             for f in shielded_fs:
                 with self.subTest('Cleanup: ' + str(f)):
                     with self.assertRaises(OSError):
@@ -384,67 +458,103 @@ class Deamonizing_test(unittest.TestCase):
         ''' Test "fratricidal" (okay, parricidal) forking (fork and 
         parent dies). Platform-specific.
         '''
-        pid_q = MP_SPAWN.Queue()
-        ct_exit = MP_SPAWN.Event()
+        with tempfile.TemporaryDirectory() as dirname:
+            res_path = dirname + '/response.txt'
 
-        # Don't use os-level forking because it screws up multiprocessing
-        p = MP_SPAWN.Process(target=childproc_fratfork, args=(
-            pid_q,
-            ct_exit
-        ))
-        p.start()
-        
-        inter_pid = p.pid
-        child_pid = pid_q.get(timeout=5)
-        ct_exit.set()
-        self.assertNotEqual(inter_pid, child_pid)
-        
-        # Wait to ensure shutdown of other process.
-        time.sleep(.5)
-        # Make sure the intermediate process is dead.
-        self.assertFalse(p.is_alive())
-        # with self.assertRaises(OSError):
-        #     # Send it a signal to check existence (os.kill is badly named)
-        #     os.kill(inter_pid, 0)
+            # Multiprocessing has not been working for this.
+            inter_pid = os.fork()
+            
+            # Parent process
+            if inter_pid != 0:
+                # Give the child a moment to start up.
+                time.sleep(.5)
+                
+                try:
+                    with open(res_path, 'r') as res:
+                        response = res.read()
+                
+                except (IOError, OSError) as exc:
+                    raise AssertionError from exc
+                    
+                child_pid = int(response)
+                self.assertNotEqual(inter_pid, child_pid)
+                
+                # Wait to ensure shutdown of other process.
+                # Ensure no zombies. See os.waitpid manpage.
+                time.sleep(1)
+                os.waitpid(-1, 0)
+            
+                # Make sure the intermediate process is dead.
+                with self.assertRaises(OSError):
+                    # Send it a signal to check existence (os.kill is badly 
+                    # named)
+                    os.kill(inter_pid, 0)
+                
+            # Child process
+            else:
+                self.skip_remaining = True
+                childproc_fratfork(res_path)
+                os._exit(0)
         
     @unittest.skipIf(not _SUPPORTED_PLATFORM, 'Unsupported platform.')
     def test_daemonize(self):
         ''' Test daemonization. Platform-specific.
         '''
-        with tempfile.TemporaryDirectory() as dirname:
-            pid_file = dirname + '/testpid.pid'
-            token = 2718282
-            res_path = dirname + '/response.txt'
+        # Manually manage the directory creation and removal so the forks don't
+        # destroy it.
+        dirname = tempfile.mkdtemp()
             
-            p = MP_SPAWN.Process(target=childproc_daemon, args=(
-                pid_file,
-                token,
-                res_path
-            ))
-            p.start()
-            
-            # Wait a moment for the daemon to show up
-            time.sleep(.5)
-            # This is janky, but multiprocessing hasn't been working for
-            # events or queues with daemonizing, might have something to 
-            # do with multiple threads and forking or something
-            
+        pid_file = dirname + '/testpid.pid'
+        token = 2718282
+        res_path = dirname + '/response.txt'
+        
+        # Multiprocessing has been failing to test all this, with either
+        # "bad value(s) in fds_to_keep" or "bad file descriptors"
+        pid = os.fork()
+        
+        # Parent process
+        if pid != 0:
             try:
-                with open(res_path, 'r') as res:
-                    response = res.read()
+                # Wait a moment for the daemon to show up
+                time.sleep(.5)
+                # This is janky, but multiprocessing hasn't been working for
+                # events or queues with daemonizing, might have something to 
+                # do with multiple threads and forking or something
+                
+                try:
+                    with open(res_path, 'r') as res:
+                        response = res.read()
+                
+                except (IOError, OSError) as exc:
+                    raise AssertionError from exc
+                    
+                # Make sure the token matches
+                self.assertTrue(response.startswith(str(token)))
+                # Make sure the pid file exists
+                self.assertTrue(os.path.exists(pid_file))
+                    
+                # Now hold off just a moment and then make sure the pid is 
+                # cleaned up successfully. Note that this timing is dependent
+                # upon the child process.
+                time.sleep(5)
+                self.assertFalse(os.path.exists(pid_file))
+                    
+                # Ensure no zombies. See os.waitpid manpage.
+                os.waitpid(pid, 0)
             
-            except (IOError, OSError) as exc:
-                raise AssertionError from exc
-                
-            # Make sure the token matches
-            self.assertTrue(response.startswith(str(token)))
-            # Make sure the pid file exists
-            self.assertTrue(os.path.exists(pid_file))
-                
-            # Now hold off just a moment and then make sure the pid is cleaned
-            # up successfully.
-            time.sleep(1)
-            self.assertFalse(os.path.exists(pid_file))
+            finally:
+                # Explicitly call cleanup so that we don't have a competition 
+                # for removing the temporary directory
+                shutil.rmtree(dirname, ignore_errors=True)
+            
+        # Child process
+        else:
+            self.skip_remaining = True
+            childproc_daemon(pid_file, token, res_path)
+            # Hm. So we can't do os._exit, because we need the cleanup to
+            # happen to remove the pid file. However, we're deamonized now, 
+            # so this shouldn't affect the parent.
+            raise SystemExit()
         
 
 if __name__ == "__main__":

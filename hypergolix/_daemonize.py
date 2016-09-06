@@ -456,7 +456,7 @@ def _fratricidal_fork():
     # If PID != 0, this is the parent process, and we should IMMEDIATELY 
     # die.
     if pid != 0:
-        # Exit first parent without cleanup.
+        # Exit parent without cleanup.
         os._exit(0)
     else:
         logger.info('Fork successful.')
@@ -689,8 +689,14 @@ def daemonize(pid_file, chdir=None, stdin_goto=None, stdout_goto=None,
     
     # Define a memoized cleanup function.
     def cleanup(pid_path=pid_file, pid_lock=locked_pidfile):
-        pid_lock.close()
-        os.remove(pid_path)
+        try:
+            pid_lock.close()
+            os.remove(pid_path)
+        except:
+            logger.error(
+                'Failed to clean up pidfile w/ traceback: \n' + 
+                ''.join(traceback.format_exc())
+            )
     
     # Register this as soon as possible in case something goes wrong.
     atexit.register(cleanup)

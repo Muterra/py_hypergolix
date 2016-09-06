@@ -40,7 +40,7 @@ import logging
 import datetime
 
 
-def autoconfig(tofile=True, logdirname='logs', loglevel='debug'):
+def autoconfig(tofile=True, logdirname='logs', loglevel='debug', suffix=''):
     if tofile:
         fname = sys.argv[0]
         logdir = pathlib.Path(logdirname)
@@ -50,12 +50,17 @@ def autoconfig(tofile=True, logdirname='logs', loglevel='debug'):
 
         # Note that double slashes don't cause problems.
         prefix = logdirname + '/' + pathlib.Path(fname).stem
+        
+        if suffix != '':
+            suffix = '_' + suffix
+            
         ii = 0
         date = str(datetime.date.today())
         ext = '.pylog'
-        while pathlib.Path(prefix + '_' + date + '_' + str(ii) + ext).exists():
-            ii += 1
-        logname = prefix + '_' + date + '_' + str(ii) + ext
+        while pathlib.Path(prefix + suffix + '_' + date + '_' + str(ii) + 
+            ext).exists():
+                ii += 1
+        logname = prefix + suffix + '_' + date + '_' + str(ii) + ext
         print('USING LOGFILE: ' + logname)
 
         # Make a log handler
@@ -100,3 +105,5 @@ def autoconfig(tofile=True, logdirname='logs', loglevel='debug'):
     else:
         logging.getLogger('asyncio').setLevel(logging.WARNING)
         logging.getLogger('websockets').setLevel(logging.WARNING)
+        
+    return logname
