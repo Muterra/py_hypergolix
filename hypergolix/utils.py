@@ -1235,3 +1235,12 @@ def platform_specificker(linux_choice, win_choice, cygwin_choice, osx_choice,
         return osx_choice
     else:
         return other_choice
+
+
+def _default_to(check, default):
+    ''' If check is None, apply default; else, return check.
+    '''
+    if check is None:
+        return default
+    else:
+        return check
