@@ -339,7 +339,7 @@ def _redirect_stds(stdin_goto, stdout_goto, stderr_goto):
     for duped_fd in streams.values():
         os.close(duped_fd)
         
-def daemonize(pid_file, chdir=None, stdin_goto=None, stdout_goto=None, 
+def daemonize(pid_file, *args, chdir=None, stdin_goto=None, stdout_goto=None, 
               stderr_goto=None, umask=0o027, shielded_fds=None, 
               fd_fallback_limit=1024):
     ''' Performs a classic unix double-fork daemonization. Registers all
@@ -422,6 +422,7 @@ def daemonize(pid_file, chdir=None, stdin_goto=None, stdout_goto=None,
     _autoclose_files(shielded_fds, fd_fallback_limit)
     _redirect_stds(stdin_goto, stdout_goto, stderr_goto)
     
+    return *args
     
 # Signal handlers
 
