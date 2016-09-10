@@ -226,18 +226,11 @@ class Deamonizing_test(unittest.TestCase):
         stdin = sys.stdin
         stdout = sys.stdout
         stderr = sys.stderr
-        
-        # Get some file descriptors to use to cache stds
-        with tempfile.NamedTemporaryFile() as stdin_tmp, \
-            tempfile.NamedTemporaryFile() as stdout_tmp, \
-            tempfile.NamedTemporaryFile() as stderr_tmp:
-                stdin_fd = stdin_tmp.fileno()
-                stdout_fd = stdout_tmp.fileno()
-                stderr_fd = stderr_tmp.fileno()
                 
-        os.dup2(0, stdin_fd)
-        os.dup2(1, stdout_fd)
-        os.dup2(2, stderr_fd)
+        # Cache all of the stds
+        stdin_fd = os.dup(0)
+        stdout_fd = os.dup(1)
+        stderr_fd = os.dup(2)
         
         # Perform the actual tests
         with tempfile.TemporaryDirectory() as dirname:

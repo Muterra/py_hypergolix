@@ -89,6 +89,34 @@ __all__ = [
 # ###############################################
         
 # Daemonization and helpers
+
+
+class Daemonizer:
+    ''' This is really very boring on the Unix side of things.
+    
+    with Daemonizer() as (is_setup, daemonize):
+        if is_setup:
+            setup_code_here()
+        else:
+            windows_only_child_code_goes_here()
+            
+        *args = daemonize(*args)
+    ''' 
+    def __enter__(self):
+        # This will always only be entered by the parent.
+        # This will always only be exited by the child.
+        return True, daemonize
+        
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        ''' Exit doesn't really need to do any cleanup. But, it's needed
+        for context managing.
+        '''
+        # This will always only be entered by the parent.
+        # This will always only be exited by the child.
+        pass
+
+
+
                     
 def _acquire_pidfile(pid_file):
     ''' Opens and locks the pid_file. This ensures that only one
@@ -131,6 +159,7 @@ def _acquire_pidfile(pid_file):
         raise SystemExit('Unable to lock PID file.') from exc
         
     return locked_pid
+
         
 def _write_pid(locked_pidfile):
     ''' Write our PID to the (already locked (by us)) PIDfile.
@@ -140,6 +169,7 @@ def _write_pid(locked_pidfile):
     pid = str(os.getpid())
     locked_pidfile.write(pid + '\n')
     locked_pidfile.flush()
+
             
 def _fratricidal_fork():
     ''' Fork the current process, and immediately exit the parent.
@@ -166,6 +196,7 @@ def _fratricidal_fork():
         os._exit(0)
     else:
         logger.info('Fork successful.')
+
         
 def _filial_usurpation(chdir, umask):
     ''' Decouple the child process from the parent environment.
@@ -186,6 +217,7 @@ def _filial_usurpation(chdir, umask):
         
     # Set the permissions mask
     os.umask(umask)
+
     
 def _make_range_tuples(start, stop, exclude):
     ''' Creates a list of tuples for all ranges needed to close all 
@@ -217,6 +249,7 @@ def _make_range_tuples(start, stop, exclude):
         ranges.append(final_range)
         
     return ranges
+
         
 def _autoclose_files(shielded=None, fallback_limit=1024):
     ''' Automatically close any open file descriptors.
@@ -255,9 +288,13 @@ def _autoclose_files(shielded=None, fallback_limit=1024):
     for start, stop in ranges_to_close:
         # How nice of os to include this for us!
         os.closerange(start, stop)
+
         
 def _flush_stds():
     ''' Flush stdout and stderr.
+    
+    Note special casing needed for pythonw.exe, which has no stdout or 
+    stderr.
     '''
     try:
         sys.stdout.flush()
@@ -267,7 +304,7 @@ def _flush_stds():
             ''.join(traceback.format_exc())
         )
         # Honestly not sure if we should exit here.
-    
+
     try:
         sys.stderr.flush()
     except BlockingIOError:
@@ -276,6 +313,7 @@ def _flush_stds():
             ''.join(traceback.format_exc())
         )
         # Honestly not sure if we should exit here.
+
         
 def _redirect_stds(stdin_goto, stdout_goto, stderr_goto):
     ''' Set stdin, stdout, sterr. If any of the paths don't exist, 
@@ -307,6 +345,12 @@ def _redirect_stds(stdin_goto, stdout_goto, stderr_goto):
         write_mask: os.O_WRONLY,
         rw_mask: os.O_RDWR
     }
+    access_lookup_2 = {
+        read_mask: 'r',
+        write_mask: 'w',
+        rw_mask: 'w+'
+    }
+    access_mode = {}
     
     # Now, use our mask lookup to translate into actual file descriptors
     for stream in streams:
@@ -319,6 +363,8 @@ def _redirect_stds(stdin_goto, stdout_goto, stderr_goto):
         access = access_lookup[streams[stream]]
         # Open the file with that level of access.
         stream_fd = os.open(stream, access)
+        # Also alias the mode in case of pythonw.exe
+        access_mode[stream] = access_lookup_2[streams[stream]]
         # And update streams to be that, instead of the access mask.
         streams[stream] = stream_fd
         # We cannot immediately close the stream, because we'll get an 
@@ -328,20 +374,37 @@ def _redirect_stds(stdin_goto, stdout_goto, stderr_goto):
     stdin_fd = streams[stdin_goto]
     stdout_fd = streams[stdout_goto]
     stderr_fd = streams[stderr_goto]
-    # Flush before transitioning
-    _flush_stds()
-    # Do iiiitttttt
-    os.dup2(stdin_fd, 0)
-    os.dup2(stdout_fd, 1)
-    os.dup2(stderr_fd, 2)
     
-    # Finally, close the extra fds.
-    for duped_fd in streams.values():
-        os.close(duped_fd)
+    # Note that we need special casing for pythonw.exe, which has no stds
+    if sys.stdout is None:
+        open_streams = {}
+        for stream in streams:
+            open_streams[stream] = os.fdopen(
+                fd = streams[stream], 
+                mode = access_mode[stream]
+            )
+            
+        sys.stdin = open_streams[stdin_goto]
+        sys.stdout = open_streams[stdout_goto]
+        sys.stderr = open_streams[stderr_goto]
         
-def daemonize(pid_file, chdir=None, stdin_goto=None, stdout_goto=None, 
+    else:
+        # Flush before transitioning
+        _flush_stds()
+        # Do iiiitttttt
+        os.dup2(stdin_fd, 0)
+        os.dup2(stdout_fd, 1)
+        os.dup2(stderr_fd, 2)
+
+        # Finally, close the extra fds.
+        for duped_fd in streams.values():
+            os.close(duped_fd)
+
+        
+def daemonize(pid_file, *args, chdir=None, stdin_goto=None, stdout_goto=None, 
               stderr_goto=None, umask=0o027, shielded_fds=None, 
-              fd_fallback_limit=1024):
+              fd_fallback_limit=1024, success_timeout=30, 
+              strip_cmd_args=False):
     ''' Performs a classic unix double-fork daemonization. Registers all
     appropriate cleanup functions.
     
@@ -425,25 +488,28 @@ def daemonize(pid_file, chdir=None, stdin_goto=None, stdout_goto=None,
     _autoclose_files(shielded_fds, fd_fallback_limit)
     _redirect_stds(stdin_goto, stdout_goto, stderr_goto)
     
+    return args
+
+    
 # Signal handlers
 
-def autosignal(sigterm=None):
-    ''' Sets up an automatic signal handling system. Will exit on 
-    sigterm, calling whatever function you passed (if any).
+class SignalHandler:
+    ''' Sets up an automatic signal handling system.
     '''
-    def handle_sigterm(signum, frame, action=sigterm):
-        ''' Call sys.exit when a sigterm is received. Or don't! Who 
-        knows!
-        '''
-        logger.warning('Caught signal. Exiting.')
-        
-        if action is not None:
-            action()
-        
-        raise SystemExit()
-        
-    # Should this be advanced to just after forking?
-    signal.signal(signal.SIGTERM, self._handle_sigterm)
+    def __init__(self, sigterm):
+        def handle_sigterm(signum, frame, action=sigterm):
+            ''' Call sys.exit when a sigterm is received. Or don't! Who 
+            knows!
+            '''
+            logger.warning('Caught signal. Exiting.')
+            
+            if action is not None:
+                action()
+            
+            raise SystemExit()
+            
+        # Should this be advanced to just after forking?
+        signal.signal(signal.SIGTERM, self._handle_sigterm)
        
        
 # Daemotion and helpers
@@ -468,6 +534,7 @@ def _setuser(user):
         self.logger.error('Unable to change user.')
         sys.exit(1)
     
+    
 def _setgroup(group):
     ''' Normalizes group to a gid and sets the current gid, or does 
     nothing if group is None.
@@ -487,7 +554,8 @@ def _setgroup(group):
     except OSError:
         self.logger.error('Unable to change group.')
         sys.exit(1)
-            
+
+
 def daemote(pid_file, user, group):
     ''' Change gid and uid, dropping privileges.
     
