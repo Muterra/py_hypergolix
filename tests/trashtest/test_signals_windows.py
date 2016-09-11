@@ -252,7 +252,6 @@ class Signals_test(unittest.TestCase):
                 sigabrt = handler
             )
             sighandler.start()
-            time.sleep(pause)
             
             for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGABRT]:
                 with self.subTest(signum):

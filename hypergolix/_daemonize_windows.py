@@ -636,6 +636,7 @@ class SignalHandler1:
         
         self._opslock = threading.Lock()
         self._stopped = threading.Event()
+        self._started = threading.Event()
         
     def start(self):
         with self._opslock:
@@ -663,6 +664,8 @@ class SignalHandler1:
                 daemon = True
             )
             self._watcher.start()
+            
+        self._started.wait()
         
     def stop(self):
         ''' Hold the phone! Idempotent.
@@ -744,18 +747,26 @@ class SignalHandler1:
         # Iterate until we're reaped by the main thread exiting.
         try:
             while self._running:
-                # Create a process. Depend upon it being reaped if the
-                # parent quits
-                self._worker = subprocess.Popen(
-                    worker_cmd,
-                    env = worker_env,
-                )
-                worker_pid = self._worker.pid
-                
-                # Record the PID of the worker in the pidfile, overwriting
-                # its contents.
-                with open(self._pidfile, 'w+') as f:
-                    f.write(str(worker_pid) + '\n')
+                try:
+                    # Create a process. Depend upon it being reaped if the
+                    # parent quits
+                    self._worker = subprocess.Popen(
+                        worker_cmd,
+                        env = worker_env,
+                    )
+                    worker_pid = self._worker.pid
+                    
+                    # Record the PID of the worker in the pidfile, overwriting
+                    # its contents.
+                    with open(self._pidfile, 'w+') as f:
+                        f.write(str(worker_pid) + '\n')
+                    
+                finally:
+                    # Now let the start() call know we are CTR, even if we
+                    # raised, so it can proceed. I might consider adding an
+                    # error signal so that the start call will raise if it
+                    # didn't work.
+                    self._started.set()
                 
                 # Wait for the worker to generate a signal. Calling stop()
                 # will break out of this.
@@ -792,6 +803,7 @@ class SignalHandler1:
                     f.write(str(os.getpid()) + '\n')
             finally:
                 self._stopped.set()
+                self._started.clear()
     
     def _watch_for_exit(self):
         ''' Automatically watches for termination of the main thread and
