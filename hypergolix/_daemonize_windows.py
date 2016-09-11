@@ -53,8 +53,11 @@ from .utils import _default_to
 
 from ._daemonize import _redirect_stds
 from ._daemonize import _write_pid
+from ._daemonize import send
+from ._daemonize import ping
 
 from .exceptions import SignalError
+from .exceptions import ReceivedSignal
 from .exceptions import SIGABRT
 from .exceptions import SIGINT
 from .exceptions import SIGTERM
@@ -789,27 +792,6 @@ class SignalHandler1:
         main = threading.main_thread()
         main.join()
         self.stop()
-                
-                
-def send(pid_file, signum):
-    ''' Sends the signal in signum to the pid_file.
-    '''
-    with open(pid_file, 'r') as f:
-        pid = int(f.read())
-        
-    os.kill(pid, signum)
-    
-    
-def ping(pid_file):
-    ''' Returns True if the process in pid_file is available, and False
-    otherwise.
-    '''
-    try:
-        send(pid_file, 0)
-    except OSError:
-        return False
-    else:
-        return True
     
     
 if __name__ == '__main__':

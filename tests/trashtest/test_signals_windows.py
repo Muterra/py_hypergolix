@@ -45,6 +45,8 @@ import shutil
 import pickle
 import subprocess
 import signal
+import random
+import psutil
 
 from hypergolix._daemonize_windows import _SUPPORTED_PLATFORM
 from hypergolix._daemonize_windows import IGNORE
@@ -61,6 +63,7 @@ from hypergolix._daemonize_windows import _await_signal
 from hypergolix._daemonize_windows import _normalize_handler
 
 from hypergolix.exceptions import SignalError
+from hypergolix.exceptions import ReceivedSignal
 from hypergolix.exceptions import SIGINT
 from hypergolix.exceptions import SIGTERM
 from hypergolix.exceptions import SIGABRT
@@ -184,6 +187,48 @@ class Signals_test(unittest.TestCase):
         self.assertEqual(_normalize_handler(handler), handler)
         self.assertEqual(_normalize_handler(None), _default_handler)
         self.assertEqual(_normalize_handler(IGNORE), _noop)
+        
+    @unittest.skipIf(not _SUPPORTED_PLATFORM, 'Unsupported platform.')
+    def test_send(self):
+        ''' Test sending signals.
+        '''
+        python_path = sys.executable
+        python_path = os.path.abspath(python_path)
+        worker_cmd = ('"' + python_path + '" -c ' + 
+                      '"import time; time.sleep(60)"')
+        
+        with tempfile.TemporaryDirectory() as dirpath:
+            pidfile = dirpath + '/pid.pid'
+            
+            for sig in [2, signal.SIGTERM, SIGABRT]:
+                with self.subTest(sig):
+                    worker = subprocess.Popen(
+                        worker_cmd
+                    )
+                    worker_pid = worker.pid
+                    
+                    with open(pidfile, 'w') as f:
+                        f.write(str(worker_pid) + '\n')
+                        
+                    send(pidfile, sig)
+                    worker.wait()
+                    self.assertEqual(worker.returncode, int(sig))
+        
+                    # Get a false PID so we can test against it as well
+                    # Note the mild race condition here
+                    bad_pid = os.getpid()
+                    while psutil.pid_exists(bad_pid):
+                        bad_pid = random.randint(1000, 99999)
+                    
+                    with open(pidfile, 'w') as f:
+                        f.write(str(bad_pid) + '\n')
+                        
+                    with self.assertRaises(OSError):
+                        send(pidfile, sig)
+                        
+                        
+            
+            
         
 
 if __name__ == "__main__":

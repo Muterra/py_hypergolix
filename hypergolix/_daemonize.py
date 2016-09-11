@@ -54,6 +54,8 @@ import shutil
 from .utils import platform_specificker
 from .utils import _default_to
 
+from .exceptions import ReceivedSignal
+
 _SUPPORTED_PLATFORM = platform_specificker(
     linux_choice = True,
     win_choice = False,
@@ -516,6 +518,38 @@ class SignalHandler1:
             
         # Should this be advanced to just after forking?
         signal.signal(signal.SIGTERM, self._handle_sigterm)
+                
+                
+def send(pid_file, signal):
+    ''' Sends the signal in signum to the pid_file. Num can be either
+    int or one of the exceptions.
+    '''
+    if isinstance(signal, ReceivedSignal):
+        signum = signal.SIGNUM
+    else:
+        signum = int(signal)
+    
+    with open(pid_file, 'r') as f:
+        pid = int(f.read())
+        
+    os.kill(pid, signum)
+    
+    
+def ping(pid_file):
+    ''' Returns True if the process in pid_file is available, and False
+    otherwise. Note that availability does not imply the process is 
+    running, just that it recently has been. For example, recently-
+    exited processes will still return True.
+    
+    Uhhh shit, this isn't going to work well, windows converts signal 0
+    into an interrupt. Okay, punt for now.
+    '''
+    try:
+        send(pid_file, 0)
+    except OSError:
+        return False
+    else:
+        return True
        
        
 # Daemotion and helpers
