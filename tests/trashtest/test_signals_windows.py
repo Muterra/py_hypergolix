@@ -225,10 +225,46 @@ class Signals_test(unittest.TestCase):
                         
                     with self.assertRaises(OSError):
                         send(pidfile, sig)
-                        
-                        
+        
+    @unittest.skipIf(not _SUPPORTED_PLATFORM, 'Unsupported platform.')
+    def test_receive(self):
+        ''' Test receiving signals.
+        '''
+        timeout = 1
+        pause = .1
+        
+        events = {
+            signal.SIGINT: threading.Event(),
+            signal.SIGTERM: threading.Event(),
+            signal.SIGABRT: threading.Event()
+        }
+        
+        def handler(signum):
+            events[signum].set()
+        
+        with tempfile.TemporaryDirectory() as dirpath:
+            pidfile = dirpath + '/pid.pid'
             
+            sighandler = SignalHandler1(
+                pidfile, 
+                sigint = handler, 
+                sigterm = handler, 
+                sigabrt = handler
+            )
+            sighandler.start()
+            time.sleep(pause)
             
+            for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGABRT]:
+                with self.subTest(signum):
+                    with open(pidfile, 'r') as f:
+                        pid = int(f.read())
+                        
+                    os.kill(pid, signum)
+                    check_flag = events[signum]
+                    self.assertTrue(check_flag.wait(timeout))
+                    time.sleep(pause)
+                    
+            sighandler.stop()
         
 
 if __name__ == "__main__":

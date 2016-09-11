@@ -628,19 +628,21 @@ class SignalHandler1:
         self.sigterm = sigterm
         self.sigabrt = sigabrt
         
-        self._pid_file = pid_file
+        self._pidfile = pid_file
         self._running = None
         self._worker = None
         self._thread = None
         self._watcher = None
         
         self._opslock = threading.Lock()
+        self._stopped = threading.Event()
         
     def start(self):
         with self._opslock:
             if self._running:
                 raise RuntimeError('SignalHandler is already running.')
                 
+            self._stopped.clear()
             self._running = True
             self._thread = threading.Thread(
                 target = self._listen_loop,
@@ -673,6 +675,8 @@ class SignalHandler1:
                 self._worker.terminate()
                 
         atexit.unregister(self.stop)
+        
+        self._stopped.wait()
         
     @property
     def sigint(self):
@@ -735,7 +739,7 @@ class SignalHandler1:
         python_path = os.path.abspath(python_path)
         worker_cmd = ('"' + python_path + '" -m ' + 
                       'hypergolix._daemonize_windows')
-        worker_env = {**_get_clean_env(), '__CREATE_SIGHANDLER__': True}
+        worker_env = {**_get_clean_env(), '__CREATE_SIGHANDLER__': 'True'}
         
         # Iterate until we're reaped by the main thread exiting.
         try:
@@ -778,12 +782,16 @@ class SignalHandler1:
         # If we exit, be sure to reset self._running and stop the running
         # worker, if there is one (note terinate is idempotent)
         finally:
-            self._running = False
-            self._worker.terminate()
-            self._worker = None
-            # Restore our actual PID to the pidfile, overwriting its contents.
-            with open(self._pidfile, 'w+') as f:
-                f.write(str(os.getpid()) + '\n')
+            try:
+                self._running = False
+                self._worker.terminate()
+                self._worker = None
+                # Restore our actual PID to the pidfile, overwriting its
+                # contents.
+                with open(self._pidfile, 'w+') as f:
+                    f.write(str(os.getpid()) + '\n')
+            finally:
+                self._stopped.set()
     
     def _watch_for_exit(self):
         ''' Automatically watches for termination of the main thread and
