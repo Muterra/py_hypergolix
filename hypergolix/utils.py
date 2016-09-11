@@ -1237,10 +1237,16 @@ def platform_specificker(linux_choice, win_choice, cygwin_choice, osx_choice,
         return other_choice
 
 
-def _default_to(check, default):
+def _default_to(check, default, comparator=None):
     ''' If check is None, apply default; else, return check.
     '''
-    if check is None:
-        return default
+    if comparator is None:
+        if check is None:
+            return default
+        else:
+            return check
     else:
-        return check
+        if check == comparator:
+            return default
+        else:
+            return check

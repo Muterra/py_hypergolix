@@ -44,10 +44,11 @@ import shutil
 import pickle
 import subprocess
 
+from hypergolix._daemonize_windows import _SUPPORTED_PLATFORM
+
 from hypergolix._daemonize_windows import Daemonizer
 from hypergolix._daemonize_windows import daemonize1
 from hypergolix._daemonize_windows import daemonize2
-from hypergolix._daemonize_windows import _SUPPORTED_PLATFORM
 from hypergolix._daemonize_windows import _capability_check
 from hypergolix._daemonize_windows import _acquire_pidfile
 from hypergolix._daemonize_windows import _filial_usurpation
@@ -59,69 +60,6 @@ from hypergolix._daemonize_windows import _fork_worker
 # ###############################################
 # "Paragon of adequacy" test fixtures
 # ###############################################
-
-
-def childproc_daemon(pid_file, token, res_path):
-    ''' The test daemon quite simply daemonizes itself, does some stuff 
-    to confirm its existence, waits for a signal to die, and then dies.
-    '''
-    # Daemonize ourselves
-    daemonize(pid_file)
-    
-    from hypergolix import logutils
-    logname = logutils.autoconfig(suffix='daemon')
-    
-    # Write the token to the response path
-    try:
-        with open(res_path, 'w') as f:
-            f.write(str(token) + '\n')
-            
-        # Wait 1 second so that the parent can make sure our PID file exists
-        time.sleep(1)
-    
-    except:
-        logging.error(
-            'Failure writing token w/ traceback: \n' + 
-            ''.join(traceback.format_exc())
-        )
-        
-        
-def childproc_fratfork(res_path):
-    # Fork again, killing the intermediate.
-    _fratricidal_fork()
-    
-    my_pid = os.getpid()
-    with open(res_path, 'w') as f:
-        f.write(str(my_pid) + '\n')
-
-        
-def childproc_filialusurp(umask, chdir, umask_path, sid_path, wdir_path, 
-                        pid_path):
-    _filial_usurpation(chdir, umask)
-    # Get our session id
-    my_pid = os.getpid()
-    sid = os.getsid(my_pid)
-    # reset umask and get our set one.
-    umask = os.umask(0)
-    # Get our working directory.
-    wdir = os.path.abspath(os.getcwd())
-    
-    # Update parent
-    # Write the umask to the response path
-    with open(umask_path, 'w') as f:
-        f.write(str(umask) + '\n')
-        
-    # Write the sid to the response path
-    with open(sid_path, 'w') as f:
-        f.write(str(sid) + '\n')
-        
-    # Write the working dir to the response path
-    with open(wdir_path, 'w') as f:
-        f.write(wdir + '\n')
-        
-    # Write the pid to the response path
-    with open(pid_path, 'w') as f:
-        f.write(str(my_pid) + '\n')
 
 
 # ###############################################

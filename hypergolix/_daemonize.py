@@ -492,8 +492,14 @@ def daemonize(pid_file, *args, chdir=None, stdin_goto=None, stdout_goto=None,
 
     
 # Signal handlers
+    
+    
+def _default_handler(signum, frame):
+    ''' The default signal handler.
+    '''
+    
 
-class SignalHandler:
+class SignalHandler1:
     ''' Sets up an automatic signal handling system.
     '''
     def __init__(self, sigterm):

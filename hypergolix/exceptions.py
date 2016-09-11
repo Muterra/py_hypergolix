@@ -74,6 +74,12 @@ __all__ = [
     # These are privateer errors
     'PrivateerError',
     'RatchetError',
+    # These are daemonization/sighandling errors and exceptions
+    'SignalError',
+    'ReceivedSignal',
+    'SIGABRT',
+    'SIGINT',
+    'SIGTERM',
 ]
 
 
@@ -317,5 +323,37 @@ class ConflictingSecrets(PrivateerError):
 class SecretUnknown(PrivateerError, KeyError):
     ''' This PrivateerError is raised when a request is made for an 
     unknown secret.
+    '''
+    pass
+
+
+class SignalError(HypergolixException, RuntimeError):
+    ''' This exception (or a subclass thereof) is raised for all issues
+    related to signal handling.
+    '''
+    pass
+
+
+class ReceivedSignal(HypergolixException, RuntimeError):
+    ''' Subclasses of this exception are raised by all of the default
+    signal handlers defined using SignalHandlers.
+    '''
+    pass
+
+
+class SIGABRT(ReceivedSignal):
+    ''' Raised upon receipt of SIGABRT.
+    '''
+    pass
+
+
+class SIGINT(ReceivedSignal):
+    ''' Raised upon receipt of SIGINT, CTRL_C_EVENT, CTRL_BREAK_EVENT.
+    '''
+    pass
+
+
+class SIGTERM(ReceivedSignal):
+    ''' Raised upon receipt of SIGTERM.
     '''
     pass

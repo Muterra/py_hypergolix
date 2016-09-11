@@ -44,6 +44,8 @@ import multiprocessing
 import shlex
 import tempfile
 import atexit
+import ctypes
+import threading
 
 # Intra-package dependencies
 from .utils import platform_specificker
@@ -51,6 +53,11 @@ from .utils import _default_to
 
 from ._daemonize import _redirect_stds
 from ._daemonize import _write_pid
+
+from .exceptions import SignalError
+from .exceptions import SIGABRT
+from .exceptions import SIGINT
+from .exceptions import SIGTERM
 
 _SUPPORTED_PLATFORM = platform_specificker(
     linux_choice = False,
@@ -377,7 +384,7 @@ def daemonize1(pid_file, *args, chdir=None, stdin_goto=None, stdout_goto=None,
         # Now open up a secure way to pass a namespace to the daughter process.
         with _NamespacePasser() as fpath:
             # Determine the child env
-            child_env = {**os.environ, '__INVOKE_DAEMON__': fpath}
+            child_env = {**_get_clean_env(), '__INVOKE_DAEMON__': fpath}
                 
             # We need to shield ourselves from signals, or we'll be terminated
             # by python before running cleanup. So use a spawned worker to
@@ -401,7 +408,7 @@ def daemonize1(pid_file, *args, chdir=None, stdin_goto=None, stdout_goto=None,
                     pickle.dump(worker_argv, f, protocol=-1)
                     
                 # Create an env for the worker to let it know what to do
-                worker_env = {**os.environ, '__CREATE_DAEMON__': 'True'}
+                worker_env = {**_get_clean_env(), '__CREATE_DAEMON__': 'True'}
                 # Figure out the path to the current file
                 worker_target = os.path.abspath(__file__)
                 worker_cmd = ('"' + python_path + '" -m ' + 
@@ -490,9 +497,319 @@ else:
     daemonize = daemonize1
     
     
-class SignalHandler:
-    ''' Signal handling system.
+def _get_clean_env():
+    ''' Gets a clean copy of our environment, with any flags stripped.
     '''
+    env2 = {**os.environ}
+    flags = {
+        '__INVOKE_DAEMON__', 
+        '__CREATE_DAEMON__', 
+        '__CREATE_SIGHANDLER__'
+    }
+    
+    for key in flags:
+        if key in env2:
+            del env2[key]
+            
+    return env2
+    
+    
+def _sketch_raise_in_main(exc):
+    ''' Sketchy way to raise an exception in the main thread.
+    '''
+    if isinstance(exc, Exception):
+        exc = type(exc)
+    elif issubclass(exc, Exception):
+        pass
+    else:
+        raise TypeError('Must raise an exception.')
+    
+    # Figure out the id of the main thread
+    main_id = threading.main_thread().ident
+    thread_ref = ctypes.c_long(main_id)
+    exc = ctypes.py_object(exc)
+    
+    result = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        thread_ref,
+        exc
+    )
+    
+    # 0 Is failed.
+    if result == 0:
+        raise SystemError('Main thread had invalid ID?')
+    # 1 succeeded
+    # > 1 failed
+    elif result > 1:
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(target_tid, 0)
+        raise SystemError('Failed to raise in main thread.')
+    
+    
+def _default_handler(signum, *args):
+    ''' The default signal handler. Don't register with signal.signal!
+    This needs to be used on the subprocess await death workaround.
+    '''
+    # All valid cpython windows signals
+    sigs = {
+        signal.SIGABRT: SIGABRT,
+        # signal.SIGFPE: 'fpe', # Don't catch this
+        # signal.SIGSEGV: 'segv', # Don't catch this
+        # signal.SIGILL: 'illegal', # Don't catch this
+        signal.SIGINT: SIGINT,
+        signal.SIGTERM: SIGTERM,
+        # signal.CTRL_C_EVENT: SIGINT, # Convert to SIGINT in _await_signal
+        # signal.CTRL_BREAK_EVENT: SIGINT # Convert to SIGINT in _await_signal
+    }
+    
+    try:
+        exc = sigs[signum]
+    except KeyError:
+        exc = SignalError
+        
+    _sketch_raise_in_main(exc)
+    
+    
+def _noop(*args, **kwargs):
+    ''' Used for ignoring signals.
+    '''
+    pass
+    
+    
+def _infinite_noop():
+    ''' Give a process something to do while it waits for a signal.
+    '''
+    while True:
+        time.sleep(9999)
+        
+        
+def _await_signal(process):
+    ''' Waits for the process to die, and then returns the exit code for
+    the process, converting CTRL_C_EVENT and CTRL_BREAK_EVENT into
+    SIGINT.
+    '''
+    # Note that this is implemented with a busy wait
+    process.wait()
+    code = process.returncode
+    
+    if code == signal.CTRL_C_EVENT:
+        code = signal.SIGINT
+    elif code == signal.CTRL_BREAK_EVENT:
+        code = signal.SIGINT
+    
+    return code
+    
+
+IGNORE = 1793
+
+
+def _normalize_handler(handler):
+    ''' Normalizes a signal handler. Converts None to the default, and
+    IGNORE to noop.
+    '''
+    # None -> _default_handler
+    handler = _default_to(handler, _default_handler)
+    # IGNORE -> _noop
+    handler = _default_to(handler, _noop, comparator=IGNORE)
+    
+    return handler
+    
+    
+class SignalHandler1:
+    ''' Signal handling system using a daughter thread.
+    '''
+    def __init__(self, pid_file, sigint=None, sigterm=None, sigabrt=None):
+        ''' Creates a signal handler, using the passed callables. None
+        will assign the default handler (raise in main). passing IGNORE
+        constant will result in the signal being noop'd.
+        '''
+        self.sigint = sigint
+        self.sigterm = sigterm
+        self.sigabrt = sigabrt
+        
+        self._pid_file = pid_file
+        self._running = None
+        self._worker = None
+        self._thread = None
+        self._watcher = None
+        
+        self._opslock = threading.Lock()
+        
+    def start(self):
+        with self._opslock:
+            if self._running:
+                raise RuntimeError('SignalHandler is already running.')
+                
+            self._running = True
+            self._thread = threading.Thread(
+                target = self._listen_loop,
+                # We need to always reset the PID file.
+                daemon = False
+            )
+            self._thread.start()
+            
+        atexit.register(self.stop)
+        
+        # Only set up a watcher once, and then let it run forever.
+        if self._watcher is None:
+            self._watcher = threading.Thread(
+                target = self._watch_for_exit,
+                # Who watches the watchman?
+                # Daemon threading this is important to protect us against
+                # issues during closure.
+                daemon = True
+            )
+            self._watcher.start()
+        
+    def stop(self):
+        ''' Hold the phone! Idempotent.
+        '''
+        with self._opslock:
+            self._running = False
+            
+            # If we were running, kill the process so that the loop breaks free
+            if self._worker is not None and self._worker.returncode is None:
+                self._worker.terminate()
+                
+        atexit.unregister(self.stop)
+        
+    @property
+    def sigint(self):
+        ''' Gets sigint.
+        '''
+        return self._sigint
+        
+    @sigint.setter
+    def sigint(self, handler):
+        ''' Normalizes and sets sigint.
+        '''
+        self._sigint = _normalize_handler(handler)
+        
+    @sigint.deleter
+    def sigint(self):
+        ''' Returns the sigint handler to the default.
+        '''
+        self.sigint = None
+        
+    @property
+    def sigterm(self):
+        ''' Gets sigterm.
+        '''
+        return self._sigterm
+        
+    @sigterm.setter
+    def sigterm(self, handler):
+        ''' Normalizes and sets sigterm.
+        '''
+        self._sigterm = _normalize_handler(handler)
+        
+    @sigterm.deleter
+    def sigterm(self):
+        ''' Returns the sigterm handler to the default.
+        '''
+        self.sigterm = None
+        
+    @property
+    def sigabrt(self):
+        ''' Gets sigabrt.
+        '''
+        return self._sigabrt
+        
+    @sigabrt.setter
+    def sigabrt(self, handler):
+        ''' Normalizes and sets sigabrt.
+        '''
+        self._sigabrt = _normalize_handler(handler)
+        
+    @sigabrt.deleter
+    def sigabrt(self):
+        ''' Returns the sigabrt handler to the default.
+        '''
+        self.sigabrt = None
+        
+    def _listen_loop(self):
+        ''' Manages all signals.
+        '''
+        python_path = sys.executable
+        python_path = os.path.abspath(python_path)
+        worker_cmd = ('"' + python_path + '" -m ' + 
+                      'hypergolix._daemonize_windows')
+        worker_env = {**_get_clean_env(), '__CREATE_SIGHANDLER__': True}
+        
+        # Iterate until we're reaped by the main thread exiting.
+        try:
+            while self._running:
+                # Create a process. Depend upon it being reaped if the
+                # parent quits
+                self._worker = subprocess.Popen(
+                    worker_cmd,
+                    env = worker_env,
+                )
+                worker_pid = self._worker.pid
+                
+                # Record the PID of the worker in the pidfile, overwriting
+                # its contents.
+                with open(self._pidfile, 'w+') as f:
+                    f.write(str(worker_pid) + '\n')
+                
+                # Wait for the worker to generate a signal. Calling stop()
+                # will break out of this.
+                signum = _await_signal(self._worker)
+                
+                # If the worker was terminated by stopping the
+                # SignalHandler, then discard errything.
+                if self._running:
+                    # Handle the signal, catching unknown ones with the
+                    # default handler. Do this each time so that the
+                    # SigHandler can be updated while running.
+                    signums = {
+                        signal.SIGABRT: self.sigabrt, 
+                        signal.SIGINT: self.sigint, 
+                        signal.SIGTERM: self.sigterm
+                    }
+                    try:
+                        handler = signums[signum]
+                    except KeyError:
+                        handler = _default_handler
+                        
+                    handler(signum)
+        
+        # If we exit, be sure to reset self._running and stop the running
+        # worker, if there is one (note terinate is idempotent)
+        finally:
+            self._running = False
+            self._worker.terminate()
+            self._worker = None
+            # Restore our actual PID to the pidfile, overwriting its contents.
+            with open(self._pidfile, 'w+') as f:
+                f.write(str(os.getpid()) + '\n')
+    
+    def _watch_for_exit(self):
+        ''' Automatically watches for termination of the main thread and
+        then closes self gracefully.
+        '''
+        main = threading.main_thread()
+        main.join()
+        self.stop()
+                
+                
+def send(pid_file, signum):
+    ''' Sends the signal in signum to the pid_file.
+    '''
+    with open(pid_file, 'r') as f:
+        pid = int(f.read())
+        
+    os.kill(pid, signum)
+    
+    
+def ping(pid_file):
+    ''' Returns True if the process in pid_file is available, and False
+    otherwise.
+    '''
+    try:
+        send(pid_file, 0)
+    except OSError:
+        return False
+    else:
+        return True
     
     
 if __name__ == '__main__':
@@ -510,4 +827,4 @@ if __name__ == '__main__':
         
     elif '__CREATE_SIGHANDLER__' in os.environ:
         # Use this to create a signal handler.
-        pass
+        _infinite_noop()
