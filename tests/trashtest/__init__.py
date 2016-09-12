@@ -1,10 +1,8 @@
 '''
-Scratchpad for test-based development.
+Boilerplate for automatic test detection.
 
 LICENSING
 -------------------------------------------------
-
-hypergolix: A python Golix client.
     Copyright (C) 2016 Muterra, Inc.
     
     Contributors

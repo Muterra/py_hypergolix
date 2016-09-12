@@ -30,8 +30,6 @@ hypergolix: A python Golix client.
 ------------------------------------------------------
 '''
 
-import signal
-
 # Control * imports.
 __all__ = [
     # Base class for all of the above
@@ -73,12 +71,6 @@ __all__ = [
     # These are privateer errors
     'PrivateerError',
     'RatchetError',
-    # These are daemonization/sighandling errors and exceptions
-    'SignalError',
-    'ReceivedSignal',
-    'SIGABRT',
-    'SIGINT',
-    'SIGTERM',
 ]
 
 
@@ -324,43 +316,3 @@ class SecretUnknown(PrivateerError, KeyError):
     unknown secret.
     '''
     pass
-
-
-class SignalError(HypergolixException, RuntimeError):
-    ''' This exception (or a subclass thereof) is raised for all issues
-    related to signal handling.
-    '''
-    pass
-    
-    
-class _SignalMeta(type):
-    def __int__(self):
-        return self.SIGNUM
-
-
-class ReceivedSignal(HypergolixException, OSError, metaclass=_SignalMeta):
-    ''' Subclasses of this exception are raised by all of the default
-    signal handlers defined using SignalHandlers.
-    '''
-    SIGNUM = -1
-    
-    def __int__(self):
-        return self.SIGNUM
-
-
-class SIGABRT(ReceivedSignal):
-    ''' Raised upon receipt of SIGABRT.
-    '''
-    SIGNUM = int(signal.SIGABRT)
-
-
-class SIGINT(ReceivedSignal):
-    ''' Raised upon receipt of SIGINT, CTRL_C_EVENT, CTRL_BREAK_EVENT.
-    '''
-    SIGNUM = int(signal.SIGINT)
-
-
-class SIGTERM(ReceivedSignal):
-    ''' Raised upon receipt of SIGTERM.
-    '''
-    SIGNUM = int(signal.SIGTERM)
