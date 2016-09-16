@@ -87,7 +87,7 @@ def make_fixtures(debug, tmpdir_a, tmpdir_b):
         _scrypt_hardness = 1024,
         password = 'hello world',
         cache_dir = tmpdir_a,
-        user_id = Ghid.from_str('AQaNl4v6Ng6-1_4qPL964SzJWuTn1Cg4eTPbQiHSFNag18tERtO0_IztVghvko37t8_NWchVJgvoDs5Nq-Yfe_I=')
+        user_id = Ghid.from_str('AQpjpYmuK-4172HYaA7rAS4T2HoHmdMKhaTq-c4zrazjhMPED7s7yIE0Dt45uOslebm2Ah4LcgVPpYQ-HQrzYg8=')
     )
     hgxdes = HGXService(
         host = 'localhost',
@@ -101,7 +101,7 @@ def make_fixtures(debug, tmpdir_a, tmpdir_b):
         _scrypt_hardness = 1024,
         password = 'hello world',
         cache_dir = tmpdir_b,
-        user_id = Ghid.from_str('Ac7UHA_FFMndtcqqtLvzg8hyJAKd4eyJHdpx4U3N8NOWGELtRHnHJ3qGCA07szpFoLt07isXwHPQFXTNRHAECRo=')
+        user_id = Ghid.from_str('AUDwqB0easdBzA0jaFm2-hngmaIKJME-NMKINOUQfFmgsWSII7OUp-J3E4iS9vh5S6hvpAd8DKmaZCpcZ6VZp60=')
     )
         
     return hgxserver, hgxraz, hgxdes, aengel

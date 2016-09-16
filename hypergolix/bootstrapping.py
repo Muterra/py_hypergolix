@@ -42,7 +42,7 @@ import weakref
 import os
 import random
 
-import pyscrypt
+from Crypto.Protocol.KDF import scrypt
 
 from golix import Ghid
 from golix import Secret
@@ -92,6 +92,12 @@ logger = logging.getLogger(__name__)
 # ###############################################
 # Utilities, etc
 # ###############################################
+
+
+# Use 2**14 for t<=100ms, 2**20 for t<=5s.
+_DEFAULT_SCRYPT_HARDNESS = 2**15
+# 256-bit password validator.
+_PASSWORD_VALIDATOR_LEN = 32
 
 
 class AgentBootstrap:
@@ -512,6 +518,8 @@ class Credential:
         self._secondary_manifest = None
         self._secondary_master = secondary_master
         
+        self._scrypt_hardness = None
+        
     def is_primary(self, ghid):
         ''' Checks to see if the ghid is one of the primary bootstrap
         objects. Returns True/False.
@@ -601,6 +609,9 @@ class Credential:
             secondary_master = identity.new_secret(),
         )
         
+        if _scrypt_hardness:
+            self._scrypt_hardness = _scrypt_hardness
+        
         return self
         
     @classmethod
@@ -668,16 +679,36 @@ class Credential:
             ghid = user_id
         )
         
-        logger.info('Password expanded. Extracting the primary manifest.')
+        logger.info(
+            'Password successfully expanded. Extracting the primary manifest.'
+        )
         manifest = primary_manifest.extract_state()
-        identity_ghid = Ghid.from_bytes(manifest[0:65])
-        identity_master = Secret.from_bytes(manifest[65:118])
-        persistent_ghid = Ghid.from_bytes(manifest[118:183])
-        persistent_master = Secret.from_bytes(manifest[183:236])
-        quarantine_ghid = Ghid.from_bytes(manifest[236:301])
-        quarantine_master = Secret.from_bytes(manifest[301:354])
-        secondary_manifest = Ghid.from_bytes(manifest[354:419])
-        secondary_master = Secret.from_bytes(manifest[419:472])
+        
+        logger.info('Verifying password. Please be patient.')
+        # Check the password so we can fail with a meaningful message!
+        # Should probably not hard-code the password validator length or summat
+        password_validator = manifest[0:32]
+        checker = cls._make_password_validator(
+            secret = primary_master,
+            hardness = _scrypt_hardness
+        )
+        if checker != password_validator:
+            logger.critical('Incorrect password.')
+            raise ValueError('Incorrect password.')
+            
+        else:
+            logger.info(
+                'Password correct. Proceeding with manifest extraction.'
+            )
+            
+        identity_ghid = Ghid.from_bytes(manifest[32:97])
+        identity_master = Secret.from_bytes(manifest[97:150])
+        persistent_ghid = Ghid.from_bytes(manifest[150:215])
+        persistent_master = Secret.from_bytes(manifest[215:268])
+        quarantine_ghid = Ghid.from_bytes(manifest[268:333])
+        quarantine_master = Secret.from_bytes(manifest[333:386])
+        secondary_manifest = Ghid.from_bytes(manifest[386:451])
+        secondary_master = Secret.from_bytes(manifest[451:504])
         # Inject all the needed secrets.
         cls._inject_secret(
             librarian, 
@@ -722,6 +753,9 @@ class Credential:
             quarantine_master = quarantine_master,
             secondary_master = secondary_master
         )
+        
+        if _scrypt_hardness:
+            self._scrypt_hardness = _scrypt_hardness
         
         self.declare_primary(
             user_id, 
@@ -774,9 +808,17 @@ class Credential:
         padding_int = random.getrandbits(padding_len * 8)
         padding = padding_int.to_bytes(length=padding_len, byteorder='big')
         
+        logger.info('Generating the password validator. Please be patient.')
+        # Check the password so we can fail with a meaningful message!
+        password_validator = self._make_password_validator(
+            secret = self._primary_master,
+            hardness = self._scrypt_hardness
+        )
+        
         # Serialize the manifest as per above
         logger.info('Serializing primary manifest.')
-        manifest = (bytes(self._identity_ghid) + 
+        manifest = (password_validator +
+                    bytes(self._identity_ghid) + 
                     bytes(self._identity_master) + 
                     bytes(self._persistent_ghid) + 
                     bytes(self._persistent_master) +
@@ -801,15 +843,15 @@ class Credential:
         '''
         # Use 2**14 for t<=100ms, 2**20 for t<=5s.
         if hardness is None:
-            hardness = 2**15
+            hardness = _DEFAULT_SCRYPT_HARDNESS
         else:
             hardness = int(hardness)
         
         # Scrypt the password. Salt against the author GHID.
-        combined = pyscrypt.hash(
+        combined = scrypt(
             password = password, 
             salt = bytes(salt_ghid),
-            dkLen = 48,
+            key_len = 48,
             N = hardness,
             r = 8,
             p = 1
@@ -823,3 +865,25 @@ class Credential:
             seed = seed
         )
         return master_secret
+        
+    @staticmethod
+    def _make_password_validator(secret, hardness=None):
+        ''' Re-scrypts the key (should be the scrypt expansion of the
+        password) with hardness, and then compares the result against
+        check_str. If wrong, raises ValueError for a bad password (and
+        logs as such).
+        '''
+        if hardness is None:
+            hardness = _DEFAULT_SCRYPT_HARDNESS
+        else:
+            hardness = int(hardness)
+            
+        checker = scrypt(
+            password = secret.key,
+            salt = bytes(_PASSWORD_VALIDATOR_LEN),
+            key_len = _PASSWORD_VALIDATOR_LEN,
+            N = hardness,
+            r = 8,
+            p = 1
+        )
+        return checker

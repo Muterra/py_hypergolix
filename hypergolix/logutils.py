@@ -65,16 +65,21 @@ def autoconfig(tofile=True, logdirname='logs', loglevel='debug', suffix=''):
 
         # Make a log handler
         loghandler = logging.FileHandler(logname)
-        loghandler.setFormatter(
-            logging.Formatter(
-                '%(threadName)-10.10s '
-                '%(name)-17.17s  %(levelname)-5.5s  '
-                '%(message)s'
-            )
-        )
         
-        # Add to root logger
-        logging.getLogger('').addHandler(loghandler)
+    else:
+        loghandler = logging.StreamHandler()
+        logname = None
+        
+    loghandler.setFormatter(
+        logging.Formatter(
+            '%(threadName)-10.10s '
+            '%(name)-17.17s  %(levelname)-5.5s  '
+            '%(message)s'
+        )
+    )
+    
+    # Add to root logger
+    logging.getLogger('').addHandler(loghandler)
 
     # Calculate the logging level
     loglevel = loglevel.lower()

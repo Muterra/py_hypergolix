@@ -114,8 +114,8 @@ setup(
         'golix>=0.1.1',
         'websockets>=3.1',
         'cryptography>=1.4',
-        'pyscrypt', # upgrade this to something else!
-        'daemoniker',
+        'pycryptodome>=3.4', # waiting for cryptography to include scrypt
+        'daemoniker>=0.2.0',
     ],
 
     # List additional groups of dependencies here (e.g. development
