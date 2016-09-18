@@ -30,12 +30,6 @@ hypergolix: A python Golix client.
 ------------------------------------------------------
 '''
 
-# Control * imports. Therefore controls what is available to toplevel
-# package through __init__.py
-__all__ = [
-    'AgentBootstrap',
-]
-
 # Global dependencies
 import threading
 import weakref
@@ -81,8 +75,15 @@ from .utils import SetMap
 
 
 # ###############################################
-# Logging boilerplate
+# Boilerplate
 # ###############################################
+
+
+# Control * imports. Therefore controls what is available to toplevel
+# package through __init__.py
+__all__ = [
+    'AgentBootstrap',
+]
 
 
 import logging
