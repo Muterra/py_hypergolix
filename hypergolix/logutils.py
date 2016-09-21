@@ -9,7 +9,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -23,10 +23,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -43,7 +43,7 @@ import datetime
 def autoconfig(tofile=True, logdirname='logs', loglevel='debug', suffix=''):
     if tofile:
         fname = sys.argv[0]
-        logdir = pathlib.Path(logdirname)
+        logdir = pathlib.Path(logdirname).absolute()
 
         if (not logdir.exists()) or (not logdir.is_dir()):
             logdir.mkdir()
@@ -57,8 +57,8 @@ def autoconfig(tofile=True, logdirname='logs', loglevel='debug', suffix=''):
         ii = 0
         date = str(datetime.date.today())
         ext = '.pylog'
-        while pathlib.Path(prefix + suffix + '_' + date + '_' + str(ii) + 
-            ext).exists():
+        while pathlib.Path(prefix + suffix + '_' + date + '_' + str(ii) +
+                           ext).exists():
                 ii += 1
         logname = prefix + suffix + '_' + date + '_' + str(ii) + ext
         print('USING LOGFILE: ' + logname)

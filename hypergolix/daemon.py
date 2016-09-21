@@ -34,33 +34,32 @@ hypergolix: A python Golix client.
 import argparse
 import sys
 import getpass
-import http
 import socket
-import socketserver
 import multiprocessing
 import time
-import urllib
-import pickle
+import pathlib
+import traceback
 
 from golix import Ghid
 
 from daemoniker import Daemonizer
 from daemoniker import SignalHandler1
 
-# Intra-package dependencies
-from .bootstrapping import AgentBootstrap
+# Intra-package dependencies (that require explicit imports, courtesy of
+# daemonization)
+from hypergolix.bootstrapping import AgentBootstrap
 
-from .utils import Aengel
-from .utils import threading_autojoin
-from .utils import _generate_threadnames
+from hypergolix.utils import Aengel
+from hypergolix.utils import threading_autojoin
+from hypergolix.utils import _generate_threadnames
 
-from .comms import Autocomms
-from .comms import WSBasicClient
-from .comms import WSBasicServer
+from hypergolix.comms import Autocomms
+from hypergolix.comms import WSBasicClient
+from hypergolix.comms import WSBasicServer
 
-from .remotes import PersisterBridgeClient
+from hypergolix.remotes import PersisterBridgeClient
 
-from . import logutils
+from hypergolix import logutils
 
 
 # ###############################################
@@ -69,7 +68,7 @@ from . import logutils
 
 
 import logging
-logging.raiseExceptions = True
+import logging.handlers
 logger = logging.getLogger(__name__)
 
 # Control * imports.
@@ -100,6 +99,48 @@ class _BootstrapFilter(logging.Filter):
         # Emit nothing else
         else:
             return False
+            
+            
+def _await_server(port, cycle_time, timeout):
+    ''' Busy wait for a logserver to be available. Raises
+    socket.timeout if unavailable.
+    '''
+    conn_timeout = cycle_time / 2
+    sleep_for = conn_timeout
+    cycles = int(timeout / cycle_time)
+    
+    log_server = ('127.0.0.1', port)
+    
+    # Attempt to connect until approximately hitting the timeout
+    for __ in range(cycles):
+        
+        try:
+            socket.create_connection(log_server, conn_timeout)
+            
+        except socket.timeout:
+            # Busy wait and try again
+            time.sleep(sleep_for)
+            
+        else:
+            break
+            
+
+def _close_server(port):
+    ''' Saturates the logging server's max number of connections,
+    ensuring it departs its .accept() loop.
+    '''
+    conn_timeout = .1
+    log_server = ('127.0.0.1', port)
+    
+    # Attempt to connect repeatedly until we error
+    while True:
+        try:
+            socket.create_connection(log_server, conn_timeout)
+            
+        except OSError:
+            # OSError includes socket.timeout. This implies that the parent
+            # is not receiving connections and has successfully closed.
+            break
         
 
 class _StartupReporter:
@@ -115,49 +156,6 @@ class _StartupReporter:
         self._cycle_time = cycle_time
         self._timeout = timeout
         
-    @staticmethod
-    def _await_server(port, cycle_time, timeout):
-        ''' Busy wait for a logserver to be available. Raises
-        socket.timeout if unavailable.
-        '''
-        conn_timeout = cycle_time / 2
-        sleep_for = conn_timeout
-        cycles = int(timeout / cycle_time)
-        
-        log_server = ('127.0.0.1', port)
-        
-        # Attempt to connect until approximately hitting the timeout
-        for __ in range(cycles):
-            
-            try:
-                socket.create_connection(log_server, conn_timeout)
-                
-            except socket.timeout:
-                # Busy wait and try again
-                time.sleep(sleep_for)
-                
-            else:
-                break
-                
-    @staticmethod
-    def _close_server(port, timeout):
-        ''' Sends the logging server a DELETE request, notifying it that
-        logging has been completed.
-        '''
-        return True
-        log_server = http.client.HTTPConnection(
-            '127.0.0.1',
-            port,
-            timeout = timeout
-        )
-        
-        try:
-            # This will automatically connect
-            log_server.request('DELETE', '/')
-            
-        except socket.timeout:
-            logger.warning('Logging server not available to close.')
-        
     def __enter__(self):
         ''' Sets up the logging reporter.
         '''
@@ -165,7 +163,7 @@ class _StartupReporter:
         logging_port = self.port
         
         try:
-            self._await_server(logging_port, self._cycle_time, self._timeout)
+            _await_server(logging_port, self._cycle_time, self._timeout)
 
         # No connection happened, so we should revert to a stream handler
         except socket.timeout:
@@ -239,99 +237,42 @@ class _StartupReporter:
             # Close the handler and, if necessary, the server
             self.handler.close()
             if isinstance(self.handler, logging.handlers.SocketHandler):
-                self._close_server(self.port, self._timeout)
-            
-            
-# class _PicklingStreamHandler(socketserver.StreamRequestHandler):
-#     ''' Handler for emitting received logs.
-#     '''
-    
-#     def handle(self):
-#         ''' Handle a single connection.
-#         '''
-#         try:
-#             print('got connection.')
-#             try:
-#                 request = pickle.load(self.rfile)
-            
-#             except EOFError:
-#                 logger.info('EOF error while handling logging connection.')
-                
-#             else:
-#                 print(request)
-            
-#         finally:
-#             self.rfile.close()
-#             self.wfile.write(b'\x01')
+                _close_server(self.port)
         
         
-# class _TimeoutingServer(socketserver.TCPServer):
-#     ''' Server that stops serving when a timeout has occurred.
-#     '''
-    
-#     def serve_until_timeout(self):
-#         self.__timeout_stop = False
-#         while not self.__timeout_stop:
-#             self.handle_request()
-            
-#     def handle_timeout(self):
-#         self.__timeout_stop = True
-#         super().handle_timeout()
-        
-#     def force_quit(self):
-#         self.__timeout_stop = True
-        
-#     def shutdown(self):
-#         # Just in case we're serve_until_timeouting
-#         self.__timeout_stop = True
-#         super().shutdown()
-        
-        
-# def _startup_listener(port, timeout):
-#     server_address = ('127.0.0.1', port)
-#     server = _TimeoutingServer(server_address, _PicklingStreamHandler)
-#     server.timeout = timeout
-    
-#     try:
-#         server.serve_until_timeout()
-        
-#     finally:
-#         server.server_close()
-        
-        
-def _handle_connection(conn, timeout):
+def _handle_startup_connection(conn, timeout):
         try:
-            print('got request. polling.')
-            while True:
+            # Loop forever until the connection is closed.
+            while not conn.closed:
                 if conn.poll(timeout):
                     try:
                         request = conn.recv()
-                        print(request)
+                        print('Hypergolix startup: ' + request['msg'])
                     
                     except EOFError:
-                        print('eoferror.')
+                        # Connections that ping without a body and immediately
+                        # disconnect, or the end of the connection, will EOF
                         return
                         
                 else:
-                    print('timeout.')
-                    return
+                    # We want to break out of the parent _serve for loop.
+                    raise socket.timeout(
+                        'Timeout while listening to daemon startup.'
+                    )
             
         finally:
             conn.close()
-            
-
-def _serve(server, timeout):
-    for __ in range(3):
-        with server.accept() as conn:
-            _handle_connection(conn, timeout)
         
         
 def _startup_listener(port, timeout):
     server_address = ('127.0.0.1', port)
     
-    # TODO: add timeout for safety
     with multiprocessing.connection.Listener(server_address) as server:
-        _serve(server, timeout)
+        # Do this twice: once for the client asking "are you there?" and a
+        # second time for the actual logs.
+        for __ in range(2):
+            with server.accept() as conn:
+                _handle_startup_connection(conn, timeout)
     
     
 def _create_password():
@@ -436,99 +377,105 @@ def daemon_main(host, port, tls, ipc_port, debug, traceur, cache_dir, password,
         thread_name = _generate_threadnames('ipc-ws')[0],
     )
         
-    return persister, core
+    return persister, core, aengel
 
 
 if __name__ == '__main__':
     # Get busy workin'
-    with Daemonizer as (is_setup, daemonizer):
+    with Daemonizer() as (is_setup, daemonizer):
         if is_setup:
-            parser = argparse.ArgumentParser(description='Start the Hypergolix service.')
-            parser.add_argument(
-                '--host', 
-                action = 'store',
-                default = 'localhost', 
-                type = str,
-                help = 'Specify the persistence provider host [default: localhost]'
+            parser = argparse.ArgumentParser(
+                description = 'Start the Hypergolix service.'
             )
             parser.add_argument(
-                '--port', 
+                '--host',
                 action = 'store',
-                default = 7770, 
+                default = 'localhost',
+                type = str,
+                help = 'Specify the persistence provider host [default: ' +
+                       'localhost]'
+            )
+            parser.add_argument(
+                '--port',
+                action = 'store',
+                default = 7770,
                 type = int,
                 help = 'Specify the persistence provider port [default: 7770]'
             )
             parser.add_argument(
-                '--notls', 
+                '--notls',
                 action = 'store_true',
                 help = 'Set debug mode. Automatically sets verbosity to debug.'
             )
             parser.add_argument(
-                '--ipcport', 
+                '--ipcport',
                 action = 'store',
-                default = 7772, 
+                default = 7772,
                 type = int,
                 help = 'Specify the ipc port [default: 7772]'
             )
             parser.add_argument(
-                '--debug', 
+                '--debug',
                 action = 'store_true',
                 help = 'Set debug mode. Automatically sets verbosity to debug.'
             )
             parser.add_argument(
-                '--cachedir', 
+                '--cachedir',
                 action = 'store',
-                default = './', 
+                default = './',
                 type = str,
-                help = 'Specify the directory to use for on-disk caching, relative to '
-                        'the current path. Defaults to the current directory.'
+                help = 'Specify the directory to use for on-disk caching, ' +
+                       'relative to the current path. Defaults to the ' +
+                       'current directory.'
             )
             parser.add_argument(
-                '--logdir', 
+                '--logdir',
                 action = 'store',
-                default = None, 
+                default = None,
                 type = str,
-                help = 'Log to a specified director, relative to current path.',
+                help = 'Log to a specified director, relative to current path.'
             )
             parser.add_argument(
-                '--userid', 
+                '--userid',
                 action = 'store',
-                default = None, 
+                default = None,
                 type = str,
-                help = 'Specifies a Hypergolix login user. If omitted, creates a new '
-                        'account.',
+                help = 'Specifies a Hypergolix login user. If omitted, ' +
+                       'creates a new account.',
             )
             parser.add_argument(
-                '--verbosity', 
+                '--verbosity',
                 action = 'store',
-                default = 'warning', 
+                default = 'warning',
                 type = str,
                 help = 'Specify the logging level. \n'
-                        '    "extreme"  -> ultramaxx verbose, \n'
-                        '    "shouty"   -> abnormal most verbose, \n'
-                        '    "debug"    -> normal most verbose, \n'
-                        '    "info"     -> somewhat verbose, \n'
-                        '    "warning"  -> default python verbosity, \n'
-                        '    "error"    -> quiet.',
+                       '    "extreme"  -> ultramaxx verbose, \n'
+                       '    "shouty"   -> abnormal most verbose, \n'
+                       '    "debug"    -> normal most verbose, \n'
+                       '    "info"     -> somewhat verbose, \n'
+                       '    "warning"  -> default python verbosity, \n'
+                       '    "error"    -> quiet.',
             )
             parser.add_argument(
-                '--traceur', 
+                '--traceur',
                 action = 'store_true',
                 help = 'Enable thorough analysis, including stack tracing. '
-                        'Implies verbosity of debug.'
+                       'Implies verbosity of debug.'
             )
 
             args = parser.parse_args()
             
             if args.logdir:
+                logdir = pathlib.Path(args.logdir).absolute().as_posix()
                 logutils.autoconfig(
-                    tofile = True, 
-                    logdirname = args.logdir, 
+                    tofile = True,
+                    logdirname = logdir,
                     loglevel = args.verbosity
                 )
             else:
+                logdir = None
                 logutils.autoconfig(
-                    tofile = False,  
+                    tofile = False,
                     loglevel = args.verbosity
                 )
                 
@@ -544,42 +491,97 @@ if __name__ == '__main__':
                 
             startup_logging_port = 7771
             
-        (is_parent, host, port, tls, ipc_port, debug, traceur, cache_dir,
-         password, user_id, startup_port) = daemonizer(
-            './hypergolix.pid',
-            args.host,
-            args.port,
-            not args.notls,
-            args.ipcport,
-            args.debug,
-            args.traceur,
-            args.cachedir,
+            args = vars(args)
+            
+        else:
+            args = {}
+            args['host'] = None
+            args['port'] = None
+            args['notls'] = None
+            args['ipcport'] = None
+            args['debug'] = None
+            args['traceur'] = None
+            args['cachedir'] = None
+            args['verbosity'] = None
+            password = None
+            user_id = None
+            startup_logging_port = None
+            logdir = None
+            
+        (
+            is_parent, pid_file, host, port, tls, ipc_port, debug, traceur,
+            cache_dir, password, user_id, startup_port, logdir, verbosity
+        ) = daemonizer(
+            '/ghidcache/logs/hypergolix.pid',
+            '/ghidcache/logs/hypergolix.pid',
+            args['host'],
+            args['port'],
+            not args['notls'],
+            args['ipcport'],
+            args['debug'],
+            args['traceur'],
+            args['cachedir'],
             password,
             user_id,
             startup_logging_port,
+            logdir,
+            args['verbosity'],
             strip_cmd_args = True
         )
          
         if is_parent:
+            print('listening')
             # Set up a logging server that we can print() to the terminal
-            pass
-    
-    with _StartupReporter(startup_logging_port) as startup_logger:
-        daemon_main(
-            host = host,
-            port = port,
-            tls = tls,
-            ipc_port = ipc_port,
-            debug = debug,
-            traceur = traceur,
-            cache_dir = cache_dir,
-            password = password,
-            user_id = user_id,
-            startup_logger = startup_logger
-        )
-    
-    sighandler = SignalHandler1()
-    sighandler.start()
-    
-    # Wait indefinitely until signal caught.
-    threading_autojoin()
+            _startup_listener(
+                port = startup_logging_port,
+                timeout = 60
+            )
+            
+            
+                
+    # Daemonized child only from here on out.
+            
+    try:
+        with _StartupReporter(startup_port) as startup_logger:
+            try:
+                if logdir is not None:
+                    logutils.autoconfig(
+                        tofile = True,
+                        logdirname = logdir,
+                        loglevel = verbosity
+                    )
+                else:
+                    logutils.autoconfig(
+                        tofile = False,
+                        loglevel = verbosity
+                    )
+                
+                persister, core, aengel = daemon_main(
+                    host = host,
+                    port = port,
+                    tls = tls,
+                    ipc_port = ipc_port,
+                    debug = debug,
+                    traceur = traceur,
+                    cache_dir = cache_dir,
+                    password = password,
+                    user_id = user_id,
+                    startup_logger = startup_logger
+                )
+            except:
+                startup_logger.critical(
+                    'exception: \n' + ''.join(traceback.format_exc())
+                )
+        
+        sighandler = SignalHandler1(pid_file)
+        sighandler.start()
+        
+        # Wait indefinitely until signal caught.
+        threading_autojoin()
+         
+    except:
+        import os
+        pid = os.getpid()
+        with open('/ghidcache/logs/' + str(pid) + '.txt', 'w') as f:
+            f.write(''.join(traceback.format_exc()))
+        raise
