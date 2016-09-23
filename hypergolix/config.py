@@ -35,11 +35,13 @@ import argparse
 import pathlib
 import json
 import collections
+import copy
 
 from golix import Ghid
 
 # Intra-package dependencies
 from .utils import _BijectDict
+from .exceptions import ConfigError
 
 
 # ###############################################
@@ -118,7 +120,6 @@ class _NamedListMeta(type):
         return len(cls._fields)
 
 
-# TODO: make an atomic update system for encoding
 # Okay, normally I'd do these as collections.namedtuples, but those are being
 # interpreted by json as tuples, so no dice.
 class _NamedList(metaclass=_NamedListMeta):
@@ -227,7 +228,7 @@ class _NamedList(metaclass=_NamedListMeta):
             return True
 
 
-class _PServer(_NamedList):
+class _RemoteDef(_NamedList):
     __slots__ = [
         'host',
         'port',
@@ -254,7 +255,7 @@ class _InstrumentationDef(_NamedList):
 # Using a bijective mapping allows us to do bidirectional lookup
 # This might be overkill, but if you already have one in your .utils module...
 _TYPEHINTS = _BijectDict({
-    '__PServer__': _PServer,
+    '__RemoteDef__': _RemoteDef,
     '__UserDef__': _UserDef,
     '__InstrumentationDef__': _InstrumentationDef
 })
@@ -322,39 +323,268 @@ class _CfgEncoder(json.JSONEncoder):
             odict[type_hint] = True
         
         return odict
-        
-    def encode(self, o, *args, **kwargs):
-        ''' Manually force any type in _TYPEHINTS to be converted to
-        their custom serialization, so that namedtuples can be supported
-        without any fuss (normally known types bypass self.default())
-        '''
-        if type(o) in _TYPEHINTS:
-            o = self.default(o)
-        
-        return super().encode(o, *args, **kwargs)
-        
-    def iterencode(self, o, *args, **kwargs):
-        ''' Explicitly un-support iterencode.
-        '''
-        if type(o) in _TYPEHINTS:
-            o = self.default(o)
-        
-        return super().iterencode(o, *args, **kwargs)
 
 
 # ###############################################
 # Library
 # ###############################################
+            
+
+_readonly_remote = collections.namedtuple(
+    typename = 'Remote',
+    field_names = ('host', 'port', 'tls'),
+)
 
 
-def _ensure_hgx_homedir():
-    ''' Gets the location of the hgx home dir and then makes sure it
-    exists, including expected subdirs.
+class Config:
+    ''' Context handler for semi-atomic config updates.
+    '''
+    
+    def __init__(self, root=None):
+        if root is None:
+            self._root = _get_hgx_rootdir()
+        else:
+            self._root = pathlib.Path(root).absolute()
+        
+        self._cfg_cache = None
+        self._cfg = None
+    
+    def __enter__(self):
+        ''' Gets a configuration for hypergolix (if one exists), and
+        creates a new one (with no remote persistence servers) if none
+        is available.
+        '''
+        try:
+            # Cache the existing configuration
+            self._cfg_cache = _get_hgx_config(self._root)
+            # Create a copy for modifications (a second name for the mutable
+            # self._cfg_cache object will always compare equal)
+            self._cfg = copy.deepcopy(self._cfg_cache)
+            
+        except ConfigError:
+            self._cfg = _make_blank_cfg()
+            
+        # And now allow access to self.
+        return self
+        
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        ''' Save any changes to configuration (including creation of a
+        new configuration).
+        '''
+        # Only modify if there were no errors; never do a partial update.
+        if exc_type is None:
+            if self._cfg_cache != self._cfg:
+                _set_hgx_config(self._root, self._cfg)
+            
+    @property
+    def remotes(self):
+        ''' Returns a read-only copy of all current remotes.
+        '''
+        try:
+            # Convert all of the defs to namedtuples while we're at it
+            # Check out this sexy tuple comprehension
+            return tuple(
+                _readonly_remote(*remote) for remote in self._cfg['remotes']
+            )
+        
+        except Exception as exc:
+            raise ConfigError('Invalid configuration.') from exc
+            
+    def set_remote(self, host, port, tls=True):
+        ''' Handles creation of _RemoteDef instances and insertion into
+        our config. Will also update TLS configuration of existing
+        remotes.
+        '''
+        rdef = _RemoteDef(host, port, tls)
+        _set_remote(self._cfg, rdef)
+        
+    def remove_remote(self, host, port):
+        ''' Removes an existing remote. Silently does nothing if it does
+        not exist in the config.
+        '''
+        # TLS does not matter when removing stuff.
+        rdef = _RemoteDef(host, port, False)
+        _pop_remote(self._cfg, rdef)
+        
+    @property
+    def fingerprint(self):
+        ''' The fingerprint! Use this for a sharing target.
+        '''
+        try:
+            fingerprint = self._cfg['user'].fingerprint
+            
+            # May be undefined, in which case return None
+            if fingerprint is None:
+                return fingerprint
+                
+            # Convert to a ghid if defined.
+            else:
+                return Ghid.from_str(fingerprint)
+        
+        except Exception as exc:
+            raise ConfigError('Invalid configuration.') from exc
+        
+    @fingerprint.setter
+    def fingerprint(self, fingerprint):
+        ''' Set our fingerprint. Really only intended to be called by
+        hypergolix itself, and not for manual manipulation of the actual
+        config file.
+        '''
+        # Convert the ghid to a plaintext equivalent
+        try:
+            fingerprint = fingerprint.as_str()
+        except Exception as exc:
+            raise ConfigError('Invalid configuration.') from exc
+        
+        try:
+            self._cfg['user'].fingerprint = fingerprint
+        
+        except KeyError:
+            self._cfg['user'] = _UserDef(
+                fingerprint = fingerprint,
+                user_id = None,
+                password = None
+            )
+        
+    @property
+    def user_id(self):
+        ''' Gets the user_id from the config. Returns a ghid.
+        '''
+        try:
+            user_id = self._cfg['user'].user_id
+            
+            # May be undefined, in which case return None
+            if user_id is None:
+                return user_id
+                
+            # Convert to a ghid if defined.
+            else:
+                return Ghid.from_str(user_id)
+        
+        except Exception as exc:
+            raise ConfigError('Invalid configuration.') from exc
+            
+    @user_id.setter
+    def user_id(self, user_id):
+        ''' Sets the user_id in the config, overwriting any existing
+        user_id.
+        '''
+        # Convert the ghid to a plaintext equivalent
+        try:
+            user_id = user_id.as_str()
+        except Exception as exc:
+            raise ConfigError('Invalid configuration.') from exc
+        
+        try:
+            self._cfg['user'].user_id = user_id
+        
+        except KeyError:
+            self._cfg['user'] = _UserDef(
+                fingerprint = None,
+                user_id = user_id,
+                password = None
+            )
+            
+    @property
+    def password(self):
+        ''' Read-only property that allows people to set a password for
+        automatic login on startup. Intended for use via sudo on fully-
+        autonomous things (ex: a raspberry pi). Can only be set through
+        manual manipulation of the config file. Really should not be
+        used until hypergolix daemonization supports privilege dropping.
+        '''
+        try:
+            return self._cfg['user'].password
+        
+        except Exception as exc:
+            raise ConfigError('Invalid configuration.') from exc
+            
+    @property
+    def log_verbosity(self):
+        ''' Tells the log verbosity.
+        '''
+        try:
+            return self._cfg['instrumentation'].verbosity
+        
+        except Exception as exc:
+            raise ConfigError('Invalid configuration.') from exc
+    
+    @log_verbosity.setter
+    def log_verbosity(self, verbosity):
+        ''' Updates log verbosity.
+        '''
+        try:
+            self._cfg['instrumentation'].verbosity = verbosity
+        
+        except KeyError:
+            self._cfg['instrumentation'] = _InstrumentationDef(
+                verbosity = verbosity,
+                debug = False,
+                traceur = False
+            )
+            
+        except Exception as exc:
+            raise ConfigError('Invalid configuration.') from exc
+            
+    @property
+    def debug_mode(self):
+        ''' Gets the debug mode.
+        '''
+        try:
+            return bool(self._cfg['instrumentation'].debug)
+            
+        except Exception as exc:
+            raise ConfigError('Invalid configuration.') from exc
+        
+    @debug_mode.setter
+    def debug_mode(self, enabled):
+        ''' Updates the debug mode.
+        '''
+        try:
+            enabled = bool(enabled)
+        except Exception as exc:
+            raise ConfigError('Invalid configuration.') from exc
+        
+        try:
+            self._cfg['instrumentation'].debug = enabled
+        except KeyError:
+            self._cfg['instrumentation'] = _InstrumentationDef(
+                verbosity = 'warning',
+                debug = enabled,
+                traceur = False
+            )
+            
+            
+def _make_blank_cfg():
+    ''' Creates a new, blank cfg dict.
+    '''
+    cfg = {
+        'remotes': [],
+        'user': _UserDef(None, None, None),
+        'instrumentation': _InstrumentationDef('warning', False, False)
+    }
+    return cfg
+
+
+def _get_hgx_rootdir():
+    ''' Simply returns the path to the hgx home dir. Does not ensure its
+    existence or perform any other checks.
+    
+    In the future, this will have an order of preference and search
+    path, but currently it is quite naively hard-coding a subdirectory
+    to the user home directory.
     '''
     # For now, simply make a subdir in the user folder.
     user_home = pathlib.Path('~/')
     user_home = user_home.expanduser()
-    hgx_home = user_home / '.hypergolix'
+    return user_home
+
+
+def _ensure_hgx_homedir(root):
+    ''' Gets the location of the hgx home dir and then makes sure it
+    exists, including expected subdirs.
+    '''
+    hgx_home = root / '.hypergolix'
     # Create the home directory if it does not exist.
     _ensure_dir(hgx_home)
     # Create the remaining folder structure if it does not exist.
@@ -400,110 +630,454 @@ def _ensure_hgx_populated(hgx_home):
     
     for subdir in subdirs:
         _ensure_dir(subdir)
+        
+        
+def _get_hgx_config(root):
+    ''' Gets and returns the hypergolix configuration. Raises
+    ConfigError if none is defined.
+    '''
+    hgx_home = root / '.hypergolix'
+    hgx_cfg_path = hgx_home / 'hgx-cfg.json'
+    
+    if not hgx_cfg_path.exists():
+        raise ConfigError('Hypergolix configuration has not been run.')
+        
+    with open(hgx_cfg_path.as_posix(), 'r') as f:
+        cfg = f.read()
+        
+    return _CfgDecoder().decode(cfg)
+    
+    
+def _set_hgx_config(root, cfg):
+    ''' Idempotent function to update the config to the passed cfg.
+    If the config does not already exist, creates it.
+    '''
+    hgx_home = _ensure_hgx_homedir(root)
+    hgx_cfg_path = hgx_home / 'hgx-cfg.json'
+    cfg = _CfgEncoder().encode(cfg)
+    
+    # TODO: make an atomic update system for encoding?
+    # TODO: consider some kind of in-place updating system if cfg exists
+    with open(hgx_cfg_path.as_posix(), 'w') as f:
+        f.write(cfg)
+        
+        
+def _set_remote(cfg, remote_def):
+    ''' Adds a server to cfg. If no servers are defined, creates the
+    key for them. Also ensures no duplicates. If remote already exists,
+    will update in place if TLS definition changed; otherwise, silently
+    does nothing.
+    '''
+    if 'remotes' not in cfg:
+        cfg['remotes'] = [remote_def]
+    
+    else:
+        # Get the index of the remote, which will be None if nonexistent
+        index = _index_remote(cfg, remote_def)
+        
+        # Only add it if the server doesn't already exist in our cfg.
+        if index is None:
+            cfg['remotes'].append(remote_def)
+        
+        # Make sure the TLS definition didn't change though!
+        else:
+            old_rdef = cfg['remotes'][index]
+            
+            # TLS changed. Update in-place.
+            if old_rdef != remote_def:
+                cfg['remotes'][index] = remote_def
+        
+        
+def _pop_remote(cfg, remote_def):
+    ''' Removes a server from cfg. Silently does nothing if the
+    server does not exist in the cfg.
+    '''
+    if 'remotes' not in cfg:
+        raise ConfigError('Invalid configuration.')
+    
+    else:
+        # Only remove if the server exists in cfg.
+        index = _index_remote(cfg, remote_def)
+        if index is None:
+            return
+        else:
+            return cfg['remotes'].pop(index)
+        
+        
+def _index_remote(cfg, remote_def):
+    ''' Finds the index of the remote_def in cfg. Returns None if the
+    server is not contained in the cfg.
+    
+    Note that the index is only looking for host and port. TLS usage
+    does not affect the remote index.
+    '''
+    # Short-circuit if servers are undefined
+    if 'remotes' not in cfg:
+        return None
+        
+    for index, server in enumerate(cfg['remotes']):
+        # Short circuit and return the index if we find an equivalent server.
+        # Don't worry about TLS for finding hosts -- you should never use the
+        # same server over both TLS and non-TLS connections.
+        if server.host == remote_def.host and server.port == remote_def.port:
+            return index
+            
+    # No equal server found. Return None.
+    else:
+        return None
+
+
+# ###############################################
+# Argparse on command line invocation
+# ###############################################
+
+
+NAMED_REMOTES = {
+    'hgxtest': _readonly_remote('hgxtest.hypergolix.com', 443, True),
+}
+
+
+def _named_remote(remote):
+    ''' Converts a named remote to a host, port, TLS group.
+    '''
+    return NAMED_REMOTES[remote]
+    
+    
+def _exclusive_named_remote(remote):
+    ''' Converts an exclusive named remote to a list of host, port, TLS
+    groups, of length one.
+    '''
+    # Manually set 'local' to an empty list
+    if remote == 'local':
+        return []
+        
+    # Otherwise, re-cast it as the pair.
+    else:
+        return [_named_remote(remote)]
+
+
+def _make_argparser():
+    ''' Makes and returns an argparser.
+    '''
+    parser = argparse.ArgumentParser(
+        prog = 'hypergolix.config',
+        description = 'Configure the Hypergolix service. You must restart ' +
+                      'Hypergolix before changes are applied.',
+    )
+    
+    ####################################################################
+    # Remotes config
+    ####################################################################
+    
+    remote_group = parser.add_argument_group(
+        title = 'Remotes configuration',
+        description = 'Specify which remote persistence servers Hypergolix ' +
+                      'should use.'
+    )
+    
+    # Exclusive autoconfig (also, clear all hosts)
+    remote_group.add_argument(
+        '--only', '-o',
+        action = 'store',
+        type = str,
+        help = 'Automatically configure Hypergolix to use only a single, ' +
+               'named remote (or no remote). Does not affect the remainder ' +
+               'of the configuration.',
+        choices = ['local', *NAMED_REMOTES],
+        dest = 'only_remotes',
+        default = None,
+    )
+    
+    # Auto-add
+    remote_group.add_argument(
+        '--add', '-a',
+        action = 'append',
+        type = str,
+        help = 'Add a named remote to the Hypergolix configuration. Cannot ' +
+               'be combined with --only.',
+        choices = NAMED_REMOTES,
+        dest = 'add_remotes'
+    )
+    
+    # Auto-remove
+    remote_group.add_argument(
+        '--remove', '-r',
+        action = 'append',
+        type = str,
+        help = 'Remove a named remote from the Hypergolix configuration. ' +
+               'Cannot be combined with --only.',
+        choices = NAMED_REMOTES,
+        dest = 'remove_remotes'
+    )
+    
+    # Manually add a host
+    remote_group.add_argument(
+        '--addhost', '-ah',
+        action = 'append',
+        type = str,
+        help = 'Add a remote host, of form "hostname port use_TLS". Example ' +
+               'usage: "hypergolix.config --adhost 192.168.0.1 7770 False". ' +
+               'Cannot be combined with --only.',
+        nargs = 3,
+        metavar = ('HOST', 'PORT', 'TLS'),
+        dest = 'add_remotes'
+    )
+    
+    # Manually remove a host
+    remote_group.add_argument(
+        '--removehost', '-rh',
+        action = 'append',
+        type = str,
+        help = 'Remove a remote host, of form "hostname port". Example ' +
+               'usage: "hypergolix.config --removehost 192.168.0.1 7770". ' +
+               'Cannot be combined with --only.',
+        nargs = 2,
+        metavar = ('HOST', 'PORT'),
+        dest = 'remove_remotes'
+    )
+    
+    # Set defaults for those two as well
+    parser.set_defaults(remove_remotes=[], add_remotes=[])
+    
+    ####################################################################
+    # Runtime config
+    ####################################################################
+    
+    runtime_group = parser.add_argument_group(
+        title = 'Runtime configuration',
+        description = 'Specify Hypergolix runtime options.'
+    )
+    
+    # Set debug mode.
+    # Make the debug parser a mutually exclusive group with flags.
+    debug_parser = runtime_group.add_mutually_exclusive_group(required=False)
+    debug_parser.add_argument(
+        '--debug',
+        action = 'store_true',
+        dest = 'debug',
+        help = 'Enables debug mode.'
+    )
+    debug_parser.add_argument(
+        '--no-debug',
+        action = 'store_false',
+        dest = 'debug',
+        help = 'Clears debug mode.'
+    )
+    parser.set_defaults(debug=None)
+    
+    # Set verbosity
+    runtime_group.add_argument(
+        '--verbosity', '-v',
+        action = 'store',
+        default = 'normal',
+        type = str,
+        choices = ['extreme', 'shouty', 'louder', 'loud', 'normal', 'quiet'],
+        help = 'Specify the logging level.'
+    )
+    
+    return parser
+    
+    
+def _handle_verbosity(config, verbosity):
+    lookup = {
+        'extreme': 'extreme',
+        'shouty': 'shouty',
+        'louder': 'debug',
+        'loud': 'info',
+        'normal': 'warning',
+        'quiet': 'error'
+    }
+    config.log_verbosity = lookup[verbosity]
+    
+    
+def _handle_debug(config, debug_enabled):
+    ''' Only modify debug if it was specified.
+    '''
+    if debug_enabled is None:
+        return
+        
+    elif debug_enabled:
+        config.debug_mode = True
+        
+    else:
+        config.debug_mode = False
+    
+    
+def _handle_remotes(config, only_remotes, add_remotes, remove_remotes):
+    ''' Manages remotes.
+    '''
+    # Handling an exclusive remote declaration
+    if only_remotes is not None:
+        # Remove all existing remotes
+        for remote in config.remotes:
+            config.remove_remote(remote.host, remote.port)
+        
+        # Do nothing for local only, but add in the named remote otherwise
+        for remote in only_remotes:
+            config.set_remote(
+                only_remotes.host,
+                only_remotes.port,
+                only_remotes.tls
+            )
+    
+    # Adding and removing remotes normally.
+    else:
+        for remote in add_remotes:
+            config.set_remote(
+                remote.host,
+                remote.port,
+                remote.tls
+            )
+        for remote in remove_remotes:
+            config.remove_remote(
+                remote.host,
+                remote.port
+            )
+            
+            
+def _typecast_remotes(args):
+    ''' Performs all type checking and casting for remotes.
+    '''
+    # First enforce "only" actually being ONLY
+    if args.only_remotes is not None and args.add_remotes:
+        raise ValueError('Cannot use --only with --add or --remove.')
+    elif args.only_remotes is not None and args.remove_remotes:
+        raise ValueError('Cannot use --only with --add or --remove.')
+        
+    # Correctly defined, and we're not using an only named remote.
+    elif args.only_remotes is None:
+        _process_remotes(args.add_remotes)
+        _process_remotes(args.remove_remotes)
+        
+    # We've specified a single named remote.
+    elif args.only_remotes != 'local':
+        args.only_remotes = [NAMED_REMOTES[args.only_remotes]]
+        
+    # We've specified only local.
+    else:
+        args.only_remotes = []
+        
+        
+def _process_remotes(remotes):
+    ''' Ensures correct definitions for all non-singular remotes, and
+    type casts them appropriately.
+    '''
+    re_remotes = []
+    for remote in remotes:
+        # This is a named remote. Easy peasy.
+        if isinstance(remote, str):
+            re_remotes.append(NAMED_REMOTES[remote])
+            
+        # This is a manually-defined remote. We need to do some massaging.
+        else:
+            host = remote[0]
+            port = int(remote[1])
+            
+            # Calling add_remotes specifies TLS. Use it!
+            if len(remote) == 3:
+                tls = _str_to_bool(
+                    remote[2],
+                    failure_msg = 'Failed to infer truthiness of TLS usage. ' +
+                                  'Please use "true", "false", "t", "f", etc.'
+                )
+                
+            # Calling remove_remotes omits TLS. Fake it!
+            else:
+                tls = True
+            
+            # Now make a readonly remote for the definition.
+            re_remotes.append(_readonly_remote(host, port, tls))
+            
+    # And finally, update the original remotes in place.
+    remotes.clear()
+    remotes.extend(re_remotes)
+    
+    
+def _str_to_bool(s, failure_msg='Failed to infer truthiness.'):
+    ''' Attempts to convert a string to a bool.
+    '''
+    # Normalize case.
+    s = s.lower()
+    
+    truisms = {'y', 'true', 't', 'yes', '1'}
+    falsities = {'n', 'false', 'f', 'no', '0'}
+    
+    if s in truisms:
+        return True
+    elif s in falsities:
+        return False
+    else:
+        raise ValueError(failure_msg)
+    
+    
+def _handle_cmd_args(args):
+    ''' Performs all needed actions on the passed command args.
+    '''
+    with Config() as config:
+        _handle_remotes(
+            config,
+            args.only_remotes,
+            args.add_remotes,
+            args.remove_remotes
+        )
+        _handle_debug(config, args.debug)
+        _handle_verbosity(config, args.verbosity)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Start the Hypergolix service.')
+    parser = _make_argparser()
+    args = parser.parse_args()
+    
+    # Now we need to do some manual type checking and manipulation
+    try:
+        _typecast_remotes(args)
+        
+    # If any of the handling fails, error out the parser.
+    except Exception as exc:
+        parser.error(str(exc))
+        
+    # We now return to your regularly scheduled programming
+    _handle_cmd_args(args)
+
+# Saving these for later, just like Rip Van Winkle's beard.
+if False:
     parser.add_argument(
-        '--host', 
-        action = 'store',
-        default = 'localhost', 
-        type = str,
-        help = 'Specify the persistence provider host [default: localhost]'
-    )
-    parser.add_argument(
-        '--port', 
-        action = 'store',
-        default = 7770, 
-        type = int,
-        help = 'Specify the persistence provider port [default: 7770]'
-    )
-    parser.add_argument(
-        '--notls', 
+        '--traceur',
         action = 'store_true',
-        help = 'Set debug mode. Automatically sets verbosity to debug.'
+        help = 'Enable thorough analysis, including stack tracing. '
+               'Implies verbosity of debug.'
     )
+    
     parser.add_argument(
-        '--ipcport', 
+        '--ipcport',
         action = 'store',
-        default = 7772, 
+        default = 7772,
         type = int,
         help = 'Specify the ipc port [default: 7772]'
     )
+    
     parser.add_argument(
-        '--debug', 
-        action = 'store_true',
-        help = 'Set debug mode. Automatically sets verbosity to debug.'
-    )
-    parser.add_argument(
-        '--cachedir', 
+        '--cachedir',
         action = 'store',
-        default = './', 
+        default = './',
         type = str,
         help = 'Specify the directory to use for on-disk caching, relative to '
                 'the current path. Defaults to the current directory.'
     )
+    
     parser.add_argument(
-        '--logdir', 
+        '--logdir',
         action = 'store',
-        default = None, 
+        default = None,
         type = str,
         help = 'Log to a specified director, relative to current path.',
     )
+    
     parser.add_argument(
-        '--userid', 
+        '--userid',
         action = 'store',
-        default = None, 
+        default = None,
         type = str,
         help = 'Specifies a Hypergolix login user. If omitted, creates a new '
-                'account.',
-    )
-    parser.add_argument(
-        '--verbosity', 
-        action = 'store',
-        default = 'warning', 
-        type = str,
-        help = 'Specify the logging level. \n'
-                '    "extreme"  -> ultramaxx verbose, \n'
-                '    "shouty"   -> abnormal most verbose, \n'
-                '    "debug"    -> normal most verbose, \n'
-                '    "info"     -> somewhat verbose, \n'
-                '    "warning"  -> default python verbosity, \n'
-                '    "error"    -> quiet.',
-    )
-    parser.add_argument(
-        '--traceur', 
-        action = 'store_true',
-        help = 'Enable thorough analysis, including stack tracing. '
-                'Implies verbosity of debug.'
-    )
-
-    args = parser.parse_args()
-    
-    if args.logdir:
-        logutils.autoconfig(
-            tofile = True, 
-            logdirname = args.logdir, 
-            loglevel = args.verbosity
-        )
-    else:
-        logutils.autoconfig(
-            tofile = False,  
-            loglevel = args.verbosity
-        )
-        
-    if args.userid is None:
-        user_id = None
-    else:
-        user_id = Ghid.from_str(args.userid)
-    
-    HGXService(
-        host = args.host, 
-        port = args.port, 
-        tls = not args.notls,
-        ipc_port = args.ipcport, 
-        debug = args.debug, 
-        traceur = args.traceur,
-        cache_dir = args.cachedir,
-        user_id = user_id
+               'account.',
     )

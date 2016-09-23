@@ -78,7 +78,7 @@ __all__ = [
 
 
 # ###############################################
-# Library
+# Bootstrap logging comms
 # ###############################################
 
 
@@ -273,6 +273,11 @@ def _startup_listener(port, timeout):
         for __ in range(2):
             with server.accept() as conn:
                 _handle_startup_connection(conn, timeout)
+
+
+# ###############################################
+# Library
+# ###############################################
     
     
 def _create_password():

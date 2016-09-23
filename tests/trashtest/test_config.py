@@ -34,7 +34,7 @@ hypergolix: A python Golix client.
 import unittest
 import json
 
-from hypergolix.config import _PServer
+from hypergolix.config import _RemoteDef
 from hypergolix.config import _UserDef
 from hypergolix.config import _InstrumentationDef
 from hypergolix.config import _CfgDecoder
@@ -46,10 +46,10 @@ from hypergolix.config import _CfgEncoder
 # ###############################################
 
 
-vec_pserver = \
+vec_remotedef = \
 '''
 {
-    "__PServer__": true,
+    "__RemoteDef__": true,
     "host": "foo",
     "port": 1234,
     "tls": false
@@ -82,9 +82,9 @@ vec_instrumentationdef = \
 vec_cfg = \
 '''
 {
-    "servers": [
+    "remotes": [
         {
-            "__PServer__": true,
+            "__RemoteDef__": true,
             "host": "foo",
             "port": 1234,
             "tls": false
@@ -106,11 +106,11 @@ vec_cfg = \
 '''
 
 
-obj_pserver = _PServer('foo', 1234, False)
+obj_remotedef = _RemoteDef('foo', 1234, False)
 obj_userdef = _UserDef('foo', 'bar', None)
 obj_instrumentationdef = _InstrumentationDef('info', False, False)
 obj_cfg = {
-    'servers': [obj_pserver],
+    'remotes': [obj_remotedef],
     'user': obj_userdef,
     'instrumentation': obj_instrumentationdef
 }
@@ -129,13 +129,13 @@ class CfgSerialTest(unittest.TestCase):
     
     def test_encode(self):
         objs = (
-            obj_pserver,
+            obj_remotedef,
             obj_userdef,
             obj_instrumentationdef,
             obj_cfg
         )
         serials = (
-            vec_pserver,
+            vec_remotedef,
             vec_userdef,
             vec_instrumentationdef,
             vec_cfg
@@ -149,13 +149,13 @@ class CfgSerialTest(unittest.TestCase):
         
     def test_decode(self):
         objs = (
-            obj_pserver,
+            obj_remotedef,
             obj_userdef,
             obj_instrumentationdef,
             obj_cfg
         )
         serials = (
-            vec_pserver,
+            vec_remotedef,
             vec_userdef,
             vec_instrumentationdef,
             vec_cfg

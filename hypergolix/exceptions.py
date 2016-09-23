@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -71,6 +71,8 @@ __all__ = [
     # These are privateer errors
     'PrivateerError',
     'RatchetError',
+    # These are configuration errors
+    'ConfigError',
 ]
 
 
@@ -90,7 +92,7 @@ class PersistenceError(HypergolixException, RuntimeError):
     
     
 class IntegrityError(PersistenceError):
-    ''' This PersistenceError is raised when a packed Golix primitive 
+    ''' This PersistenceError is raised when a packed Golix primitive
     appears to be corrupted in local persistence.
     '''
     pass
@@ -104,7 +106,7 @@ class UnavailableUpstream(PersistenceError):
 
 
 class RemoteNak(PersistenceError):
-    ''' This exception (or a subclass thereof) is raised for all failed 
+    ''' This exception (or a subclass thereof) is raised for all failed
     operations with remote persister servers.
     '''
     pass
@@ -132,7 +134,7 @@ class InvalidIdentity(RemoteNak):
     
     
 class UnboundContainer(RemoteNak):
-    ''' This RemoteNak is raised when a persistence provider has no 
+    ''' This RemoteNak is raised when a persistence provider has no
     binding for the attempted container, and it was therefore passed
     immediately to garbage collection.
     '''
@@ -172,7 +174,7 @@ class DoesNotExist(RemoteNak, KeyError):
 class IllegalDynamicFrame(RemoteNak):
     ''' This RemoteNak is raised when a persistence provider has received
     an illegal dynamic frame, ie. if the existing frame is not contained
-    within the new frame's history, or if the zeroth frame contains 
+    within the new frame's history, or if the zeroth frame contains
     history.
     '''
     pass
@@ -231,7 +233,7 @@ class DispatchWarning(HypergolixException, RuntimeWarning):
     
     
 class IPCError(HypergolixException, RuntimeError):
-    ''' Raised when something goes wrong with IPC or embed (bad 
+    ''' Raised when something goes wrong with IPC or embed (bad
     commands, etc).
     '''
     pass
@@ -291,7 +293,7 @@ class SessionClosed(CommsError):
 
 
 class PrivateerError(HypergolixException, RuntimeError):
-    ''' This exception (or a subclass thereof) is raised for all failed 
+    ''' This exception (or a subclass thereof) is raised for all failed
     operations with privateers (which keep secrets).
     '''
     pass
@@ -312,7 +314,14 @@ class ConflictingSecrets(PrivateerError):
     
     
 class SecretUnknown(PrivateerError, KeyError):
-    ''' This PrivateerError is raised when a request is made for an 
+    ''' This PrivateerError is raised when a request is made for an
     unknown secret.
+    '''
+    pass
+
+
+class ConfigError(HypergolixException, RuntimeError):
+    ''' This exception (or a subclass thereof) is raised for all failed
+    operations with configuration.
     '''
     pass
