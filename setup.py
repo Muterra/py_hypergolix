@@ -1,4 +1,4 @@
-''' 
+'''
 LICENSING
 -------------------------------------------------
 
@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,37 +21,25 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
 '''
-import sys
 
 # Always prefer setuptools over distutils
 from setuptools import setup, find_packages
 # To use a consistent encoding
-from codecs import open
 from os import path
 
 here = path.abspath(path.dirname(__file__))
 
-long_description = '''Hypergolix is a python Golix service. It makes encrypted 
-IoT development effortless through self-authenticating cryptographic entities.'''
-# # If we're installing, don't bother building the long_description
-# # Ewwww, this is dirty.
-# if sys.argv[1] == 'sdist':
-#     with open('README.md', 'r') as f:
-#         s_readme = f.read()
-        
-#     # Get the long description from the README file
-#     import pypandoc
-#     long_description = pypandoc.convert(s_readme, 'rst', format='md')
-#     with open('README.rst', 'w') as f:
-#         f.write(long_description)
+long_description = ('Hypergolix is a python Golix service. It makes ' +
+                    'cloud persistence (think Dropbox) and sharing of ' +
+                    'Python objects easy, reliable, and secure.')
 
 setup(
     name='hypergolix',
@@ -88,7 +76,8 @@ setup(
         'Topic :: Utilities',
 
         # Pick your license as you wish (should match "license" above)
-        'License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)',
+        'License :: OSI Approved :: GNU Lesser General Public License v2 or ' +
+        'later (LGPLv2+)',
 
         # Specify the Python versions you support here. In particular, ensure
         # that you indicate whether you support Python 2, Python 3 or both.
@@ -96,7 +85,8 @@ setup(
     ],
 
     # What does your project relate to?
-    keywords='hypergolix, IoT, internet of things, golix, encryption, security, privacy, private, identity, sharing',
+    keywords='hypergolix, IoT, internet of things, golix, encryption, ' +
+             'security, privacy, private, identity, sharing',
 
     # You can just specify the packages manually here if your project is
     # simple. Or you can use find_packages().
@@ -114,8 +104,8 @@ setup(
         'golix>=0.1.1',
         'websockets>=3.1',
         'cryptography>=1.4',
-        'pycryptodome>=3.4', # waiting for cryptography to include scrypt
-        'daemoniker>=0.2.0',
+        'pycryptodome>=3.4',  # waiting for cryptography to include scrypt
+        'daemoniker>=0.2.1',
     ],
 
     # List additional groups of dependencies here (e.g. development
