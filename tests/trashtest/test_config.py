@@ -463,6 +463,7 @@ class CommandingTest(unittest.TestCase):
             ('--removehost host2 123', host1),
             ('-o local', blank),
             ('--only local', blank),
+            ('-ah host1 123 t -ah host2 123 t', host1host2),
         ]
         
         failing_commands = [
