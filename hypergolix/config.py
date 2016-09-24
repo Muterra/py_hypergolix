@@ -375,6 +375,12 @@ class Config:
         if exc_type is None:
             if self._cfg_cache != self._cfg:
                 _set_hgx_config(self._root, self._cfg)
+                
+    @property
+    def homedir(self):
+        ''' The Hypergolix home directory.
+        '''
+        return self._root / '.hypergolix'
             
     @property
     def remotes(self):
@@ -578,19 +584,6 @@ def _get_hgx_rootdir():
     user_home = pathlib.Path('~/')
     user_home = user_home.expanduser()
     return user_home
-
-
-def _ensure_hgx_homedir(root):
-    ''' Gets the location of the hgx home dir and then makes sure it
-    exists, including expected subdirs.
-    '''
-    hgx_home = root / '.hypergolix'
-    # Create the home directory if it does not exist.
-    _ensure_dir(hgx_home)
-    # Create the remaining folder structure if it does not exist.
-    _ensure_hgx_populated(hgx_home)
-    
-    return hgx_home
     
     
 def _ensure_dir(path):
@@ -630,6 +623,19 @@ def _ensure_hgx_populated(hgx_home):
     
     for subdir in subdirs:
         _ensure_dir(subdir)
+
+
+def _ensure_hgx_homedir(root):
+    ''' Gets the location of the hgx home dir and then makes sure it
+    exists, including expected subdirs.
+    '''
+    hgx_home = root / '.hypergolix'
+    # Create the home directory if it does not exist.
+    _ensure_dir(hgx_home)
+    # Create the remaining folder structure if it does not exist.
+    _ensure_hgx_populated(hgx_home)
+    
+    return hgx_home
         
         
 def _get_hgx_config(root):
@@ -699,7 +705,7 @@ def _pop_remote(cfg, remote_def):
         # Only remove if the server exists in cfg.
         index = _index_remote(cfg, remote_def)
         if index is None:
-            return
+            return None
         else:
             return cfg['remotes'].pop(index)
         
@@ -754,128 +760,6 @@ def _exclusive_named_remote(remote):
     # Otherwise, re-cast it as the pair.
     else:
         return [_named_remote(remote)]
-
-
-def _make_argparser():
-    ''' Makes and returns an argparser.
-    '''
-    parser = argparse.ArgumentParser(
-        prog = 'hypergolix.config',
-        description = 'Configure the Hypergolix service. You must restart ' +
-                      'Hypergolix before changes are applied.',
-    )
-    
-    ####################################################################
-    # Remotes config
-    ####################################################################
-    
-    remote_group = parser.add_argument_group(
-        title = 'Remotes configuration',
-        description = 'Specify which remote persistence servers Hypergolix ' +
-                      'should use.'
-    )
-    
-    # Exclusive autoconfig (also, clear all hosts)
-    remote_group.add_argument(
-        '--only', '-o',
-        action = 'store',
-        type = str,
-        help = 'Automatically configure Hypergolix to use only a single, ' +
-               'named remote (or no remote). Does not affect the remainder ' +
-               'of the configuration.',
-        choices = ['local', *NAMED_REMOTES],
-        dest = 'only_remotes',
-        default = None,
-    )
-    
-    # Auto-add
-    remote_group.add_argument(
-        '--add', '-a',
-        action = 'append',
-        type = str,
-        help = 'Add a named remote to the Hypergolix configuration. Cannot ' +
-               'be combined with --only.',
-        choices = NAMED_REMOTES,
-        dest = 'add_remotes'
-    )
-    
-    # Auto-remove
-    remote_group.add_argument(
-        '--remove', '-r',
-        action = 'append',
-        type = str,
-        help = 'Remove a named remote from the Hypergolix configuration. ' +
-               'Cannot be combined with --only.',
-        choices = NAMED_REMOTES,
-        dest = 'remove_remotes'
-    )
-    
-    # Manually add a host
-    remote_group.add_argument(
-        '--addhost', '-ah',
-        action = 'append',
-        type = str,
-        help = 'Add a remote host, of form "hostname port use_TLS". Example ' +
-               'usage: "hypergolix.config --adhost 192.168.0.1 7770 False". ' +
-               'Cannot be combined with --only.',
-        nargs = 3,
-        metavar = ('HOST', 'PORT', 'TLS'),
-        dest = 'add_remotes'
-    )
-    
-    # Manually remove a host
-    remote_group.add_argument(
-        '--removehost', '-rh',
-        action = 'append',
-        type = str,
-        help = 'Remove a remote host, of form "hostname port". Example ' +
-               'usage: "hypergolix.config --removehost 192.168.0.1 7770". ' +
-               'Cannot be combined with --only.',
-        nargs = 2,
-        metavar = ('HOST', 'PORT'),
-        dest = 'remove_remotes'
-    )
-    
-    # Set defaults for those two as well
-    parser.set_defaults(remove_remotes=[], add_remotes=[])
-    
-    ####################################################################
-    # Runtime config
-    ####################################################################
-    
-    runtime_group = parser.add_argument_group(
-        title = 'Runtime configuration',
-        description = 'Specify Hypergolix runtime options.'
-    )
-    
-    # Set debug mode.
-    # Make the debug parser a mutually exclusive group with flags.
-    debug_parser = runtime_group.add_mutually_exclusive_group(required=False)
-    debug_parser.add_argument(
-        '--debug',
-        action = 'store_true',
-        dest = 'debug',
-        help = 'Enables debug mode.'
-    )
-    debug_parser.add_argument(
-        '--no-debug',
-        action = 'store_false',
-        dest = 'debug',
-        help = 'Clears debug mode.'
-    )
-    parser.set_defaults(debug=None)
-    
-    # Set verbosity
-    runtime_group.add_argument(
-        '--verbosity', '-v',
-        action = 'store',
-        default = 'normal',
-        type = str,
-        choices = ['extreme', 'shouty', 'louder', 'loud', 'normal', 'quiet'],
-        help = 'Specify the logging level.'
-    )
-    
-    return parser
     
     
 def _handle_verbosity(config, verbosity):
@@ -1010,10 +894,10 @@ def _str_to_bool(s, failure_msg='Failed to infer truthiness.'):
         raise ValueError(failure_msg)
     
     
-def _handle_cmd_args(args):
+def _handle_args(args, root=None):
     ''' Performs all needed actions on the passed command args.
     '''
-    with Config() as config:
+    with Config(root) as config:
         _handle_remotes(
             config,
             args.only_remotes,
@@ -1022,12 +906,134 @@ def _handle_cmd_args(args):
         )
         _handle_debug(config, args.debug)
         _handle_verbosity(config, args.verbosity)
-
-
-if __name__ == '__main__':
-    parser = _make_argparser()
-    args = parser.parse_args()
+        
+        
+def _ingest_args(argv=None):
+    ''' Makes an arg parser and then ingests commands, returning the
+    arguments contained in the commands.
+    '''
+    parser = argparse.ArgumentParser(
+        prog = 'hypergolix.config',
+        description = 'Configure the Hypergolix service. You must restart ' +
+                      'Hypergolix before changes are applied.',
+    )
     
+    ####################################################################
+    # Remotes config
+    ####################################################################
+    
+    remote_group = parser.add_argument_group(
+        title = 'Remotes configuration',
+        description = 'Specify which remote persistence servers Hypergolix ' +
+                      'should use.'
+    )
+    
+    # Exclusive autoconfig (also, clear all hosts)
+    remote_group.add_argument(
+        '--only', '-o',
+        action = 'store',
+        type = str,
+        help = 'Automatically configure Hypergolix to use only a single, ' +
+               'named remote (or no remote). Does not affect the remainder ' +
+               'of the configuration.',
+        choices = ['local', *NAMED_REMOTES],
+        dest = 'only_remotes',
+        default = None,
+    )
+    
+    # Auto-add
+    remote_group.add_argument(
+        '--add', '-a',
+        action = 'append',
+        type = str,
+        help = 'Add a named remote to the Hypergolix configuration. Cannot ' +
+               'be combined with --only.',
+        choices = NAMED_REMOTES,
+        dest = 'add_remotes'
+    )
+    
+    # Auto-remove
+    remote_group.add_argument(
+        '--remove', '-r',
+        action = 'append',
+        type = str,
+        help = 'Remove a named remote from the Hypergolix configuration. ' +
+               'Cannot be combined with --only.',
+        choices = NAMED_REMOTES,
+        dest = 'remove_remotes'
+    )
+    
+    # Manually add a host
+    remote_group.add_argument(
+        '--addhost', '-ah',
+        action = 'append',
+        type = str,
+        help = 'Add a remote host, of form "hostname port use_TLS". Example ' +
+               'usage: "hypergolix.config --adhost 192.168.0.1 7770 False". ' +
+               'Cannot be combined with --only.',
+        nargs = 3,
+        metavar = ('HOST', 'PORT', 'TLS'),
+        dest = 'add_remotes'
+    )
+    
+    # Manually remove a host
+    remote_group.add_argument(
+        '--removehost', '-rh',
+        action = 'append',
+        type = str,
+        help = 'Remove a remote host, of form "hostname port". Example ' +
+               'usage: "hypergolix.config --removehost 192.168.0.1 7770". ' +
+               'Cannot be combined with --only.',
+        nargs = 2,
+        metavar = ('HOST', 'PORT'),
+        dest = 'remove_remotes'
+    )
+    
+    # Set defaults for those two as well
+    parser.set_defaults(remove_remotes=[], add_remotes=[])
+    
+    ####################################################################
+    # Runtime config
+    ####################################################################
+    
+    runtime_group = parser.add_argument_group(
+        title = 'Runtime configuration',
+        description = 'Specify Hypergolix runtime options.'
+    )
+    
+    # Set debug mode.
+    # Make the debug parser a mutually exclusive group with flags.
+    debug_parser = runtime_group.add_mutually_exclusive_group(required=False)
+    debug_parser.add_argument(
+        '--debug',
+        action = 'store_true',
+        dest = 'debug',
+        help = 'Enables debug mode.'
+    )
+    debug_parser.add_argument(
+        '--no-debug',
+        action = 'store_false',
+        dest = 'debug',
+        help = 'Clears debug mode.'
+    )
+    parser.set_defaults(debug=None)
+    
+    # Set verbosity
+    runtime_group.add_argument(
+        '--verbosity', '-v',
+        action = 'store',
+        default = 'normal',
+        type = str,
+        choices = ['extreme', 'shouty', 'louder', 'loud', 'normal', 'quiet'],
+        help = 'Specify the logging level.'
+    )
+    
+    if argv is None:
+        args = parser.parse_args()
+        
+    else:
+        args = parser.parse_args(argv)
+        
     # Now we need to do some manual type checking and manipulation
     try:
         _typecast_remotes(args)
@@ -1036,8 +1042,14 @@ if __name__ == '__main__':
     except Exception as exc:
         parser.error(str(exc))
         
+    return args
+
+
+if __name__ == '__main__':
     # We now return to your regularly scheduled programming
-    _handle_cmd_args(args)
+    args = _ingest_args()
+    _handle_args(args)
+
 
 # Saving these for later, just like Rip Van Winkle's beard.
 if False:
