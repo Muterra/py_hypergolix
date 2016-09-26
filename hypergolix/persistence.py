@@ -1286,7 +1286,7 @@ class Bookie:
             existing = self._librarian.summarize(obj.ghid)
         except KeyError:
             if obj.history:
-                logger.error(
+                logger.warning(
                     'Placing a dynamic frame with history, but it\'s missing '
                     'at the librarian.'
                 )
@@ -2222,7 +2222,7 @@ class Undertaker:
             # This will always happen if it's the first frame, so let's be sure
             # to ignore that for logging.
             if obj.history:
-                logger.error('Could not find gobd to check existing target.')
+                logger.warning('Could not find gobd to check existing target.')
         else:
             self.triage(existing.target)
             
