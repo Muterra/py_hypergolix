@@ -21,36 +21,37 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
     
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
 '''
 
 # Global dependencies
-import argparse
-import sys
-import getpass
+# import collections
 
+from concurrent.futures import CancelledError
 from golix import Ghid
 
-# Intra-package dependencies
-from .bootstrapping import AgentBootstrap
+# Intra-package dependencies (that require explicit imports, courtesy of
+# daemonization)
+from hypergolix.bootstrapping import AgentBootstrap
 
-from .utils import Aengel
-from .utils import threading_autojoin
-from .utils import _generate_threadnames
+from hypergolix.utils import Aengel
+from hypergolix.utils import _generate_threadnames
 
-from .comms import Autocomms
-from .comms import WSBasicClient
-from .comms import WSBasicServer
+from hypergolix.comms import Autocomms
+from hypergolix.comms import WSBasicClient
+from hypergolix.comms import WSBasicServer
 
-from .remotes import PersisterBridgeClient
+from hypergolix.remotes import PersisterBridgeClient
 
-from . import logutils
+from hypergolix.config import Config
+
+from hypergolix import logutils
 
 
 # ###############################################
@@ -63,46 +64,18 @@ logger = logging.getLogger(__name__)
 
 # Control * imports.
 __all__ = [
-    # 'Inquisitor', 
+    # 'Inquisitor',
 ]
 
 
 # ###############################################
 # Library
 # ###############################################
-
-
-def _make_bootstrap_chatty():
-    ''' Makes the bootstrap process log info messages into STDOUT.
-    '''
-    bootstrap_logger = logging.getLogger('hypergolix.bootstrapping')
-    bootstrap_logger.setLevel(logging.INFO)
-    
-    loghandler = logging.StreamHandler(sys.stdout)
-    loghandler.setFormatter(
-        logging.Formatter(
-            'Hypergolix startup: %(message)s'
-        )
-    )
-    
-    bootstrap_logger.addHandler(loghandler)
-    
-    return bootstrap_logger, loghandler
     
     
-def _make_bootstrap_quiet(handler):
-    ''' Restores the bootstrap process logging to its previous verbosity
-    and removes the handler.
-    '''
-    bootstrap_logger = logging.getLogger('hypergolix.bootstrapping')
-    bootstrap_logger.setLevel(logging.NOTSET)
-    bootstrap_logger.removeHandler(handler)
-    
-    
-def HGXService(host, port, tls, ipc_port, debug, traceur, cache_dir, 
-                foreground=True, aengel=None, user_id=None, password=None,
-                _scrypt_hardness=None):
-    ''' This is where all of the UX goes for the service itself. From 
+def app_core(user_id, password, startup_logger, aengel=None,
+             _scrypt_hardness=None, log_dir=None):
+    ''' This is where all of the UX goes for the service itself. From
     here, we build a credential, then a bootstrap, and then persisters,
     IPC, etc.
     
@@ -116,20 +89,31 @@ def HGXService(host, port, tls, ipc_port, debug, traceur, cache_dir,
     verbosity:  'warning'
     traceur:    False
     '''
+    if startup_logger is not None:
+        # At some point, this will need to restore the module logger, but for
+        # now it really doesn't make any difference whatsoever
+        logger = startup_logger
+    
+    with Config() as config:
+        # Convert paths to strs
+        cache_dir = str(config.cache_dir)
         
-    debug = bool(debug)
-    # Note: this isn't currently used.
-    traceur = bool(traceur)
-    
-    # # Override the module-level logger definition to root
-    # logger = logging.getLogger()
-    # # For now, log to console
-    # log_handler = logging.StreamHandler()
-    # log_handler.setLevel(log_level)
-    # logger.addHandler(log_handler)
-    
-    # Todo: add traceur argument to dump stack traces into debug log, and/or
-    # use them to auto-detect deadlocks/hangs
+        if log_dir is None:
+            log_dir = str(config.log_dir)
+            
+        if user_id is None:
+            user_id = config.user_id
+        
+        debug = config.debug_mode
+        verbosity = config.log_verbosity
+        ipc_port = config.ipc_port
+        remotes = config.remotes
+        
+    logutils.autoconfig(
+        tofile = True,
+        logdirname = log_dir,
+        loglevel = verbosity
+    )
     
     if not aengel:
         aengel = Aengel()
@@ -137,61 +121,61 @@ def HGXService(host, port, tls, ipc_port, debug, traceur, cache_dir,
     core = AgentBootstrap(aengel=aengel, debug=debug, cache_dir=cache_dir)
     core.assemble()
     
-    # Do the actual bootstrap, chattily telling STDOUT what's up.
-    bootstrap_logger, tmp_handler = _make_bootstrap_chatty()
-    
-    # Either way, we need a password.
-    if password is None:
-        password = getpass.getpass(
-            prompt = 'Please enter your Hypergolix password. It will not be '
-                    'shown while you type. Hit enter when done.'
-        )
-    password = password.encode('utf-8')
-    
     # In this case, we have no existing user_id.
     if user_id is None:
         user_id = core.bootstrap_zero(
-            password = password, 
+            password = password,
             _scrypt_hardness = _scrypt_hardness
         )
-        bootstrap_logger.info(
-            'Identity created. Your user_id is ' + str(user_id) + '. '
-            'Contacting upstream persisters and starting IPC server.'
+        logger.info(
+            'Identity created. Your user_id is ' + str(user_id) + '.'
         )
+        with Config() as config:
+            config.user_id = user_id
         
     # Hey look, we have an existing user.
     else:
         core.bootstrap(
-            user_id = user_id, 
+            user_id = user_id,
             password = password,
             _scrypt_hardness = _scrypt_hardness,
         )
+        logger.info('Login successful.')
         
-    bootstrap_logger.info(
-        'Successfully logged in to fingerprint ' + str(core.whoami)
-    )
-    _make_bootstrap_quiet(tmp_handler)
-    del tmp_handler
-    del bootstrap_logger
-    
-    persister = Autocomms(
-        autoresponder_name = 'remrecli',
-        autoresponder_class = PersisterBridgeClient,
-        connector_name = 'remwscli',
-        connector_class = WSBasicClient,
-        connector_kwargs = {
-            'host': host,
-            'port': port,
-            'tls': tls,
-        },
-        debug = debug,
-        aengel = aengel,
-    )
-    core.salmonator.add_upstream_remote(persister)
+    # Add all of the remotes to a namespace preserver
+    persisters = []
+    for remote in remotes:
+        try:
+            persister = Autocomms(
+                autoresponder_name = 'remrecli',
+                autoresponder_class = PersisterBridgeClient,
+                connector_name = 'remwscli',
+                connector_class = WSBasicClient,
+                connector_kwargs = {
+                    'host': remote.host,
+                    'port': remote.port,
+                    'tls': remote.tls,
+                },
+                debug = debug,
+                aengel = aengel,
+            )
+            
+        except CancelledError:
+            logger.error(
+                'Error while connecting to upstream remote at ' +
+                remote.host + ':' + remote.port + '. Connection will only ' +
+                'be reattempted after restarting Hypergolix.'
+            )
+            
+        else:
+            core.salmonator.add_upstream_remote(persister)
+            persisters.append(persister)
+        
+    # Finally, add the ipc system
     core.ipccore.add_ipc_server(
-        'wslocal', 
-        WSBasicServer, 
-        host = 'localhost', 
+        'wslocal',
+        WSBasicServer,
+        host = 'localhost',
         port = ipc_port,
         tls = False,
         debug = debug,
@@ -199,117 +183,5 @@ def HGXService(host, port, tls, ipc_port, debug, traceur, cache_dir,
         threaded = True,
         thread_name = _generate_threadnames('ipc-ws')[0],
     )
-    
-    # Automatically detect if we're the main thread. If so, wait indefinitely
-    # until signal caught.
-    if foreground:
-        threading_autojoin()
         
-    return persister, core
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Start the Hypergolix service.')
-    parser.add_argument(
-        '--host', 
-        action = 'store',
-        default = 'localhost', 
-        type = str,
-        help = 'Specify the persistence provider host [default: localhost]'
-    )
-    parser.add_argument(
-        '--port', 
-        action = 'store',
-        default = 7770, 
-        type = int,
-        help = 'Specify the persistence provider port [default: 7770]'
-    )
-    parser.add_argument(
-        '--notls', 
-        action = 'store_true',
-        help = 'Set debug mode. Automatically sets verbosity to debug.'
-    )
-    parser.add_argument(
-        '--ipcport', 
-        action = 'store',
-        default = 7772, 
-        type = int,
-        help = 'Specify the ipc port [default: 7772]'
-    )
-    parser.add_argument(
-        '--debug', 
-        action = 'store_true',
-        help = 'Set debug mode. Automatically sets verbosity to debug.'
-    )
-    parser.add_argument(
-        '--cachedir', 
-        action = 'store',
-        default = './', 
-        type = str,
-        help = 'Specify the directory to use for on-disk caching, relative to '
-                'the current path. Defaults to the current directory.'
-    )
-    parser.add_argument(
-        '--logdir', 
-        action = 'store',
-        default = None, 
-        type = str,
-        help = 'Log to a specified director, relative to current path.',
-    )
-    parser.add_argument(
-        '--userid', 
-        action = 'store',
-        default = None, 
-        type = str,
-        help = 'Specifies a Hypergolix login user. If omitted, creates a new '
-                'account.',
-    )
-    parser.add_argument(
-        '--verbosity', 
-        action = 'store',
-        default = 'warning', 
-        type = str,
-        help = 'Specify the logging level. \n'
-                '    "extreme"  -> ultramaxx verbose, \n'
-                '    "shouty"   -> abnormal most verbose, \n'
-                '    "debug"    -> normal most verbose, \n'
-                '    "info"     -> somewhat verbose, \n'
-                '    "warning"  -> default python verbosity, \n'
-                '    "error"    -> quiet.',
-    )
-    parser.add_argument(
-        '--traceur', 
-        action = 'store_true',
-        help = 'Enable thorough analysis, including stack tracing. '
-                'Implies verbosity of debug.'
-    )
-
-    args = parser.parse_args()
-    
-    if args.logdir:
-        logutils.autoconfig(
-            tofile = True, 
-            logdirname = args.logdir, 
-            loglevel = args.verbosity
-        )
-    else:
-        logutils.autoconfig(
-            tofile = False,  
-            loglevel = args.verbosity
-        )
-        
-    if args.userid is None:
-        user_id = None
-    else:
-        user_id = Ghid.from_str(args.userid)
-    
-    HGXService(
-        host = args.host, 
-        port = args.port, 
-        tls = not args.notls,
-        ipc_port = args.ipcport, 
-        debug = args.debug, 
-        traceur = args.traceur,
-        cache_dir = args.cachedir,
-        user_id = user_id
-    )
+    return persisters, core, aengel

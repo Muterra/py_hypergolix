@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -39,9 +39,9 @@ RemoteNak status code conventions:
 0x0006: Invalid or unknown target.
 0x0007: Inconsistent author.
 0x0008: Object does not exist at persistence provider.
-0x0009: Attempt to upload illegal frame for dynamic binding. Indicates 
+0x0009: Attempt to upload illegal frame for dynamic binding. Indicates
         uploading a new dynamic binding without the root binding, or that
-        the uploaded frame does not contain any existing frames in its 
+        the uploaded frame does not contain any existing frames in its
         history.
 '''
 
@@ -120,7 +120,7 @@ logger = logging.getLogger(__name__)
 
 # Control * imports.
 __all__ = [
-    'PersistenceCore', 
+    'PersistenceCore',
 ]
 
 
@@ -130,17 +130,18 @@ __all__ = [
                 
         
 class PersistenceCore:
-    ''' Provides the core functions for storing Golix objects. Required 
+    ''' Provides the core functions for storing Golix objects. Required
     for the hypergolix service to start.
     
     Can coordinate with both "upstream" and "downstream" persisters.
     Other persisters should pass through the "ingestive tract". Local
-    objects can be published directly through calling the ingest_<type> 
+    objects can be published directly through calling the ingest_<type>
     methods.
     
-    TODO: add librarian validation, so that attempting to update an 
+    TODO: add librarian validation, so that attempting to update an
     object we already have an identical copy to silently exits.
     '''
+    
     def __init__(self):
         # REALLY not crazy about this being an RLock, but lazy loading in
         # librarian is causing problems with anything else.
@@ -156,8 +157,8 @@ class PersistenceCore:
         self.librarian = None
         self.salmonator = None
         
-    def assemble(self, doorman, enforcer, lawyer, bookie, librarian, postman, 
-                undertaker, salmonator):
+    def assemble(self, doorman, enforcer, lawyer, bookie, librarian, postman,
+                 undertaker, salmonator):
         self.doorman = weakref.proxy(doorman)
         self.enlitener = Enlitener
         self.enforcer = weakref.proxy(enforcer)
@@ -172,8 +173,8 @@ class PersistenceCore:
         
     def ingest(self, packed, remotable=True):
         ''' Called on an untrusted and unknown object. May be bypassed
-        by locally-created, trusted objects (by calling the individual 
-        ingest methods directly). Parses, validates, and stores the 
+        by locally-created, trusted objects (by calling the individual
+        ingest methods directly). Parses, validates, and stores the
         object, and returns True; or, raises an error.
         '''
         for loader, ingester in (
@@ -1511,73 +1512,75 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         return self.check_in_cache(ghid)
     
     def restore(self):
-        ''' Loads any existing files from the cache.  All existing 
-        files there will be attempted to be loaded, so it's best not to 
+        ''' Loads any existing files from the cache.  All existing
+        files there will be attempted to be loaded, so it's best not to
         have extraneous stuff in the directory. Will be passed through
         to the core for processing.
         '''
-        # Upgrade this to warning just so that the default logging level is
-        # still informed that we're restoring.
-        logger.warning('# BEGINNING LIBRARIAN RESTORATION ###################')
-        
-        if self._percore is None:
-            raise RuntimeError(
-                'Cannot restore a librarian\'s cache without first linking to '
-                'its corresponding core.'
-            )
-        
-        # This prevents us from wasting time rewriting existing entries in the
-        # cache.
-        with self._restoring:
-            gidcs = []
-            geocs = []
-            gobss = []
-            gobds = []
-            gdxxs = []
-            garqs = []
-            
-            # This will mutate the lists in-place.
-            for candidate in self.walk_cache():
-                self._attempt_load_inplace(
-                    candidate, gidcs, geocs, gobss, gobds, gdxxs, garqs
+        # Suppress all warnings during restoration.
+        logger.setLevel(logging.ERROR)
+        try:
+            if self._percore is None:
+                raise RuntimeError(
+                    'Cannot restore a librarian\'s cache without first ' +
+                    'linking to its corresponding core.'
                 )
-                
-            # Okay yes, unfortunately this will result in unpacking all of the
-            # files twice. However, we need to verify the crypto.
             
-            # First load all identities, so that we have authors for everything
-            for gidc in gidcs:
-                self._percore.ingest(gidc.packed)
-                # self._percore.ingest_gidc(gidc)
+            # This prevents us from wasting time rewriting existing entries in
+            # the cache.
+            with self._restoring:
+                gidcs = []
+                geocs = []
+                gobss = []
+                gobds = []
+                gdxxs = []
+                garqs = []
                 
-            # Now all debindings, so that we can check state while we're at it
-            for gdxx in gdxxs:
-                self._percore.ingest(gdxx.packed)
-                # self._percore.ingest_gdxx(gdxx)
+                # This will mutate the lists in-place.
+                for candidate in self.walk_cache():
+                    self._attempt_load_inplace(
+                        candidate, gidcs, geocs, gobss, gobds, gdxxs, garqs
+                    )
+                    
+                # Okay yes, unfortunately this will result in unpacking all of
+                # the files twice. However, we need to verify the crypto.
                 
-            # Now all bindings, so that objects aren't gc'd. Note: can't 
-            # combine into single list, because of different ingest methods
-            for gobs in gobss:
-                self._percore.ingest(gobs.packed)
-                # self._percore.ingest_gobs(gobs)
-            for gobd in gobds:
-                self._percore.ingest(gobd.packed)
-                # self._percore.ingest_gobd(gobd)
+                # First load all identities, so that we have authors for
+                # everything
+                for gidc in gidcs:
+                    self._percore.ingest(gidc.packed)
+                    # self._percore.ingest_gidc(gidc)
+                    
+                # Now all debindings, so that we can check state while we're at
+                # it
+                for gdxx in gdxxs:
+                    self._percore.ingest(gdxx.packed)
+                    # self._percore.ingest_gdxx(gdxx)
+                    
+                # Now all bindings, so that objects aren't gc'd. Note: can't
+                # combine into single list, because of different ingest methods
+                for gobs in gobss:
+                    self._percore.ingest(gobs.packed)
+                    # self._percore.ingest_gobs(gobs)
+                for gobd in gobds:
+                    self._percore.ingest(gobd.packed)
+                    # self._percore.ingest_gobd(gobd)
+                    
+                # Next the objects themselves, so that any requests will have
+                # their targets available (not that it would matter yet,
+                # buuuuut)...
+                for geoc in geocs:
+                    self._percore.ingest(geoc.packed)
+                    # self._percore.ingest_geoc(geoc)
+                    
+                # Last but not least
+                for garq in garqs:
+                    self._percore.ingest(garq.packed)
+                    # self._percore.ingest_garq(garq)
                 
-            # Next the objects themselves, so that any requests will have their 
-            # targets available (not that it would matter yet, buuuuut)...
-            for geoc in geocs:
-                self._percore.ingest(geoc.packed)
-                # self._percore.ingest_geoc(geoc)
-                
-            # Last but not least
-            for garq in garqs:
-                self._percore.ingest(garq.packed)
-                # self._percore.ingest_garq(garq)
-                
-        # Upgrade this to warning just so that the default logging level is
-        # still informed that we're restoring.
-        logger.warning('# COMPLETED LIBRARIAN RESTORATION ###################')
+        # Restore the logging level to notset
+        finally:
+            logger.setLevel(logging.NOTSET)
                 
     def _attempt_load_inplace(self, candidate, gidcs, geocs, gobss, gobds, 
                             gdxxs, garqs):
@@ -2362,7 +2365,7 @@ class Salmonator:
         ''' Grabs the ghid from remotes, if available, and puts it into
         the ingestion pipeline.
         '''
-        # TODO: check locally, run _inspect, check if mutable before blindly 
+        # TODO: check locally, run _inspect, check if mutable before blindly
         # pulling.
         # This is the lame way of doing this, fo sho
         for remote in self._upstream_remotes:
@@ -2379,7 +2382,7 @@ class Salmonator:
                         
                     except UnavailableUpstream:
                         logger.warning(
-                            'Received a subscription notification for ' + 
+                            'Received a subscription notification for ' +
                             str(ghid) + ', but the sub\'s target was missing '
                             'both locally and upstream.'
                         )
@@ -2399,7 +2402,7 @@ class Salmonator:
                     'currently-registered remotes.'
                 )
             else:
-                logger.warning(
+                logger.info(
                     'Object was unavailable or unacceptable upstream, but '
                     'pull was called quietly: ' + str(ghid)
                 )

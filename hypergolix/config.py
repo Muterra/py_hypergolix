@@ -252,12 +252,19 @@ class _InstrumentationDef(_NamedList):
     ]
 
 
+class _ProcessDef(_NamedList):
+    __slots__ = [
+        'ipc_port'
+    ]
+
+
 # Using a bijective mapping allows us to do bidirectional lookup
 # This might be overkill, but if you already have one in your .utils module...
 _TYPEHINTS = _BijectDict({
     '__RemoteDef__': _RemoteDef,
     '__UserDef__': _UserDef,
-    '__InstrumentationDef__': _InstrumentationDef
+    '__InstrumentationDef__': _InstrumentationDef,
+    '__ProcessDef__': _ProcessDef
 })
 
 
@@ -338,6 +345,19 @@ _readonly_remote = collections.namedtuple(
 
 class Config:
     ''' Context handler for semi-atomic config updates.
+    
+    .hypergolix /
+    
+    +---logs
+        +---(log file 1...)
+        +---(log file 2...)
+        
+    +---ghidcache
+        +---(ghid file 1...)
+        +---(ghid file 2...)
+        
+    +---(hgx.pid)
+    +---(hgx-cfg.json)
     '''
     
     def __init__(self, root=None):
@@ -381,6 +401,24 @@ class Config:
         ''' The Hypergolix home directory.
         '''
         return self._root / '.hypergolix'
+        
+    @property
+    def cache_dir(self):
+        ''' Where is the cache dir?
+        '''
+        return self.homedir / 'ghidcache'
+        
+    @property
+    def log_dir(self):
+        ''' Where is the log dir?
+        '''
+        return self.homedir / 'logs'
+        
+    @property
+    def pid_file(self):
+        ''' The pid file to use.
+        '''
+        return self.homedir / 'hypergolix.pid'
             
     @property
     def remotes(self):
@@ -560,6 +598,32 @@ class Config:
                 traceur = False
             )
             
+    @property
+    def ipc_port(self):
+        ''' Gets the IPC port.
+        '''
+        try:
+            return bool(self._cfg['process'].ipc_port)
+            
+        except Exception as exc:
+            raise ConfigError('Invalid configuration.') from exc
+        
+    @ipc_port.setter
+    def ipc_port(self, port):
+        ''' Updates the debug mode.
+        '''
+        try:
+            port = int(port)
+        except Exception as exc:
+            raise ConfigError('Invalid configuration.') from exc
+        
+        try:
+            self._cfg['process'].ipc_port = port
+        except KeyError:
+            self._cfg['process'] = _ProcessDef(
+                ipc_port = port
+            )
+            
             
 def _make_blank_cfg():
     ''' Creates a new, blank cfg dict.
@@ -567,7 +631,8 @@ def _make_blank_cfg():
     cfg = {
         'remotes': [],
         'user': _UserDef(None, None, None),
-        'instrumentation': _InstrumentationDef('warning', False, False)
+        'instrumentation': _InstrumentationDef('warning', False, False),
+        'process': _ProcessDef(ipc_port=7772)
     }
     return cfg
 
@@ -892,6 +957,13 @@ def _str_to_bool(s, failure_msg='Failed to infer truthiness.'):
         return False
     else:
         raise ValueError(failure_msg)
+        
+        
+def _handle_ipc(config, ipc):
+    ''' If IPC is defined, update it.
+    '''
+    if ipc is not None:
+        config.ipc_port = ipc
     
     
 def _handle_args(args, root=None):
@@ -906,6 +978,7 @@ def _handle_args(args, root=None):
         )
         _handle_debug(config, args.debug)
         _handle_verbosity(config, args.verbosity)
+        _handle_ipc(config, args.ipc_port)
         
         
 def _ingest_args(argv=None):
@@ -1026,6 +1099,16 @@ def _ingest_args(argv=None):
         type = str,
         choices = ['extreme', 'shouty', 'louder', 'loud', 'normal', 'quiet'],
         help = 'Specify the logging level.'
+    )
+    
+    # Set verbosity
+    runtime_group.add_argument(
+        '--ipc-port', '-ipc',
+        action = 'store',
+        default = None,
+        type = int,
+        help = 'Configure which port to use for Hypergolix IPC.',
+        metavar = 'PORT'
     )
     
     if argv is None:

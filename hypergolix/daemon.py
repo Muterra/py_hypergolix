@@ -37,29 +37,21 @@ import getpass
 import socket
 import multiprocessing
 import time
-import pathlib
 import traceback
+import collections
+import logging
+import logging.handlers
 
-from golix import Ghid
-
+import daemoniker
 from daemoniker import Daemonizer
 from daemoniker import SignalHandler1
+from daemoniker import SIGTERM
 
 # Intra-package dependencies (that require explicit imports, courtesy of
 # daemonization)
-from hypergolix.bootstrapping import AgentBootstrap
+from hypergolix.config import Config
 
-from hypergolix.utils import Aengel
-from hypergolix.utils import threading_autojoin
-from hypergolix.utils import _generate_threadnames
-
-from hypergolix.comms import Autocomms
-from hypergolix.comms import WSBasicClient
-from hypergolix.comms import WSBasicServer
-
-from hypergolix.remotes import PersisterBridgeClient
-
-from hypergolix import logutils
+from hypergolix.app import app_core
 
 
 # ###############################################
@@ -67,13 +59,11 @@ from hypergolix import logutils
 # ###############################################
 
 
-import logging
-import logging.handlers
 logger = logging.getLogger(__name__)
 
 # Control * imports.
 __all__ = [
-    # 'Inquisitor',
+    'start',
 ]
 
 
@@ -225,6 +215,14 @@ class _StartupReporter:
             root_logger = logging.getLogger('')
             bootstrap_logger = logging.getLogger('hypergolix.bootstrapping')
             
+            # Well first, if we aren't cleanly exiting, report the error.
+            if exc_type is not None:
+                root_logger.error(
+                    'Exception during startup: ' + str(exc_type) + '(' +
+                    str(exc_value) + ') + \n' +
+                    ''.join(traceback.format_tb(exc_tb))
+                )
+            
             bootstrap_logger.propagate = self._bootstrap_revert_propagation
             bootstrap_logger.setLevel(self._bootstrap_revert_level)
             if self._root_revert_level is not None:
@@ -276,7 +274,7 @@ def _startup_listener(port, timeout):
 
 
 # ###############################################
-# Library
+# Password stuff
 # ###############################################
     
     
@@ -307,286 +305,121 @@ def _enter_password():
     return password.encode('utf-8')
     
     
-def daemon_main(host, port, tls, ipc_port, debug, traceur, cache_dir, password,
-                aengel=None, user_id=None, startup_logger=None,
-                _scrypt_hardness=None):
-    ''' This is where all of the UX goes for the service itself. From
-    here, we build a credential, then a bootstrap, and then persisters,
-    IPC, etc.
-    
-    Expected defaults:
-    host:       'localhost'
-    port:       7770
-    tls:        True
-    ipc_port:   7772
-    debug:      False
-    logfile:    None
-    verbosity:  'warning'
-    traceur:    False
+def _request_password(user_id):
+    ''' Checks the user_id. If None, creates a password (with the
+    infamous double-prompt). If defined, just gets it normally.
     '''
-    if startup_logger is not None:
-        logger = startup_logger
-        
-    debug = bool(debug)
-    # Note: this isn't currently used.
-    traceur = bool(traceur)
-    
-    if not aengel:
-        aengel = Aengel()
-    
-    core = AgentBootstrap(aengel=aengel, debug=debug, cache_dir=cache_dir)
-    core.assemble()
-    
-    # In this case, we have no existing user_id.
+    # Create an account
     if user_id is None:
-        user_id = core.bootstrap_zero(
-            password = password,
-            _scrypt_hardness = _scrypt_hardness
-        )
-        logger.info(
-            'Identity created. Your user_id is ' + str(user_id) + '.'
-        )
+        password = _create_password()
         
-    # Hey look, we have an existing user.
+    # Log in to existing account
     else:
-        core.bootstrap(
-            user_id = user_id,
-            password = password,
-            _scrypt_hardness = _scrypt_hardness,
-        )
-        logger.info('Login successful.')
-    
-    persister = Autocomms(
-        autoresponder_name = 'remrecli',
-        autoresponder_class = PersisterBridgeClient,
-        connector_name = 'remwscli',
-        connector_class = WSBasicClient,
-        connector_kwargs = {
-            'host': host,
-            'port': port,
-            'tls': tls,
-        },
-        debug = debug,
-        aengel = aengel,
-    )
-    core.salmonator.add_upstream_remote(persister)
-    core.ipccore.add_ipc_server(
-        'wslocal',
-        WSBasicServer,
-        host = 'localhost',
-        port = ipc_port,
-        tls = False,
-        debug = debug,
-        aengel = aengel,
-        threaded = True,
-        thread_name = _generate_threadnames('ipc-ws')[0],
-    )
+        password = _enter_password()
         
-    return persister, core, aengel
+    return password
 
 
-if __name__ == '__main__':
-    # Get busy workin'
+# ###############################################
+# Actionable intelligence
+# ###############################################
+
+    
+def start(namespace=None):
+    ''' Starts a Hypergolix daemon.
+    '''
     with Daemonizer() as (is_setup, daemonizer):
+        # Need these so that the second time around doesn't NameError
+        user_id = None
+        password = None
+        pid_file = None
+        parent_port = 7771
+        
         if is_setup:
-            parser = argparse.ArgumentParser(
-                description = 'Start the Hypergolix service.'
-            )
-            parser.add_argument(
-                '--host',
-                action = 'store',
-                default = 'localhost',
-                type = str,
-                help = 'Specify the persistence provider host [default: ' +
-                       'localhost]'
-            )
-            parser.add_argument(
-                '--port',
-                action = 'store',
-                default = 7770,
-                type = int,
-                help = 'Specify the persistence provider port [default: 7770]'
-            )
-            parser.add_argument(
-                '--notls',
-                action = 'store_true',
-                help = 'Set debug mode. Automatically sets verbosity to debug.'
-            )
-            parser.add_argument(
-                '--ipcport',
-                action = 'store',
-                default = 7772,
-                type = int,
-                help = 'Specify the ipc port [default: 7772]'
-            )
-            parser.add_argument(
-                '--debug',
-                action = 'store_true',
-                help = 'Set debug mode. Automatically sets verbosity to debug.'
-            )
-            parser.add_argument(
-                '--cachedir',
-                action = 'store',
-                default = './',
-                type = str,
-                help = 'Specify the directory to use for on-disk caching, ' +
-                       'relative to the current path. Defaults to the ' +
-                       'current directory.'
-            )
-            parser.add_argument(
-                '--logdir',
-                action = 'store',
-                default = None,
-                type = str,
-                help = 'Log to a specified director, relative to current path.'
-            )
-            parser.add_argument(
-                '--userid',
-                action = 'store',
-                default = None,
-                type = str,
-                help = 'Specifies a Hypergolix login user. If omitted, ' +
-                       'creates a new account.',
-            )
-            parser.add_argument(
-                '--verbosity',
-                action = 'store',
-                default = 'warning',
-                type = str,
-                help = 'Specify the logging level. \n'
-                       '    "extreme"  -> ultramaxx verbose, \n'
-                       '    "shouty"   -> abnormal most verbose, \n'
-                       '    "debug"    -> normal most verbose, \n'
-                       '    "info"     -> somewhat verbose, \n'
-                       '    "warning"  -> default python verbosity, \n'
-                       '    "error"    -> quiet.',
-            )
-            parser.add_argument(
-                '--traceur',
-                action = 'store_true',
-                help = 'Enable thorough analysis, including stack tracing. '
-                       'Implies verbosity of debug.'
-            )
-
-            args = parser.parse_args()
-            
-            if args.logdir:
-                logdir = pathlib.Path(args.logdir).absolute().as_posix()
-                logutils.autoconfig(
-                    tofile = True,
-                    logdirname = logdir,
-                    loglevel = args.verbosity
-                )
-            else:
-                logdir = None
-                logutils.autoconfig(
-                    tofile = False,
-                    loglevel = args.verbosity
-                )
+            with Config() as config:
+                user_id = config.user_id
+                password = config.password
+                # Convert the path to a str
+                pid_file = str(config.pid_file)
                 
-            # Create an account
-            if args.userid is None:
-                user_id = None
-                password = _create_password()
-                
-            # Log in to existing account
-            else:
-                user_id = Ghid.from_str(args.userid)
-                password = _enter_password()
-                
-            startup_logging_port = 7771
+            if password is None:
+                password = _request_password(user_id)
             
-            args = vars(args)
-            
-        else:
-            args = {}
-            args['host'] = None
-            args['port'] = None
-            args['notls'] = None
-            args['ipcport'] = None
-            args['debug'] = None
-            args['traceur'] = None
-            args['cachedir'] = None
-            args['verbosity'] = None
-            password = None
-            user_id = None
-            startup_logging_port = None
-            logdir = None
-            
-        (
-            is_parent, pid_file, host, port, tls, ipc_port, debug, traceur,
-            cache_dir, password, user_id, startup_port, logdir, verbosity
-        ) = daemonizer(
-            '/ghidcache/logs/hypergolix.pid',
-            '/ghidcache/logs/hypergolix.pid',
-            args['host'],
-            args['port'],
-            not args['notls'],
-            args['ipcport'],
-            args['debug'],
-            args['traceur'],
-            args['cachedir'],
-            password,
-            user_id,
-            startup_logging_port,
-            logdir,
-            args['verbosity'],
-            strip_cmd_args = True
-        )
+        # Daemonize. Don't strip cmd-line arguments, or we won't know to
+        # continue with startup
+        is_parent, user_id, password = daemonizer(pid_file, user_id, password)
          
         if is_parent:
-            print('listening')
             # Set up a logging server that we can print() to the terminal
             _startup_listener(
-                port = startup_logging_port,
+                port = parent_port,
                 timeout = 60
             )
-            
-            
+            #####################
+            # PARENT EXITS HERE #
+            #####################
                 
     # Daemonized child only from here on out.
-            
-    try:
-        with _StartupReporter(startup_port) as startup_logger:
-            try:
-                if logdir is not None:
-                    logutils.autoconfig(
-                        tofile = True,
-                        logdirname = logdir,
-                        loglevel = verbosity
-                    )
-                else:
-                    logutils.autoconfig(
-                        tofile = False,
-                        loglevel = verbosity
-                    )
-                
-                persister, core, aengel = daemon_main(
-                    host = host,
-                    port = port,
-                    tls = tls,
-                    ipc_port = ipc_port,
-                    debug = debug,
-                    traceur = traceur,
-                    cache_dir = cache_dir,
-                    password = password,
-                    user_id = user_id,
-                    startup_logger = startup_logger
-                )
-            except:
-                startup_logger.critical(
-                    'exception: \n' + ''.join(traceback.format_exc())
-                )
-        
+    with _StartupReporter(parent_port) as startup_logger:
+        # We need to set up a signal handler ASAP
+        with Config() as config:
+            pid_file = str(config.pid_file)
         sighandler = SignalHandler1(pid_file)
         sighandler.start()
         
-        # Wait indefinitely until signal caught.
-        threading_autojoin()
-         
-    except:
-        import os
-        pid = os.getpid()
-        with open('/ghidcache/logs/' + str(pid) + '.txt', 'w') as f:
-            f.write(''.join(traceback.format_exc()))
-        raise
+        core = app_core(user_id, password, startup_logger)
+
+    # Wait indefinitely until signal caught.
+    # TODO: literally anything smarter than this.
+    try:
+        while True:
+            time.sleep(.5)
+    except SIGTERM:
+        logger.info('Caught SIGTERM. Exiting.')
+    
+    del core
+    
+    
+def stop(namespace=None):
+    ''' Stops the Hypergolix daemon.
+    '''
+    with Config() as config:
+        pid_file = str(config.pid_file)
+        
+    daemoniker.send(pid_file, SIGTERM)
+
+
+# ###############################################
+# Command line stuff
+# ###############################################
+
+
+COMMANDS = collections.OrderedDict((
+    ('start', start),
+    ('stop', stop)
+))
+
+
+def _ingest_args(argv=None):
+    ''' Parse and handle any command-line args.
+    '''
+    parser = argparse.ArgumentParser(
+        description = 'Control the Hypergolix service.'
+    )
+    parser.add_argument(
+        'cmd',
+        action = 'store',
+        type = str,
+        choices = COMMANDS,
+        help = 'What should we do to the daemon? Note that stop and ' +
+               'restart will only work if the daemon is already running.'
+    )
+
+    args = parser.parse_args()
+    return args
+        
+
+if __name__ == '__main__':
+    namespace = _ingest_args()
+    # Invoke the command
+    COMMANDS[namespace.cmd.lower()](namespace)
