@@ -42,6 +42,7 @@ import threading
 import random
 import tempfile
 import shutil
+import logging
 
 import cProfile
 
@@ -383,6 +384,11 @@ if __name__ == '__main__':
         suite = unittest.TestSuite()
         suite.addTest(apptest('test_app'))
         unittest.TextTestRunner().run(suite)
+        
+        logging.getLogger('').critical('Test suite complete; closing down.')
+        
+        raz[1].wait_close_safe()
+        des[1].wait_close_safe()
     
     # We're going to copy all of the vectors into a temporary directory, so we
     # don't accidentally mutate them.
@@ -404,4 +410,4 @@ if __name__ == '__main__':
             do_test(cache_dir_a, cache_dir_b)
             
         # Wait a moment before cleanup so everything can exit
-        time.sleep(5)
+        time.sleep(1)

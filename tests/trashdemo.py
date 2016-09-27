@@ -43,6 +43,7 @@ import random
 import pathlib
 import tempfile
 import shutil
+import logging
 
 from hypergolix.service import _hgx_server
 from hypergolix.app import app_core
@@ -381,6 +382,13 @@ if __name__ == '__main__':
             suite.addTest(apptest('test_app'))
             unittest.TextTestRunner().run(suite)
         
+            logging.getLogger('').critical(
+                'Test suite complete; closing down.'
+            )
+        
+            raz[1].wait_close_safe()
+            des[1].wait_close_safe()
+        
         # Clip negative numbers
         trace_interval = max([args.traceur, 0.1])
         if trace_interval:
@@ -395,6 +403,6 @@ if __name__ == '__main__':
         if cleanup_test_files:
             # Wait a wee bit before attempting cleanup, so that everything can
             # exit
-            time.sleep(5)
+            time.sleep(1)
             shutil.rmtree(hgx_root_a)
             shutil.rmtree(hgx_root_b)

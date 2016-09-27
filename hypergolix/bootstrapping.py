@@ -68,6 +68,7 @@ from .dispatch import _Dispatchable
 
 from .ipc import IPCCore
 from .privateer import Privateer
+from .privateer import Charon
 from .rolodex import Rolodex
 
 from .utils import threading_autojoin
@@ -110,11 +111,11 @@ class AgentBootstrap:
     def __init__(self, cache_dir, aengel=None, debug=False):
         ''' Creates everything and puts it into a singular namespace.
         
-        If bootstrap (ghid) is passed, we'll use the credential to 
-        extract an identity. If bootstrap_ghid is not passed, will use 
+        If bootstrap (ghid) is passed, we'll use the credential to
+        extract an identity. If bootstrap_ghid is not passed, will use
         the credential to create one.
         
-        TODO: move entire bootstrap creation process (or as much as 
+        TODO: move entire bootstrap creation process (or as much as
         possible, anyways) into register().
         '''
         # First we need to create everything.
@@ -134,11 +135,18 @@ class AgentBootstrap:
         self.ghidproxy = GhidProxier()
         self.dispatch = Dispatcher()
         self.ipccore = IPCCore(
-            aengel = aengel, 
-            threaded = True, 
+            aengel = aengel,
+            threaded = True,
             thread_name = 'ipccore',
-            debug = debug, 
+            debug = debug,
         )
+        self.charon = Charon(
+            aengel = aengel,
+            threaded = True,
+            thread_name = 'charon',
+            debug = debug,
+        )
+        self.aengel = aengel
         
     @property
     def whoami(self):
@@ -147,31 +155,33 @@ class AgentBootstrap:
         
     def assemble(self):
         # Now we need to link everything together.
-        self.percore.assemble(self.doorman, self.enforcer, self.lawyer, 
-                            self.bookie, self.librarian, self.postman,
-                            self.undertaker, self.salmonator)
+        self.percore.assemble(self.doorman, self.enforcer, self.lawyer,
+                              self.bookie, self.librarian, self.postman,
+                              self.undertaker, self.salmonator)
         self.doorman.assemble(self.librarian)
         self.enforcer.assemble(self.librarian)
         self.lawyer.assemble(self.librarian)
         self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
         self.librarian.assemble(self.percore)
-        self.postman.assemble(self.golcore, self.librarian, self.bookie, 
-                            self.rolodex)
-        self.undertaker.assemble(self.librarian, self.bookie, self.postman)
+        self.postman.assemble(self.golcore, self.librarian, self.bookie,
+                              self.rolodex)
+        self.undertaker.assemble(self.librarian, self.bookie, self.postman,
+                                 self.charon)
         self.salmonator.assemble(self.golcore, self.percore, self.doorman,
-                                self.postman, self.librarian)
+                                 self.postman, self.librarian)
         self.golcore.assemble(self.librarian)
         self.privateer.assemble(self.golcore, self.ghidproxy, self.oracle)
         self.ghidproxy.assemble(self.librarian, self.salmonator)
         self.oracle.assemble(self.golcore, self.ghidproxy, self.privateer,
-                            self.percore, self.bookie, self.librarian, 
-                            self.postman, self.salmonator)
-        self.rolodex.assemble(self.golcore, self.privateer, self.dispatch, 
-                            self.percore, self.librarian, self.salmonator,
-                            self.ghidproxy, self.ipccore)
+                             self.percore, self.bookie, self.librarian,
+                             self.postman, self.salmonator)
+        self.rolodex.assemble(self.golcore, self.privateer, self.dispatch,
+                              self.percore, self.librarian, self.salmonator,
+                              self.ghidproxy, self.ipccore)
         self.dispatch.assemble()
-        self.ipccore.assemble(self.golcore, self.oracle, self.dispatch, 
-                            self.rolodex, self.salmonator)
+        self.charon.assemble(self.privateer)
+        self.ipccore.assemble(self.golcore, self.oracle, self.dispatch,
+                              self.rolodex, self.salmonator)
             
     def bootstrap_zero(self, password, _scrypt_hardness=None):
         ''' Bootstrap zero is run on the creation of a new account, to
@@ -492,6 +502,15 @@ class AgentBootstrap:
         )
         
         logger.info('Bootstrap completed successfully. Continuing with setup.')
+        
+    def wait_close_safe(self):
+        ''' Make sure everything has shut down appropriately.
+        '''
+        if self.aengel is not None:
+            self.aengel.stop()
+        # Just assume charon is the last for now
+        self.charon._shutdown_complete_flag.wait()
+        return
 
         
 class Credential:

@@ -40,6 +40,7 @@ import threading
 import collections
 import weakref
 import traceback
+import asyncio
 
 from golix import Ghid
 
@@ -53,6 +54,8 @@ from .core import _GAO
 from .core import _GAODict
 
 from .utils import TraceLogger
+from .utils import LooperTrooper
+from .utils import call_coroutine_threadsafe
 
 from .exceptions import PrivateerError
 from .exceptions import RatchetError
@@ -721,7 +724,7 @@ class Privateer:
         # DON'T take bootlock or modlock here or we'll be reentrant = deadlock
         # Do the try/catch for this in the outside method, so that we can
         # else it.
-        self.stage(binding.target, known_secret)
+        self.stage(binding.target, new_secret)
         # Note that opening the container itself will commit the secret.
         
     @staticmethod
@@ -765,16 +768,30 @@ class Privateer:
         )
         
         
-class Charon:
+class Charon(LooperTrooper):
     ''' Handles the removal of secrets when their targets are removed,
     deleted, or otherwise made inaccessible. Charon instances are
     notified of object removal by the undertaker, and then handle
     ferrying the object's secret into non-existence. Data isn't "dead"
     until its keys are deleted.
+    
+    It's pretty wasteful to use an entire event loop and thread for this
+    but that's sorta the situation at hand currently.
     '''
     
     def __init__(self, *args, **kwargs):
         self._privateer = None
+        self._death_q = None
+        super().__init__(*args, **kwargs)
+        
+    async def loop_init(self, *args, **kwargs):
+        await super().loop_init(*args, **kwargs)
+        # For now, just have an arbitrary max cap
+        self._death_q = asyncio.Queue(loop=self._loop, maxsize=50)
+        
+    async def loop_stop(self):
+        await super().loop_stop()
+        self._death_q = None
         
     def assemble(self, privateer):
         self._privateer = weakref.proxy(privateer)
@@ -783,3 +800,21 @@ class Charon:
         ''' Gets a secret ready for removal.
         obj is a Hypergolix lightweight representation.
         '''
+        if self._death_q is None:
+            raise RuntimeError(
+                'Cannot schedule secret removal until after loop init.'
+            )
+        call_coroutine_threadsafe(
+            coro = self._death_q.put(obj.ghid),
+            loop = self._loop
+        )
+            
+    async def loop_run(self, *args, **kwargs):
+        ''' Very simply await stuff in the queue, pause for a hot sec,
+        and then remove it.
+        '''
+        await super().loop_run(*args, **kwargs)
+        
+        dead_ghid = await self._death_q.get()
+        await asyncio.sleep(.1)
+        self._privateer.abandon(dead_ghid)

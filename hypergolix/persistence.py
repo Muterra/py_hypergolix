@@ -108,6 +108,7 @@ from .utils import _JitSetDict
 from .utils import TruthyLock
 from .utils import SetMap
 from .utils import WeakSetMap
+from .utils import _generate_threadnames
 
 
 # ###############################################
@@ -2205,7 +2206,14 @@ class Undertaker:
         self._postman.schedule(obj, removed=True)
         # Finally, if we have a psychopomp (secrets remover), notify her, too
         if self._psychopomp is not None:
-            self._psychopomp.schedule(obj)
+            # Protect this with a thread to prevent reentrancy
+            worker = threading.Thread(
+                target = self._psychopomp.schedule,
+                daemon = True,
+                args = (obj,),
+                name = _generate_threadnames('styxwrkr')[0],
+            )
+            worker.start()
         
     def prep_gidc(self, obj):
         ''' GIDC do not affect GC.
