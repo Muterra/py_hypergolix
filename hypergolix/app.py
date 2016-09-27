@@ -134,6 +134,7 @@ def app_core(user_id, password, startup_logger, aengel=None,
             'or lost.'
         )
         with Config() as config:
+            config.fingerprint = core.whoami
             config.user_id = user_id
         
     # Hey look, we have an existing user.
