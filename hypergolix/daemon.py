@@ -431,6 +431,41 @@ def stop(namespace=None):
         pid_file = str(config.pid_file)
         
     daemoniker.send(pid_file, SIGTERM)
+    
+    
+def _format_ghidstr(ghid):
+    ''' Wraps a urlsafe ghid.
+    '''
+    long_line = ghid.as_str()
+    shortened_length = 42
+    indent = '    '
+    
+    out = []
+    for slice_start in range(0, len(long_line), shortened_length):
+        out.append(
+            indent + long_line[slice_start:slice_start + shortened_length]
+        )
+    
+    return '\n'.join(out)
+    
+    
+def whoami(namespace=None):
+    ''' Returns the current Hypergolix user, if one exists.
+    '''
+    with Config() as config:
+        fingerprint = config.fingerprint
+        user_id = config.user_id
+        
+    if user_id is None:
+        print('Your user ID is undefined.')
+    else:
+        
+        print('Your user ID is\n' + _format_ghidstr(user_id))
+        
+    if fingerprint is None:
+        print('Your fingerprint is undefined.')
+    else:
+        print('Your fingerprint is\n' + _format_ghidstr(fingerprint))
 
 
 # ###############################################
@@ -440,7 +475,8 @@ def stop(namespace=None):
 
 COMMANDS = collections.OrderedDict((
     ('start', start),
-    ('stop', stop)
+    ('stop', stop),
+    ('whoami', whoami)
 ))
 
 
