@@ -41,6 +41,7 @@ import traceback
 import collections
 import logging
 import logging.handlers
+import textwrap
 
 import daemoniker
 from daemoniker import Daemonizer
@@ -234,6 +235,25 @@ class _StartupReporter:
             self.handler.close()
             if isinstance(self.handler, logging.handlers.SocketHandler):
                 _close_server(self.port)
+                
+
+# Customize what bullet to use for which loglevel
+def _get_bullet_from_loglevel(loglevel):
+    lookup = [
+        (logging.DEBUG,     '--- '),
+        (logging.INFO,      '+-- '),
+        (logging.WARNING,   '!-- '),
+        (logging.ERROR,     '!!! ')
+    ]
+    
+    # Return the first bullet that is at least our level
+    for check_level, bullet in lookup:
+        if loglevel <= check_level:
+            return bullet
+    # If the logging level is higher than the highest bullet level, return the
+    # last (aka the highest) bullet level
+    else:
+        return bullet
         
         
 def _handle_startup_connection(conn, timeout):
@@ -243,7 +263,22 @@ def _handle_startup_connection(conn, timeout):
                 if conn.poll(timeout):
                     try:
                         request = conn.recv()
-                        print('+-- ' + request['msg'])
+                        # Add a visual indicator of new message
+                        bullet = _get_bullet_from_loglevel(request['levelno'])
+                        indent = len(bullet) * ' '
+                        # Wrap each line to 70 (indent 4, text 66) chars
+                        lines = textwrap.wrap(
+                            request['msg'],
+                            width = 70 - len(indent)
+                        )
+                        # ...and indent all following lines appropriately
+                        indents = [bullet] + ([indent] * (len(lines) - 1))
+                        # Interleave the indentation with the message core and
+                        # condense into single str
+                        msg = '\n'.join(
+                            [indent + s for indent, s in zip(indents, lines)]
+                        )
+                        print(msg)
                     
                     except EOFError:
                         # Connections that ping without a body and immediately

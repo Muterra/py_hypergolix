@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -385,9 +385,9 @@ class AgentBootstrap:
         logger.info('Loading credential.')
         credential = Credential.load(
             self.librarian,
-            self.oracle, 
-            self.privateer, 
-            user_id, 
+            self.oracle,
+            self.privateer,
+            user_id,
             password,
             _scrypt_hardness = _scrypt_hardness,
         )
@@ -536,7 +536,7 @@ class Credential:
                 ghid == self._user_id or
                 ghid == self._secondary_manifest)
         
-    def declare_primary(self, user_id, identity_ghid, persistent_ghid, 
+    def declare_primary(self, user_id, identity_ghid, persistent_ghid,
                         quarantine_ghid, secondary_ghid):
         ''' Declares all of the primary bootstrapping addresses, making
         the credential fully-prepped.
@@ -630,9 +630,9 @@ class Credential:
         privateer.stage(binding.target, container_secret)
     
     @classmethod
-    def load(cls, librarian, oracle, privateer, user_id, password, 
+    def load(cls, librarian, oracle, privateer, user_id, password,
             _scrypt_hardness=None):
-        ''' Loads a credential container from the <librarian>, with a 
+        ''' Loads a credential container from the <librarian>, with a
         ghid of <user_id>, encrypted with scrypted <password>.
         '''
         # User_id resolves the "primary manifest", a dynamic object containing:
@@ -660,7 +660,7 @@ class Credential:
         fingerprint = primary_manifest.author
         logger.info('Expanding password using scrypt. Please be patient.')
         primary_master = cls._password_expansion(
-            fingerprint, 
+            fingerprint,
             password,
             _scrypt_hardness
         )
@@ -669,9 +669,9 @@ class Credential:
         # Calculate the primary secret and then inject it into the temporary
         # storage at privateer
         cls._inject_secret(
-            librarian, 
-            privateer, 
-            proxy = user_id, 
+            librarian,
+            privateer,
+            proxy = user_id,
             master_secret = primary_master
         )
         # We're done with the summary, so go ahead and overwrite this name
@@ -759,9 +759,9 @@ class Credential:
             self._scrypt_hardness = _scrypt_hardness
         
         self.declare_primary(
-            user_id, 
-            identity_ghid, 
-            persistent_ghid, 
+            user_id,
+            identity_ghid,
+            persistent_ghid,
             quarantine_ghid,
             secondary_manifest
         )

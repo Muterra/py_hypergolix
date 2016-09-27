@@ -127,8 +127,11 @@ def app_core(user_id, password, startup_logger, aengel=None,
             password = password,
             _scrypt_hardness = _scrypt_hardness
         )
-        logger.info(
-            'Identity created. Your user_id is ' + str(user_id) + '.'
+        logger.critical(
+            'Identity created. Your user ID is ' + str(user_id) + '. You ' +
+            'will need your user ID to log in to Hypergolix from another ' +
+            'machine, or if your Hypergolix configuration file is corrupted ' +
+            'or lost.'
         )
         with Config() as config:
             config.user_id = user_id
