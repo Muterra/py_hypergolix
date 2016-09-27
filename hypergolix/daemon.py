@@ -175,11 +175,9 @@ class _StartupReporter:
             self.handler = logging.StreamHandler(sys.stdout)
             self.handler.setFormatter(
                 logging.Formatter(
-                    'Hypergolix startup: %(message)s'
+                    '+-- %(message)s'
                 )
             )
-            
-        self.handler.handleError = print
             
         # Assign a filter to chill the noise
         self.handler.addFilter(_BootstrapFilter())
@@ -245,7 +243,7 @@ def _handle_startup_connection(conn, timeout):
                 if conn.poll(timeout):
                     try:
                         request = conn.recv()
-                        print('Hypergolix startup: ' + request['msg'])
+                        print('+-- ' + request['msg'])
                     
                     except EOFError:
                         # Connections that ping without a body and immediately
@@ -334,6 +332,7 @@ def start(namespace=None):
         password = None
         pid_file = None
         parent_port = 7771
+        homedir = None
         
         if is_setup:
             with Config() as config:
@@ -341,13 +340,21 @@ def start(namespace=None):
                 password = config.password
                 # Convert the path to a str
                 pid_file = str(config.pid_file)
+                homedir = str(config.home_dir)
                 
             if password is None:
                 password = _request_password(user_id)
+                
+            print('Starting Hypergolix...')
             
         # Daemonize. Don't strip cmd-line arguments, or we won't know to
         # continue with startup
-        is_parent, user_id, password = daemonizer(pid_file, user_id, password)
+        is_parent, user_id, password = daemonizer(
+            pid_file,
+            user_id,
+            password,
+            chdir = homedir
+        )
          
         if is_parent:
             # Set up a logging server that we can print() to the terminal
@@ -368,6 +375,8 @@ def start(namespace=None):
         sighandler.start()
         
         core = app_core(user_id, password, startup_logger)
+        
+        startup_logger.info('Hypergolix startup complete.')
 
     # Wait indefinitely until signal caught.
     # TODO: literally anything smarter than this.

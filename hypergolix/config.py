@@ -397,7 +397,7 @@ class Config:
                 _set_hgx_config(self._root, self._cfg)
                 
     @property
-    def homedir(self):
+    def home_dir(self):
         ''' The Hypergolix home directory.
         '''
         return self._root / '.hypergolix'
@@ -406,19 +406,19 @@ class Config:
     def cache_dir(self):
         ''' Where is the cache dir?
         '''
-        return self.homedir / 'ghidcache'
+        return self.home_dir / 'ghidcache'
         
     @property
     def log_dir(self):
         ''' Where is the log dir?
         '''
-        return self.homedir / 'logs'
+        return self.home_dir / 'logs'
         
     @property
     def pid_file(self):
         ''' The pid file to use.
         '''
-        return self.homedir / 'hypergolix.pid'
+        return self.home_dir / 'hypergolix.pid'
             
     @property
     def remotes(self):
