@@ -9,7 +9,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -23,17 +23,16 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
 
 '''
 import argparse
-import logging
 import unittest
 import sys
 import time
@@ -41,67 +40,66 @@ import statistics
 import collections
 import threading
 import random
-import datetime
-import pathlib
+import tempfile
+import shutil
 
 import cProfile
 
-
-import IPython
-import warnings
-
 from hypergolix.service import _hgx_server
-from hypergolix.app import HGXService
+from hypergolix.app import app_core
+from hypergolix.config import Config
 from hypergolix import HGXLink
 from hypergolix.utils import Aengel
 
 from hypergolix.objproxy import ProxyBase
-
-from golix import Ghid
 
 # ###############################################
 # Fixtures
 # ###############################################
 
 
-def make_fixtures(debug, tmpdir_a, tmpdir_b):
+def make_fixtures(debug, hgx_root_1, hgx_root_2):
+    ''' Makes fixtures for the test.
+    hgx_root_# is the root app directory, used by config. It contains
+    the cache directory.
+    '''
+    server_port = 6022
     aengel = Aengel()
+    
+    with Config(hgx_root_1) as config:
+        config.set_remote('127.0.0.1', server_port, False)
+        config.ipc_port = 6023
+        
+    with Config(hgx_root_2) as config:
+        config.set_remote('127.0.0.1', server_port, False)
+        config.ipc_port = 6024
         
     hgxserver = _hgx_server(
-        host = 'localhost',
-        port = 6022,
+        host = '127.0.0.1',
+        port = server_port,
         debug = debug,
         traceur = False,
         foreground = False,
         aengel = aengel,
     )
-    hgxraz = HGXService(
-        host = 'localhost',
-        port = 6022,
-        tls = False,
-        ipc_port = 6023,
-        debug = debug,
-        traceur = False,
-        foreground = False,
+    # localhost:6023, no tls
+    hgxraz = app_core(
+        user_id = None,
+        password = 'hello world',
+        startup_logger = None,
         aengel = aengel,
         _scrypt_hardness = 1024,
-        password = 'hello world',
-        cache_dir = tmpdir_a,
-        user_id = Ghid.from_str('AQpjpYmuK-4172HYaA7rAS4T2HoHmdMKhaTq-c4zrazjhMPED7s7yIE0Dt45uOslebm2Ah4LcgVPpYQ-HQrzYg8=')
+        hgx_root = hgx_root_1
     )
-    hgxdes = HGXService(
-        host = 'localhost',
-        port = 6022,
-        tls = False,
-        ipc_port = 6024,
-        debug = debug,
-        traceur = False,
-        foreground = False,
+        
+    # localhost:6024, no tls
+    hgxdes = app_core(
+        user_id = None,
+        password = 'hello world',
+        startup_logger = None,
         aengel = aengel,
         _scrypt_hardness = 1024,
-        password = 'hello world',
-        cache_dir = tmpdir_b,
-        user_id = Ghid.from_str('AUDwqB0easdBzA0jaFm2-hngmaIKJME-NMKINOUQfFmgsWSII7OUp-J3E4iS9vh5S6hvpAd8DKmaZCpcZ6VZp60=')
+        hgx_root = hgx_root_2
     )
         
     return hgxserver, hgxraz, hgxdes, aengel
@@ -284,32 +282,42 @@ def make_tests(iterations, debug, raz, des, aengel):
 # ###############################################
 # Operations
 # ###############################################
-                
-if __name__ == '__main__':
+
+
+def ingest_args():
+    ''' Register argparser and parse (and return) args.
+    '''
     parser = argparse.ArgumentParser(description='Hypergolix trashtest.')
     parser.add_argument(
-        '--iters', 
+        'hgxroot',
         action = 'store',
-        default = 10, 
+        default = None,
+        nargs = 2,
+        help = 'Specify the root directories for the two configurations.'
+    )
+    parser.add_argument(
+        '--iters',
+        action = 'store',
+        default = 10,
         type = int,
         help = 'How many iterations to run?',
     )
     parser.add_argument(
-        '--debug', 
+        '--debug',
         action = 'store_true',
         help = 'Set debug mode. Automatically sets verbosity to debug.'
     )
     parser.add_argument(
-        '--logdir', 
+        '--logdir',
         action = 'store',
-        default = None, 
+        default = None,
         type = str,
         help = 'Log to a specified directory, relative to current path.',
     )
     parser.add_argument(
-        '--verbosity', 
+        '--verbosity',
         action = 'store',
-        default = 'warning', 
+        default = 'warning',
         type = str,
         help = 'Specify the logging level. '
                 '"debug" -> most verbose, '
@@ -318,7 +326,7 @@ if __name__ == '__main__':
                 '"error" -> quiet.',
     )
     parser.add_argument(
-        '--traceur', 
+        '--traceur',
         action = 'store',
         default = False,
         type = float,
@@ -329,32 +337,45 @@ if __name__ == '__main__':
     parser.add_argument('unittest_args', nargs='*')
     args = parser.parse_args()
     
-    # LOGGING CONFIGURATION! Do this first so any fixturing errors get handled
+    return args
     
+    
+def configure_unified_logger(args):
+    ''' If we want to run a single unified logger for the entire test,
+    set that up here. Note that these logs will be in addition to those
+    created naturally during hypergolix operation (which will live
+    within each app's respective hgx_root)
+    '''
     from hypergolix import logutils
     
     if args.logdir:
         logutils.autoconfig(
-            tofile = True, 
-            logdirname = args.logdir, 
+            tofile = True,
+            logdirname = args.logdir,
             loglevel = args.verbosity
         )
     else:
         logutils.autoconfig(
-            tofile = False,  
+            tofile = False,
             loglevel = args.verbosity
         )
-    
+
+                
+if __name__ == '__main__':
+    args = ingest_args()
     # Dammit unittest using argparse
     sys.argv[1:] = args.unittest_args
+    
+    # Configure logs first so any fixturing errors are handled.
+    configure_unified_logger(args)
     
     def do_test(cache_dir_a, cache_dir_b):
         # Okay, let's set up the tests
         server, raz, des, aengel = make_fixtures(
-            args.debug, 
-            cache_dir_a, 
+            args.debug,
+            cache_dir_a,
             cache_dir_b
-        )    
+        )
         
         apptest = make_tests(args.iters, args.debug, raz, des, aengel)
         
@@ -365,28 +386,22 @@ if __name__ == '__main__':
     
     # We're going to copy all of the vectors into a temporary directory, so we
     # don't accidentally mutate them.
-    import tempfile
-    import pathlib
-    import shutil
     
-    with tempfile.TemporaryDirectory() as cache_dir_a, \
-        tempfile.TemporaryDirectory() as cache_dir_b:
-            save_dir_a = pathlib.Path('./trashtest/_vectors/hgx_save_a')
-            save_dir_b = pathlib.Path('./trashtest/_vectors/hgx_save_b')
-            
-            assert cache_dir_a != cache_dir_b
-            
-            for fpath in save_dir_a.iterdir():
-                shutil.copy(fpath.as_posix(), cache_dir_a)
-            
-            for fpath in save_dir_b.iterdir():
-                shutil.copy(fpath.as_posix(), cache_dir_b)
+    with tempfile.TemporaryDirectory() as temp_root:
+        cache_dir_a = temp_root + '/temp_a'
+        cache_dir_b = temp_root + '/temp_b'
         
-            # Clip negative numbers
-            trace_interval = max([args.traceur, 0])
-            if trace_interval:
-                from hypergolix.utils import TraceLogger
-                with TraceLogger(trace_interval):
-                    do_test(cache_dir_a, cache_dir_b)
-            else:
+        shutil.copytree(args.hgxroot[0], cache_dir_a)
+        shutil.copytree(args.hgxroot[1], cache_dir_b)
+    
+        # Clip negative numbers
+        trace_interval = max([args.traceur, .1])
+        if trace_interval:
+            from hypergolix.utils import TraceLogger
+            with TraceLogger(trace_interval):
                 do_test(cache_dir_a, cache_dir_b)
+        else:
+            do_test(cache_dir_a, cache_dir_b)
+            
+        # Wait a moment before cleanup so everything can exit
+        time.sleep(5)

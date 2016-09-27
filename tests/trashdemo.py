@@ -52,8 +52,6 @@ from hypergolix.utils import Aengel
 
 from hypergolix.objproxy import ProxyBase
 
-from golix import Ghid
-
 # ###############################################
 # Fixtures
 # ###############################################
@@ -271,6 +269,13 @@ def ingest_args():
     '''
     parser = argparse.ArgumentParser(description='Hypergolix trashtest.')
     parser.add_argument(
+        '--hgxroot',
+        action = 'store',
+        default = None,
+        nargs = 2,
+        help = 'Specify the root directories for the two configurations.'
+    )
+    parser.add_argument(
         '--iters',
         action = 'store',
         default = 10,
@@ -308,13 +313,6 @@ def ingest_args():
         help = 'Set traceur mode, using the passed float as a stack tracing '
                 'interval for deadlock detection. Must be a positive number, '
                 'or it will be ignored.'
-    )
-    parser.add_argument(
-        '--hgxroot',
-        action = 'store',
-        default = None,
-        nargs = 2,
-        help = 'Specify the root directories for the two configurations.'
     )
     parser.add_argument('unittest_args', nargs='*')
     args = parser.parse_args()
