@@ -2093,13 +2093,19 @@ class Undertaker:
         self._bookie = None
         self._postman = None
         
+        # This, if defined, handles removal of secrets when objects are debound
+        self._psychopomp = None
+        
         self._staging = None
         
-    def assemble(self, librarian, bookie, postman):
+    def assemble(self, librarian, bookie, postman, psychopomp=None):
         # Call before using.
         self._librarian = weakref.proxy(librarian)
         self._bookie = weakref.proxy(bookie)
         self._postman = weakref.proxy(postman)
+        
+        if psychopomp is not None:
+            self._psychopomp = weakref.proxy(psychopomp)
         
     def __enter__(self):
         # Create a new staging object.
@@ -2197,6 +2203,9 @@ class Undertaker:
         self._librarian.force_gc(obj)
         # Now notify the postman, and tell her it's a removal.
         self._postman.schedule(obj, removed=True)
+        # Finally, if we have a psychopomp (secrets remover), notify her, too
+        if self._psychopomp is not None:
+            self._psychopomp.schedule(obj)
         
     def prep_gidc(self, obj):
         ''' GIDC do not affect GC.

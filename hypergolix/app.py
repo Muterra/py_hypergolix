@@ -74,7 +74,7 @@ __all__ = [
     
     
 def app_core(user_id, password, startup_logger, aengel=None,
-             _scrypt_hardness=None, log_dir=None):
+             _scrypt_hardness=None, hgx_root=None):
     ''' This is where all of the UX goes for the service itself. From
     here, we build a credential, then a bootstrap, and then persisters,
     IPC, etc.
@@ -92,14 +92,14 @@ def app_core(user_id, password, startup_logger, aengel=None,
     if startup_logger is not None:
         # At some point, this will need to restore the module logger, but for
         # now it really doesn't make any difference whatsoever
-        logger = startup_logger
+        effective_logger = startup_logger
+    else:
+        effective_logger = logger
     
-    with Config() as config:
+    with Config(hgx_root) as config:
         # Convert paths to strs
         cache_dir = str(config.cache_dir)
-        
-        if log_dir is None:
-            log_dir = str(config.log_dir)
+        log_dir = str(config.log_dir)
             
         if user_id is None:
             user_id = config.user_id
@@ -127,13 +127,13 @@ def app_core(user_id, password, startup_logger, aengel=None,
             password = password,
             _scrypt_hardness = _scrypt_hardness
         )
-        logger.critical(
+        effective_logger.critical(
             'Identity created. Your user ID is ' + str(user_id) + '. You ' +
             'will need your user ID to log in to Hypergolix from another ' +
             'machine, or if your Hypergolix configuration file is corrupted ' +
             'or lost.'
         )
-        with Config() as config:
+        with Config(hgx_root) as config:
             config.fingerprint = core.whoami
             config.user_id = user_id
         
@@ -144,7 +144,7 @@ def app_core(user_id, password, startup_logger, aengel=None,
             password = password,
             _scrypt_hardness = _scrypt_hardness,
         )
-        logger.info('Login successful.')
+        effective_logger.info('Login successful.')
         
     # Add all of the remotes to a namespace preserver
     persisters = []
@@ -165,7 +165,7 @@ def app_core(user_id, password, startup_logger, aengel=None,
             )
             
         except CancelledError:
-            logger.error(
+            effective_logger.error(
                 'Error while connecting to upstream remote at ' +
                 remote.host + ':' + remote.port + '. Connection will only ' +
                 'be reattempted after restarting Hypergolix.'

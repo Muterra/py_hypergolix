@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -33,14 +33,9 @@ Some notes:
 
 '''
 
-# Control * imports. Therefore controls what is available to toplevel
-# package through __init__.py
-__all__ = [
-    'Privateer', 
-]
-
 
 # External dependencies
+import logging
 import threading
 import collections
 import weakref
@@ -52,7 +47,6 @@ from golix import Ghid
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf import hkdf
 from cryptography.hazmat.backends import default_backend
-CRYPTO_BACKEND = default_backend()
 
 # Intra-package dependencies
 from .core import _GAO
@@ -67,11 +61,20 @@ from .exceptions import SecretUnknown
 
 
 # ###############################################
-# Logging boilerplate
+# Boilerplate and constants
 # ###############################################
 
 
-import logging
+CRYPTO_BACKEND = default_backend()
+
+
+# Control * imports. Therefore controls what is available to toplevel
+# package through __init__.py
+__all__ = [
+    'Privateer',
+]
+
+
 logger = logging.getLogger(__name__)
 
         
@@ -92,11 +95,11 @@ class Privateer:
     be eliminated (and restored via oracle). But, that should probably
     wait for Golix v2.0, which will change secret ratcheting anyways.
     This will also help us track which secrets use the old ratcheting
-    mechanism and which ones use the new one, once that change is 
+    mechanism and which ones use the new one, once that change is
     started.
     '''
     def __init__(self):
-        # NOTE: I'm not particularly happy about the RLock (vs plain locks), 
+        # NOTE: I'm not particularly happy about the RLock (vs plain locks),
         # but the process of updating the internal lookups is highly reentrant.
         
         # Modification lock for standard objects
@@ -147,7 +150,7 @@ class Privateer:
         self._secrets_local = {}
         self._secrets_quarantine = _GaoDictBootstrap()
         self._secrets = collections.ChainMap(
-            self._secrets_persistent, 
+            self._secrets_persistent,
             self._secrets_local,
             self._secrets_staging,
             self._secrets_quarantine,
@@ -182,39 +185,39 @@ class Privateer:
         self._secrets_local = {}
         self._secrets_quarantine = quarantine
         self._secrets = collections.ChainMap(
-            self._secrets_persistent, 
+            self._secrets_persistent,
             self._secrets_local,
             self._secrets_staging,
             self._secrets_quarantine,
         )
         
         # Note that we just overwrote any chains that were created when we
-        # initially loaded the three above resources. So, we may need to 
+        # initially loaded the three above resources. So, we may need to
         # re-create them. But, we can use a fake container address for two of
         # them, since they use a different secrets tracking mechanism.
         self._ensure_bootstrap_chain(
-            self._secrets_persistent.ghid, 
+            self._secrets_persistent.ghid,
             persistent_container
         )
         self._ensure_bootstrap_chain(
-            self._secrets_quarantine.ghid, 
+            self._secrets_quarantine.ghid,
             quarantine_container
         )
         self._ensure_bootstrap_chain(
-            self._credential._identity_ghid, 
+            self._credential._identity_ghid,
             identity_container
         )
         self._ensure_bootstrap_chain(
-            self._credential._user_id, 
+            self._credential._user_id,
             credential_container
         )
         self._ensure_bootstrap_chain(
-            self._credential._secondary_manifest, 
+            self._credential._secondary_manifest,
             secondary_manifest_container
         )
             
     def _ensure_bootstrap_chain(self, proxy, container):
-        ''' Makes sure that the proxy is in self._chains, and if it's 
+        ''' Makes sure that the proxy is in self._chains, and if it's
         missing, adds it.
         '''
         if proxy not in self._chains:
@@ -254,7 +257,7 @@ class Privateer:
     def stage(self, ghid, secret):
         ''' Preliminarily set a secret for a ghid.
         
-        If a secret is already staged for that ghid and the ghids are 
+        If a secret is already staged for that ghid and the ghids are
         not equal, raises ConflictingSecrets.
         '''
         with self._modlock:
@@ -268,11 +271,11 @@ class Privateer:
         target = self._ghidproxy.resolve(ghid)
         if ghid != target:
             raise ValueError(
-                'Staged ghids must be containers, not proxies: '+ str(ghid)
+                'Staged ghids must be containers, not proxies: ' + str(ghid)
             )
                 
     def _stage(self, ghid, secret, lookup):
-        ''' Raw staging, bypassing modlock. Only accessed directly 
+        ''' Raw staging, bypassing modlock. Only accessed directly
         during bootstrapping.
         '''
         if ghid in self._secrets:
@@ -286,7 +289,7 @@ class Privateer:
             
     def quarantine(self, ghid, secret):
         ''' Store a secret temporarily, but distributedly, separate from
-        the primary secret store. Used only for incoming secrets in 
+        the primary secret store. Used only for incoming secrets in
         shares that have not yet been opened.
         '''
         with self._modlock:
@@ -325,15 +328,15 @@ class Privateer:
         Other states will raise SecretUnknown (a subclass of KeyError).
         
         Note that this relies upon staging logic enforcing consistency
-        of secrets! If that changes to allow the staging conflicting 
+        of secrets! If that changes to allow the staging conflicting
         secrets, this will need to be modified.
         
-        This is transactional and atomic; any errors (ex: ValueError 
+        This is transactional and atomic; any errors (ex: ValueError
         above) will return its state to the previous.
         
-        BOOTSTRAP CHAINS ARE NEVER (fully) COMMITTED. First of all, 
-        there's no need to and it's wasteful, because the bootstrap 
-        chains are deterministically derivable from the credential 
+        BOOTSTRAP CHAINS ARE NEVER (fully) COMMITTED. First of all,
+        there's no need to and it's wasteful, because the bootstrap
+        chains are deterministically derivable from the credential
         master secret. Second of all, it would unavoidably cause an
         infinitely recursive chain of secret committing. So let's not do
         that!
@@ -397,7 +400,7 @@ class Privateer:
             
         except AttributeError:
             logger.error(
-                'Attribute error while diffing secrets. Type mismatch? \n' 
+                'Attribute error while diffing secrets. Type mismatch? \n'
                 '    ' + repr(type(secret)) + '\n'
                 '    ' + repr(type(other))
             )
@@ -454,28 +457,28 @@ class Privateer:
         
         with self._modlock:
             missing_in_persist = not self._abandon(
-                ghid, 
+                ghid,
                 self._secrets_persistent,
                 'persistent lookup'
             )
             fail_test &= missing_in_persist
             
             missing_in_local = not self._abandon(
-                ghid, 
+                ghid,
                 self._secrets_local,
                 'local lookup'
             )
             fail_test &= missing_in_local
             
             missing_in_quaran = not self._abandon(
-                ghid, 
+                ghid,
                 self._secrets_quarantine,
                 'quarantine lookup'
             )
             fail_test &= missing_in_quaran
             
             missing_in_staging = not self._abandon(
-                ghid, 
+                ghid,
                 self._secrets_staging,
                 'staging lookup'
             )
@@ -485,7 +488,7 @@ class Privateer:
             raise SecretUnknown('Secret not found for ' + str(ghid))
             
     def _abandon(self, ghid, lookup, lookup_name='lookup'):
-        ''' Abandons a secret for a ghid in a specified lookup. NOT 
+        ''' Abandons a secret for a ghid in a specified lookup. NOT
         THREADSAFE! Call only from within self.abandon.
         '''
         if ghid in lookup:
@@ -523,7 +526,7 @@ class Privateer:
             self._chains[proxy] = container
         
     def ratchet_chain(self, proxy):
-        ''' Gets a new secret for the proxy. Returns the secret, and 
+        ''' Gets a new secret for the proxy. Returns the secret, and
         flags the ratchet as in-progress.
         '''
         if proxy in self._ratchet_in_progress:
@@ -602,8 +605,8 @@ class Privateer:
         secret = self._ratchet_in_progress.pop(proxy)
         self._chains[proxy] = container
         
-        # NOTE: this does not bypass the usual stage -> commit process, 
-        # even though it can only be used locally during the creation of a 
+        # NOTE: this does not bypass the usual stage -> commit process,
+        # even though it can only be used locally during the creation of a
         # new container, because the container creation still calls commit.
         self._secrets_staging[container] = secret
         
@@ -625,16 +628,16 @@ class Privateer:
             self._chains[proxy] = container
             
     def heal_chain(self, gao, binding):
-        ''' Heals the ratchet for a binding using the gao. Call this any 
+        ''' Heals the ratchet for a binding using the gao. Call this any
         time an agent RECEIVES a new EXTERNAL ratcheted object. Stages
         the resulting secret for the most recent frame in binding, BUT
         DOES NOT RETURN (or commit) IT.
         
         Note that this is necessarily being called before the object is
-        available at the oracle. It should, however, be available at 
+        available at the oracle. It should, however, be available at
         both the ghidproxy and the librarian.
         
-        NOTE that the binding is the LITEWEIGHT version from the 
+        NOTE that the binding is the LITEWEIGHT version from the
         librarian already, so its ghid is already the dynamic one.
         '''
         target = self._ghidproxy.resolve(binding.ghid)
@@ -650,13 +653,13 @@ class Privateer:
             except:
                 logger.warning(
                     'Error while staging new secret for attempted ratchet. '
-                    'The ratchet is very likely broken.\n' + 
+                    'The ratchet is very likely broken.\n' +
                     ''.join(traceback.format_exc())
                 )
                 
             else:
-                # If we have a chain for it, update it! Do this directly, 
-                # skipping the usual ratcheting process, because we already 
+                # If we have a chain for it, update it! Do this directly,
+                # skipping the usual ratcheting process, because we already
                 # know everything.
                 if gao.ghid in self._chains:
                     self._chains[gao.ghid] = binding.target
@@ -685,7 +688,7 @@ class Privateer:
                     'targets. Re-establish the ratchet.'
                 )
             
-        # Count backwards in index (and therefore forward in time) from the 
+        # Count backwards in index (and therefore forward in time) from the
         # first new frame to zero (and therefore the current frame).
         # Note that we're using the previous frame's ghid as salt.
         for ii in range(offset, -1, -1):
@@ -705,7 +708,7 @@ class Privateer:
         ''' Heals a chain used in a bootstrapping container.
         '''
         with self._bootlock:
-            # We don't need to do anything fancy here. Everything is handled 
+            # We don't need to do anything fancy here. Everything is handled
             # through the credential's master secret and the binding itself.
             master_secret = self._credential.get_master(gao.ghid)
             last_frame = binding._history[0]
@@ -723,7 +726,7 @@ class Privateer:
         
     @staticmethod
     def _ratchet(secret, proxy, salt_ghid):
-        ''' Ratchets a key using HKDF-SHA512, using the associated 
+        ''' Ratchets a key using HKDF-SHA512, using the associated
         address as salt. For dynamic files, this should be the previous
         frame ghid (not the dynamic ghid).
         
@@ -762,7 +765,21 @@ class Privateer:
         )
         
         
-class MarqueRevoker:
+class Charon:
     ''' Handles the removal of secrets when their targets are removed,
-    deleted, or otherwise made inaccessible.
+    deleted, or otherwise made inaccessible. Charon instances are
+    notified of object removal by the undertaker, and then handle
+    ferrying the object's secret into non-existence. Data isn't "dead"
+    until its keys are deleted.
     '''
+    
+    def __init__(self, *args, **kwargs):
+        self._privateer = None
+        
+    def assemble(self, privateer):
+        self._privateer = weakref.proxy(privateer)
+        
+    def schedule(self, obj):
+        ''' Gets a secret ready for removal.
+        obj is a Hypergolix lightweight representation.
+        '''

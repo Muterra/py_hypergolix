@@ -377,7 +377,7 @@ class ConfigTest(unittest.TestCase):
             homedir = _ensure_hgx_homedir(root)
             
             with Config(root) as config:
-                self.assertEqual(config.homedir, homedir)
+                self.assertEqual(config.home_dir, homedir)
                 
                 self.assertEqual(config.remotes, tuple())
                 self.assertEqual(config.fingerprint, None)

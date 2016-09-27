@@ -1,0 +1,26 @@
+{
+    "remotes": [
+        {
+            "host": "127.0.0.1",
+            "tls": false,
+            "__RemoteDef__": true,
+            "port": 6022
+        }
+    ],
+    "instrumentation": {
+        "traceur": false,
+        "__InstrumentationDef__": true,
+        "debug": false,
+        "verbosity": "warning"
+    },
+    "user": {
+        "user_id": "AWRt_jiwnT5hUTfQmQSKn3_OC4SD1Lgjiqu1MI4xaaJDVNZRcQp-f9XcwQt2nvk-4oYpoW_vq-WRu_6_auwt2wY=",
+        "fingerprint": "Ad2qpgqje7zRT8vRoBiDD_3-XN3C8sbL0kdpyjpU-5set3l_D8mwpPoXOHX1GmBAdIpQkYVfzdtSMCkuelE46Qk=",
+        "password": null,
+        "__UserDef__": true
+    },
+    "process": {
+        "ipc_port": 6023,
+        "__ProcessDef__": true
+    }
+}

@@ -603,7 +603,7 @@ class Config:
         ''' Gets the IPC port.
         '''
         try:
-            return bool(self._cfg['process'].ipc_port)
+            return int(self._cfg['process'].ipc_port)
             
         except Exception as exc:
             raise ConfigError('Invalid configuration.') from exc
