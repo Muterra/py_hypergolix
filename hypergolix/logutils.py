@@ -37,34 +37,70 @@ hypergolix: A python Golix client.
 import sys
 import pathlib
 import logging
+import logging.handlers
 import datetime
+import time
+
+
+def _make_logpath(root, prefix, name, suffix, ext):
+    ''' Creates a logname using the passed prefix, suffix, ext, etc.
+    Returns a path.
+    '''
+    if prefix != '':
+        prefix = prefix + '_'
+        
+    if suffix != '':
+        suffix = '_' + suffix
+        
+    if not ext.startswith('.'):
+        ext = '.' + ext
+        
+    start_time = datetime.datetime.now()
+    start_time = start_time.strftime('%Y.%m.%d_%H.%M.%S')
+    
+    return root / (prefix + name + suffix + '_' + start_time + ext)
 
 
 def autoconfig(tofile=True, logdirname='logs', loglevel='warning', suffix=''):
     if tofile:
+        # Use the name of the called script as the log title
         fname = sys.argv[0]
+        logname = pathlib.Path(fname).stem
+        # Convert the log directory to an absolute path
         logdir = pathlib.Path(logdirname).absolute()
 
         if (not logdir.exists()) or (not logdir.is_dir()):
-            logdir.mkdir()
-
-        # Note that double slashes don't cause problems.
-        prefix = logdirname + '/' + pathlib.Path(fname).stem
-        
-        if suffix != '':
-            suffix = '_' + suffix
+            logdir.mkdir(parents=True)
             
-        ii = 0
-        date = str(datetime.date.today())
-        ext = '.pylog'
-        while pathlib.Path(prefix + suffix + '_' + date + '_' + str(ii) +
-                           ext).exists():
-                ii += 1
-        logname = prefix + suffix + '_' + date + '_' + str(ii) + ext
-        print('USING LOGFILE: ' + logname)
+        logpath = _make_logpath(
+            root = logdir,
+            prefix = '',
+            name = logname,
+            suffix = suffix,
+            ext = '.pylog'
+        )
+        
+        while logpath.exists():
+            # Wait until the time changes, because, yeah.
+            time.sleep(1)
+            logpath = _make_logpath(
+                root = logdir,
+                prefix = '',
+                name = logname,
+                suffix = suffix,
+                ext = '.pylog'
+            )
 
         # Make a log handler
-        loghandler = logging.FileHandler(logname)
+        loghandler = logging.handlers.RotatingFileHandler(
+            filename = str(logpath),
+            # This determines the max size of each log file, and the number of
+            # log files to keep. To be clear, this is a shitload of logging.
+            maxBytes = 2**20,
+            backupCount = 10,
+            # Setting this to True will defer log creation until it's needed
+            delay = False
+        )
         
     else:
         loghandler = logging.StreamHandler()
