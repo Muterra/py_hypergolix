@@ -1111,11 +1111,8 @@ def _ingest_args(argv=None):
         metavar = 'PORT'
     )
     
-    if argv is None:
-        args = parser.parse_args()
-        
-    else:
-        args = parser.parse_args(argv)
+    # This will dispatch to sys.argv correctly if args=argv is None
+    args = parser.parse_args(args=argv)
         
     # Now we need to do some manual type checking and manipulation
     try:

@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -51,7 +51,7 @@ logging.getLogger(__name__).addHandler(NullHandler())
 __all__ = [
     'HGXLink',
     'Ghid',
-    'ObjBase', 
+    'ObjBase',
     'ProxyBase',
     'PickleObj',
     'PickleProxy',
@@ -84,7 +84,6 @@ from . import service
 from . import utils
 
 # Add in toplevel stuff
-from .service import HGXLink
 from golix import Ghid
 
 from .objproxy import ObjBase
@@ -93,3 +92,29 @@ from .objproxy import PickleObj
 from .objproxy import PickleProxy
 from .objproxy import JsonObj
 from .objproxy import JsonProxy
+
+
+def HGXLink(ipc_port=7772, debug=False, aengel=None):
+    if not aengel:
+        aengel = utils.Aengel()
+        
+    embed = ipc.IPCEmbed(
+        aengel = aengel,
+        threaded = True,
+        thread_name = utils._generate_threadnames('em-aure')[0],
+        debug = debug,
+    )
+    
+    embed.add_ipc_threadsafe(
+        client_class = comms.WSBasicClient,
+        host = 'localhost',
+        port = ipc_port,
+        debug = debug,
+        aengel = aengel,
+        threaded = True,
+        thread_name = utils._generate_threadnames('emb-ws')[0],
+        tls = False
+    )
+        
+    embed.aengel = aengel
+    return embed

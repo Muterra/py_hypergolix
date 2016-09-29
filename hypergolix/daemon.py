@@ -491,7 +491,8 @@ def _ingest_args(argv=None):
     ''' Parse and handle any command-line args.
     '''
     parser = argparse.ArgumentParser(
-        description = 'Control the Hypergolix service.'
+        prog = 'hypergolix.daemon',
+        description = 'Control the Hypergolix app daemon.'
     )
     parser.add_argument(
         'cmd',
@@ -502,7 +503,7 @@ def _ingest_args(argv=None):
                'restart will only work if the daemon is already running.'
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(args=argv)
     return args
         
 

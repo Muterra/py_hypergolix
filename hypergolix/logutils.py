@@ -40,7 +40,7 @@ import logging
 import datetime
 
 
-def autoconfig(tofile=True, logdirname='logs', loglevel='debug', suffix=''):
+def autoconfig(tofile=True, logdirname='logs', loglevel='warning', suffix=''):
     if tofile:
         fname = sys.argv[0]
         logdir = pathlib.Path(logdirname).absolute()

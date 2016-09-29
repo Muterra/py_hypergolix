@@ -80,7 +80,6 @@ def make_fixtures(debug, hgx_root_1, hgx_root_2):
         port = server_port,
         debug = debug,
         traceur = False,
-        foreground = False,
         aengel = aengel,
     )
     # localhost:6023, no tls
