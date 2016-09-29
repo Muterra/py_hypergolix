@@ -70,15 +70,6 @@ logger = logging.getLogger(__name__)
 # ###############################################
 # Lib
 # ###############################################
-
-
-def _get_local_ip():
-    ''' Act like we're going to connect to Google's DNS servers and then
-    use the socket to figure out our local IP address.
-    '''
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.connect(('8.8.8.8', 53))
-    return s.getsockname()[0]
     
     
 def _cast_verbosity(verbosity, debug, traceur):
@@ -96,6 +87,15 @@ def _cast_verbosity(verbosity, debug, traceur):
             verbosity = 'warning'
             
     return verbosity
+
+
+def _get_local_ip():
+    ''' Act like we're going to connect to Google's DNS servers and then
+    use the socket to figure out our local IP address.
+    '''
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(('8.8.8.8', 53))
+    return s.getsockname()[0]
     
     
 def _cast_host(host):
@@ -105,6 +105,8 @@ def _cast_host(host):
         host = '127.0.0.1'
     elif host == 'AUTO':
         host = _get_local_ip()
+    elif host == 'ANY':
+        host = ''
     
     # Otherwise, host stays the same
     return host
@@ -261,7 +263,9 @@ def _ingest_args(argv=None):
         type = str,
         help = 'Specify the TCP host to use. Defaults to localhost only. ' +
                'Passing the special (case-sensitive) string "AUTO" will ' +
-               'determine the current local IP address and bind to that.'
+               'determine the current local IP address and bind to that. ' +
+               'Passing the special (case-sensitive) string "ANY" will bind ' +
+               'to any host at the specified port (not recommended).'
     )
     start_parser.add_argument(
         '--port', '-P',
