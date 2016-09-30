@@ -112,7 +112,8 @@ def app_core(user_id, password, startup_logger, aengel=None,
     logutils.autoconfig(
         tofile = True,
         logdirname = log_dir,
-        loglevel = verbosity
+        loglevel = verbosity,
+        logname = 'hgxapp'
     )
     
     if not aengel:
@@ -167,8 +168,8 @@ def app_core(user_id, password, startup_logger, aengel=None,
         except CancelledError:
             effective_logger.error(
                 'Error while connecting to upstream remote at ' +
-                remote.host + ':' + remote.port + '. Connection will only ' +
-                'be reattempted after restarting Hypergolix.'
+                remote.host + ':' + str(remote.port) + '. Connection will ' +
+                'only be reattempted after restarting Hypergolix.'
             )
             
         else:

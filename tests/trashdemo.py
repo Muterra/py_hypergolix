@@ -77,6 +77,7 @@ def make_fixtures(debug, hgx_root_1, hgx_root_2):
     hgxserver = _hgx_server(
         host = '127.0.0.1',
         port = server_port,
+        cache_dir = None,
         debug = debug,
         traceur = False,
         aengel = aengel,

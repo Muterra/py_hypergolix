@@ -38,6 +38,7 @@ import time
 import argparse
 import logging
 import socket
+import pathlib
 
 import daemoniker
 from daemoniker import Daemonizer
@@ -112,13 +113,14 @@ def _cast_host(host):
     return host
 
 
-def _hgx_server(host, port, debug, traceur, aengel=None):
+def _hgx_server(host, port, cache_dir, debug, traceur, aengel=None):
     ''' Simple remote persistence server over websockets.
+    Explicitly pass None to cache_dir to use in-memory only.
     '''
     if not aengel:
         aengel = Aengel()
         
-    remote = RemotePersistenceServer()
+    remote = RemotePersistenceServer(cache_dir)
     server = Autocomms(
         autoresponder_name = 'reremser',
         autoresponder_class = PersisterBridgeServer,
@@ -149,9 +151,19 @@ def start(namespace=None):
         debug = namespace.debug
         traceur = namespace.traceur
         chdir = namespace.chdir
-        log_dir = namespace.logdir
+        # Convert log dir to absolute if defined
+        if namespace.logdir is not None:
+            log_dir = str(pathlib.Path(namespace.logdir).absolute())
+        else:
+            log_dir = namespace.log_dir
+        # Convert cache dir to absolute if defined
+        if namespace.cachedir is not None:
+            cache_dir = str(pathlib.Path(namespace.cachedir).absolute())
+        else:
+            cache_dir = namespace.cache_dir
         verbosity = namespace.verbosity
-        pid_path = namespace.pidfile
+        # Convert pid path to absolute (must be defined)
+        pid_path = str(pathlib.Path(namespace.pidfile).absolute())
         
     # Daemonizing, we still need these to be defined to avoid NameErrors
     else:
@@ -161,27 +173,29 @@ def start(namespace=None):
         traceur = None
         chdir = None
         log_dir = None
+        cache_dir = None
         verbosity = None
         pid_path = None
     
     with Daemonizer() as (is_setup, daemonizer):
         # Daemonize. Don't strip cmd-line arguments, or we won't know to
         # continue with startup
-        is_parent, host, port, debug, traceur, log_dir, verbosity, pid_path = \
-            daemonizer(
-                pid_path,
-                host,
-                port,
-                debug,
-                traceur,
-                log_dir,
-                verbosity,
-                pid_path,
-                chdir = chdir,
-                # Don't strip these, because otherwise we won't know to resume
-                # daemonization
-                strip_cmd_args = False
-            )
+        (is_parent, host, port, debug, traceur, log_dir, cache_dir, verbosity,
+         pid_path) = daemonizer(
+            pid_path,
+            host,
+            port,
+            debug,
+            traceur,
+            log_dir,
+            cache_dir,
+            verbosity,
+            pid_path,
+            chdir = chdir,
+            # Don't strip these, because otherwise we won't know to resume
+            # daemonization
+            strip_cmd_args = False
+        )
         
         if not is_parent:
             # Do signal handling within the Daemonizer so that the parent knows
@@ -199,12 +213,13 @@ def start(namespace=None):
         logutils.autoconfig(
             tofile = True,
             logdirname = log_dir,
+            logname = 'hgxremote',
             loglevel = verbosity
         )
         
     logger.debug('Starting remote persistence server...')
     host = _cast_host(host)
-    remote, server = _hgx_server(host, port, debug, traceur)
+    remote, server = _hgx_server(host, port, cache_dir, debug, traceur)
     logger.info('Remote persistence server successfully started.')
 
     # Wait indefinitely until signal caught.
@@ -256,6 +271,16 @@ def _ingest_args(argv=None):
         help = 'The full path to the PID file we should use for the service.'
     )
     start_parser.add_argument(
+        '--cachedir', '-c',
+        action = 'store',
+        dest = 'cachedir',
+        default = None,
+        type = str,
+        help = 'Specify a directory to use as a persistent cache for files. ' +
+               'If none is specified, will default to an in-memory-only ' +
+               'cache, which is, quite obviously, rather volatile.'
+    )
+    start_parser.add_argument(
         '--host', '-H',
         action = 'store',
         dest = 'host',
@@ -268,7 +293,7 @@ def _ingest_args(argv=None):
                'to any host at the specified port (not recommended).'
     )
     start_parser.add_argument(
-        '--port', '-P',
+        '--port', '-p',
         action = 'store',
         dest = 'port',
         default = 7770,

@@ -449,6 +449,7 @@ def _format_ghidstr(ghid):
     return '\n'.join(out)
     
     
+# TODO: move this to config
 def whoami(namespace=None):
     ''' Returns the current Hypergolix user, if one exists.
     '''

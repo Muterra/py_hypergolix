@@ -806,6 +806,14 @@ class Autoresponder(LooperTrooper):
             target_loop = self._loop
         )
         
+    def _close_session_threadsafe(self, connection):
+        ''' Threadsafe wrapper for closing sessions.
+        '''
+        call_coroutine_threadsafe(
+            coro = self._close_session(connection),
+            loop = self._loop
+        )
+        
     async def _close_session(self, connection):
         ''' Loopsafe wrapper for closing sessions.
         '''

@@ -174,7 +174,7 @@ class RemotePersistenceServer:
     debug:      False
     traceur:    False
     '''
-    def __init__(self):
+    def __init__(self, cache_dir=None):
         self.bridge = None
         
         self.percore = PersistenceCore()
@@ -182,7 +182,12 @@ class RemotePersistenceServer:
         self.enforcer = Enforcer()
         self.lawyer = Lawyer()
         self.bookie = Bookie()
-        self.librarian = MemoryLibrarian()
+        
+        if cache_dir is None:
+            self.librarian = MemoryLibrarian()
+        else:
+            self.librarian = DiskLibrarian(cache_dir)
+            
         self.postman = PostOffice()
         self.undertaker = Undertaker()
         # I mean, this won't be used unless we set up peering, but it saves us 
@@ -488,6 +493,27 @@ class _PersisterBridgeSession(_AutoresponderSession):
                         # Note: for now, just don't worry about failures.
                         # await_reply = False
                     )
+                    
+                # KeyErrors have been happening when connections/sessions
+                # disconnect without calling close (or something similar to
+                # that, I never tracked down the original source of the
+                # problem). This is a quick, hacky fix to remove the bad
+                # subscription when we first get an update for an object.
+                # This is far, far from ideal, but hey, what can you do
+                # without any time to do it in?
+                except KeyError as exc:
+                    # Well, this is an awkward way to handle an unsub, but it
+                    # gets the job done until we fix the way all of this plays
+                    # together.
+                    await self._transport.unsubscribe_wrapper(
+                        session = self,
+                        request_body = bytes(subscribed_ghid)
+                    )
+                    logger.warning(
+                        'Application client subscription persisted longer ' +
+                        'than the connection itself w/ traceback:\n' +
+                        ''.join(traceback.format_exc())
+                    )
                 
                 except:
                     logger.error(
@@ -645,7 +671,7 @@ class PersisterBridgeServer(Autoresponder):
         '''
         ghid = Ghid.from_bytes(request_body)
         
-        def updater(subscribed_ghid, notification_ghid, 
+        def updater(subscribed_ghid, notification_ghid,
                     call=session.send_subs_update):
             call(subscribed_ghid, notification_ghid)
         

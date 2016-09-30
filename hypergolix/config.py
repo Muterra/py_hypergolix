@@ -805,6 +805,7 @@ def _index_remote(cfg, remote_def):
 
 NAMED_REMOTES = {
     'hgxtest': _readonly_remote('hgxtest.hypergolix.com', 443, True),
+    'hgx': _readonly_remote('hgx.hypergolix.com', 443, True)
 }
 
 
@@ -1129,47 +1130,4 @@ if __name__ == '__main__':
     # We now return to your regularly scheduled programming
     args = _ingest_args()
     _handle_args(args)
-
-
-# Saving these for later, just like Rip Van Winkle's beard.
-if False:
-    parser.add_argument(
-        '--traceur',
-        action = 'store_true',
-        help = 'Enable thorough analysis, including stack tracing. '
-               'Implies verbosity of debug.'
-    )
-    
-    parser.add_argument(
-        '--ipcport',
-        action = 'store',
-        default = 7772,
-        type = int,
-        help = 'Specify the ipc port [default: 7772]'
-    )
-    
-    parser.add_argument(
-        '--cachedir',
-        action = 'store',
-        default = './',
-        type = str,
-        help = 'Specify the directory to use for on-disk caching, relative to '
-                'the current path. Defaults to the current directory.'
-    )
-    
-    parser.add_argument(
-        '--logdir',
-        action = 'store',
-        default = None,
-        type = str,
-        help = 'Log to a specified director, relative to current path.',
-    )
-    
-    parser.add_argument(
-        '--userid',
-        action = 'store',
-        default = None,
-        type = str,
-        help = 'Specifies a Hypergolix login user. If omitted, creates a new '
-               'account.',
-    )
+    print('Configuration successful. Restart Hypergolix to apply changes.')

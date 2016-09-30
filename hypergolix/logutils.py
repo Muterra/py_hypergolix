@@ -61,11 +61,14 @@ def _make_logpath(root, prefix, name, suffix, ext):
     return root / (prefix + name + suffix + '_' + start_time + ext)
 
 
-def autoconfig(tofile=True, logdirname='logs', loglevel='warning', suffix=''):
+def autoconfig(tofile=True, logdirname='logs', loglevel='warning', prefix='',
+               logname=None, suffix=''):
     if tofile:
-        # Use the name of the called script as the log title
-        fname = sys.argv[0]
-        logname = pathlib.Path(fname).stem
+        # Use the name of the called script as the log title if none was given
+        if logname is None:
+            fname = sys.argv[0]
+            logname = pathlib.Path(fname).stem
+        
         # Convert the log directory to an absolute path
         logdir = pathlib.Path(logdirname).absolute()
 
