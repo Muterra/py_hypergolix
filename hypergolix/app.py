@@ -74,7 +74,7 @@ __all__ = [
     
     
 def app_core(user_id, password, startup_logger, aengel=None,
-             _scrypt_hardness=None, hgx_root=None):
+             _scrypt_hardness=None, hgx_root=None, enable_logs=True):
     ''' This is where all of the UX goes for the service itself. From
     here, we build a credential, then a bootstrap, and then persisters,
     IPC, etc.
@@ -109,12 +109,13 @@ def app_core(user_id, password, startup_logger, aengel=None,
         ipc_port = config.ipc_port
         remotes = config.remotes
         
-    logutils.autoconfig(
-        tofile = True,
-        logdirname = log_dir,
-        loglevel = verbosity,
-        logname = 'hgxapp'
-    )
+    if enable_logs:
+        logutils.autoconfig(
+            tofile = True,
+            logdirname = log_dir,
+            loglevel = verbosity,
+            logname = 'hgxapp'
+        )
     
     if not aengel:
         aengel = Aengel()

@@ -90,7 +90,8 @@ def make_fixtures(debug, hgx_root_1, hgx_root_2):
         startup_logger = None,
         aengel = aengel,
         _scrypt_hardness = 1024,
-        hgx_root = hgx_root_1
+        hgx_root = hgx_root_1,
+        enable_logs = False
     )
         
     # localhost:6024, no tls
@@ -100,7 +101,8 @@ def make_fixtures(debug, hgx_root_1, hgx_root_2):
         startup_logger = None,
         aengel = aengel,
         _scrypt_hardness = 1024,
-        hgx_root = hgx_root_2
+        hgx_root = hgx_root_2,
+        enable_logs = False
     )
         
     return hgxserver, hgxraz, hgxdes, aengel

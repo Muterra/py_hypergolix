@@ -2047,6 +2047,11 @@ class PostOffice(_PostmanBase):
     def subscribe(self, ghid, callback):
         ''' Tells the postman that the watching_session would like to be
         updated about ghid.
+        
+        TODO: instead of postoffices subscribing with a callback, they
+        should subscribe with a session. That way, we're not spewing off
+        extra strong references and just generally mangling up our
+        object lifetimes.
         '''
         # First add the subscription listeners
         with self._opslock_listen:
