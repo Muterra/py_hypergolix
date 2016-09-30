@@ -44,6 +44,7 @@ import daemoniker
 from daemoniker import Daemonizer
 from daemoniker import SignalHandler1
 from daemoniker import SIGTERM
+from daemoniker.exceptions import ReceivedSignal
 
 # Intra-package dependencies (that require explicit imports, courtesy of
 # daemonization)
@@ -111,6 +112,24 @@ def _cast_host(host):
     
     # Otherwise, host stays the same
     return host
+    
+    
+def _shielded_server(host, port, cache_dir, debug, traceur, aengel=None):
+    ''' Wraps an _hgx_server in a run-forever while loop, catching and
+    logging all RuntimeErrors but otherwise restarting immediately.
+    
+    Ahhhhh shit, unfortunately because everything is happening in its
+    own thread this won't really work.
+    '''
+    while True:
+        try:
+            _hgx_server(host, port, cache_dir, debug, traceur, aengel)
+            
+        except ReceivedSignal:
+            raise
+            
+        except SystemExit:
+            raise
 
 
 def _hgx_server(host, port, cache_dir, debug, traceur, aengel=None):

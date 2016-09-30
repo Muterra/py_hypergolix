@@ -36,6 +36,7 @@ import pathlib
 import json
 import collections
 import copy
+import webbrowser
 
 from golix import Ghid
 
@@ -967,6 +968,79 @@ def _handle_ipc(config, ipc):
         config.ipc_port = ipc
     
     
+def _format_blockstr(long_line):
+    ''' Wraps a urlsafe ghid.
+    '''
+    shortened_length = 36
+    indent = '    '
+    
+    out = []
+    for slice_start in range(0, len(long_line), shortened_length):
+        out.append(
+            indent + long_line[slice_start:slice_start + shortened_length]
+        )
+    
+    return '\n'.join(out)
+        
+        
+def _handle_whoami(config, whoami):
+    ''' If whoami is True, prints out information about the current
+    hypergolix user.
+    '''
+    if whoami:
+        fingerprint = config.fingerprint
+        user_id = config.user_id
+
+        # Add newline just for format pretty
+        print('')
+            
+        if user_id is None:
+            print('Your user ID is undefined.')
+        else:
+            user_id = user_id.as_str()
+            print('Your user ID is:\n' + _format_blockstr(user_id))
+            print('You use that to log in.\n')
+            
+        if fingerprint is None:
+            print('Your fingerprint is undefined.')
+        else:
+            fingerprint = fingerprint.as_str()
+            print('Your fingerprint is:\n' + _format_blockstr(fingerprint))
+            print(
+                'Someone else can use that to share\n' +
+                'Hypergolix objects with you.'
+            )
+        
+    
+def _handle_register(config, register):
+    ''' Launches registration in a browser window if set.
+    '''
+    if register:
+        fingerprint = config.fingerprint.as_str()
+        reg_address = (
+            'https://www.hypergolix.com/register.html?fingerprint=' +
+            fingerprint
+        )
+        
+        try:
+            webbrowser.open(reg_address, new=2)
+            
+        except:
+            print(
+                'Failed to open web browser for registration.\n' +
+                'Please navigate to this address to register:\n' +
+                _format_blockstr(reg_address)
+            )
+            
+        else:
+            print(
+                'Please complete registration in your browser window.\n' +
+                'If no page was opened, navigate to this address to\n' +
+                'register:\n' +
+                _format_blockstr(reg_address)
+            )
+    
+    
 def _handle_args(args, root=None):
     ''' Performs all needed actions on the passed command args.
     '''
@@ -980,6 +1054,8 @@ def _handle_args(args, root=None):
         _handle_debug(config, args.debug)
         _handle_verbosity(config, args.verbosity)
         _handle_ipc(config, args.ipc_port)
+        _handle_whoami(config, args.whoami)
+        _handle_register(config, args.register)
         
         
 def _ingest_args(argv=None):
@@ -1112,6 +1188,31 @@ def _ingest_args(argv=None):
         metavar = 'PORT'
     )
     
+    ####################################################################
+    # Etc
+    ####################################################################
+    
+    etc_group = parser.add_argument_group(
+        title = 'Miscellaneous commands'
+    )
+    
+    # Set verbosity
+    etc_group.add_argument(
+        '--whoami',
+        action = 'store_true',
+        help = 'Print the fingerprint and user ID for the current ' +
+               'Hypergolix configuration.'
+    )
+    
+    # Set verbosity
+    etc_group.add_argument(
+        '--register',
+        action = 'store_true',
+        help = 'Register the current Hypergolix user, allowing them access ' +
+               'to the hgx.hypergolix.com remote persister. Requires a web ' +
+               'browser.'
+    )
+    
     # This will dispatch to sys.argv correctly if args=argv is None
     args = parser.parse_args(args=argv)
         
@@ -1130,4 +1231,4 @@ if __name__ == '__main__':
     # We now return to your regularly scheduled programming
     args = _ingest_args()
     _handle_args(args)
-    print('Configuration successful. Restart Hypergolix to apply changes.')
+    print('Configuration successful. Restart Hypergolix to apply any changes.')
