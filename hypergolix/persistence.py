@@ -249,7 +249,7 @@ class PersistenceCore:
         
         # TODO: push this to a delayed callback within an event loop...
         if remotable:
-            self.salmonator.push(obj.ghid)
+            self.salmonator.schedule_push(obj.ghid)
         
         return obj
         
@@ -286,7 +286,7 @@ class PersistenceCore:
         
         # TODO: push this to a delayed callback within an event loop...
         if remotable:
-            self.salmonator.push(obj.ghid)
+            self.salmonator.schedule_push(obj.ghid)
         
         return obj
         
@@ -323,7 +323,7 @@ class PersistenceCore:
         
         # TODO: push this to a delayed callback within an event loop...
         if remotable:
-            self.salmonator.push(obj.ghid)
+            self.salmonator.schedule_push(obj.ghid)
         
         return obj
         
@@ -360,7 +360,7 @@ class PersistenceCore:
         
         # TODO: push this to a delayed callback within an event loop...
         if remotable:
-            self.salmonator.push(obj.ghid)
+            self.salmonator.schedule_push(obj.ghid)
         
         return obj
         
@@ -397,7 +397,7 @@ class PersistenceCore:
         
         # TODO: push this to a delayed callback within an event loop...
         if remotable:
-            self.salmonator.push(obj.ghid)
+            self.salmonator.schedule_push(obj.ghid)
         
         return obj
         
@@ -434,7 +434,7 @@ class PersistenceCore:
         
         # TODO: push this to a delayed callback within an event loop...
         if remotable:
-            self.salmonator.push(obj.ghid)
+            self.salmonator.schedule_push(obj.ghid)
         
         return obj
         
@@ -2372,9 +2372,9 @@ class Salmonator:
         ''' Callback to use when subscribing to things at remotes.
         '''
         logger.debug('Hitting remote callback.')
-        self.pull(notification)
+        self.attempt_pull(notification)
         
-    def push(self, ghid):
+    def schedule_push(self, ghid):
         ''' Grabs the ghid from librarian and sends it to all applicable
         remotes.
         '''
@@ -2383,7 +2383,7 @@ class Salmonator:
         for remote in self._upstream_remotes:
             remote.publish(data)
         
-    def pull(self, ghid, quiet=False):
+    def attempt_pull(self, ghid, quiet=False):
         ''' Grabs the ghid from remotes, if available, and puts it into
         the ingestion pipeline.
         '''
@@ -2400,7 +2400,7 @@ class Salmonator:
                     # Catch unavailableupstream and log a warning.
                     # TODO: add logic to retry a few times and then discard
                     try:
-                        self.pull(obj.target)
+                        self.attempt_pull(obj.target)
                         
                     except UnavailableUpstream:
                         logger.warning(
@@ -2569,7 +2569,7 @@ class Salmonator:
             
         # This should also catch any upstream deletes.
         if not skip_refresh:
-            self.pull(gao.ghid, quiet=True)
+            self.attempt_pull(gao.ghid, quiet=True)
                 
     def deregister(self, ghid):
         ''' Tells the salmonator to stop listening for upstream 
@@ -2602,7 +2602,7 @@ class SalmonatorNoop:
     ''' Currently used in remote persistence servers to hush everything
     upstream/downstream while still making use of standard librarians.
     
-    And by "used", I mean "unused, but is intended to be added in at 
+    And by "used", I mean "unused, but is intended to be added in at
     some point, because I forgot I was just using a standard Salmonator
     because the overhead is unimportant right now".
     '''
@@ -2621,11 +2621,14 @@ class SalmonatorNoop:
     def remove_downstream_remote(*args, **kwargs):
         pass
         
-    def push(*args, **kwargs):
+    def schedule_push(*args, **kwargs):
         pass
         
     def pull(*args, **kwargs):
         pass
         
     def register(*args, **kwargs):
+        pass
+        
+    def deregister(*args, **kwargs):
         pass

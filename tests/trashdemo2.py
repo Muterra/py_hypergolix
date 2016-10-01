@@ -114,8 +114,8 @@ def make_fixtures(debug, hgx_root_1, hgx_root_2):
 
 
 def make_tests(iterations, debug, raz, des, aengel):
-    inner_profiler = cProfile.Profile()
-    outer_profiler = cProfile.Profile()
+    # inner_profiler = cProfile.Profile()
+    # outer_profiler = cProfile.Profile()
     timer = collections.deque([0,0], maxlen=2)
 
     # Declare API
@@ -194,9 +194,12 @@ def make_tests(iterations, debug, raz, des, aengel):
             def state_mirror(source_obj):
                 # print('Mirroring state.')
                 reply.hgx_state = source_obj
-                inner_profiler.enable()
-                reply.hgx_push_threadsafe()
-                inner_profiler.disable()
+                # inner_profiler.enable()
+                try:
+                    reply.hgx_push_threadsafe()
+                finally:
+                    # inner_profiler.disable()
+                    pass
             obj.hgx_register_callback_threadsafe(state_mirror)
             
             reply.hgx_share_threadsafe(recipient=self.raz)
@@ -232,7 +235,6 @@ def make_tests(iterations, debug, raz, des, aengel):
             time.sleep(1.5)
             times = []
             
-            outer_profiler.enable()
             for ii in range(iterations):
                 with self.subTest(i=ii):
                     msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
@@ -242,17 +244,20 @@ def make_tests(iterations, debug, raz, des, aengel):
                     obj.hgx_state = msg
                     
                     # Zero out the timer and enable the profiler
-                    inner_profiler.enable()
-                    self.timer.extendleft([0,0,time.monotonic()])
-                    
-                    # Call an update
-                    obj.hgx_push_threadsafe()
-                    # Wait for response
-                    success = rt_waiter()
-                    # Stop the timer
-                    times.append(self.timer[0] - self.timer[1])
-                    # Stop the profiler
-                    inner_profiler.disable()
+                    # inner_profiler.enable()
+                    try:
+                        self.timer.extendleft([0,0,time.monotonic()])
+                        
+                        # Call an update
+                        obj.hgx_push_threadsafe()
+                        # Wait for response
+                        success = rt_waiter()
+                        # Stop the timer
+                        times.append(self.timer[0] - self.timer[1])
+                    finally:
+                        # Stop the profiler
+                        # inner_profiler.disable()
+                        pass
                     
                     # Check for success
                     self.assertTrue(success)
@@ -260,7 +265,6 @@ def make_tests(iterations, debug, raz, des, aengel):
                     
                     # Max update frequencies can cause problems yo
                     time.sleep(.1)
-            outer_profiler.disable()
                     
             print('---------------------------------------------------')
             print('Max time: ', max(times))
@@ -269,15 +273,10 @@ def make_tests(iterations, debug, raz, des, aengel):
             print('Med time: ', statistics.median(times))
             print('\n')
             
-            print('---------------------------------------------------')
-            print('Cropped profile')
-            inner_profiler.print_stats('cumulative')
-            print('\n')
-            
-            print('---------------------------------------------------')
-            print('Wide-angle profile')
-            outer_profiler.print_stats('cumulative')
-            print('\n')
+            # print('---------------------------------------------------')
+            # print('Cropped profile')
+            # inner_profiler.print_stats('cumulative')
+            # print('\n')
     
     return DemoReplicatorTest
     

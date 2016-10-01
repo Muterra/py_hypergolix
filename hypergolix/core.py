@@ -286,7 +286,7 @@ class GhidProxier:
         container).
         '''
         if ghid not in self._librarian:
-            self._salmonator.pull(ghid, quiet=True)
+            self._salmonator.attempt_pull(ghid, quiet=True)
         
         try:
             obj = self._librarian.summarize(ghid)
@@ -351,7 +351,7 @@ class Oracle:
         except KeyError:
             with self._opslock:
                 if ghid not in self._librarian:
-                    self._salmonator.pull(ghid, quiet=True)
+                    self._salmonator.attempt_pull(ghid, quiet=True)
                 
                 obj = gaoclass.from_ghid(
                     ghid = ghid, 
