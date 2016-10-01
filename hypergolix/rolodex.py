@@ -150,7 +150,7 @@ class Rolodex:
         '''
         if recipient not in self._librarian:
             try:
-                self._salmonator.pull(recipient)
+                self._salmonator.attempt_pull(recipient)
             except Exception as exc:
                 raise UnknownParty(
                     'Recipient unknown: ' + str(recipient)
@@ -189,7 +189,7 @@ class Rolodex:
         ''' Callback to handle any requests.
         '''
         if notification not in self._librarian:
-            self._salmonator.pull(notification, quiet=True)
+            self._salmonator.attempt_pull(notification, quiet=True)
         
         # Note that the notification could also be a GDXX.
         request_or_debind = self._librarian.summarize(notification)
@@ -218,7 +218,7 @@ class Rolodex:
             # TODO: have this filter based on contacts.
             if unpacked.author not in self._librarian:
                 try:
-                    self._salmonator.pull(unpacked.author)
+                    self._salmonator.attempt_pull(unpacked.author)
                 except Exception as exc:
                     raise UnknownParty(
                         'Request author unknown: ' + str(unpacked.author)

@@ -2624,7 +2624,7 @@ class SalmonatorNoop:
     def schedule_push(*args, **kwargs):
         pass
         
-    def pull(*args, **kwargs):
+    def attempt_pull(*args, **kwargs):
         pass
         
     def register(*args, **kwargs):

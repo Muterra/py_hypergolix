@@ -865,7 +865,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         independently.
         '''
         ghid = Ghid.from_bytes(request_body)
-        self._salmonator.pull(ghid)
+        self._salmonator.attempt_pull(ghid)
         return b'\x01'
         
     async def share_object_wrapper(self, endpoint, request_body):
