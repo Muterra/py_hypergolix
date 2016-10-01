@@ -851,7 +851,10 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         if response == b'\x01':
             return True
         else:
-            raise RuntimeError('Unknown response code while publishing object.')
+            raise RuntimeError(
+                'Unknown response code while publishing object:\n' +
+                str(response)
+            )
     
     def get(self, ghid):
         ''' Requests an object from the persistence provider, identified

@@ -39,6 +39,9 @@ import argparse
 import logging
 import socket
 import pathlib
+import threading
+import http.server
+from http import HTTPStatus
 
 import daemoniker
 from daemoniker import Daemonizer
@@ -72,6 +75,34 @@ logger = logging.getLogger(__name__)
 # ###############################################
 # Lib
 # ###############################################
+
+
+class _HealthHandler(http.server.BaseHTTPRequestHandler):
+    ''' Handles healthcheck requests.
+    '''
+    
+    def do_GET(self):
+        # Send it a 200 with headers and GTFO
+        self.send_response(HTTPStatus.OK)
+        self.send_header('Content-type', 'text/plain')
+        self.send_header("Content-Length", 0)
+        self.end_headers()
+
+
+def _serve_healthcheck(port=7777):
+    ''' Sets up an http server in a different thread to be a health
+    check.
+    '''
+    server_address = ('', port)
+    server = http.server.HTTPServer(server_address, _HealthHandler)
+    worker = threading.Thread(
+        # Do it in a daemon thread so that application exits are reflected as
+        # unavailable, instead of persisting everything
+        daemon = True,
+        target = server.serve_forever(),
+        name = 'hlthchk'
+    )
+    return server, worker
     
     
 def _cast_verbosity(verbosity, debug, traceur):
@@ -240,6 +271,9 @@ def start(namespace=None):
     host = _cast_host(host)
     remote, server = _hgx_server(host, port, cache_dir, debug, traceur)
     logger.info('Remote persistence server successfully started.')
+    
+    # Start a health check
+    healthcheck_server, healthcheck_thread = _serve_healthcheck()
 
     # Wait indefinitely until signal caught.
     # TODO: literally anything smarter than this.
@@ -248,9 +282,13 @@ def start(namespace=None):
             time.sleep(.5)
     except SIGTERM:
         logger.info('Caught SIGTERM. Exiting.')
+        
+    healthcheck_server.shutdown()
     
     del remote
     del server
+    del healthcheck_thread
+    del healthcheck_server
     
     
 def stop(namespace=None):
