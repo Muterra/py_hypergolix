@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -39,56 +39,25 @@ RemoteNak status code conventions:
 0x0006: Invalid or unknown target.
 0x0007: Inconsistent author.
 0x0008: Object does not exist at persistence provider.
-0x0009: Attempt to upload illegal frame for dynamic binding. Indicates 
+0x0009: Attempt to upload illegal frame for dynamic binding. Indicates
         uploading a new dynamic binding without the root binding, or that
-        the uploaded frame does not contain any existing frames in its 
+        the uploaded frame does not contain any existing frames in its
         history.
 '''
-
-# Control * imports.
-__all__ = [
-    'MemoryPersister', 
-]
 
 # Global dependencies
 import abc
 import collections
-import warnings
-import functools
-import struct
 import weakref
-import queue
-import pathlib
-import base64
 import concurrent.futures
-
-import asyncio
-import websockets
-from websockets.exceptions import ConnectionClosed
-    
-# Not sure if these are being used
-import time
-import random
-import string
 import threading
 import traceback
-# End unsure block
 
-from golix import ThirdParty
-from golix import SecondParty
+import asyncio
+
 from golix import Ghid
-from golix import Secret
-from golix import ParseError
-from golix import SecurityError
 
 from golix.utils import generate_ghidlist_parser
-
-from golix._getlow import GIDC
-from golix._getlow import GEOC
-from golix._getlow import GOBS
-from golix._getlow import GOBD
-from golix._getlow import GDXX
-from golix._getlow import GARQ
 
 # Local dependencies
 from .persistence import PersistenceCore
@@ -101,7 +70,7 @@ from .persistence import Bookie
 from .persistence import DiskLibrarian
 from .persistence import MemoryLibrarian
 from .persistence import Enlitener
-from .persistence import Salmonator
+from .persistence import SalmonatorNoop
 
 from .exceptions import RemoteNak
 from .exceptions import MalformedGolixPrimitive
@@ -111,17 +80,12 @@ from .exceptions import InvalidIdentity
 from .exceptions import DoesNotExist
 from .exceptions import AlreadyDebound
 from .exceptions import InvalidTarget
-from .exceptions import StillBoundWarning
-from .exceptions import RequestError
+# from .exceptions import StillBoundWarning
+# from .exceptions import RequestError
 from .exceptions import InconsistentAuthor
 from .exceptions import IllegalDynamicFrame
 
-from .utils import _DeepDeleteChainMap
-from .utils import _WeldedSetDeepChainMap
-from .utils import _block_on_result
 from .utils import _JitSetDict
-from .utils import TruthyLock
-from .utils import SetMap
 from .utils import call_coroutine_threadsafe
 from .utils import _generate_threadnames
 
@@ -141,7 +105,7 @@ logger = logging.getLogger(__name__)
 
 # Control * imports.
 __all__ = [
-    # 'Rolodex', 
+    # 'Rolodex',
 ]
 
 
@@ -174,6 +138,7 @@ class RemotePersistenceServer:
     debug:      False
     traceur:    False
     '''
+    
     def __init__(self, cache_dir=None):
         self.bridge = None
         
@@ -190,17 +155,16 @@ class RemotePersistenceServer:
             
         self.postman = PostOffice()
         self.undertaker = Undertaker()
-        # I mean, this won't be used unless we set up peering, but it saves us 
-        # needing to do a modal switch for remote persistence servers and has
-        # (currently, relatively) negligible overhead
-        self.salmonator = Salmonator()
+        # I mean, this won't be used unless we set up peering, but it saves us
+        # needing to do a modal switch for remote persistence servers
+        self.salmonator = SalmonatorNoop()
         
     def assemble(self, bridge):
         # Now we need to link everything together.
-        self.percore.assemble(self.doorman, self.enforcer, 
-                                        self.lawyer, self.bookie, 
-                                        self.librarian, self.postman,
-                                        self.undertaker, self.salmonator)
+        self.percore.assemble(self.doorman, self.enforcer,
+                              self.lawyer, self.bookie,
+                              self.librarian, self.postman,
+                              self.undertaker, self.salmonator)
         self.doorman.assemble(self.librarian)
         self.enforcer.assemble(self.librarian)
         self.lawyer.assemble(self.librarian)
@@ -208,26 +172,27 @@ class RemotePersistenceServer:
         self.librarian.assemble(self.percore)
         self.postman.assemble(self.librarian, self.bookie)
         self.undertaker.assemble(self.librarian, self.bookie, self.postman)
-        # Note that this will break if we ever try to use it, because 
+        # Note that this will break if we ever try to use it, because
         # golix_core isn't actually a golix_core.
-        self.salmonator.assemble(self, self.percore, self.doorman, 
-                                self.postman, self.librarian)
+        self.salmonator.assemble(self, self.percore, self.doorman,
+                                 self.postman, self.librarian)
         
         # Okay, now set up the bridge, and we should be ready.
         self.bridge = bridge
-        self.bridge.assemble(self.percore, self.bookie, 
-                            self.librarian, self.postman)
+        self.bridge.assemble(self.percore, self.bookie,
+                             self.librarian, self.postman)
 
 
 class _PersisterBase(metaclass=abc.ABCMeta):
     ''' Base class for persistence providers.
-    '''    
+    '''
+    
     @abc.abstractmethod
     def publish(self, packed):
         ''' Submits a packed object to the persister.
         
-        Note that this is going to (unfortunately) result in packing + 
-        unpacking the object twice for ex. a MemoryPersister. At some 
+        Note that this is going to (unfortunately) result in packing +
+        unpacking the object twice for ex. a MemoryPersister. At some
         point, that should be fixed -- maybe through ex. publish_unsafe?
         
         ACK/success is represented by a return True
@@ -262,7 +227,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
         1. Dynamic ghid
         2. Author identity ghid
         
-        Upon successful subscription, the persistence provider will 
+        Upon successful subscription, the persistence provider will
         publish to client either of the above:
         
         1. New frames to a dynamic binding
@@ -275,7 +240,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
     
     @abc.abstractmethod
     def unsubscribe(self, ghid, callback):
-        ''' Unsubscribe. Client must have an existing subscription to 
+        ''' Unsubscribe. Client must have an existing subscription to
         the passed ghid at the persistence provider. Removes only the
         passed callback.
         
@@ -286,7 +251,7 @@ class _PersisterBase(metaclass=abc.ABCMeta):
     
     @abc.abstractmethod
     def list_subs(self):
-        ''' List all currently subscribed ghids for the connected 
+        ''' List all currently subscribed ghids for the connected
         client.
         
         ACK/success is represented by returning a list of ghids.
@@ -344,14 +309,15 @@ class _PersisterBase(metaclass=abc.ABCMeta):
 class MemoryPersister(PersistenceCore):
     ''' Basic in-memory persister.
     
-    This is a deprecated legacy thing we're keeping around so that we 
+    This is a deprecated legacy thing we're keeping around so that we
     don't need to completely re-write our already inadequate test suite.
-    '''    
+    '''
+    
     def __init__(self):
         super().__init__()
-        self.assemble(Doorman(), Enforcer(), Lawyer(), Bookie(), 
-                        MemoryLibrarian(), PostOffice(), Undertaker(), 
-                        Salmonator())
+        self.assemble(Doorman(), Enforcer(), Lawyer(), Bookie(),
+                      MemoryLibrarian(), PostOffice(), Undertaker(),
+                      SalmonatorNoop())
         
         self.subscribe = self.postman.subscribe
         self.unsubscribe = self.postman.unsubscribe
@@ -360,8 +326,8 @@ class MemoryPersister(PersistenceCore):
         self.list_bindings = self.bookie.bind_status
         self.list_debindings = self.bookie.debind_status
         
-    def assemble(self, doorman, enforcer, lawyer, bookie, librarian, postman, 
-                undertaker, salmonator):
+    def assemble(self, doorman, enforcer, lawyer, bookie, librarian, postman,
+                 undertaker, salmonator):
         self.doorman = doorman
         self.enlitener = Enlitener
         self.enforcer = enforcer
@@ -379,8 +345,8 @@ class MemoryPersister(PersistenceCore):
         self.enforcer.assemble(librarian)
         self.bookie.assemble(librarian, lawyer, undertaker)
         self.librarian.assemble(self, self.salmonator)
-        self.salmonator.assemble(self, self, self.doorman, self.postman, 
-                                self.librarian)
+        self.salmonator.assemble(self, self, self.doorman, self.postman,
+                                 self.librarian)
         
     def publish(self, *args, **kwargs):
         # This is a temporary fix to force memorypersisters to notify during
@@ -404,7 +370,7 @@ class MemoryPersister(PersistenceCore):
             ) from exc
         
     def list_subs(self):
-        ''' List all currently subscribed ghids for the connected 
+        ''' List all currently subscribed ghids for the connected
         client.
         '''
         # TODO: figure out what to do instead of this
@@ -425,9 +391,9 @@ class MemoryPersister(PersistenceCore):
             return False
         
     def disconnect(self):
-        ''' Terminates all subscriptions. Not required for a disconnect, 
-        but highly recommended, and prevents an window of attack for 
-        address spoofers. Note that such an attack would only leak 
+        ''' Terminates all subscriptions. Not required for a disconnect,
+        but highly recommended, and prevents an window of attack for
+        address spoofers. Note that such an attack would only leak
         metadata.
         
         ACK/success is represented by a return True
@@ -443,12 +409,13 @@ class DiskCachePersister(MemoryPersister):
     Replicate MemoryPersister, just replace Librarian.
     
     Same note re: deprecated.
-    '''    
+    '''
+    
     def __init__(self, cache_dir):
         super().__init__()
-        self.assemble(Doorman(), Enforcer(), Lawyer(), Bookie(), 
-                        DiskLibrarian(cache_dir=cache_dir), PostOffice(), 
-                        Undertaker(), Salmonator())
+        self.assemble(Doorman(), Enforcer(), Lawyer(), Bookie(),
+                      DiskLibrarian(cache_dir=cache_dir), PostOffice(),
+                      Undertaker(), SalmonatorNoop())
         
         self.subscribe = self.postman.subscribe
         self.unsubscribe = self.postman.unsubscribe
@@ -472,24 +439,25 @@ class _PersisterBridgeSession(_AutoresponderSession):
         # Maxlen may need some tuning, and this is a bit of a hack.
         self._silenced = collections.deque(maxlen=5)
     
-        # NOTE: these must be done as a closure upon functions, instead of 
-        # normal bound methods, because otherwise the weakrefs used in the 
+        # NOTE: these must be done as a closure upon functions, instead of
+        # normal bound methods, because otherwise the weakrefs used in the
         # post office subscription weakset will be DOA
                 
         async def send_subs_update_ax(subscribed_ghid, notification_ghid):
             ''' Deliver any subscription updates.
             
-            Also, temporary workaround for not re-delivering updates for 
+            Also, temporary workaround for not re-delivering updates for
             objects we just sent up.
             '''
             if notification_ghid not in self._silenced:
                 try:
                     await self._transport.send(
                         session = self,
-                        msg = bytes(subscribed_ghid) + 
-                            bytes(notification_ghid),
-                        request_code = 
-                            self._transport.REQUEST_CODES['send_subs_update'],
+                        msg = (bytes(subscribed_ghid) +
+                               bytes(notification_ghid)),
+                        request_code = self._transport.REQUEST_CODES[
+                            'send_subs_update'
+                        ],
                         # Note: for now, just don't worry about failures.
                         # await_reply = False
                     )
@@ -517,9 +485,9 @@ class _PersisterBridgeSession(_AutoresponderSession):
                 
                 except:
                     logger.error(
-                        'Application client failed to receive sub update at ' + 
-                        str(subscribed_ghid) + ' for notification ' + 
-                        str(notification_ghid) + ' w/ traceback: \n' + 
+                        'Application client failed to receive sub update at ' +
+                        str(subscribed_ghid) + ' for notification ' +
+                        str(notification_ghid) + ' w/ traceback: \n' +
                         ''.join(traceback.format_exc())
                     )
         
@@ -536,7 +504,10 @@ class _PersisterBridgeSession(_AutoresponderSession):
             )
             
             # asyncio.run_coroutine_threadsafe(
-            #     coro = self.send_subs_update_ax(subscribed_ghid, notification_ghid)
+            #     coro = self.send_subs_update_ax(
+            #         subscribed_ghid,
+            #         notification_ghid
+            #     )
             #     loop = self._transport._loop
             # )
             
@@ -565,25 +536,25 @@ class PersisterBridgeServer(Autoresponder):
         self._postman = None
         
         req_handlers = {
-            # ping 
+            # ping
             b'??': self.ping_wrapper,
-            # publish 
+            # publish
             b'PB': self.publish_wrapper,
-            # get  
+            # get
             b'GT': self.get_wrapper,
-            # subscribe 
+            # subscribe
             b'+S': self.subscribe_wrapper,
-            # unsubscribe 
+            # unsubscribe
             b'xS': self.unsubscribe_wrapper,
-            # list subs 
+            # list subs
             b'LS': self.list_subs_wrapper,
-            # list binds 
+            # list binds
             b'LB': self.list_bindings_wrapper,
             # list debindings
             b'LD': self.list_debindings_wrapper,
-            # query (existence) 
+            # query (existence)
             b'QE': self.query_wrapper,
-            # disconnect 
+            # disconnect
             b'XX': self.disconnect_wrapper,
         }
         
@@ -622,14 +593,15 @@ class PersisterBridgeServer(Autoresponder):
         return b'\x01'
             
     async def publish_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
+        ''' Deserializes a publish request and forwards it to the
         persister.
         '''
         obj = await self._loop.run_in_executor(
-            self._ingester, # executor
-            self._percore.ingest, # func
-            request_body, # packed
-            False) # remotable
+            self._ingester,         # executor
+            self._percore.ingest,   # func
+            request_body,           # packed
+            False                   # remotable
+        )
         
         # If we already have an exact copy of the object, do not go on a mail
         # run.
@@ -653,11 +625,13 @@ class PersisterBridgeServer(Autoresponder):
         '''
         try:
             await self._loop.run_in_executor(
-                executor = self._mailrunner, 
-                func = self._postman.do_mail_run)
+                executor = self._mailrunner,
+                func = self._postman.do_mail_run
+            )
         except:
-            logger.error('Error during mail run: \n' + 
-                        ''.join(traceback.format_exc()))
+            logger.error(
+                'Error during mail run: \n' + ''.join(traceback.format_exc())
+            )
             
     async def get_wrapper(self, session, request_body):
         ''' Deserializes a get request; forwards it to the persister.
@@ -666,7 +640,7 @@ class PersisterBridgeServer(Autoresponder):
         return self._librarian.retrieve(ghid)
             
     async def subscribe_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
+        ''' Deserializes a publish request and forwards it to the
         persister.
         '''
         ghid = Ghid.from_bytes(request_body)
@@ -680,7 +654,7 @@ class PersisterBridgeServer(Autoresponder):
         return b'\x01'
             
     async def unsubscribe_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
+        ''' Deserializes a publish request and forwards it to the
         persister.
         '''
         ghid = Ghid.from_bytes(request_body)
@@ -693,7 +667,7 @@ class PersisterBridgeServer(Autoresponder):
             return b'\x00'
             
     async def list_subs_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
+        ''' Deserializes a publish request and forwards it to the
         persister.
         '''
         ghidlist = list(session._subscriptions)
@@ -701,7 +675,7 @@ class PersisterBridgeServer(Autoresponder):
         return parser.pack(ghidlist)
             
     async def list_bindings_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
+        ''' Deserializes a publish request and forwards it to the
         persister.
         '''
         ghid = Ghid.from_bytes(request_body)
@@ -710,7 +684,7 @@ class PersisterBridgeServer(Autoresponder):
         return parser.pack(ghidlist)
             
     async def list_debindings_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
+        ''' Deserializes a publish request and forwards it to the
         persister.
         '''
         ghid = Ghid.from_bytes(request_body)
@@ -719,7 +693,7 @@ class PersisterBridgeServer(Autoresponder):
         return parser.pack(ghidlist)
             
     async def query_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
+        ''' Deserializes a publish request and forwards it to the
         persister.
         '''
         ghid = Ghid.from_bytes(request_body)
@@ -729,7 +703,7 @@ class PersisterBridgeServer(Autoresponder):
             return b'\x00'
             
     async def disconnect_wrapper(self, session, request_body):
-        ''' Deserializes a publish request and forwards it to the 
+        ''' Deserializes a publish request and forwards it to the
         persister.
         '''
         for sub_ghid, sub_callback in session._subscriptions.items():
@@ -743,25 +717,25 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
     '''
             
     REQUEST_CODES = {
-        # ping 
+        # ping
         'ping': b'??',
-        # publish 
+        # publish
         'publish': b'PB',
-        # get  
+        # get
         'get': b'GT',
-        # subscribe 
+        # subscribe
         'subscribe': b'+S',
-        # unsubscribe 
+        # unsubscribe
         'unsubscribe': b'xS',
-        # list subs 
+        # list subs
         'list_subs': b'LS',
-        # list binds 
+        # list binds
         'list_bindings': b'LB',
         # list debindings
         'list_debindings': b'LD',
-        # query (existence) 
+        # query (existence)
         'query': b'QE',
-        # disconnect 
+        # disconnect
         'disconnect': b'XX',
     }
     
@@ -793,9 +767,9 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         # for callback in self._subscriptions[subscribed_ghid]:
         #     callback(notification_ghid)
                 
-        # Well this is a huge hack. But something about the event loop 
+        # Well this is a huge hack. But something about the event loop
         # itself is fucking up control flow and causing the world to hang
-        # here. May want to create a dedicated thread just for pushing 
+        # here. May want to create a dedicated thread just for pushing
         # updates? Like autoresponder, but autoupdater?
         # TODO: fix this gross mess
             
@@ -834,8 +808,8 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
     def publish(self, packed):
         ''' Submits a packed object to the persister.
         
-        Note that this is going to (unfortunately) result in packing + 
-        unpacking the object twice for ex. a MemoryPersister. At some 
+        Note that this is going to (unfortunately) result in packing +
+        unpacking the object twice for ex. a MemoryPersister. At some
         point, that should be fixed -- maybe through ex. publish_unsafe?
         
         ACK/success is represented by a return True
@@ -879,7 +853,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         1. Dynamic ghid
         2. Author identity ghid
         
-        Upon successful subscription, the persistence provider will 
+        Upon successful subscription, the persistence provider will
         publish to client either of the above:
         
         1. New frames to a dynamic binding
@@ -898,15 +872,14 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
             
             if response != b'\x01':
                 raise RuntimeError(
-                    'Unknown response code while subscribing to ' + 
-                    str(ghid)
+                    'Unknown response code while subscribing to ' + str(ghid)
                 )
                 
         self._subscriptions[ghid].add(callback)
         return True
     
     def unsubscribe(self, ghid, callback):
-        ''' Unsubscribe. Client must have an existing subscription to 
+        ''' Unsubscribe. Client must have an existing subscription to
         the passed ghid at the persistence provider. Removes only the
         passed callback.
         
@@ -936,7 +909,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
                 pass
             else:
                 raise RuntimeError(
-                    'Unknown response code while unsubscribing from ' + 
+                    'Unknown response code while unsubscribing from ' +
                     str(ghid) + '\nThe persister might still send '
                     'updates, but the callback has been removed.'
                 )
@@ -944,7 +917,7 @@ class PersisterBridgeClient(Autoresponder, _PersisterBase):
         return True
     
     def list_subs(self):
-        ''' List all currently subscribed ghids for the connected 
+        ''' List all currently subscribed ghids for the connected
         client.
         
         ACK/success is represented by returning a list of ghids.
