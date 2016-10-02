@@ -113,7 +113,7 @@ def autoconfig(tofile=True, logdirname='logs', loglevel='warning', prefix='',
         logging.Formatter(
             '%(threadName)-10.10s '
             '%(name)-17.17s  %(levelname)-5.5s  '
-            '%(message)s'
+            '%(asctime)s %(message)s'
         )
     )
     

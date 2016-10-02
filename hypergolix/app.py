@@ -31,10 +31,8 @@ hypergolix: A python Golix client.
 '''
 
 # Global dependencies
-# import collections
-
+import traceback
 from concurrent.futures import CancelledError
-from golix import Ghid
 
 # Intra-package dependencies (that require explicit imports, courtesy of
 # daemonization)
@@ -149,33 +147,8 @@ def app_core(user_id, password, startup_logger, aengel=None,
         effective_logger.info('Login successful.')
         
     # Add all of the remotes to a namespace preserver
-    persisters = []
     for remote in remotes:
-        try:
-            persister = Autocomms(
-                autoresponder_name = 'remrecli',
-                autoresponder_class = PersisterBridgeClient,
-                connector_name = 'remwscli',
-                connector_class = WSBasicClient,
-                connector_kwargs = {
-                    'host': remote.host,
-                    'port': remote.port,
-                    'tls': remote.tls,
-                },
-                debug = debug,
-                aengel = aengel,
-            )
-            
-        except CancelledError:
-            effective_logger.error(
-                'Error while connecting to upstream remote at ' +
-                remote.host + ':' + str(remote.port) + '. Connection will ' +
-                'only be reattempted after restarting Hypergolix.'
-            )
-            
-        else:
-            core.salmonator.add_upstream_remote(persister)
-            persisters.append(persister)
+        core.salmonator.add_upstream(remote)
         
     # Finally, add the ipc system
     core.ipccore.add_ipc_server(
@@ -190,4 +163,4 @@ def app_core(user_id, password, startup_logger, aengel=None,
         thread_name = _generate_threadnames('ipc-ws')[0],
     )
         
-    return persisters, core, aengel
+    return True, core, aengel

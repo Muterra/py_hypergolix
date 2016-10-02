@@ -175,42 +175,43 @@ class PersistenceCore:
         ingest methods directly). Parses, validates, and stores the
         object, and returns True; or, raises an error.
         '''
-        for loader, ingester in (
-        (self.doorman.load_gidc, self.ingest_gidc),
-        (self.doorman.load_geoc, self.ingest_geoc),
-        (self.doorman.load_gobs, self.ingest_gobs),
-        (self.doorman.load_gobd, self.ingest_gobd),
-        (self.doorman.load_gdxx, self.ingest_gdxx),
-        (self.doorman.load_garq, self.ingest_garq)):
+        for loader, ingester in ((self.doorman.load_gidc, self.ingest_gidc),
+                                 (self.doorman.load_geoc, self.ingest_geoc),
+                                 (self.doorman.load_gobs, self.ingest_gobs),
+                                 (self.doorman.load_gobd, self.ingest_gobd),
+                                 (self.doorman.load_gdxx, self.ingest_gdxx),
+                                 (self.doorman.load_garq, self.ingest_garq)):
             # Attempt this loader
             try:
                 golix_obj = loader(packed)
             # This loader failed. Continue to the next.
             except MalformedGolixPrimitive:
                 continue
-            # This loader succeeded. Ingest it and then break out of the loop.
+            # This loader succeeded. Break out of the loop.
             else:
-                obj = ingester(golix_obj, remotable)
                 break
         # Running into the else means we could not find a loader.
         else:
             raise MalformedGolixPrimitive(
                 '0x0001: Packed bytes do not appear to be a Golix primitive.'
             )
-                    
+        
+        # Ingest the object. Because we broke out, both golix_obj and ingester
+        # will still be valid.
+        obj = ingester(golix_obj, remotable)
         # If the object is identical to what we already have, the ingester will
         # return None, so don't schedule that.
         if obj is not None:
-            # Note that individual ingest methods are only called directly for 
+            # Note that individual ingest methods are only called directly for
             # locally-built objects, which do not need a mail run.
             self.postman.schedule(obj)
         else:
             logger.debug('Object unchanged; postman scheduling not required.')
-            
-            # Note: this is not the place for salmonator pushing! Locally 
-            # created/updated objects call the individual ingest methods 
+        
+            # Note: this is not the place for salmonator pushing! Locally
+            # created/updated objects call the individual ingest methods
             # directly, so they have to be the ones that actually deal with
-                    
+        
         return obj
         
     def ingest_gidc(self, obj, remotable=True):
@@ -238,7 +239,7 @@ class PersistenceCore:
             with self.undertaker:
                 # And now prep the undertaker for any necessary GC
                 self.undertaker.prep_gidc(obj)
-                # Everything is validated. Place with the bookie first, so that 
+                # Everything is validated. Place with the bookie first, so that
                 # it has access to the old librarian state
                 self.bookie.place_gidc(obj)
                 # And finally add it to the librarian
@@ -1416,7 +1417,7 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         ''' Starts tracking an object.
         obj is a hypergolix representation object.
         raw is bytes-like.
-        '''  
+        '''
         with self._restoring.mutex:
             # We need to do some resolver work if it's a dynamic object.
             if isinstance(obj, _GobdLite):
@@ -1578,17 +1579,17 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         finally:
             logger.setLevel(logging.NOTSET)
                 
-    def _attempt_load_inplace(self, candidate, gidcs, geocs, gobss, gobds, 
-                            gdxxs, garqs):
+    def _attempt_load_inplace(self, candidate, gidcs, geocs, gobss, gobds,
+                              gdxxs, garqs):
         ''' Attempts to do an inplace addition to the passed lists based
         on the loading.
         '''
         for loader, target in ((GIDC.unpack, gidcs),
-                                (GEOC.unpack, geocs),
-                                (GOBS.unpack, gobss),
-                                (GOBD.unpack, gobds),
-                                (GDXX.unpack, gdxxs),
-                                (GARQ.unpack, garqs)):
+                               (GEOC.unpack, geocs),
+                               (GOBS.unpack, gobss),
+                               (GOBD.unpack, gobds),
+                               (GDXX.unpack, gdxxs),
+                               (GARQ.unpack, garqs)):
             # Attempt this loader
             try:
                 golix_obj = loader(candidate)
@@ -1597,7 +1598,7 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
                 continue
             # This loader succeeded. Ingest it and then break out of the loop.
             else:
-                obj = target.append(golix_obj)
+                target.append(golix_obj)
                 break
                 
         # HOWEVER, unlike usual, don't raise if this isn't a correct object,
@@ -2021,8 +2022,8 @@ class MrPostman(_PostmanBase):
         else:
             callbacks = self._listeners.get_any(subscription)
             logger.debug(
-                'MrPostman starting delivery for ' + str(len(callbacks)) + 
-                ' updates on sub ' + str(subscription) + ' with notif ' + 
+                'MrPostman starting delivery for ' + str(len(callbacks)) +
+                ' updates on sub ' + str(subscription) + ' with notif ' +
                 str(notification)
             )
             for callback in callbacks:
@@ -2386,6 +2387,9 @@ class Salmonator(LooperTrooper):
     async def loop_stop(self, *args, **kwargs):
         ''' On top of the usual stuff, clear our queues.
         '''
+        for remote in self._persisters:
+            await self._stop_persister(remote)
+        
         await super().loop_stop(*args, **kwargs)
         self._pull_q = None
         self._push_q = None
@@ -2436,10 +2440,11 @@ class Salmonator(LooperTrooper):
         try:
             data = self._librarian.retrieve(ghid)
         
-        except HypergolixException:
+        except HypergolixException as exc:
             logger.error(
                 'Error while pushing an object upstream:\n' +
-                ''.join(traceback.format_exc())
+                ''.join(traceback.format_exc()) +
+                repr(exc)
             )
             return
         
@@ -2466,7 +2471,8 @@ class Salmonator(LooperTrooper):
                 if exc is not None:
                     logger.error(
                         'Error while pushing to remote:\n' +
-                        ''.join(traceback.format_tb(exc.__traceback__))
+                        ''.join(traceback.format_tb(exc.__traceback__)) +
+                        repr(exc)
                     )
                 
     async def pull(self, ghid):
@@ -2503,7 +2509,8 @@ class Salmonator(LooperTrooper):
             if exc is not None:
                 logger.error(
                     'Error while pulling from remote:\n' +
-                    ''.join(traceback.format_tb(exc.__traceback__))
+                    ''.join(traceback.format_tb(exc.__traceback__)) +
+                    repr(exc)
                 )
                 finished = None
             
@@ -2599,10 +2606,11 @@ class Salmonator(LooperTrooper):
             obj = self._percore.ingest(data, remotable=False)
         
         # Couldn't load. Return False.
-        except:
+        except Exception as exc:
             logger.warning(
                 'Error while pulling from upstream: \n' +
-                ''.join(traceback.format_exc())
+                ''.join(traceback.format_exc()) +
+                repr(exc)
             )
             return False
             

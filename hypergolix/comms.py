@@ -126,9 +126,9 @@ class ConnectorBase(LooperTrooper):
         ''' Yeah, the usual.
         host -> str: hostname for the server
         port -> int: port for the server
-        receiver -> coro: handler for incoming objects. Must have async def 
+        receiver -> coro: handler for incoming objects. Must have async def
             receiver.receive(), which will be passed the connection, message
-        connection_class -> type: used to create new connections. Defaults to 
+        connection_class -> type: used to create new connections. Defaults to
             _WSConnection.
         '''
         self._ws_port = port
@@ -147,8 +147,8 @@ class ConnectorBase(LooperTrooper):
     @property
     def _ws_loc(self):
         return (
-            self._ws_protocol + 
-            self._ws_host + ':' + 
+            self._ws_protocol +
+            self._ws_host + ':' +
             str(self._ws_port) + '/'
         )
         
@@ -165,8 +165,8 @@ class ConnectorBase(LooperTrooper):
         logger.debug('New connection: ' + str(args) + ' ' + str(kwargs))
         return self.connection_factory(
             loop = self._loop,
-            websocket = websocket, 
-            path = path, 
+            websocket = websocket,
+            path = path,
             *args, **kwargs
         )
         
@@ -201,8 +201,9 @@ class ConnectorBase(LooperTrooper):
 class WSBasicServer(ConnectorBase):
     ''' Generic websockets server.
     '''
+    
     def __init__(self, birthday_bits=40, *args, **kwargs):
-        ''' 
+        '''
         Note: birthdays must be > 1000, or it will be ignored, and will
         default to a 40-bit space.
         '''
@@ -288,9 +289,10 @@ class WSBasicClient(ConnectorBase):
     ''' Generic websockets client.
     
     Note that this doesn't block or anything. You're free to continue on
-    in the thread where this was created, and if you don't, it will 
+    in the thread where this was created, and if you don't, it will
     close down.
-    '''    
+    '''
+    
     def __init__(self, threaded, *args, **kwargs):
         super().__init__(threaded=threaded, *args, **kwargs)
         
@@ -305,8 +307,12 @@ class WSBasicClient(ConnectorBase):
         self._ctx = asyncio.Event()
         await super().loop_init()
         
+    async def loop_stop(self):
+        self._ctx = None
+        await super().loop_stop()
+        
     async def new_connection(self, *args, **kwargs):
-        ''' Wraps super().new_connection() to store it as 
+        ''' Wraps super().new_connection() to store it as
         self._connection.
         '''
         connection = await super().new_connection(*args, **kwargs)
@@ -338,16 +344,16 @@ class WSBasicClient(ConnectorBase):
         loop.
         '''
         await run_coroutine_loopsafe(
-            coro = self.send(msg), 
+            coro = self.send(msg),
             target_loop = self._loop
         )
         
     def send_threadsafe(self, msg):
-        ''' Threadsafe wrapper to send a message. Must be called 
+        ''' Threadsafe wrapper to send a message. Must be called
         synchronously.
         '''
         call_coroutine_threadsafe(
-            coro = self.send(msg), 
+            coro = self.send(msg),
             loop = self._loop
         )
         
@@ -736,7 +742,7 @@ class Autoresponder(LooperTrooper):
     def any_session(self):
         ''' Returns an arbitrary session.
         
-        Mostly useful for Autoresponders that have only one session 
+        Mostly useful for Autoresponders that have only one session
         (for example, any client in a client/server setup).
         '''
         # Connection lookup maps session -> connection.
@@ -1038,6 +1044,10 @@ def Autocomms(autoresponder_class, connector_class, autoresponder_args=None,
     )
     
     class LinkedConnector(connector_class):
+        def stop(self):
+            autoresponder.stop_threadsafe_nowait()
+            super().stop()
+        
         async def new_connection(self, *args, **kwargs):
             ''' Bridge the connection with a newly created session.
             '''
