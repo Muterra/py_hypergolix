@@ -295,6 +295,7 @@ class WSBasicClient(ConnectorBase):
     
     def __init__(self, threaded, *args, **kwargs):
         super().__init__(threaded=threaded, *args, **kwargs)
+        self._retry_flag = None
         
         # If we're threaded, we need to wait for the clear to transmit flag
         if threaded:
@@ -305,10 +306,12 @@ class WSBasicClient(ConnectorBase):
     
     async def loop_init(self):
         self._ctx = asyncio.Event()
+        self._retry_flag = asyncio.Event()
         await super().loop_init()
         
     async def loop_stop(self):
         self._ctx = None
+        self._retry_flag = None
         await super().loop_stop()
         
     async def new_connection(self, *args, **kwargs):
@@ -322,18 +325,23 @@ class WSBasicClient(ConnectorBase):
     async def loop_run(self):
         ''' Client coroutine. Initiates a connection with server.
         '''
+        self._retry_flag.clear()
         async with websockets.connect(self._ws_loc) as websocket:
             try:
                 self._loop.call_soon(self._ctx.set)
                 await self._handle_connection(websocket)
+                
             except ConnectionClosed as exc:
-                # For now, if the connection closes, just stop everything. We 
-                # could also set it up to retry a few times or something. But 
-                # for now, just close it.
-                self.stop()
+                # Wait until an external something sets our retry flag.
+                await self._retry_flag.wait()
+                
+    def retry_connection(self):
+        ''' Careful! This must be called from outside the event loop.
+        '''
+        self._loop.call_soon_threadsafe(self._retry_flag.set())
         
     async def send(self, msg):
-        ''' NON THREADSAFE wrapper to send a message. Must be called 
+        ''' NON THREADSAFE wrapper to send a message. Must be called
         from the same event loop as the websocket.
         '''
         await self._ctx.wait()

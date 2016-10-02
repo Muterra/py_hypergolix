@@ -2296,10 +2296,14 @@ class Salmonator(LooperTrooper):
         
         self._pull_q = None
         self._push_q = None
+        self._connect_q = None
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
         
         self._upstream_remotes = set()
         self._downstream_remotes = set()
+        
+        # Lookup: remote -> persister
+        self._persisters = {}
         
         # WVD lookup for <registered ghid>: GAO.
         self._registered = weakref.WeakValueDictionary()
@@ -2313,7 +2317,7 @@ class Salmonator(LooperTrooper):
         self._postman = weakref.proxy(postman)
         self._librarian = weakref.proxy(librarian)
     
-    def add_upstream_remote(self, persister):
+    def add_upstream(self, remote):
         ''' Adds an upstream persister.
         
         PersistenceCore will attempt to have a constantly consistent
@@ -2324,33 +2328,113 @@ class Salmonator(LooperTrooper):
         HOWEVER, the Salmonator will make no attempt to synchronize
         state **between** upstream remotes.
         '''
-        # Before we do anything, we should try pushing up our identity.
-        persister.publish(self._golcore._identity.second_party.packed)
-        
-        with self._opslock:
-            self._upstream_remotes.add(persister)
-            # Subscribe to our identity, assuming we actually have a golix core
+        self._upstream_remotes.add(remote)
+        call_coroutine_threadsafe(
+            coro = self._connect_q.put(remote),
+            loop = self._loop
+        )
+            
+    async def _start_persister(self, remote):
+        ''' Convert a remote definition into a running persister
+        connection.
+        '''
+        try:
+            persister = Autocomms(
+                autoresponder_name = 'remrecli',
+                autoresponder_class = PersisterBridgeClient,
+                connector_name = 'remwscli',
+                connector_class = WSBasicClient,
+                connector_kwargs = {
+                    'host': remote.host,
+                    'port': remote.port,
+                    'tls': remote.tls,
+                },
+                debug = debug,
+                aengel = aengel,
+            )
+            
+        except CancelledError:
+            effective_logger.error(
+                'Error while connecting to upstream remote at ' +
+                remote.host + ':' + str(remote.port) + '. Connection will ' +
+                'only be reattempted after Hypergolix restart. Traceback:\n' +
+                ''.join(traceback.format_exc())
+            )
+            return None
+            
+        else:
+            self._persisters[remote] = persister
+            return persister
+            
+    async def connect(self, remote):
+        ''' Create a persister connection.
+        '''
+        if remote not in self._persisters:
+            persister = await self._start_persister(remote)
+        else:
+            persister = self._persisters[remote]
+            
+        # Make sure we successfully connected before proceeding.
+        if persister:
             try:
-                persister.subscribe(
-                    self._golcore.whoami,
-                    self._remote_callback
-                )
-            except AttributeError:
-                pass
+                # Wait for a session/connection to be available
+                persister.connector.retry_connection()
+                await persister.await_session_loopsafe()
                 
-            # Subscribe to every active GAO's ghid
-            for registrant in self._registered:
-                persister.subscribe(registrant, self._remote_callback)
+                # Before we do anything, we should try pushing up our identity.
+                if not persister.query(self._golcore.whoami):
+                    persister.publish(
+                        self._golcore._identity.second_party.packed
+                    )
+                    
+                # Subscribe to our identity, assuming we actually have a golix
+                # core
+                try:
+                    persister.subscribe(
+                        self._golcore.whoami,
+                        self._remote_callback
+                    )
+                except AttributeError:
+                    pass
+                        
+                with self._opslock:
+                    # Subscribe to every active GAO's ghid
+                    for registrant in self._registered:
+                        persister.subscribe(registrant, self._remote_callback)
+            
+            # Note that this does not catch systemexit, keyboardinterrupt, or
+            # generatorexit.
+            except Exception:
+                logger.error(
+                    'Could not add remote. Traceback:\n' +
+                    ''.join(traceback.format_exc())
+                )
+        else:
+            logger.error(
+                'Could not connect to remote due to persister startup error.'
+            )
         
-    def remove_upstream_remote(self, persister):
+    def remove_upstream(self, remote):
         ''' Inverse of above.
         '''
-        with self._opslock:
-            self._upstream_remotes.remove(persister)
-            # Remove all subscriptions
-            persister.disconnect()
+        self._upstream_remotes.remove(remote)
+        call_coroutine_threadsafe(
+            coro = self._stop_persister(remote),
+            loop = self._loop
+        )
+            
+    async def _stop_persister(self, remote):
+        ''' Stops a running persister. Meant to be called after removing
+        from upstream/downstream.
+        '''
+        persister = self._persisters[remote]
+        # Remove all subscriptions
+        persister.disconnect()
+        # This will automatically also close the autoresponder (yuk this is a
+        # mess)
+        persister.connector.stop_threadsafe_nowait()
         
-    def add_downstream_remote(self, persister):
+    def add_downstream(self, remote):
         ''' Adds a downstream persister.
         
         PersistenceCore will not attempt to keep a consistent state with
@@ -2364,7 +2448,7 @@ class Salmonator(LooperTrooper):
         raise NotImplementedError()
         self._downstream_remotes.add(persister)
         
-    def remove_downstream_remote(self, persister):
+    def remove_downstream(self, remote):
         ''' Inverse of above.
         '''
         raise NotImplementedError()
@@ -2383,6 +2467,7 @@ class Salmonator(LooperTrooper):
         await super().loop_init(*args, **kwargs)
         self._pull_q = asyncio.Queue(loop=self._loop)
         self._push_q = asyncio.Queue(loop=self._loop)
+        self._connect_q = asyncio.Queue(loop=self._loop)
         
     async def loop_stop(self, *args, **kwargs):
         ''' On top of the usual stuff, clear our queues.
@@ -2393,6 +2478,7 @@ class Salmonator(LooperTrooper):
         await super().loop_stop(*args, **kwargs)
         self._pull_q = None
         self._push_q = None
+        self._connect_q = None
         
     async def loop_run(self, *args, **kwargs):
         ''' Launch two tasks: one manages the push queue, and the other
@@ -2400,21 +2486,30 @@ class Salmonator(LooperTrooper):
         '''
         to_pull = asyncio.ensure_future(self._pull_q.get())
         to_push = asyncio.ensure_future(self._push_q.get())
+        to_connect = asyncio.ensure_future(self._connect_q.get())
         
         finished, pending = await asyncio.wait(
-            fs = [to_pull, to_push],
+            fs = [to_pull, to_push, to_connect],
             return_when = asyncio.FIRST_COMPLETED
         )
         
         # One or the other has to be done. Here, it's pull.
         if to_pull in finished:
             to_push.cancel()
+            to_connect.cancel()
             await self.pull(to_pull.result())
         
         # Here, it's push.
+        elif to_push in finished:
+            to_pull.cancel()
+            to_connect.cancel()
+            await self.push(to_push.result())
+            
+        # Here, it's connect.
         else:
             to_pull.cancel()
-            await self.push(to_push.result())
+            to_push.cancel()
+            await self.connect(to_connect.result())
         
     def schedule_pull(self, ghid):
         ''' Tells the salmonator to pull the ghid at the earliest
