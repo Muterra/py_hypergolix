@@ -813,8 +813,6 @@ class Charon(LooperTrooper):
         ''' Very simply await stuff in the queue, pause for a hot sec,
         and then remove it.
         '''
-        await super().loop_run(*args, **kwargs)
-        
         dead_ghid = await self._death_q.get()
         await asyncio.sleep(.1)
         self._privateer.abandon(dead_ghid)

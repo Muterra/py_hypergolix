@@ -31,6 +31,7 @@ hypergolix: A python Golix client.
 '''
 
 # Global dependencies
+import logging
 import threading
 import weakref
 import os
@@ -87,7 +88,6 @@ __all__ = [
 ]
 
 
-import logging
 logger = logging.getLogger(__name__)
 
 
@@ -108,6 +108,7 @@ class AgentBootstrap:
     
     Also binds everything within a single namespace, etc etc.
     '''
+    
     def __init__(self, cache_dir, aengel=None, debug=False):
         ''' Creates everything and puts it into a singular namespace.
         
@@ -127,7 +128,6 @@ class AgentBootstrap:
         self.librarian = DiskLibrarian(cache_dir=cache_dir)
         self.postman = MrPostman()
         self.undertaker = Undertaker()
-        self.salmonator = Salmonator()
         self.golcore = GolixCore()
         self.privateer = Privateer()
         self.oracle = Oracle()
@@ -138,6 +138,12 @@ class AgentBootstrap:
             aengel = aengel,
             threaded = True,
             thread_name = 'ipccore',
+            debug = debug,
+        )
+        self.salmonator = Salmonator(
+            aengel = aengel,
+            threaded = True,
+            thread_name = 'salmon',
             debug = debug,
         )
         self.charon = Charon(

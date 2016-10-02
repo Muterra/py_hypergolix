@@ -322,19 +322,19 @@ def ingest_args():
         default = 'warning',
         type = str,
         help = 'Specify the logging level. '
-                '"debug" -> most verbose, '
-                '"info" -> somewhat verbose, '
-                '"warning" -> default python verbosity, '
-                '"error" -> quiet.',
+               '"debug" -> most verbose, '
+               '"info" -> somewhat verbose, '
+               '"warning" -> default python verbosity, '
+               '"error" -> quiet.',
     )
     parser.add_argument(
         '--traceur',
         action = 'store',
-        default = False,
+        default = None,
         type = float,
         help = 'Set traceur mode, using the passed float as a stack tracing '
-                'interval for deadlock detection. Must be a positive number, '
-                'or it will be ignored.'
+               'interval for deadlock detection. Must be a positive number, '
+               'or it will be ignored.'
     )
     parser.add_argument('unittest_args', nargs='*')
     args = parser.parse_args()
@@ -385,7 +385,6 @@ if __name__ == '__main__':
         suite = unittest.TestSuite()
         suite.addTest(apptest('test_app'))
         unittest.TextTestRunner().run(suite)
-        
         logging.getLogger('').critical('Test suite complete; closing down.')
         
         raz[1].wait_close_safe()
@@ -402,8 +401,9 @@ if __name__ == '__main__':
         shutil.copytree(args.hgxroot[1], cache_dir_b)
     
         # Clip negative numbers
-        trace_interval = max([args.traceur, .1])
-        if trace_interval:
+        if args.traceur is not None:
+            trace_interval = max([args.traceur, 0.1])
+            print('Running with trace.')
             from hypergolix.utils import TraceLogger
             with TraceLogger(trace_interval):
                 do_test(cache_dir_a, cache_dir_b)

@@ -51,7 +51,7 @@ from hypergolix.persistence import Enforcer
 from hypergolix.persistence import Bookie
 from hypergolix.persistence import DiskLibrarian
 from hypergolix.persistence import MemoryLibrarian
-from hypergolix.persistence import Salmonator
+from hypergolix.persistence import SalmonatorNoop
 
 from hypergolix.exceptions import PersistenceError
 from hypergolix.exceptions import StillBoundWarning
@@ -418,7 +418,7 @@ class MemoryLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
         self.librarian = MemoryLibrarian()
         self.postman = MrPostman()
         self.undertaker = Undertaker()
-        self.salmonator = Salmonator()
+        self.salmonator = SalmonatorNoop()
         
         self.rolodex = RolodexMock()
         self.golcore = GCoreMock(TEST_AGENT1)
@@ -452,7 +452,7 @@ class DiskLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
         self.librarian = DiskLibrarian(cache_dir='/ghidcache_test')
         self.postman = MrPostman()
         self.undertaker = Undertaker()
-        self.salmonator = Salmonator()
+        self.salmonator = SalmonatorNoop()
         
         self.rolodex = RolodexMock()
         self.golcore = GCoreMock(TEST_AGENT1)
@@ -482,7 +482,7 @@ class DiskLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
         librarian = DiskLibrarian(cache_dir='/ghidcache_test')
         postman = MrPostman()
         undertaker = Undertaker()
-        salmonator = Salmonator()
+        salmonator = SalmonatorNoop()
         
         rolodex = RolodexMock()
         golcore = GCoreMock(TEST_AGENT1)

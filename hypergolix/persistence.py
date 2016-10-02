@@ -56,18 +56,12 @@ import weakref
 import queue
 import pathlib
 import base64
-
+import concurrent.futures
 import asyncio
 import websockets
 from websockets.exceptions import ConnectionClosed
-    
-# Not sure if these are being used
-import time
-import random
-import string
 import threading
 import traceback
-# End unsure block
 
 from golix import ThirdParty
 from golix import SecondParty
@@ -86,6 +80,7 @@ from golix._getlow import GDXX
 from golix._getlow import GARQ
 
 # Local dependencies
+from .exceptions import HypergolixException
 from .exceptions import RemoteNak
 from .exceptions import MalformedGolixPrimitive
 from .exceptions import VerificationFailure
@@ -109,6 +104,8 @@ from .utils import TruthyLock
 from .utils import SetMap
 from .utils import WeakSetMap
 from .utils import _generate_threadnames
+from .utils import LooperTrooper
+from .utils import call_coroutine_threadsafe
 
 
 # ###############################################
@@ -440,7 +437,7 @@ class PersistenceCore:
         
         
 class Doorman:
-    ''' Parses files and enforces crypto. Can be bypassed for trusted 
+    ''' Parses files and enforces crypto. Can be bypassed for trusted
     (aka locally-created) objects. Only called from within the typeless
     PersisterCore.ingest() method.
     '''
@@ -456,8 +453,6 @@ class Doorman:
         try:
             obj = GIDC.unpack(packed)
         except Exception as exc:
-            # logger.error('Malformed gidc: ' + str(packed))
-            # logger.error(repr(exc) + '\n').join(traceback.format_tb(exc.__traceback__))
             raise MalformedGolixPrimitive(
                 '0x0001: Invalid formatting for GIDC object.'
             ) from exc
@@ -1549,34 +1544,34 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
                 # First load all identities, so that we have authors for
                 # everything
                 for gidc in gidcs:
-                    self._percore.ingest(gidc.packed)
+                    self._percore.ingest(gidc.packed, remotable=False)
                     # self._percore.ingest_gidc(gidc)
                     
                 # Now all debindings, so that we can check state while we're at
                 # it
                 for gdxx in gdxxs:
-                    self._percore.ingest(gdxx.packed)
+                    self._percore.ingest(gdxx.packed, remotable=False)
                     # self._percore.ingest_gdxx(gdxx)
                     
                 # Now all bindings, so that objects aren't gc'd. Note: can't
                 # combine into single list, because of different ingest methods
                 for gobs in gobss:
-                    self._percore.ingest(gobs.packed)
+                    self._percore.ingest(gobs.packed, remotable=False)
                     # self._percore.ingest_gobs(gobs)
                 for gobd in gobds:
-                    self._percore.ingest(gobd.packed)
+                    self._percore.ingest(gobd.packed, remotable=False)
                     # self._percore.ingest_gobd(gobd)
                     
                 # Next the objects themselves, so that any requests will have
                 # their targets available (not that it would matter yet,
                 # buuuuut)...
                 for geoc in geocs:
-                    self._percore.ingest(geoc.packed)
+                    self._percore.ingest(geoc.packed, remotable=False)
                     # self._percore.ingest_geoc(geoc)
                     
                 # Last but not least
                 for garq in garqs:
-                    self._percore.ingest(garq.packed)
+                    self._percore.ingest(garq.packed, remotable=False)
                     # self._percore.ingest_garq(garq)
                 
         # Restore the logging level to notset
@@ -2282,14 +2277,12 @@ class UnderReaper(Undertaker):
             self._privateer.abandon(obj.ghid)
 
 
-class Salmonator:
-    ''' Responsible for disseminating Golix objects upstream and 
+class Salmonator(LooperTrooper):
+    ''' Responsible for disseminating Golix objects upstream and
     downstream. Handles all comms with them as well.
-    
-    # TODO: (f)reebase and separate into components for both local and
-    # server use
     '''
-    def __init__(self):
+    
+    def __init__(self, *args, **kwargs):
         ''' Yarp.
         '''
         self._opslock = threading.Lock()
@@ -2300,14 +2293,20 @@ class Salmonator:
         self._librarian = None
         self._doorman = None
         
+        self._pull_q = None
+        self._push_q = None
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+        
         self._upstream_remotes = set()
         self._downstream_remotes = set()
         
         # WVD lookup for <registered ghid>: GAO.
         self._registered = weakref.WeakValueDictionary()
         
-    def assemble(self, golix_core, persistence_core, doorman, postman, 
-                librarian):
+        super().__init__(*args, **kwargs)
+        
+    def assemble(self, golix_core, persistence_core, doorman, postman,
+                 librarian):
         self._golcore = weakref.proxy(golix_core)
         self._percore = weakref.proxy(persistence_core)
         self._postman = weakref.proxy(postman)
@@ -2316,12 +2315,12 @@ class Salmonator:
     def add_upstream_remote(self, persister):
         ''' Adds an upstream persister.
         
-        PersistenceCore will attempt to have a constantly consistent 
-        state with upstream persisters. That means that any local 
+        PersistenceCore will attempt to have a constantly consistent
+        state with upstream persisters. That means that any local
         resources will either be subscribed to upstream, or checked for
         updates before ingestion by the Hypergolix service.
         
-        HOWEVER, the Salmonator will make no attempt to synchronize 
+        HOWEVER, the Salmonator will make no attempt to synchronize
         state **between** upstream remotes.
         '''
         # Before we do anything, we should try pushing up our identity.
@@ -2331,8 +2330,10 @@ class Salmonator:
             self._upstream_remotes.add(persister)
             # Subscribe to our identity, assuming we actually have a golix core
             try:
-                persister.subscribe(self._golcore.whoami, 
-                                    self._remote_callback)
+                persister.subscribe(
+                    self._golcore.whoami,
+                    self._remote_callback
+                )
             except AttributeError:
                 pass
                 
@@ -2356,7 +2357,7 @@ class Salmonator:
         local objects downstream. It will not, however, look to them for
         updates.
         
-        Therefore, to create synchronization **between** multiple 
+        Therefore, to create synchronization **between** multiple
         upstream remotes, also add them as downstream remotes.
         '''
         raise NotImplementedError()
@@ -2372,16 +2373,196 @@ class Salmonator:
         ''' Callback to use when subscribing to things at remotes.
         '''
         logger.debug('Hitting remote callback.')
-        self.attempt_pull(notification)
+        # TODO: make this non-blocking
+        self.schedule_pull(notification)
+        
+    async def loop_init(self, *args, **kwargs):
+        ''' On top of the usual stuff, set up our queues.
+        '''
+        await super().loop_init(*args, **kwargs)
+        self._pull_q = asyncio.Queue(loop=self._loop)
+        self._push_q = asyncio.Queue(loop=self._loop)
+        
+    async def loop_stop(self, *args, **kwargs):
+        ''' On top of the usual stuff, clear our queues.
+        '''
+        await super().loop_stop(*args, **kwargs)
+        self._pull_q = None
+        self._push_q = None
+        
+    async def loop_run(self, *args, **kwargs):
+        ''' Launch two tasks: one manages the push queue, and the other
+        the pull queue.
+        '''
+        to_pull = asyncio.ensure_future(self._pull_q.get())
+        to_push = asyncio.ensure_future(self._push_q.get())
+        
+        finished, pending = await asyncio.wait(
+            fs = [to_pull, to_push],
+            return_when = asyncio.FIRST_COMPLETED
+        )
+        
+        # One or the other has to be done. Here, it's pull.
+        if to_pull in finished:
+            to_push.cancel()
+            await self.pull(to_pull.result())
+        
+        # Here, it's push.
+        else:
+            to_pull.cancel()
+            await self.push(to_push.result())
+        
+    def schedule_pull(self, ghid):
+        ''' Tells the salmonator to pull the ghid at the earliest
+        opportunity and returns. Call from a different thread.
+        '''
+        call_coroutine_threadsafe(
+            coro = self._pull_q.put(ghid),
+            loop = self._loop
+        )
         
     def schedule_push(self, ghid):
         ''' Grabs the ghid from librarian and sends it to all applicable
         remotes.
         '''
-        data = self._librarian.retrieve(ghid)
-        # This is, again, definitely a lame way of doing this
+        call_coroutine_threadsafe(
+            coro = self._push_q.put(ghid),
+            loop = self._loop
+        )
+        
+    async def push(self, ghid):
+        ''' Push a single ghid to all remotes.
+        '''
+        try:
+            data = self._librarian.retrieve(ghid)
+        
+        except HypergolixException:
+            logger.error(
+                'Error while pushing an object upstream:\n' +
+                ''.join(traceback.format_exc())
+            )
+            return
+        
+        tasks_available = []
         for remote in self._upstream_remotes:
-            remote.publish(data)
+            this_push = asyncio.ensure_future(
+                self._loop.run_in_executor(
+                    self._executor,
+                    remote.publish,
+                    data
+                )
+            )
+            tasks_available.append(this_push)
+            
+        if tasks_available:
+            finished, pending = await asyncio.wait(
+                fs = tasks_available,
+                return_when = asyncio.ALL_COMPLETED
+            )
+            
+            # Pending will be empty (or asyncio bugged up)
+            for task in finished:
+                exc = task.exception()
+                if exc is not None:
+                    logger.error(
+                        'Error while pushing to remote:\n' +
+                        ''.join(traceback.format_tb(exc.__traceback__))
+                    )
+                
+    async def pull(self, ghid):
+        ''' Gets a ghid from upstream. Returns on the first result. Note
+        that this is not meant to be called on a dynamic address, as a
+        subs update from a slower remote would always be overridden by
+        the faster one.
+        '''
+        finished = None
+        tasks_available = set()
+        for remote in self._upstream_remotes:
+            this_pull = asyncio.ensure_future(
+                self._loop.run_in_executor(
+                    self._executor,
+                    self._attempt_pull_single,
+                    ghid,
+                    remote
+                )
+            )
+            tasks_available.add(this_pull)
+            
+        # Wait until the first successful task completion
+        while tasks_available and not finished:
+            finished, pending = await asyncio.wait(
+                fs = tasks_available,
+                return_when = asyncio.FIRST_COMPLETED
+            )
+        
+            finished = finished.pop()
+            tasks_available.discard(finished)
+            exc = finished.exception()
+            
+            # If there's been an exception, continue waiting for the rest.
+            if exc is not None:
+                logger.error(
+                    'Error while pulling from remote:\n' +
+                    ''.join(traceback.format_tb(exc.__traceback__))
+                )
+                finished = None
+            
+            # Completed successfully, but it could be a 404 (or other error),
+            # which would present as result() = False. So, assign the result to
+            # finished and let the while loop handle the rest.
+            else:
+                finished = finished.result()
+                
+        # No dice. Either finished is None (no remotes), None (no successful
+        # pulls), or False (exactly one remote had the object, but it was
+        # unloadable). Raise.
+        if not finished:
+            raise UnavailableUpstream(
+                'Object was unavailable or unacceptable at all '
+                'currently-registered remotes.'
+            )
+                
+        logger.debug(
+            'Successfully pulled ' + str(ghid) + ' from upstream remote. ' +
+            'Handling...'
+        )
+        # Now we have one complete task (finished) and potentially still some
+        # pending. So, cancel all remaining...
+        for task in pending:
+            task.cancel()
+        # And handle the result.
+        await self._handle_successful_pull(finished)
+            
+    async def _handle_successful_pull(self, maybe_obj):
+        ''' Dispatches the object in the successful pull.
+        
+        maybe_obj can be either True (if the object already existed
+        locally), or the object itself (if the object was new).
+        '''
+        # If we got a gobd, make sure its target is in the librarian
+        if isinstance(maybe_obj, _GobdLite):
+            if maybe_obj.target not in self._librarian:
+                # Catch unavailableupstream and log a warning.
+                # TODO: add logic to retry a few times and then discard
+                try:
+                    await self.pull(maybe_obj.target)
+                    
+                except UnavailableUpstream:
+                    logger.warning(
+                        'Received a subscription notification for ' +
+                        str(maybe_obj.ghid) + ', but the sub\'s target was '
+                        'missing both locally and upstream.'
+                    )
+        
+        # We know the pull was successful, but that could indicate that the
+        # requested ghid was already known locally. In that case, there's no
+        # harm in doing an extra mail run, so make it happen regardless.
+        await self._loop.run_in_executor(
+            self._executor,
+            self._postman.do_mail_run
+        )
+        
+        logger.debug('Successful pull handled.')
         
     def attempt_pull(self, ghid, quiet=False):
         ''' Grabs the ghid from remotes, if available, and puts it into
@@ -2389,40 +2570,16 @@ class Salmonator:
         '''
         # TODO: check locally, run _inspect, check if mutable before blindly
         # pulling.
-        # This is the lame way of doing this, fo sho
-        for remote in self._upstream_remotes:
-            # Pull, and then see if we got anything back
-            obj = self._attempt_pull_single(ghid, remote)
+        try:
+            call_coroutine_threadsafe(
+                coro = self.pull(ghid),
+                loop = self._loop
+            )
             
-            # If we got a gobd, make sure its target is in the librarian
-            if isinstance(obj, _GobdLite):
-                if obj.target not in self._librarian:
-                    # Catch unavailableupstream and log a warning.
-                    # TODO: add logic to retry a few times and then discard
-                    try:
-                        self.attempt_pull(obj.target)
-                        
-                    except UnavailableUpstream:
-                        logger.warning(
-                            'Received a subscription notification for ' +
-                            str(ghid) + ', but the sub\'s target was missing '
-                            'both locally and upstream.'
-                        )
-                        
-                self._postman.do_mail_run()
-                break
-            
-            # For all other successful pulls, just go ahead and do a mail run.
-            elif obj:
-                self._postman.do_mail_run()
-                break
-                
-        else:
+        except UnavailableUpstream:
             if not quiet:
-                raise UnavailableUpstream(
-                    'Object was unavailable or unacceptable at all '
-                    'currently-registered remotes.'
-                )
+                raise
+            # Suppress errors if we were called quietly.
             else:
                 logger.info(
                     'Object was unavailable or unacceptable upstream, but '
@@ -2430,43 +2587,34 @@ class Salmonator:
                 )
         
     def _attempt_pull_single(self, ghid, remote):
-        ''' Once we've successfully acquired data from
+        ''' Attempt to fetch a single object from a single remote. If
+        successful, put it into the ingestion pipeline.
         '''
-        # Try to get it from the remote.
-        try:
-            data = remote.get(ghid)
-            
-        # Unsuccessful pull. Log the error and return False.
-        except:
-            logger.warning('Error while pulling from upstream: \n' + 
-                            ''.join(traceback.format_exc()))
-            return False
+        # This may error, but any errors here will be caught by the parent.
+        data = remote.get(ghid)
         
-        # Only if we actually successfully got something back should we
-        # continue on to ingest.
-        else:
-            # This may or may not be an update we already have.
-            try:
-                # Call as remotable=False to avoid infinite loops.
-                obj = self._percore.ingest(data, remotable=False)
+        # This may or may not be an update we already have.
+        try:
+            # Call as remotable=False to avoid infinite loops.
+            obj = self._percore.ingest(data, remotable=False)
+        
+        # Couldn't load. Return False.
+        except:
+            logger.warning(
+                'Error while pulling from upstream: \n' +
+                ''.join(traceback.format_exc())
+            )
+            return False
             
-            # Couldn't load. Return False.
-            except:
-                logger.warning(
-                    'Error while pulling from upstream: \n' + 
-                    ''.join(traceback.format_exc())
-                )
-                return False
-                
-            # As soon as we have it, return True so parent can stop checking 
-            # other remotes.
+        # As soon as we have it, return True so parent can stop checking
+        # other remotes.
+        else:
+            # Note that ingest can either return None, if we already have
+            # the object, or the object itself, if it's new.
+            if obj is None:
+                return True
             else:
-                # Note that ingest can either return None, if we already have
-                # the object, or the object itself, if it's new.
-                if obj is None:
-                    return True
-                else:
-                    return obj
+                return obj
         
     def _inspect(self, ghid):
         ''' Checks librarian for an existing ghid. If it has it, checks
@@ -2477,14 +2625,14 @@ class Salmonator:
         returns True if local copy exists and is valid
         raises IntegrityError if local copy exists, but is corrupted.
         ~~(returns False if dynamic and local copy is out of date)~~
-            Note: this is unimplemented currently, blocking on several 
+            Note: this is unimplemented currently, blocking on several
             upstream changes.
         '''
         # Load the object locally
         try:
             obj = self._librarian.summarize(ghid)
         
-        # Librarian has no copy.    
+        # Librarian has no copy.
         except KeyError:
             return None
             
@@ -2498,7 +2646,7 @@ class Salmonator:
         return True
             
     def _check_for_updates(self, obj):
-        ''' Checks with all upstream remotes for new versions of a 
+        ''' Checks with all upstream remotes for new versions of a
         dynamic object.
         '''
         # Oh wait, we can't actually do this, because the remote persistence
@@ -2519,20 +2667,20 @@ class Salmonator:
         packed = self._librarian.retrieve(obj.ghid)
         
         for primitive, loader in ((_GidcLite, self._doorman.load_gidc),
-                                (_GeocLite, self._doorman.load_geoc),
-                                (_GobsLite, self._doorman.load_gobs),
-                                (_GobdLite, self._doorman.load_gobd),
-                                (_GdxxLite, self._doorman.load_gdxx),
-                                (_GarqLite, self._doorman.load_garq)):
+                                  (_GeocLite, self._doorman.load_geoc),
+                                  (_GobsLite, self._doorman.load_gobs),
+                                  (_GobdLite, self._doorman.load_gobd),
+                                  (_GdxxLite, self._doorman.load_gdxx),
+                                  (_GarqLite, self._doorman.load_garq)):
             # Attempt this loader
             if isinstance(obj, primitive):
                 try:
                     loader(packed)
                 except (MalformedGolixPrimitive, SecurityError) as exc:
                     logger.error('Integrity of local object appears '
-                                'compromised.')
+                                 'compromised.')
                     raise IntegrityError('Local copy of object appears to be '
-                                        'corrupt or compromised.') from exc
+                                         'corrupt or compromised.') from exc
                 else:
                     break
                     
@@ -2572,16 +2720,16 @@ class Salmonator:
             self.attempt_pull(gao.ghid, quiet=True)
                 
     def deregister(self, ghid):
-        ''' Tells the salmonator to stop listening for upstream 
+        ''' Tells the salmonator to stop listening for upstream
         object updates. Primarily intended for use as a finalizer
         for GAO objects.
         '''
         with self._opslock:
             try:
                 # We shouldn't really actually need to do this, but let's
-                # explicitly do it anyways, to ensure there is no race 
-                # condition between object removal and someone else sending an 
-                # update. The weak-value-ness of the _registered lookup can be 
+                # explicitly do it anyways, to ensure there is no race
+                # condition between object removal and someone else sending an
+                # update. The weak-value-ness of the _registered lookup can be
                 # used as a fallback.
                 del self._registered[ghid]
             except KeyError:
@@ -2606,6 +2754,10 @@ class SalmonatorNoop:
     some point, because I forgot I was just using a standard Salmonator
     because the overhead is unimportant right now".
     '''
+    
+    def __init__(self, *args, **kwargs):
+        pass
+    
     def assemble(*args, **kwargs):
         pass
         
