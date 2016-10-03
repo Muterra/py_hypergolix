@@ -101,11 +101,11 @@ setup(
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
     install_requires=[
-        'golix>=0.1.1',
+        'golix>=0.1.3',
         'websockets>=3.1',
         'cryptography>=1.4',
         'pycryptodome>=3.4',  # waiting for cryptography to include scrypt
-        'daemoniker>=0.2.1',
+        'daemoniker>=0.2.2',
     ],
 
     # List additional groups of dependencies here (e.g. development
