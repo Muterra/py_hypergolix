@@ -1025,7 +1025,7 @@ def _handle_register(config, register):
         try:
             webbrowser.open(reg_address, new=2)
             
-        except:
+        except Exception:
             print(
                 'Failed to open web browser for registration.\n' +
                 'Please navigate to this address to register:\n' +

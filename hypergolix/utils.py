@@ -140,7 +140,7 @@ class IPCPackerMixIn:
             is_link = data[199:200]
             state = data[200:]
             
-        except:
+        except Exception:
             logger.error(
                 'Unable to unpack IPC object definition w/ traceback:\n'
                 ''.join(traceback.format_exc())
@@ -166,13 +166,13 @@ class IPCPackerMixIn:
         is_link = bool(int.from_bytes(is_link, 'big'))
         # state also stays unmodified
         
-        return (address, 
-                author, 
-                state, 
+        return (address,
+                author,
+                state,
                 is_link,
-                api_id, 
-                private, 
-                dynamic, 
+                api_id,
+                private,
+                dynamic,
                 _legroom)
     
     
@@ -347,7 +347,7 @@ class _BijectDict:
             try:
                 self._fwd[key] = value
                 self._rev[value] = key
-            except:
+            except Exception:
                 # Default to None when popping to avoid KeyError
                 self._fwd.pop(key, None)
                 self._rev.pop(value, None)
@@ -717,7 +717,7 @@ class Aengel:
                 for guardling in self._guardlings:
                     try:
                         guardling.stop_threadsafe_nowait()
-                    except:
+                    except Exception:
                         # This is very precarious. Swallow all exceptions.
                         logger.error(
                             'Swallowed exception while closing ' + 

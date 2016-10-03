@@ -304,12 +304,13 @@ class Dispatcher:
             ) from exc
             
     def get_parent_token(self, ghid):
-        ''' Returns the app_token parent for the passed ghid, if (and 
+        ''' Returns the app_token parent for the passed ghid, if (and
         only if) it's private. Otherwise, returns None.
         '''
         try:
             return self._private_by_ghid[ghid]
         except KeyError:
+            logger.debug(str(ghid) + ' has no parent token.')
             return None
             
             

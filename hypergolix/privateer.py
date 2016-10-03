@@ -626,7 +626,7 @@ class Privateer:
             try:
                 del self._ratchet_in_progress[proxy]
             except KeyError:
-                pass
+                logger.debug('No ratchet in progress for ' + str(proxy))
                 
             self._chains[proxy] = container
             
@@ -653,7 +653,7 @@ class Privateer:
                 else:
                     self._heal_standard(gao, binding)
                     
-            except:
+            except Exception:
                 logger.warning(
                     'Error while staging new secret for attempted ratchet. '
                     'The ratchet is very likely broken.\n' +

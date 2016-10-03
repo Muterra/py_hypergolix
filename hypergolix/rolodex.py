@@ -227,7 +227,7 @@ class Rolodex:
             payload = self._golcore.open_request(unpacked)
             self._dispatch_payload(payload, notification)
 
-        # Don't forget to (always) debind.            
+        # Don't forget to (always) debind.
         finally:
             debinding = self._golcore.make_debinding(notification)
             self._percore.ingest_gdxx(debinding)
@@ -235,12 +235,15 @@ class Rolodex:
     def _handle_debinding(self, debinding):
         ''' The notification is a debinding. Deal with it.
         '''
-        # For now we just need to remove any pending requests for the 
+        # For now we just need to remove any pending requests for the
         # debinding's target.
         try:
             del self._pending_requests[debinding.target]
         except KeyError:
-            pass
+            logger.debug(
+                str(debinding.target) + ' missing in debind w/ traceback ' +
+                ''.join(traceback.format_exc())
+            )
         
     def _dispatch_payload(self, payload, source_ghid):
         ''' Appropriately handles a request payload.
@@ -265,14 +268,14 @@ class Rolodex:
             # address is, and then stage the secret for it.
             container_ghid = self._ghidproxy.resolve(request.target)
             self._privateer.quarantine(
-                ghid = container_ghid, 
+                ghid = container_ghid,
                 secret = request.secret
             )
             
             # Note that unless we raise a HandshakeError RIGHT NOW, we'll be
-            # sending an ack to the handshake, just to indicate successful 
-            # receipt of the share. If the originating app wants to check for 
-            # availability, well, that's currently on them. In the future, add 
+            # sending an ack to the handshake, just to indicate successful
+            # receipt of the share. If the originating app wants to check for
+            # availability, well, that's currently on them. In the future, add
             # handle for that in SHARE instead of HANDSHAKE?
             
         except Exception as exc:
@@ -303,7 +306,7 @@ class Rolodex:
             target, recipient = self._pending_requests.pop(request.target)
         except KeyError:
             logger.error(
-                'Received an ACK for an unknown origin: ' + 
+                'Received an ACK for an unknown origin: ' +
                 str(request.target)
             )
         else:
@@ -316,7 +319,7 @@ class Rolodex:
             target, recipient = self._pending_requests.pop(request.target)
         except KeyError:
             logger.error(
-                'Received a NAK for an unknown origin: ' + 
+                'Received a NAK for an unknown origin: ' +
                 str(request.target)
             )
         else:

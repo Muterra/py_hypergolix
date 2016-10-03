@@ -34,9 +34,10 @@ hypergolix: A python Golix client.
 '''
 
 # Global dependencies
+import logging
+import traceback
 import time
 import argparse
-import logging
 import socket
 import pathlib
 import threading
@@ -156,11 +157,11 @@ def _shielded_server(host, port, cache_dir, debug, traceur, aengel=None):
         try:
             _hgx_server(host, port, cache_dir, debug, traceur, aengel)
             
-        except ReceivedSignal:
-            raise
-            
-        except SystemExit:
-            raise
+        except Exception:
+            logger.critical(
+                'Server failed with traceback:\n' +
+                ''.join(traceback.format_exc())
+            )
 
 
 def _hgx_server(host, port, cache_dir, debug, traceur, aengel=None):

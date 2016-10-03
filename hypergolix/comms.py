@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -71,6 +71,8 @@ class _WSConnection:
     server).
     
     This should definitely use slots, to save on server memory usage.
+    
+    TODO: merge this with autoresponder sessions
     '''
     def __init__(self, loop, websocket, path=None, connid=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -181,17 +183,16 @@ class ConnectorBase(LooperTrooper):
                 await self._receiver(connection, msg)
                 
         except ConnectionClosed:
-            pass
+            logger.info('Connection closed: ' + str(connection.connid))
                     
-        except Exception as exc:
-            await connection.close()
+        except Exception:
             logger.error(
                 'Error running connection! Cleanup not called.\n' +
-                ''.join(traceback.format_tb(exc.__traceback__))
+                ''.join(traceback.format_exc())
             )
             raise
             
-        else:
+        finally:
             await connection.close()
             
         # In case subclasses want to do any cleanup
@@ -296,6 +297,9 @@ class WSBasicClient(ConnectorBase):
     def __init__(self, threaded, *args, **kwargs):
         super().__init__(threaded=threaded, *args, **kwargs)
         
+        self._retry_counter = 0
+        self._retry_max = 60
+        
         # If we're threaded, we need to wait for the clear to transmit flag
         if threaded:
             call_coroutine_threadsafe(
@@ -326,14 +330,20 @@ class WSBasicClient(ConnectorBase):
             try:
                 self._loop.call_soon(self._ctx.set)
                 await self._handle_connection(websocket)
+                
             except ConnectionClosed as exc:
-                # For now, if the connection closes, just stop everything. We 
-                # could also set it up to retry a few times or something. But 
-                # for now, just close it.
-                self.stop()
+                logger.warning('Connection closed!')
+                # For now, if the connection closes, just dumbly retry
+                self._retry_counter += 1
+                
+                if self._retry_counter <= self._retry_max:
+                    await asyncio.sleep(.1)
+                    
+                else:
+                    self.stop()
         
     async def send(self, msg):
-        ''' NON THREADSAFE wrapper to send a message. Must be called 
+        ''' NON THREADSAFE wrapper to send a message. Must be called
         from the same event loop as the websocket.
         '''
         await self._ctx.wait()
@@ -361,6 +371,8 @@ class WSBasicClient(ConnectorBase):
 class _AutoresponderSession:
     ''' A request/response websockets connection.
     MUST ONLY BE CREATED INSIDE AN EVENT LOOP.
+    
+    TODO: merge with connections
     '''
     def __init__(self):
         # Lookup for request token -> queue(maxsize=1)
@@ -557,24 +569,42 @@ class Autoresponder(LooperTrooper):
         ERRORS AND ERROR CODES. Sending the body of an arbitrary error
         exposes information!
         '''
+        exc_msg = ''.join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
+        str_token = str(their_token)
         token = their_token.to_bytes(length=2, byteorder='big', signed=False)
+        
+        logger.info(
+            'REQUEST FAILED:    ' + str_token +
+            ' Packing exception:\n' + exc_msg
+        )
+        
         try:
             code = self.error_lookup[type(exc)]
-            body = (repr(exc) + '\n' + ''.join(
-                traceback.format_tb(exc.__traceback__))).encode('utf-8')
+            body = exc_msg.encode('utf-8')
+            
         except KeyError:
             code = b'\x00\x00'
-            body = (repr(exc) + '\n' + ''.join(
-                traceback.format_tb(exc.__traceback__))).encode('utf-8')
-        except:
+            body = exc_msg.encode('utf-8')
+            logger.debug(
+                'Request ' + str_token + ' has no matching response code ' +
+                'for exception.'
+            )
+            
+        except Exception:
+            exc2_msg = ''.join(traceback.format_exc())
             code = b'\x00\x00'
-            body = ('Failure followed by exception handling failure:\n' +
-                    ''.join(traceback.format_exc())).encode('utf-8')
+            body = (exc_msg + '\n\nFOLLOWED BY\n\n' + exc2_msg).encode('utf-8')
+            logger.debug(
+                'Request ' + str_token + ' failed to pack exc w/traceback:\n' +
+                exc_msg + '\n\nFOLLOWED BY\n\n' + exc2_msg
+            )
             
         return token + code + body
         
     def unpack_failure(self, data):
-        ''' Unpacks data from a "failure" response and raises the 
+        ''' Unpacks data from a "failure" response and raises the
         exception that generated it (or something close to it).
         '''
         token = int.from_bytes(data[0:2], byteorder='big', signed=False)
@@ -691,11 +721,11 @@ class Autoresponder(LooperTrooper):
         try:
             res_handler = self._get_recv_handler(req_code, body)
             # Note: we should probably wrap the res_handler into something
-            # that tolerates no return value (probably by wrapping None 
+            # that tolerates no return value (probably by wrapping None
             # into b'')
             response_msg = await res_handler(session, body)
             response = self.pack_success(
-                their_token = their_token, 
+                their_token = their_token,
                 data = response_msg,
             )
             response_code = self._success_code
@@ -703,8 +733,9 @@ class Autoresponder(LooperTrooper):
         except Exception as exc:
             # Instrumentation
             logger.info(
-                'Exception while autoresponding to request: \n' + ''.join(
-                traceback.format_exc())
+                'FAILED ' + str(req_code) + ' FROM SESSION ' +
+                hex(id(session)) + ' w/ traceback\n' +
+                ''.join(traceback.format_exc())
             )
             response = self.pack_failure(their_token, exc)
             response_code = self._failure_code
@@ -713,9 +744,9 @@ class Autoresponder(LooperTrooper):
         
         else:
             logger.debug(
-                'SUCCESS ' + str(req_code) + 
-                ' FROM SESSION ' + hex(id(session)) + ' ' + 
-                str(body[:10])
+                'SUCCESS ' + str(req_code) +
+                ' FROM SESSION ' + hex(id(session)) + ' ' +
+                str(body[:25])
             )
         
         finally:
@@ -795,6 +826,9 @@ class Autoresponder(LooperTrooper):
             try:
                 session = self._session_lookup[connection]
             except KeyError:
+                logger.debug(
+                    'Connection missing in session lookup: ' + str(connection)
+                )
                 session = self.session_factory()
                 self._session_lookup[connection] = session
                 self._connection_lookup[session] = weakref.proxy(connection)
@@ -831,7 +865,7 @@ class Autoresponder(LooperTrooper):
         except KeyError as exc:
             logger.error(
                 'KeyError while closing session:\n' +
-                ''.join(traceback.format_tb(exc.__traceback__))
+                ''.join(traceback.format_exc())
             )
         
     async def send(self, session, msg, request_code, await_reply=True):

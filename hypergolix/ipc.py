@@ -321,7 +321,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             try:
                 callsheet.add(self._endpoint_from_token[token])
             except KeyError:
-                pass
+                logger.debug('Missing endpoint for token ' + str(token))
         
         # Distribute the share success to all apps that requested its delivery
         await self._robodialer(
@@ -334,7 +334,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
     async def process_share_failure(self, target, recipient, tokens):
         ''' Wrapper to notify all requestors of share failure.
         
-        Note that tokens will only include applications that have a 
+        Note that tokens will only include applications that have a
         declared app token.
         '''
         callsheet = set()
@@ -343,7 +343,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             try:
                 callsheet.add(self._endpoint_from_token[token])
             except KeyError:
-                pass
+                logger.debug('Missing endpoint for token ' + str(token))
         
         # Distribute the share success to all apps that requested its delivery
         await self._robodialer(
@@ -357,7 +357,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         ''' Generates a callsheet (set of tokens) for the dispatchable
         obj.
         
-        The callsheet is generated from app_tokens, so that the actual 
+        The callsheet is generated from app_tokens, so that the actual
         distributor can kick missing tokens back for safekeeping.
         
         TODO: make this a "private" method -- aka, remove this from the
@@ -367,16 +367,16 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         '''
         try:
             obj = self._oracle.get_object(
-                gaoclass = _Dispatchable, 
+                gaoclass = _Dispatchable,
                 ghid = ghid,
                 dispatch = self._dispatch,
                 ipc_core = self
             )
         
-        except:
+        except Exception:
             # At some point we'll need some kind of proper handling for this.
             logger.error(
-                'Failed to retrieve object at ' + str(ghid) + '\n' + 
+                'Failed to retrieve object at ' + str(ghid) + '\n' +
                 ''.join(traceback.format_exc())
             )
             return set()
@@ -455,9 +455,9 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         try:
             await distributor(endpoint, *args)
             
-        except:
+        except Exception:
             logger.error(
-                'Error while contacting endpoint: \n' + 
+                'Error while contacting endpoint: \n' +
                 ''.join(traceback.format_exc())
             )
             
@@ -477,16 +477,16 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         '''
         try:
             obj = self._oracle.get_object(
-                gaoclass = _Dispatchable, 
+                gaoclass = _Dispatchable,
                 ghid = ghid,
                 dispatch = self._dispatch,
                 ipc_core = self
             )
             
-        except:
+        except Exception:
             # At some point we'll need some kind of proper handling for this.
             logger.error(
-                'Failed to retrieve object at ' + str(ghid) + '\n' + 
+                'Failed to retrieve object at ' + str(ghid) + '\n' +
                 ''.join(traceback.format_exc())
             )
             
@@ -507,10 +507,10 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                     request_code = self.REQUEST_CODES[request_code],
                 )
                 
-            except:
+            except Exception:
                 logger.error(
-                    'Application client failed to receive object at ' + 
-                    str(ghid) + ' w/ the following traceback: \n' + 
+                    'Application client failed to receive object at ' +
+                    str(ghid) + ' w/ the following traceback: \n' +
                     ''.join(traceback.format_exc())
                 )
                 
@@ -520,7 +520,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         
     async def set_token_wrapper(self, endpoint, request_body):
         ''' With the current paradigm of independent app starting, this
-        is the "official" start of the application. We set our lookups 
+        is the "official" start of the application. We set our lookups
         for endpoint <--> token, and then send all startup objects.
         '''
         app_token = request_body[0:4]
@@ -600,7 +600,7 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
         await self._obj_sender(endpoint, ghid, 'send_update')
         
     async def send_delete(self, endpoint, ghid):
-        ''' Notifies the endpoint that the object has been deleted 
+        ''' Notifies the endpoint that the object has been deleted
         upstream.
         '''
         if not isinstance(ghid, Ghid):
@@ -615,10 +615,10 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                 # await_reply = False
             )
                 
-        except:
+        except Exception:
             logger.error(
-                'Application client failed to receive delete at ' + 
-                str(ghid) + ' w/ the following traceback: \n' + 
+                'Application client failed to receive delete at ' +
+                str(ghid) + ' w/ the following traceback: \n' +
                 ''.join(traceback.format_exc())
             )
         
@@ -634,10 +634,10 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                 # await_reply = False
             )
             
-        except:
+        except Exception:
             logger.error(
-                'Application client failed to receive share success at ' + 
-                str(ghid) + ' w/ the following traceback: \n' + 
+                'Application client failed to receive share success at ' +
+                str(ghid) + ' w/ the following traceback: \n' +
                 ''.join(traceback.format_exc())
             )
         
@@ -652,10 +652,10 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
                 # Note: for now, just don't worry about failures.
                 # await_reply = False
             )
-        except:
+        except Exception:
             logger.error(
-                'Application client failed to receive share failure at ' + 
-                str(ghid) + ' w/ the following traceback: \n' + 
+                'Application client failed to receive share failure at ' +
+                str(ghid) + ' w/ the following traceback: \n' +
                 ''.join(traceback.format_exc())
             )
         
@@ -880,8 +880,8 @@ class IPCCore(Autoresponder, IPCPackerMixIn):
             requesting_token = self._token_from_endpoint[endpoint]
             
         except KeyError as exc:
-            # Instead of forbidding unregistered apps from sharing objects, 
-            # go for it, but document that you will never be notified of a 
+            # Instead of forbidding unregistered apps from sharing objects,
+            # go for it, but document that you will never be notified of a
             # share success or failure without an app token.
             requesting_token = None
             
@@ -1271,8 +1271,8 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
     async def _register_share_handler(self, api_id, cls, handler):
         ''' Call this to register a handler for an object shared by a
         different hypergolix identity, or the same hypergolix identity
-        but a different application. Any api_id can have at most one 
-        share handler, across ALL forms of callback (internal, 
+        but a different application. Any api_id can have at most one
+        share handler, across ALL forms of callback (internal,
         threadsafe, loopsafe).
         
         typecast determines what kind of ObjProxy class the object will
@@ -1287,14 +1287,14 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         api_id = self._normalize_api_id(api_id)
         await self._register_api(api_id)
         
-        # Any handlers passed to us this way can already be called natively 
-        # from withinour own event loop, so they just need to be wrapped such 
+        # Any handlers passed to us this way can already be called natively
+        # from withinour own event loop, so they just need to be wrapped such
         # that they never raise.
         async def wrap_handler(*args, handler=handler, **kwargs):
             try:
                 await handler(*args, **kwargs)
                 
-            except:
+            except Exception:
                 logger.error(
                     'Error while running share handler. Traceback: \n' +
                     ''.join(traceback.format_exc())
@@ -1831,7 +1831,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
             # it locally.
             logger.warning(
                 'Received an object update, but the object was no longer '
-                'contained in memory. Discarding its subscription: ' + 
+                'contained in memory. Discarding its subscription: ' +
                 str(address) + '.'
             )
             response = await self.send(
@@ -1864,7 +1864,7 @@ class IPCEmbed(Autoresponder, IPCPackerMixIn):
         try:
             obj = self._objs_by_ghid[ghid]
         except KeyError:
-            pass
+            logger.debug(str(ghid) + ' not known to IPCEmbed.')
         else:
             await obj._force_delete_3141592()
             

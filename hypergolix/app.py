@@ -147,8 +147,37 @@ def app_core(user_id, password, startup_logger, aengel=None,
         effective_logger.info('Login successful.')
         
     # Add all of the remotes to a namespace preserver
+    persisters = []
     for remote in remotes:
-        core.salmonator.add_upstream(remote)
+        try:
+            persister = Autocomms(
+                autoresponder_name = 'remrecli',
+                autoresponder_class = PersisterBridgeClient,
+                connector_name = 'remwscli',
+                connector_class = WSBasicClient,
+                connector_kwargs = {
+                    'host': remote.host,
+                    'port': remote.port,
+                    'tls': remote.tls,
+                },
+                debug = debug,
+                aengel = aengel,
+            )
+            
+        except Exception:
+            effective_logger.error(
+                'Error while connecting to upstream remote at ' +
+                remote.host + ':' + str(remote.port) + '. Connection will ' +
+                'only be reattempted after restarting Hypergolix.'
+            )
+            logger.warning(
+                'Connection error traceback:\n' +
+                ''.join(traceback.format_exc())
+            )
+            
+        else:
+            core.salmonator.add_upstream_remote(persister)
+            persisters.append(persister)
         
     # Finally, add the ipc system
     core.ipccore.add_ipc_server(
@@ -163,4 +192,4 @@ def app_core(user_id, password, startup_logger, aengel=None,
         thread_name = _generate_threadnames('ipc-ws')[0],
     )
         
-    return True, core, aengel
+    return persisters, core, aengel

@@ -349,6 +349,10 @@ class Oracle:
                 )
                 
         except KeyError:
+            logger.debug(
+                str(ghid) + ' missing locally. Attempting upstream pull.'
+            )
+            
             with self._opslock:
                 if ghid not in self._librarian:
                     self._salmonator.attempt_pull(ghid, quiet=True)
@@ -403,7 +407,7 @@ class Oracle:
             try:
                 del self._lookup[ghid]
             except KeyError:
-                pass
+                logger.debug(str(ghid) + ' unknown to oracle.')
             
     def __contains__(self, ghid):
         ''' Checks for the ghid in cache (but does not check for global
@@ -685,6 +689,7 @@ class _GAO(_GAOBase):
             try:
                 self._silenced.remove(notification)
             except ValueError:
+                logger.debug(str(notification) + ' is missing from silenced.')
                 pass
         
     @staticmethod
@@ -771,8 +776,8 @@ class _GAO(_GAOBase):
         except DoesNotExist:
             logger.error(
                 'The GAO itself was unavailable while pulling an update. This '
-                'is a likely indication of an upstream delete for the object, ' 
-                'located at ' + str(self.ghid) + ', with traceback: \n' + 
+                'is a likely indication of an upstream delete for the object, '
+                'located at ' + str(self.ghid) + ', with traceback: \n' +
                 ''.join(traceback.format_exc())
             )
             modified = False
@@ -932,7 +937,7 @@ class _GAO(_GAOBase):
                 logger.error(
                     'The notification object was unavailable while pulling an '
                     'update for a dynamic gao at ' + str(self.ghid) + ' with '
-                    'notification ' + str(notification) + ' and traceback: \n' + 
+                    'notification ' + str(notification) + ' and traceback:\n' +
                     ''.join(traceback.format_exc())
                 )
             
@@ -988,7 +993,7 @@ class _GAO(_GAOBase):
             # Finally, publish the container itself.
             self._percore.ingest_geoc(container)
             
-        except:
+        except Exception:
             logger.error(
                 'Error while creating new golix object: \n' +
                 ''.join(traceback.format_exc())
@@ -1027,7 +1032,7 @@ class _GAO(_GAOBase):
             secret = self._privateer.ratchet_chain(self.ghid)
             
         # TODO: make this a specific error.
-        except:
+        except Exception:
             logger.warning(
                 'Failed to ratchet secret for ' + str(self.ghid) + 
                 '\n' + ''.join(traceback.format_exc())
@@ -1069,7 +1074,7 @@ class _GAO(_GAOBase):
             self._percore.ingest_gobd(binding)
             self._percore.ingest_geoc(container)
             
-        except:
+        except Exception:
             # We had a problem, so we're going to forcibly restore the object
             # to the last known good state.
             logger.error(
@@ -1100,7 +1105,7 @@ class _GAO(_GAOBase):
             try:
                 self._privateer.reset_chain(self.ghid, container_ghid)
             except ValueError:
-                pass
+                logger.debug('Chain missing for ' + str(self.ghid))
             
             # Re-raise the original exception that caused the update to fail
             raise
@@ -1157,7 +1162,7 @@ class _GAOPickleBase(_GAO):
         try:
             return pickle.dumps(state, protocol=4)
             
-        except:
+        except Exception:
             logger.error(
                 'Failed to pickle the GAO w/ traceback: \n' +
                 ''.join(traceback.format_exc())
@@ -1173,7 +1178,7 @@ class _GAOPickleBase(_GAO):
         try:
             return pickle.loads(packed)
             
-        except:
+        except Exception:
             logger.error(
                 'Failed to unpickle the GAO w/ traceback: \n' +
                 ''.join(traceback.format_exc())

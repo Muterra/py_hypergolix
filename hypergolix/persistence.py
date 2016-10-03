@@ -695,7 +695,7 @@ class _GeocLite(_BaseLite):
     def __eq__(self, other):
         try:
             return (
-                super().__eq__(other) and 
+                super().__eq__(other) and
                 self.author == other.author
             )
         # This will not catch a super() TyperError, so we want to be able to
@@ -722,7 +722,7 @@ class _GobsLite(_BaseLite):
     def __eq__(self, other):
         try:
             return (
-                super().__eq__(other) and 
+                super().__eq__(other) and
                 self.author == other.author and
                 self.target == other.target
             )
@@ -857,7 +857,10 @@ class Enforcer:
         # appropriately to raise a DoesNotExist instead of a KeyError.
         # This could be more specific and say DoesNotExist
         except KeyError:
-            pass
+            logger.debug(
+                str(obj.target) + ' missing from librarian w/ traceback:\n' +
+                ''.join(traceback.format_exc())
+            )
         else:
             for forbidden in (_GidcLite, _GobsLite, _GdxxLite, _GarqLite):
                 if isinstance(target, forbidden):
@@ -875,7 +878,10 @@ class Enforcer:
         try:
             target = self._librarian.summarize(obj.target)
         except KeyError:
-            pass
+            logger.debug(
+                str(obj.target) + ' missing from librarian w/ traceback:\n' +
+                ''.join(traceback.format_exc())
+            )
         else:
             for forbidden in (_GidcLite, _GobsLite, _GdxxLite, _GarqLite):
                 if isinstance(target, forbidden):
@@ -903,6 +909,10 @@ class Enforcer:
                 '    GDXX ghid:   ' + str(obj.ghid) + '\n'
                 '    Target ghid: ' + str(obj.target)
             )
+            logger.debug(
+                'Traceback for missing ' + str(obj.ghid) + ':\n' +
+                ''.join(traceback.format_exc())
+            )
             # raise InvalidTarget(
             #     '0x0006: Unknown debinding target. Cannot debind an unknown '
             #     'resource, to prevent a malicious party from preemptively '
@@ -924,13 +934,13 @@ class Enforcer:
         return True
         
     def _validate_dynamic_history(self, obj):
-        ''' Enforces state flow / progression for dynamic objects. In 
+        ''' Enforces state flow / progression for dynamic objects. In
         other words, prevents zeroth bindings with history, makes sure
         future bindings contain previous ones in history, etc.
         
         NOTE: the "zeroth binding must not have history" requirement has
         been relaxed, since it will be superseded in the next version of
-        the golix protocol, and it causes SERIOUS problems with the 
+        the golix protocol, and it causes SERIOUS problems with the
         operational flow of, like, literally everything.
         '''
         # Try getting an existing binding.
@@ -943,7 +953,9 @@ class Enforcer:
             #         '0x0009: Illegal frame. Cannot upload a frame with '
             #         'history as the first frame in a persistence provider.'
             #     )
-            pass
+            logger.debug(
+                str(obj.ghid) + ' uploaded zeroth frame WITH history.'
+            )
                 
         else:
             if existing.frame_ghid not in obj.history:
@@ -959,7 +971,7 @@ class Enforcer:
         
 class Lawyer:
     ''' Enforces authorship requirements, including both having a known
-    entity as author/recipient and consistency for eg. bindings and 
+    entity as author/recipient and consistency for eg. bindings and
     debindings.
     
     Threadsafe.
@@ -1014,7 +1026,10 @@ class Lawyer:
         try:
             existing = self._librarian.summarize(obj.ghid)
         except KeyError:
-            pass
+            logger.debug(
+                str(obj.ghid) + ' missing from librarian w/ traceback:\n' +
+                ''.join(traceback.format_exc())
+            )
         else:
             if existing.author != obj.author:
                 logger.info(
@@ -1044,7 +1059,10 @@ class Lawyer:
                 existing = target_obj
                 
         except KeyError:
-            pass
+            logger.debug(
+                str(obj.target) + ' missing from librarian w/ traceback:\n' +
+                ''.join(traceback.format_exc())
+            )
             
         else:
             if isinstance(existing, _GarqLite):
@@ -1182,7 +1200,7 @@ class Bookie:
                 self._lawyer.validate_gdxx(debinding, target_obj=obj)
                 
             # Validation failed. Remove illegal debinding.
-            except:
+            except Exception:
                 logger.warning(
                     'Removed invalid existing binding. \n'
                     '    Illegal debinding author: ' + str(debinding.author) +
@@ -1399,7 +1417,7 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
             try:
                 ghid = self._ghid_resolver(obj.ghid)
                 self.remove_from_cache(ghid)
-            except:
+            except Exception:
                 logger.warning(
                     'Exception while removing from cache during object GC. '
                     'Probably a bug.\n' + ''.join(traceback.format_exc())
@@ -1408,7 +1426,10 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
             try:
                 del self._catalog[ghid]
             except KeyError:
-                pass
+                logger.debug(
+                    str(ghid) + ' missing from librarian w/ traceback:\n' +
+                    ''.join(traceback.format_exc())
+                )
                 
             if isinstance(obj, _GobdLite):
                 del self._dyn_resolver[obj.ghid]
@@ -1473,6 +1494,7 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
             return self._catalog[ghid]
             
         except KeyError as exc:
+            logger.debug('Attempting lazy-load for ' + str(ghid))
             # Put this inside the except block so that we don't have to do any
             # weird fiddling to make restoration work.
             with self._restoring.mutex:
@@ -2325,22 +2347,33 @@ class Salmonator(LooperTrooper):
         state **between** upstream remotes.
         '''
         # Before we do anything, we should try pushing up our identity.
-        persister.publish(self._golcore._identity.second_party.packed)
+        try:
+            if not persister.query(self._golcore.whoami):
+                persister.publish(self._golcore._identity.second_party.packed)
+            
+            with self._opslock:
+                self._upstream_remotes.add(persister)
+                # Subscribe to our identity, assuming we actually have a golix core
+                try:
+                    persister.subscribe(
+                        self._golcore.whoami,
+                        self._remote_callback
+                    )
+                except AttributeError:
+                    logger.error(
+                        'Missing golcore while attempting to add upstream ' +
+                        'remote!'
+                    )
+                    
+                # Subscribe to every active GAO's ghid
+                for registrant in self._registered:
+                    persister.subscribe(registrant, self._remote_callback)
         
-        with self._opslock:
-            self._upstream_remotes.add(persister)
-            # Subscribe to our identity, assuming we actually have a golix core
-            try:
-                persister.subscribe(
-                    self._golcore.whoami,
-                    self._remote_callback
-                )
-            except AttributeError:
-                pass
-                
-            # Subscribe to every active GAO's ghid
-            for registrant in self._registered:
-                persister.subscribe(registrant, self._remote_callback)
+        except Exception:
+            logger.error(
+                'Failed to add upstream remote w/ traceback:\n' +
+                ''.join(traceback.format_exc())
+            )
         
     def remove_upstream_remote(self, persister):
         ''' Inverse of above.
@@ -2387,8 +2420,9 @@ class Salmonator(LooperTrooper):
     async def loop_stop(self, *args, **kwargs):
         ''' On top of the usual stuff, clear our queues.
         '''
-        for remote in self._persisters:
-            await self._stop_persister(remote)
+        # Would be good to do, but not currently working
+        # for remote in self._persisters:
+        #     await self._stop_persister(remote)
         
         await super().loop_stop(*args, **kwargs)
         self._pull_q = None
@@ -2440,7 +2474,7 @@ class Salmonator(LooperTrooper):
         try:
             data = self._librarian.retrieve(ghid)
         
-        except HypergolixException as exc:
+        except Exception as exc:
             logger.error(
                 'Error while pushing an object upstream:\n' +
                 ''.join(traceback.format_exc()) +
@@ -2707,7 +2741,7 @@ class Salmonator(LooperTrooper):
                 for remote in self._upstream_remotes:
                     try:
                         remote.subscribe(gao.ghid, self._remote_callback)
-                    except:
+                    except Exception:
                         logger.warning(
                             'Exception while subscribing to upstream updates '
                             'for GAO at ' + str(gao.ghid) + '\n' +
@@ -2741,12 +2775,15 @@ class Salmonator(LooperTrooper):
                 # used as a fallback.
                 del self._registered[ghid]
             except KeyError:
-                pass
+                logger.debug(
+                    str(ghid) + ' missing in deregistration w/ traceback:\n' +
+                    ''.join(traceback.format_exc())
+                )
             
             for remote in self._upstream_remotes:
                 try:
                     remote.unsubscribe(ghid, self._remote_callback)
-                except:
+                except Exception:
                     logger.warning(
                         'Exception while unsubscribing from upstream updates '
                         'during GAO cleanup for ' + str(ghid) + '\n' +

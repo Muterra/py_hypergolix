@@ -483,7 +483,7 @@ class _PersisterBridgeSession(_AutoresponderSession):
                         ''.join(traceback.format_exc())
                     )
                 
-                except:
+                except Exception:
                     logger.error(
                         'Application client failed to receive sub update at ' +
                         str(subscribed_ghid) + ' for notification ' +
@@ -628,7 +628,7 @@ class PersisterBridgeServer(Autoresponder):
                 executor = self._mailrunner,
                 func = self._postman.do_mail_run
             )
-        except:
+        except Exception:
             logger.error(
                 'Error during mail run: \n' + ''.join(traceback.format_exc())
             )
