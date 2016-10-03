@@ -132,7 +132,7 @@ def make_tests(iterations, debug, raz, des, aengel):
         timer.appendleft(time.monotonic())
         roundtrip_flag.set()
         roundtrip_check.append(obj._proxy_3141592)
-    def rt_waiter(timeout=1):
+    def rt_waiter(timeout=1.5):
         result = roundtrip_flag.wait(timeout)
         roundtrip_flag.clear()
         return result
@@ -226,6 +226,10 @@ def make_tests(iterations, debug, raz, des, aengel):
             
             time.sleep(1.5)
             times = []
+            
+            logging.getLogger('').critical(
+                '########## Handshakes complete! Starting tests. ##########'
+            )
             
             for ii in range(iterations):
                 with self.subTest(i=ii):
@@ -385,7 +389,7 @@ if __name__ == '__main__':
             unittest.TextTestRunner().run(suite)
         
             logging.getLogger('').critical(
-                'Test suite complete; closing down.'
+                '########## Test suite complete; closing down. ##########'
             )
         
             raz[1].wait_close_safe()

@@ -866,9 +866,9 @@ def _handle_remotes(config, only_remotes, add_remotes, remove_remotes):
         # Do nothing for local only, but add in the named remote otherwise
         for remote in only_remotes:
             config.set_remote(
-                only_remotes.host,
-                only_remotes.port,
-                only_remotes.tls
+                remote.host,
+                remote.port,
+                remote.tls
             )
     
     # Adding and removing remotes normally.
