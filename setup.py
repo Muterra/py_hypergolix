@@ -106,6 +106,7 @@ setup(
         'cryptography>=1.4',
         'pycryptodome>=3.4',  # waiting for cryptography to include scrypt
         'daemoniker>=0.2.2',
+        'loopa>=0.0.2'
     ],
 
     # List additional groups of dependencies here (e.g. development

@@ -36,6 +36,7 @@ import threading
 import weakref
 import os
 import random
+import loopa
 
 from Crypto.Protocol.KDF import scrypt
 
@@ -119,6 +120,16 @@ class AgentBootstrap:
         TODO: move entire bootstrap creation process (or as much as
         possible, anyways) into register().
         '''
+        # Before anything, create a global task management system
+        self.taskmanager = loopa.TaskCommander(
+            # threaded = False,
+            # debug = False,
+            # aengel = None,
+            # reusable_loop = False,
+            # start_timeout = None,
+            name = 'taskman'
+        )
+        
         # First we need to create everything.
         self.percore = PersistenceCore()
         self.doorman = Doorman()

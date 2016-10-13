@@ -1250,3 +1250,25 @@ def _default_to(check, default, comparator=None):
             return default
         else:
             return check
+
+
+def ensure_equal_len(iterable, msg=''):
+    ''' Ensures that all members of an iterable have the same length.
+    Raises ValueError if not, using the passed msg. Returns the length.
+    '''
+    bulk_len = None
+    for item in iterable:
+        # Check length first, so that we only check bulk_len's definition once,
+        # saving a few bytecode ops (just because it took me less time to think
+        # of that than to write this comment explaining the ordering)
+        if len(item) != bulk_len:
+            
+            # NOW make sure this isn't the first thing we're comparing to!
+            if bulk_len is None:
+                bulk_len = len(item)
+                
+            # If so, lengths don't match; raise.
+            else:
+                raise ValueError(msg)
+                
+    return bulk_len

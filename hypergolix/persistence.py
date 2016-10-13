@@ -98,7 +98,6 @@ from .exceptions import UnavailableUpstream
 
 from .utils import _DeepDeleteChainMap
 from .utils import _WeldedSetDeepChainMap
-from .utils import _block_on_result
 from .utils import _JitSetDict
 from .utils import TruthyLock
 from .utils import SetMap
