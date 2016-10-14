@@ -34,13 +34,13 @@ import logging
 import abc
 import asyncio
 import websockets
-from websockets.exceptions import ConnectionClosed
 import threading
 import collections.abc
 import collections
 import traceback
 import functools
 import weakref
+import base64
 import loopa
 
 from collections import namedtuple
@@ -51,7 +51,7 @@ import random
 from .exceptions import RequestError
 from .exceptions import RequestFinished
 from .exceptions import RequestUnknown
-from .exceptions import SessionClosed
+from .exceptions import ConnectionClosed
 
 from .utils import _BijectDict
 from .utils import LooperTrooper
@@ -79,24 +79,124 @@ logger = logging.getLogger(__name__)
 
 
 # ###############################################
+# Globals
+# ###############################################
+
+
+# ALL_CONNECTIONS = weakref.WeakSet()
+
+
+# def close_all_connections():
+#     # Iterate over ALL_CONNECTIONS until it's empty
+#     while ALL_CONNECTIONS:
+#         connection = ALL_CONNECTIONS.pop()
+#         # Cannot call close, because the event loop won't be running.
+#         connection.terminate()
+        
+
+# atexit.register(close_all_connections)
+
+
+# ###############################################
 # Lib
 # ###############################################
+        
+        
+class BasicServer(loopa.ManagedTask):
+    ''' Generic server. This isn't really a looped task, just a managed
+    one.
+    '''
+    
+    def __init__(self, connection_cls, *args, **kwargs):
+        self.connection_cls = connection_cls
+        super().__init__(*args, **kwargs)
+        
+    async def task_run(self, *args, **kwargs):
+        await self.connection_cls.serve_forever(*args, **kwargs)
 
 
 class _ConnectionBase(metaclass=abc.ABCMeta):
     ''' Defines common interface for all connections.
+    
+    TODO: modify this such that the return is ALWAYS weakly referenced,
+    but still hashable, etc. Within that proxy, wrap all ReferenceErrors
+    with ConnectionClosed errors.
     '''
     
-    def __init__(self, conn_id, *args, **kwargs):
-        self.conn_id = conn_id
-        # Only really used for req/res connections, buuuut... keep it here for
-        # now.
-        self.pending_responses = {}
+    def __init__(self, *args, **kwargs):
+        ''' Log the creation of the connection.
+        '''
         super().__init__(*args, **kwargs)
-    
+        # Create a reference to ourselves so that we can manage our own
+        # lifetime through self.terminate()
+        self._ref = self
+        # If termination gets any more complicated, add this in so we can
+        # register self.terminate in an atexit call.
+        # ALL_CONNECTIONS.add(self)
+        
+        # Memoize our repr as the hex repr of our id(self)
+        self._repr = '<' + type(self).__name__ + ' ' + hex(id(self)) + '>'
+        # Memoize a urlsafe base64 string of our id(self) for str
+        self._str = str(
+            # Change the bytes int to base64
+            base64.urlsafe_b64encode(
+                # Convert our id(self) to a bytes integer equal to the maximum
+                # length of ID on a 64-bit system
+                id(self).to_bytes(byteorder='big', length=8)
+            ),
+            # And then re-cast as a native str
+            'utf-8'
+        )
+        # And log our creation.
+        logger.info('CONN ' + str(self) + ' CREATED.')
+        
+    def terminate(self):
+        ''' Remove our circular reference, which (assuming all other
+        refs were weak) will result in our garbage collection.
+        Idempotent.
+        '''
+        # Note: if this gets any more complicated, then we should register an
+        # atext cleanup to call terminate. For now, just let GC remove it.
+        try:
+            del self._ref
+            
+        except AttributeError:
+            logger.debug(
+                'Attempted to terminate connection twice. Check for other ' +
+                'strong references to the connection.'
+            )
+        
+    def __repr__(self):
+        ''' Make a slightly nicer version of repr, since connections are
+        ephemeral and we cannot reproduce them anyways.
+        '''
+        # Example: <_AutoresponderSession 0x52b2978>
+        return self._repr
+        
+    def __str__(self):
+        ''' Make an even more concise version of str, just giving the
+        id, as a constant-length base64 string.
+        '''
+        return self._str
+        
+    @abc.abstractmethod
+    @classmethod
+    async def serve_forever(cls, conn_handler, *args, **kwargs):
+        ''' Starts a server for this kind of connection. Should handle
+        its own return, and be cancellable via task cancellation.
+        '''
+        
+    @abc.abstractmethod
+    @classmethod
+    async def new(cls, *args, **kwargs):
+        ''' Creates and returns a new connection. Intended to be called
+        by clients; servers may call __init__ directly.
+        '''
+        
     @abc.abstractmethod
     async def close(self):
-        ''' Performs any and all necessary connection cleanup.
+        ''' Closes the existing connection, performing any necessary
+        cleanup.
         '''
         
     @abc.abstractmethod
@@ -108,6 +208,24 @@ class _ConnectionBase(metaclass=abc.ABCMeta):
     async def recv(self):
         ''' Waits for first available message and returns it.
         '''
+        
+        
+class _WSLoc(namedtuple('_WSLoc', ('host', 'port', 'tls'))):
+    ''' Utility class for managing websockets server locations. Provides
+    unambiguous, canonical way to refer to WS targets, with a string
+    representation suitable for use in websockets.connect (etc).
+    '''
+    
+    def __str__(self):
+        ''' Converts the representation into something that can be used
+        to create websockets.
+        '''
+        if self.tls:
+            ws_protocol = 'wss://'
+        else:
+            ws_protocol = 'ws://'
+            
+        return ws_protocol + self.host + ':' + str(self.port) + '/'
 
 
 class _WSConnection(_ConnectionBase):
@@ -115,329 +233,242 @@ class _WSConnection(_ConnectionBase):
     server).
     
     This should definitely use slots, to save on server memory usage.
-    
-    TODO: merge this with autoresponder sessions
     '''
     
-    def __init__(self, conn_id, websocket, path=None, *args, **kwargs):
-        super().__init__(conn_id, *args, **kwargs)
+    def __init__(self, websocket, path=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
         self.websocket = websocket
         self.path = path
         
-    async def close(self):
-        ''' Wraps websocket.close.
+    @classmethod
+    async def serve_forever(cls, conn_handler, host, port):
+        ''' Starts a server for this kind of connection. Should handle
+        its own return, and be cancellable via task cancellation.
         '''
-        await self.websocket.close()
+        async def wrapped_conn_handler(websocket, path):
+            ''' We need an intermediary that will feed the conn_handler
+            actual _WSConnection objects.
+            '''
+            # Make sure we don't take a strong reference to the connection!
+            await conn_handler(cls(websocket, path))
+        
+        server = await websockets.serve(
+            wrapped_conn_handler,
+            host,
+            port
+        )
+        
+        try:
+            await server.wait_closed()
+            
+        except asyncio.CancelledError:
+            server.close()
+            await server.wait_closed()
+        
+    @classmethod
+    async def new(cls, host, port, tls):
+        ''' Creates and returns a new connection. Intended to be called
+        by clients; servers may call __init__ directly.
+        '''
+        loc = _WSLoc(host, int(port), bool(tls))
+        # If this raises, we don't need to worry about closing, because the
+        # websocket won't exist.
+        websocket = await websockets.connect(str(loc))
+        return cls(websocket=websocket)
+        
+    async def close(self):
+        ''' Wraps websocket.close and calls self.terminate().
+        '''
+        try:
+            # This call is idempotent, so we don't need to worry about
+            # accidentally calling it twice.
+            await self.websocket.close()
+        finally:
+            # And force us to be GC'd
+            self.terminate()
         
     async def send(self, msg):
         ''' Send from the same event loop as the websocket.
         '''
-        await self.websocket.send(msg)
+        try:
+            return (await self.websocket.send(msg))
+        
+        # If the connection is closed, call our own close (and therefore
+        # self-destruct)
+        except websockets.exceptions.ConnectionClosed as exc:
+            await self.close()
+            raise ConnectionClosed() from exc
         
     async def recv(self):
         ''' Receive from the same event loop as the websocket.
         '''
-        return (await self.websocket.recv())
-        
-
-class WSBase:
-    ''' Common stuff for websockets clients and servers.
-    '''
-    
-    def __init__(self, host, port, receiver, tls=True, *args, **kwargs):
-        ''' Yeah, the usual.
-        host -> str: hostname for the server
-        port -> int: port for the server
-        receiver -> coro: handler for incoming objects. Must have async def
-            receiver.receive(), which will be passed the connection, message
-        connection_class -> type: used to create new connections. Defaults to
-            _WSConnection.
-        '''
-        self._ws_port = port
-        self._ws_host = host
-        
-        if tls:
-            self._ws_protocol = 'wss://'
-        else:
-            self._ws_protocol = 'ws://'
-        
-        self._ws_tls = bool(tls)
-        self._receiver = receiver
-            
-        super().__init__(*args, **kwargs)
-            
-    @property
-    def _ws_loc(self):
-        return (
-            self._ws_protocol +
-            self._ws_host + ':' +
-            str(self._ws_port) + '/'
-        )
-        
-    @property
-    def connection_factory(self):
-        ''' Proxy for connection factory to allow saner subclassing.
-        '''
-        return _WSConnection
-    
-    async def new_connection(self, websocket, path, *args, **kwargs):
-        ''' Wrapper for creating a new connection. Mostly here to make
-        subclasses simpler.
-        '''
-        logger.debug('New connection: ' + str(args) + ' ' + str(kwargs))
-        return self.connection_factory(
-            loop = self._loop,
-            websocket = websocket,
-            path = path,
-            *args, **kwargs
-        )
-        
-    async def _handle_connection(self, websocket, path=None):
-        ''' This handles a single websockets connection.
-        '''
-        connection = await self.new_connection(websocket, path)
-        
         try:
-            while True:
-                await asyncio.sleep(0)
-                msg = await websocket.recv()
-                # Should this be split off into own looper so we can get on
-                # with receiving?
-                await self._receiver(connection, msg)
-                
-        except ConnectionClosed:
-            logger.info('Connection closed: ' + str(connection.connid))
-                    
-        except Exception:
-            logger.error(
-                'Error running connection! Cleanup not called.\n' +
-                ''.join(traceback.format_exc())
-            )
-            raise
-            
-        finally:
-            await connection.close()
-            
-        # In case subclasses want to do any cleanup
-        return connection
+            return (await self.websocket.recv())
+        
+        # If the connection is closed, call our own close (and therefore
+        # self-destruct)
+        except websockets.exceptions.ConnectionClosed as exc:
+            await self.close()
+            raise ConnectionClosed() from exc
         
         
-class WSBasicServer(WSBase, loopa.ManagedTask):
-    ''' Generic websockets server.
-    
-    This isn't really a looped task, just a managed one.
+class Listener(loopa.TaskLooper):
+    ''' Listens forever to a single connection. The connection can be
+    updated while the loop is running.
     '''
     
-    def __init__(self, birthday_bits=40, *args, **kwargs):
+    def __init__(self, receiver, *args, **kwargs):
+        ''' Defines the receive coro.
         '''
-        Note: birthdays must be > 1000, or it will be ignored, and will
-        default to a 40-bit space.
-        '''
-        # When creating new connection ids,
-        # Select a pseudorandom number from approx 40-bit space. Should have 1%
-        # collision probability at 150k connections and 25% at 800k
-        self._birthdays = 2 ** birthday_bits
-        self._connections = {}
-        self._connid_lock = None
-        self._server = None
-        
-        # Make sure to call this last, lest we drop immediately into a thread.
-        super().__init__(*args, **kwargs)
-        
-    @property
-    def connections(self):
-        ''' Access the connections dict.
-        '''
-        return self._connections
-        
-    async def new_connection(self, websocket, path, *args, **kwargs):
-        ''' Generates a new connection object for the current conn.
-        
-        Must be called from super() if overridden.
-        '''
-        # Note that this overhead happens only once per connection.
-        async with self._connid_lock:
-            # Grab a connid and initialize it before releasing
-            connid = self._new_connid()
-            # Go ahead and set it to None so we block for absolute minimum time
-            self._connections[connid] = None
-        
-        connection = await super().new_connection(
-            websocket = websocket, 
-            path = path, 
-            connid = connid,
-            *args, **kwargs
-        )
-        self._connections[connid] = connection
-        
-        return connection
-                
-    def _new_connid(self):
-        ''' Creates a new connection ID. Does not need to use CSRNG, so
-        let's avoid depleting entropy.
-        
-        THIS IS NOT COOP SAFE! Must be called with a lock to avoid a 
-        race condition. Release the lock AFTER registering the connid.
-        
-        Standard websockets stuff.
-        '''
-        # Select a pseudorandom number from approx 40-bit space. Should have 1%
-        # collision probability at 150k connections and 25% at 800k
-        connid = random.randint(0, self._birthdays)
-        if connid in self._connections:
-            connid = self._new_connid()
-        return connid
-        
-    async def task_run(self):
-        try:
-            self._connid_lock = asyncio.Lock()
-            self._server = await websockets.serve(
-                self._handle_connection,
-                self._ws_host,
-                self._ws_port
-            )
-            await self._server.wait_closed()
-        
-        # Catch any cancellations in here.
-        finally:
-            if self._server is not None:
-                self._server.close()
-                await self._server.wait_closed()
-        
-        
-class WSBasicClient(WSBase, loopa.TaskLooper):
-    ''' Generic websockets client.
-    
-    Note that this doesn't block or anything. You're free to continue on
-    in the thread where this was created, and if you don't, it will
-    close down.
-    '''
-    
-    def __init__(self, threaded, *args, **kwargs):
-        super().__init__(threaded=threaded, *args, **kwargs)
-        
-        self._retry_counter = 0
-        self._retry_max = 60
-        
-        # If we're threaded, we need to wait for the clear to transmit flag
-        if threaded:
-            call_coroutine_threadsafe(
-                coro = self._ctx.wait(),
-                loop = self._loop,
-            )
-    
-    async def loop_init(self):
-        self._ctx = asyncio.Event()
-        await super().loop_init()
-        
-    async def loop_stop(self):
         self._ctx = None
-        await super().loop_stop()
+        self._connection = None
+        self._receiver = receiver
+        super().__init__(*args, **kwargs)
         
-    async def new_connection(self, *args, **kwargs):
-        ''' Wraps super().new_connection() to store it as
-        self._connection.
+    async def register_connection(self, connection):
+        ''' Registers the connection locally. Use this as the
+        conn_handler in ConnectionCls.serve_forever calls.
         '''
-        connection = await super().new_connection(*args, **kwargs)
-        self._connection = connection
-        return connection
+        # Use a weakref so that the connection can manage its own lifetime
+        self._connection = weakref.proxy(connection)
+        # Memoize the str rep of the connection for when it's finally closed.
+        self._conn_str = str(connection)
+        self._ctx.set()
+        
+    async def loop_init(self):
+        ''' Sets up a connection available flag.
+        '''
+        self._ctx = asyncio.Event()
         
     async def loop_run(self):
-        ''' Client coroutine. Initiates a connection with server.
+        ''' Pretty damn simple really.
         '''
-        async with websockets.connect(self._ws_loc) as websocket:
-            try:
-                self._loop.call_soon(self._ctx.set)
-                await self._handle_connection(websocket)
-                
-            except ConnectionClosed as exc:
-                logger.warning('Connection closed!')
-                # For now, if the connection closes, just dumbly retry
-                self._retry_counter += 1
-                
-                if self._retry_counter <= self._retry_max:
-                    await asyncio.sleep(.1)
-                    
-                else:
-                    self.stop()
-        
-    async def send(self, msg):
-        ''' NON THREADSAFE wrapper to send a message. Must be called
-        from the same event loop as the websocket.
-        '''
+        # Wait until we have a connection.
         await self._ctx.wait()
-        await self._connection.send(msg)
         
-    async def send_loopsafe(self, msg):
-        ''' Threadsafe wrapper to send a message from a different event
-        loop.
+        try:
+            msg = await self._connection.recv()
+        
+        except ConnectionClosed:
+            logger.info(
+                'CONN ' + self._conn_str + ' closed at listener.'
+            )
+            # Wait for the next connection.
+            self._ctx.clear()
+            
+        except ReferenceError:
+            logger.info(
+                'CONN ' + self._conn_str + ' already terminated.'
+            )
+            # Wait for the next connection.
+            self._ctx.clear()
+            
+        else:
+            try:
+                # When we pass to the receiver, make sure we give them a strong
+                # reference, so hashing and stuff continues to work.
+                await self._receiver(self._connection._ref, msg)
+            
+            except Exception:
+                logger.error(
+                    'CONN ' + self._conn_str + ' Listener receiver ' +
+                    'raised w/ traceback:\n' + ''.join(traceback.format_exc())
+                )
+                
+    async def loop_close(self):
+        ''' Remove our connection available flag.
         '''
-        await run_coroutine_loopsafe(
-            coro = self.send(msg),
-            target_loop = self._loop
-        )
-        
-    def send_threadsafe(self, msg):
-        ''' Threadsafe wrapper to send a message. Must be called
-        synchronously.
-        '''
-        call_coroutine_threadsafe(
-            coro = self.send(msg),
-            loop = self._loop
-        )
+        self._ctx = None
         
         
-class _AutoresponderSession:
-    ''' A request/response websockets connection.
-    MUST ONLY BE CREATED INSIDE AN EVENT LOOP.
-    
-    TODO: merge with connections
+class ListenerFactory(loopa.TaskLooper):
+    ''' ListenerFactories create ad-hoc listeners as connections roll
+    in, making sure they only last as long as the... well... shit.
     '''
-    def __init__(self):
-        # Lookup for request token -> queue(maxsize=1)
-        self.pending_responses = {}
-        self._req_lock = asyncio.Lock()
-        
-    async def _gen_req_token(self):
-        ''' Gets a new (well, currently unused) request token. Sets it
-        in pending_responses to prevent race conditions.
+    
+    
+class MsgBuffer(loopa.TaskLooper):
+    ''' Buffers incoming messages, handling them as handlers become
+    available. Intended to be put between a Listener and a ProtoDef.
+    '''
+    
+    def __init__(self, handler, *args, **kwargs):
+        ''' Inits the incoming queue to avoid AttributeErrors.
         '''
-        async with self._req_lock:
-            token = self._gen_unused_token()
-            # Do this just so we can release the lock ASAP
-            self.pending_responses[token] = None
-            
-        return token
-            
-    def _gen_unused_token(self):
-        ''' Recursive search for unused token. THIS IS NOT THREADSAFE
-        NOR ASYNC SAFE! Must be called from within parent lock.
+        self._recv_q = None
+        self._handler = handler
+        super().__init__(*args, **kwargs)
+    
+    async def __call__(self, msg):
+        ''' Schedules a message to receive.
         '''
-        # Get a random-ish (no need for CSRNG) 16-bit token
-        token = random.getrandbits(16)
-        if token in self.pending_responses:
-            token = self._gen_unused_token()
-        return token
-        
-    async def close(self):
-        ''' Perform any needed cleanup.
+        await self._recv_q.put(msg)
+    
+    async def loop_init(self):
+        ''' Creates the incoming queue.
         '''
-        # Awaken any further pending responses that they're doomed
-        for waiter in self.pending_responses.values():
-            await waiter.put(SessionClosed())
-            
-    def __repr__(self):
-        # Example: <_AutoresponderSession 0x52b2978>
-        clsname = type(self).__name__
-        sess_str = str(hex(id(self)))
-        return '<' + clsname + ' ' + sess_str + '>'
+        self._recv_q = asyncio.Queue()
         
-    def __str__(self):
-        # Example: _AutoresponderSession(0x52b2978)
-        clsname = type(self).__name__
-        sess_str = str(hex(id(self)))
-        return clsname + '(' + sess_str + ')'
+    async def loop_run(self):
+        ''' Awaits the receive queue and then runs a handler for it.
+        '''
+        connection, msg = await self._recv_q.get()
+        
+        try:
+            await self._handler(connection, msg)
+        
+        except Exception:
+            logger.error(
+                'CONN ' + self._conn_str + ' Listener receiver ' +
+                'raised w/ traceback:\n' + ''.join(traceback.format_exc())
+            )
+        await self._handler(msg)
+        
+    async def loop_stop(self):
+        ''' Clears the incoming queue.
+        '''
+        self._recv_q = None
+    
+    
+class ConnectionManager(loopa.TaskLooper):
+    ''' Use this client-side to automatically create, re-establish, etc
+    connections with servers, using exponential backoff. May optionally
+    wrap a ProtoDef, automatically passing the current connection to any
+    outgoing requests. Buffers all incoming commands (outgoing requests)
+    to protect against failed connections. Also manages connection
+    closing, which isotherwise up to the next pay grade.
+    '''
+    
+    def __init__(self, connection_cls, *args, **kwargs):
+        ''' We need to assign our connection class.
+        '''
+        self.connection_cls = connection_cls
+        self._conn_available = None
+        self._conn_args = None
+        self._conn_kwargs = None
+        
+        super().__init__(*args, **kwargs)
+    
+    async def loop_init(self, *args, **kwargs):
+        ''' *args and **kwargs will be passed to the connection class.
+        '''
+        self._conn_available = asyncio.Event()
+        self._conn_args = args
+        self._conn_kwargs = kwargs
+        
+    async def loop_stop(self):
+        ''' Reset whether or not we have a connection available.
+        '''
+        self._conn_available = None
+        self._conn_args = None
+        self._conn_kwargs = None
+        
+    def await_connection(self):
+        ''' Despite the normal function def, call this with await.
+        '''
+        # Wrap our connection available flag without the double await call
+        return self._conn_available.wait()
 
 
 class RequestResponseProtocol(type):
@@ -530,7 +561,7 @@ class _RequestToken(int):
     __len__ = _PACK_LEN
     _MAX_VAL = (2 ** (8 * _PACK_LEN) - 1)
     # Set the string length to be that of the largest possible value
-    _STR_LEN = len(str(max_val))
+    _STR_LEN = len(str(_MAX_VAL))
     
     def __init__(self, *args, respondable=False, **kwargs):
         super().__init__(*args, **kwargs)
@@ -674,6 +705,20 @@ class _ReqResMixin:
     ''' Extends req/res protocol definitions to support calling.
     '''
     
+    def __init__(self, *args, **kwargs):
+        ''' Add in a weakkeydictionary to track connection responses.
+        '''
+        # Lookup: connection -> {token1: queue1, token2: queue2...}
+        self._responses = weakref.WeakKeyDictionary()
+        super().__init__(*args, **kwargs)
+        
+    def _ensure_responseable(self, connection):
+        ''' Make sure a connection is capable of receiving a response.
+        Note that this is NOT threadsafe, but it IS asyncsafe.
+        '''
+        if connection not in self._responses:
+            self._responses[connection] = {}
+    
     async def __call__(self, connection, msg):
         ''' Called for all incoming requests. Handles the request, then
         sends the response.
@@ -693,7 +738,7 @@ class _ReqResMixin:
         # This block dispatches the call. We handle **everything** within this
         # coroutine, so it could be an ACK or a NAK as well as a request.
         if code == self._SUCCESS_CODE:
-            response = (result, None)
+            response = (body, None)
             
         # For failures, result=None and failure=Exception()
         elif code == self._FAILURE_CODE:
@@ -707,8 +752,9 @@ class _ReqResMixin:
             
         # We arrive here only by way of a response (and not a request), so we
         # need to awaken the requestor.
+        self._ensure_responseable(connection)
         try:
-            await connection.pending_responses[token].put(response)
+            await self._responses[connection][token].put(response)
         except KeyError:
             logger.warning(
                 'CONN ' + str(connection) + ' REQ ' + str(token) +
@@ -763,7 +809,7 @@ class _ReqResMixin:
         
         # No responder. Pack a failed response with RequestUnknown.
         except KeyError:
-            result = _pack_failure(RequestUnknown(repr(code)))
+            result = self._pack_failure(RequestUnknown(repr(code)))
             logger.warning(
                 req_id + ' FAILED w/ traceback:\n' +
                 ''.join(traceback.format_exc())
@@ -784,7 +830,7 @@ class _ReqResMixin:
             # Response attempt failed. Pack a failed response with the
             # exception instead.
             except Exception as exc:
-                result = _pack_failure(exc)
+                result = self._pack_failure(exc)
                 logger.warning(
                     req_id + ' FAILED w/ traceback:\n' +
                     ''.join(traceback.format_exc())
@@ -860,7 +906,7 @@ class _ReqResMixin:
                 
             except Exception:
                 logger.warning(
-                    'Improper NAK body: ' + str(body) ' w/ traceback:\n' +
+                    'Improper NAK body: ' + str(body) + ' w/ traceback:\n' +
                     ''.join(traceback.format_exc())
                 )
                 result = RequestError(str(body))
@@ -870,10 +916,12 @@ class _ReqResMixin:
     async def wrap_requestor(self, requestor, response_handler, code,
                              connection, timeout=None, *args, **kwargs):
         ''' Does anything necessary to turn a requestor into something
-        that can actually perform the request. 
+        that can actually perform the request.
         '''
         # We already have the code, just need the token and body
-        token = await session._gen_req_token()
+        # Note that this will automatically ensure we have a self._responses
+        # key, so we don't need to call _ensure_responseable later.
+        token = self._new_request_token(connection)
         # Note the use of an explicit self!
         body = await requestor(self, connection, *args, **kwargs)
         # Pack the request
@@ -883,7 +931,7 @@ class _ReqResMixin:
         # the request, and then await the response.
         waiter = asyncio.Queue(maxsize=1)
         try:
-            connection.pending_responses[token] = waiter
+            self._responses[connection][token] = waiter
             await connection.send(request)
             
             # Wait for the response
@@ -904,7 +952,21 @@ class _ReqResMixin:
                 
         finally:
             del waiter
-            del connection.pending_responses[token]
+            del self._responses[connection][token]
+            
+    def _new_request_token(self, connection):
+        ''' Generates a request token for the connection.
+        '''
+        self._ensure_responseable(connection)
+        # Get a random-ish (no need for CSRNG) 16-bit token
+        token = random.getrandbits(16)
+        # Repeat until unique
+        while token in self._responses[connection]:
+            token = random.getrandbits(16)
+        # Now create an empty entry in the _responses entry (to avoid a race
+        # condition) and return the token
+        self._responses[connection][token] = None
+        return token
         
         
 class Autoresponder(LooperTrooper):
@@ -1358,7 +1420,7 @@ class Autoresponder(LooperTrooper):
             if isinstance(response, Exception):
                 raise response
                 
-        except SessionClosed as exc:
+        except ConnectionClosed as exc:
             logger.debug(
                 'Session closed while awaiting response: \n' + ''.join(
                 traceback.format_exc())
@@ -1594,3 +1656,219 @@ def Autocomms(autoresponder_class, connector_class, autoresponder_args=None,
     autoresponder.connector = connector
     
     return autoresponder
+        
+
+class WSBase:
+    ''' Common stuff for websockets clients and servers.
+    '''
+    
+    def __init__(self, host, port, receiver, tls=True, *args, **kwargs):
+        ''' Yeah, the usual.
+        host -> str: hostname for the server
+        port -> int: port for the server
+        receiver -> coro: handler for incoming objects. Must have async def
+            receiver.receive(), which will be passed the connection, message
+        connection_class -> type: used to create new connections. Defaults to
+            _WSConnection.
+        '''
+        self._ws_port = port
+        self._ws_host = host
+        
+        if tls:
+            self._ws_protocol = 'wss://'
+        else:
+            self._ws_protocol = 'ws://'
+        
+        self._ws_tls = bool(tls)
+        self._receiver = receiver
+            
+        super().__init__(*args, **kwargs)
+            
+    @property
+    def _ws_loc(self):
+        return (
+            self._ws_protocol +
+            self._ws_host + ':' +
+            str(self._ws_port) + '/'
+        )
+        
+    @property
+    def connection_factory(self):
+        ''' Proxy for connection factory to allow saner subclassing.
+        '''
+        return _WSConnection
+    
+    async def new_connection(self, websocket, path, *args, **kwargs):
+        ''' Wrapper for creating a new connection. Mostly here to make
+        subclasses simpler.
+        '''
+        logger.debug('New connection: ' + str(args) + ' ' + str(kwargs))
+        return self.connection_factory(
+            loop = self._loop,
+            websocket = websocket,
+            path = path,
+            *args, **kwargs
+        )
+        
+    async def _handle_connection(self, websocket, path=None):
+        ''' This handles a single websockets connection.
+        '''
+        connection = await self.new_connection(websocket, path)
+        
+        try:
+            while True:
+                await asyncio.sleep(0)
+                msg = await websocket.recv()
+                # Should this be split off into own looper so we can get on
+                # with receiving?
+                await self._receiver(connection, msg)
+                
+        except ConnectionClosed:
+            logger.info('Connection closed: ' + str(connection.connid))
+                    
+        except Exception:
+            logger.error(
+                'Error running connection! Cleanup not called.\n' +
+                ''.join(traceback.format_exc())
+            )
+            raise
+            
+        finally:
+            await connection.close()
+            
+        # In case subclasses want to do any cleanup
+        return connection
+        
+        
+class WSBasicClient(WSBase, loopa.TaskLooper):
+    ''' Generic websockets client.
+    
+    Note that this doesn't block or anything. You're free to continue on
+    in the thread where this was created, and if you don't, it will
+    close down.
+    '''
+    
+    def __init__(self, threaded, *args, **kwargs):
+        super().__init__(threaded=threaded, *args, **kwargs)
+        
+        self._retry_counter = 0
+        self._retry_max = 60
+        
+        # If we're threaded, we need to wait for the clear to transmit flag
+        if threaded:
+            call_coroutine_threadsafe(
+                coro = self._ctx.wait(),
+                loop = self._loop,
+            )
+    
+    async def loop_init(self):
+        self._ctx = asyncio.Event()
+        await super().loop_init()
+        
+    async def loop_stop(self):
+        self._ctx = None
+        await super().loop_stop()
+        
+    async def new_connection(self, *args, **kwargs):
+        ''' Wraps super().new_connection() to store it as
+        self._connection.
+        '''
+        connection = await super().new_connection(*args, **kwargs)
+        self._connection = connection
+        return connection
+        
+    async def loop_run(self):
+        ''' Client coroutine. Initiates a connection with server.
+        '''
+        async with websockets.connect(self._ws_loc) as websocket:
+            try:
+                self._loop.call_soon(self._ctx.set)
+                await self._handle_connection(websocket)
+                
+            except ConnectionClosed as exc:
+                logger.warning('Connection closed!')
+                # For now, if the connection closes, just dumbly retry
+                self._retry_counter += 1
+                
+                if self._retry_counter <= self._retry_max:
+                    await asyncio.sleep(.1)
+                    
+                else:
+                    self.stop()
+        
+    async def send(self, msg):
+        ''' NON THREADSAFE wrapper to send a message. Must be called
+        from the same event loop as the websocket.
+        '''
+        await self._ctx.wait()
+        await self._connection.send(msg)
+        
+    async def send_loopsafe(self, msg):
+        ''' Threadsafe wrapper to send a message from a different event
+        loop.
+        '''
+        await run_coroutine_loopsafe(
+            coro = self.send(msg),
+            target_loop = self._loop
+        )
+        
+    def send_threadsafe(self, msg):
+        ''' Threadsafe wrapper to send a message. Must be called
+        synchronously.
+        '''
+        call_coroutine_threadsafe(
+            coro = self.send(msg),
+            loop = self._loop
+        )
+        
+        
+class _AutoresponderSession:
+    ''' A request/response websockets connection.
+    MUST ONLY BE CREATED INSIDE AN EVENT LOOP.
+    
+    TODO: merge with connections
+    '''
+    def __init__(self):
+        # Lookup for request token -> queue(maxsize=1)
+        self.pending_responses = {}
+        self._req_lock = asyncio.Lock()
+        
+    async def _gen_req_token(self):
+        ''' Gets a new (well, currently unused) request token. Sets it
+        in pending_responses to prevent race conditions.
+        '''
+        async with self._req_lock:
+            token = self._gen_unused_token()
+            # Do this just so we can release the lock ASAP
+            self.pending_responses[token] = None
+            
+        return token
+            
+    def _gen_unused_token(self):
+        ''' Recursive search for unused token. THIS IS NOT THREADSAFE
+        NOR ASYNC SAFE! Must be called from within parent lock.
+        '''
+        # Get a random-ish (no need for CSRNG) 16-bit token
+        token = random.getrandbits(16)
+        if token in self.pending_responses:
+            token = self._gen_unused_token()
+        return token
+        
+    async def close(self):
+        ''' Perform any needed cleanup.
+        '''
+        # Awaken any further pending responses that they're doomed
+        for waiter in self.pending_responses.values():
+            await waiter.put(ConnectionClosed())
+            
+    def __repr__(self):
+        # Example: <_AutoresponderSession 0x52b2978>
+        clsname = type(self).__name__
+        sess_str = str(hex(id(self)))
+        return '<' + clsname + ' ' + sess_str + '>'
+        
+    def __str__(self):
+        # Example: _AutoresponderSession(0x52b2978)
+        clsname = type(self).__name__
+        sess_str = str(hex(id(self)))
+        return clsname + '(' + sess_str + ')'

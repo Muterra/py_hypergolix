@@ -67,7 +67,7 @@ __all__ = [
     'RequestError',
     'RequestFinished',
     'RequestUnknown',
-    'SessionClosed',
+    'ConnectionClosed',
     # These are privateer errors
     'PrivateerError',
     'RatchetError',
@@ -286,7 +286,7 @@ class RequestUnknown(RequestError):
     pass
     
     
-class SessionClosed(CommsError):
+class ConnectionClosed(CommsError):
     ''' Raised when something goes wrong with IPC (bad commands, etc).
     '''
     pass
