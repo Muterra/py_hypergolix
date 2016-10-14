@@ -179,6 +179,36 @@ class _ConnectionBase(metaclass=abc.ABCMeta):
         '''
         return self._str
         
+    async def listener(self, receiver):
+        ''' Once a connection has been created, call this to listen for
+        a message until the connection is terminated. Put it in a loop
+        to listen forever.
+        '''
+        try:
+            msg = await self._connection.recv()
+        
+        except ConnectionClosed:
+            logger.info(
+                'CONN ' + str(self) + ' closed at listener.'
+            )
+            
+        except ReferenceError:
+            logger.info(
+                'CONN ' + str(self) + ' already terminated.'
+            )
+            
+        else:
+            try:
+                # When we pass to the receiver, make sure we give them a strong
+                # reference, so hashing and stuff continues to work.
+                await receiver(self, msg)
+            
+            except Exception:
+                logger.error(
+                    'CONN ' + str(self) + ' Listener receiver ' +
+                    'raised w/ traceback:\n' + ''.join(traceback.format_exc())
+                )
+        
     @abc.abstractmethod
     @classmethod
     async def serve_forever(cls, conn_handler, *args, **kwargs):
@@ -311,81 +341,6 @@ class _WSConnection(_ConnectionBase):
         except websockets.exceptions.ConnectionClosed as exc:
             await self.close()
             raise ConnectionClosed() from exc
-        
-        
-class Listener(loopa.TaskLooper):
-    ''' Listens forever to a single connection. The connection can be
-    updated while the loop is running.
-    '''
-    
-    def __init__(self, receiver, *args, **kwargs):
-        ''' Defines the receive coro.
-        '''
-        self._ctx = None
-        self._connection = None
-        self._receiver = receiver
-        super().__init__(*args, **kwargs)
-        
-    async def register_connection(self, connection):
-        ''' Registers the connection locally. Use this as the
-        conn_handler in ConnectionCls.serve_forever calls.
-        '''
-        # Use a weakref so that the connection can manage its own lifetime
-        self._connection = weakref.proxy(connection)
-        # Memoize the str rep of the connection for when it's finally closed.
-        self._conn_str = str(connection)
-        self._ctx.set()
-        
-    async def loop_init(self):
-        ''' Sets up a connection available flag.
-        '''
-        self._ctx = asyncio.Event()
-        
-    async def loop_run(self):
-        ''' Pretty damn simple really.
-        '''
-        # Wait until we have a connection.
-        await self._ctx.wait()
-        
-        try:
-            msg = await self._connection.recv()
-        
-        except ConnectionClosed:
-            logger.info(
-                'CONN ' + self._conn_str + ' closed at listener.'
-            )
-            # Wait for the next connection.
-            self._ctx.clear()
-            
-        except ReferenceError:
-            logger.info(
-                'CONN ' + self._conn_str + ' already terminated.'
-            )
-            # Wait for the next connection.
-            self._ctx.clear()
-            
-        else:
-            try:
-                # When we pass to the receiver, make sure we give them a strong
-                # reference, so hashing and stuff continues to work.
-                await self._receiver(self._connection._ref, msg)
-            
-            except Exception:
-                logger.error(
-                    'CONN ' + self._conn_str + ' Listener receiver ' +
-                    'raised w/ traceback:\n' + ''.join(traceback.format_exc())
-                )
-                
-    async def loop_close(self):
-        ''' Remove our connection available flag.
-        '''
-        self._ctx = None
-        
-        
-class ListenerFactory(loopa.TaskLooper):
-    ''' ListenerFactories create ad-hoc listeners as connections roll
-    in, making sure they only last as long as the... well... shit.
-    '''
     
     
 class MsgBuffer(loopa.TaskLooper):
