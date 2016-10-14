@@ -165,6 +165,12 @@ class _ConnectionBase(metaclass=abc.ABCMeta):
                 'Attempted to terminate connection twice. Check for other ' +
                 'strong references to the connection.'
             )
+            
+    def __bool__(self):
+        ''' Return True if the connection is still active and False
+        otherwise.
+        '''
+        return hasattr(self, '_ref')
         
     def __repr__(self):
         ''' Make a slightly nicer version of repr, since connections are
@@ -185,17 +191,13 @@ class _ConnectionBase(metaclass=abc.ABCMeta):
         to listen forever.
         '''
         try:
-            msg = await self._connection.recv()
+            msg = await self.recv()
         
         except ConnectionClosed:
             logger.info(
                 'CONN ' + str(self) + ' closed at listener.'
             )
-            
-        except ReferenceError:
-            logger.info(
-                'CONN ' + str(self) + ' already terminated.'
-            )
+            raise
             
         else:
             try:
@@ -208,6 +210,15 @@ class _ConnectionBase(metaclass=abc.ABCMeta):
                     'CONN ' + str(self) + ' Listener receiver ' +
                     'raised w/ traceback:\n' + ''.join(traceback.format_exc())
                 )
+                
+    async def listen_forever(self, receiver):
+        ''' Listens until the connection terminates.
+        '''
+        # Wait until terminate is called.
+        while self:
+            # Juuust in case things go south, add this to help cancellation.
+            await asyncio.sleep(0)
+            await self.listener(receiver)
         
     @abc.abstractmethod
     @classmethod
@@ -280,8 +291,9 @@ class _WSConnection(_ConnectionBase):
             ''' We need an intermediary that will feed the conn_handler
             actual _WSConnection objects.
             '''
+            self = weakref.proxy(cls(websocket, path))
             # Make sure we don't take a strong reference to the connection!
-            await conn_handler(cls(websocket, path))
+            await self.listen_forever(conn_handler)
         
         server = await websockets.serve(
             wrapped_conn_handler,
@@ -393,6 +405,9 @@ class ConnectionManager(loopa.TaskLooper):
     outgoing requests. Buffers all incoming commands (outgoing requests)
     to protect against failed connections. Also manages connection
     closing, which isotherwise up to the next pay grade.
+    
+    This should probably also do the listen() invocation (actually, that
+    would make a ton of sense).
     '''
     
     def __init__(self, connection_cls, *args, **kwargs):
