@@ -39,14 +39,13 @@ import collections.abc
 import collections
 import traceback
 import functools
+# Note that random is only used for exponential backoff
+import random
 import weakref
 import base64
 import loopa
 
 from collections import namedtuple
-
-# Note: this is used exclusively for connection ID generation in _Websocketeer
-import random
 
 from .exceptions import RequestError
 from .exceptions import RequestFinished
@@ -298,7 +297,8 @@ class _WSConnection(_ConnectionBase):
         server = await websockets.serve(
             wrapped_conn_handler,
             host,
-            port
+            port,
+            max_size = 5 * (2 ** 20)    # Max incoming msg size 5 MiB
         )
         
         try:
@@ -316,7 +316,10 @@ class _WSConnection(_ConnectionBase):
         loc = _WSLoc(host, int(port), bool(tls))
         # If this raises, we don't need to worry about closing, because the
         # websocket won't exist.
-        websocket = await websockets.connect(str(loc))
+        websocket = await websockets.connect(
+            str(loc),
+            max_size = 5 * (2 ** 20)    # Max incoming msg size 5 MiB
+        )
         return cls(websocket=websocket)
         
     async def close(self):
@@ -358,13 +361,33 @@ class _WSConnection(_ConnectionBase):
 class MsgBuffer(loopa.TaskLooper):
     ''' Buffers incoming messages, handling them as handlers become
     available. Intended to be put between a Listener and a ProtoDef.
+    
+    MsgBuffers are primarily intended to be a "server"-side construct;
+    it would be unexpected for requests to happen at such a rate that
+    the upstream buffers fill for the requestor ("client").
+    
+    They can also function as the server-side equivalent of a
+    ConnectionManager, in that ProtoDef requests can be queued through
+    the MsgBuffer instead of the ProtoDef itself.
     '''
     
     def __init__(self, handler, *args, **kwargs):
         ''' Inits the incoming queue to avoid AttributeErrors.
+        
+        For now, anyways, the handler must be a protodef object.
         '''
         self._recv_q = None
+        self._send_q = None
         self._handler = handler
+        
+        # Very quick and easy way of injecting all of the handler methods into
+        # self. Short of having one queue per method, we need to wrap it
+        # anyways to buffer the actual method call.
+        for name in handler._RESPONDERS:
+            async def wrap_request(*args, _wrapped_name=name, **kwargs):
+                await self._send_q.put((_wrapped_name, args, kwargs))
+            setattr(self, name, wrap_request)
+        
         super().__init__(*args, **kwargs)
     
     async def __call__(self, msg):
@@ -376,69 +399,165 @@ class MsgBuffer(loopa.TaskLooper):
         ''' Creates the incoming queue.
         '''
         self._recv_q = asyncio.Queue()
+        self._send_q = asyncio.Queue()
         
     async def loop_run(self):
         ''' Awaits the receive queue and then runs a handler for it.
         '''
-        connection, msg = await self._recv_q.get()
+        incoming = asyncio.ensure_future(self._recv_q.get())
+        outgoing = asyncio.ensure_future(self._send_q.get())
+        
+        finished, pending = await asyncio.wait(
+            fs = {incoming, outgoing},
+            return_when = asyncio.FIRST_COMPLETED
+        )
         
         try:
-            await self._handler(connection, msg)
+            if incoming in finished:
+                connection, msg = incoming.result()
+                await self._handler(connection, msg)
+            else:
+                incoming.cancel()
+                
+            # Cannot elif because they may both finish simultaneously enough
+            # to be returned together
+            if outgoing in finished:
+                request_name, args, kwargs = outgoing.result()
+                method = getattr(self._handler, request_name)
+                await method(*args, **kwargs)
+            else:
+                outgoing.cancel()
         
         except Exception:
             logger.error(
-                'CONN ' + self._conn_str + ' Listener receiver ' +
-                'raised w/ traceback:\n' + ''.join(traceback.format_exc())
+                'MsgBuffer raised while handling task w/ traceback:\n' +
+                ''.join(traceback.format_exc())
             )
-        await self._handler(msg)
         
     async def loop_stop(self):
         ''' Clears the incoming queue.
         '''
         self._recv_q = None
+        self._send_q = None
     
     
 class ConnectionManager(loopa.TaskLooper):
-    ''' Use this client-side to automatically create, re-establish, etc
-    connections with servers, using exponential backoff. May optionally
-    wrap a ProtoDef, automatically passing the current connection to any
-    outgoing requests. Buffers all incoming commands (outgoing requests)
-    to protect against failed connections. Also manages connection
-    closing, which isotherwise up to the next pay grade.
+    ''' Use this client-side to automatically establish (and, whenever
+    necessary, re-establish) a connection with a server. This adds
+    exponential backoff for every consecutive failed connection attempt.
     
-    This should probably also do the listen() invocation (actually, that
-    would make a ton of sense).
+    ConnectionManagers will handle listening to the connection, and will
+    dispatch any incoming requests to protocol_def. They do not buffer
+    the message processing; ie, they will only handle one incoming
+    message at a time. They also handle closing connections.
+    
+    Finally, ConnectionManagers may be used to invoke any requests that
+    are defined at the msg_handler, and will automatically pass them the
+    current connection.
     '''
+    # Minimum delay before retrying a connection, in seconds
+    MIN_RETRY_DELAY = .01
+    # Maximum delay before retrying a connection, in seconds (1 hour)
+    MAX_RETRY_DELAY = 3600
     
-    def __init__(self, connection_cls, *args, **kwargs):
+    def __init__(self, connection_cls, protocol_def, *args, **kwargs):
         ''' We need to assign our connection class.
         '''
         self.connection_cls = connection_cls
+        self.protocol_def = protocol_def
+        self._connection = None
         self._conn_available = None
         self._conn_args = None
         self._conn_kwargs = None
+        self._consecutive_attempts = 0
+        
+        # Very quick and easy way of injecting all of the handler methods into
+        # self. Short of having one queue per method, we need to wrap it
+        # anyways to buffer the actual method call.
+        for name in protocol_def._RESPONDERS:
+            async def wrap_request(*args, _method=name, **kwargs):
+                ''' Pass all requests to our perform_request method.
+                '''
+                return (await self.perform_request(_method, args, kwargs))
+            
+            setattr(self, name, wrap_request)
         
         super().__init__(*args, **kwargs)
     
     async def loop_init(self, *args, **kwargs):
         ''' *args and **kwargs will be passed to the connection class.
         '''
+        self._send_q = asyncio.Queue()
         self._conn_available = asyncio.Event()
         self._conn_args = args
         self._conn_kwargs = kwargs
+        self._consecutive_attempts = 0
+        self._connection = None
         
     async def loop_stop(self):
         ''' Reset whether or not we have a connection available.
         '''
+        self._send_q = None
         self._conn_available = None
         self._conn_args = None
         self._conn_kwargs = None
+        self._connection = None
         
-    def await_connection(self):
-        ''' Despite the normal function def, call this with await.
+    async def loop_run(self):
+        ''' Creates a connection and listens forever.
         '''
-        # Wrap our connection available flag without the double await call
-        return self._conn_available.wait()
+        # Attempt to connect.
+        try:
+            # Technically this violates the idea that connections should be
+            # wholly self-sustained, but we want to be able to explicitly close
+            # them and pass some strong references to them later. Maybe. I
+            # think, anyways. Okay, not totally sure.
+            connection = await self.connection_cls.new(
+                *self._conn_args,
+                **self._conn_kwargs
+            )
+            
+        # The connection failed. Wait before reattempting it.
+        except Exception:
+            logger.error(
+                'Failed to establish connection with traceback:\n' +
+                ''.join(traceback.format_exc())
+            )
+            # Do this first, because otherwise randrange errors (and also
+            # otherwise it isn't technically binary exponential backoff)
+            self._consecutive_attempts += 1
+            backoff = random.randrange((2 ** self._consecutive_attempts) - 1)
+            backoff = max(self.MIN_RETRY_DELAY, backoff)
+            backoff = min(self.MAX_RETRY_DELAY, backoff)
+            await asyncio.sleep(backoff)
+            
+        # We successfully connected. Awesome.
+        else:
+            # Reset the attempts counter and set that a connection is available
+            self._consecutive_attempts = 0
+            # See note above re: strong/weak references
+            self._connection = connection
+            self._conn_available.set()
+            
+            try:
+                # We don't expect clients to have a high enough message volume
+                # to justify a buffer, so directly invoke the message handler
+                await connection.listen_forever(receiver=self.protocol_def)
+            
+            # No matter what happens, when this dies we need to clean up the
+            # connection and tell downstream that we cannot send anymore.
+            finally:
+                self._conn_available.clear()
+                connection.close()
+            
+    async def perform_request(self, request_name, args, kwargs):
+        ''' Make the given request using the protocol_def, but wait
+        until a connection exists.
+        '''
+        # Wait for the connection to be available.
+        method = getattr(self.protocol_def, request_name)
+        await self._conn_available.wait()
+        return (await method(self._connection, *args, **kwargs))
 
 
 class RequestResponseProtocol(type):
