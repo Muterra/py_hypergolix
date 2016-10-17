@@ -219,15 +219,15 @@ class _ConnectionBase(metaclass=abc.ABCMeta):
             await asyncio.sleep(0)
             await self.listener(receiver)
         
-    @abc.abstractmethod
     @classmethod
-    async def serve_forever(cls, conn_handler, *args, **kwargs):
+    @abc.abstractmethod
+    async def serve_forever(cls, msg_handler, *args, **kwargs):
         ''' Starts a server for this kind of connection. Should handle
         its own return, and be cancellable via task cancellation.
         '''
         
-    @abc.abstractmethod
     @classmethod
+    @abc.abstractmethod
     async def new(cls, *args, **kwargs):
         ''' Creates and returns a new connection. Intended to be called
         by clients; servers may call __init__ directly.
@@ -268,7 +268,7 @@ class _WSLoc(namedtuple('_WSLoc', ('host', 'port', 'tls'))):
         return ws_protocol + self.host + ':' + str(self.port) + '/'
 
 
-class _WSConnection(_ConnectionBase):
+class WSConnection(_ConnectionBase):
     ''' Bookkeeping object for a single websocket connection (client or
     server).
     
@@ -282,23 +282,23 @@ class _WSConnection(_ConnectionBase):
         self.path = path
         
     @classmethod
-    async def serve_forever(cls, conn_handler, host, port):
+    async def serve_forever(cls, msg_handler, host, port):
         ''' Starts a server for this kind of connection. Should handle
         its own return, and be cancellable via task cancellation.
         '''
-        async def wrapped_conn_handler(websocket, path):
+        async def wrapped_msg_handler(websocket, path):
             ''' We need an intermediary that will feed the conn_handler
             actual _WSConnection objects.
             '''
             self = weakref.proxy(cls(websocket, path))
             # Make sure we don't take a strong reference to the connection!
-            await self.listen_forever(conn_handler)
+            await self.listen_forever(msg_handler)
         
         server = await websockets.serve(
-            wrapped_conn_handler,
+            wrapped_msg_handler,
             host,
             port,
-            max_size = 5 * (2 ** 20)    # Max incoming msg size 5 MiB
+            # max_size = 5 * (2 ** 20)    # Max incoming msg size 5 MiB
         )
         
         try:
@@ -318,7 +318,7 @@ class _WSConnection(_ConnectionBase):
         # websocket won't exist.
         websocket = await websockets.connect(
             str(loc),
-            max_size = 5 * (2 ** 20)    # Max incoming msg size 5 MiB
+            # max_size = 5 * (2 ** 20)    # Max incoming msg size 5 MiB
         )
         return cls(websocket=websocket)
         
@@ -460,11 +460,11 @@ class ConnectionManager(loopa.TaskLooper):
     # Maximum delay before retrying a connection, in seconds (1 hour)
     MAX_RETRY_DELAY = 3600
     
-    def __init__(self, connection_cls, protocol_def, *args, **kwargs):
+    def __init__(self, connection_cls, msg_handler, *args, **kwargs):
         ''' We need to assign our connection class.
         '''
         self.connection_cls = connection_cls
-        self.protocol_def = protocol_def
+        self.protocol_def = msg_handler
         self._connection = None
         self._conn_available = None
         self._conn_args = None
@@ -474,7 +474,7 @@ class ConnectionManager(loopa.TaskLooper):
         # Very quick and easy way of injecting all of the handler methods into
         # self. Short of having one queue per method, we need to wrap it
         # anyways to buffer the actual method call.
-        for name in protocol_def._RESPONDERS:
+        for name in msg_handler._RESPONDERS:
             async def wrap_request(*args, _method=name, **kwargs):
                 ''' Pass all requests to our perform_request method.
                 '''
@@ -517,6 +517,10 @@ class ConnectionManager(loopa.TaskLooper):
                 **self._conn_kwargs
             )
             
+        # Need to catch this specifically, lest we accidentally do this forever
+        except asyncio.CancelledError:
+            return
+            
         # The connection failed. Wait before reattempting it.
         except Exception:
             logger.error(
@@ -548,7 +552,7 @@ class ConnectionManager(loopa.TaskLooper):
             # connection and tell downstream that we cannot send anymore.
             finally:
                 self._conn_available.clear()
-                connection.close()
+                await connection.close()
             
     async def perform_request(self, request_name, args, kwargs):
         ''' Make the given request using the protocol_def, but wait
@@ -584,7 +588,7 @@ class RequestResponseProtocol(type):
             # These are requestors
             # Get the request code and handler, defaulting to None if undefined
             req_code = getattr(value, '_req_code', None)
-            handler = getattr(value, 'handler_coro', None)
+            handler = getattr(value, '_request_handler_coro', None)
             
             # Ensure we've fully-defined the request system
             incomplete_def = (req_code is not None) and (handler is None)
@@ -647,13 +651,13 @@ class _RequestToken(int):
     packing, and modify str() to be a fixed length.
     '''
     _PACK_LEN = 2
-    __len__ = _PACK_LEN
     _MAX_VAL = (2 ** (8 * _PACK_LEN) - 1)
     # Set the string length to be that of the largest possible value
     _STR_LEN = len(str(_MAX_VAL))
     
-    def __init__(self, *args, respondable=False, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __new__(cls, *args, **kwargs):
+        # Note that the magic in int() happens in __new__ and not in __init__
+        self = super().__new__(*args, **kwargs)
         
         # Enforce positive integers only
         if self < 0:
@@ -663,15 +667,10 @@ class _RequestToken(int):
         elif self > self._MAX_VAL:
             raise ValueError('_RequestToken too large for pack length.')
             
-        # Set up a queue for response waiting if desired... which, actually,
-        # this is probably the wrong place to put this.
-        if respondable:
-            self._response = asyncio.Queue(maxsize=1)
-        else:
-            self._response = None
+        return self
         
-    def __bytes__(self):
-        return self.to_bytes(
+    def to_bytes(self):
+        return super().to_bytes(
             length = self._PACK_LEN,
             byteorder = 'big',
             signed = False
@@ -687,7 +686,8 @@ class _RequestToken(int):
     def from_bytes(cls, bytes):
         ''' Fixed-length recreation.
         '''
-        return cls(super().from_bytes(bytes, 'big', signed=False))
+        plain_int = super().from_bytes(bytes, 'big', signed=False)
+        return cls(plain_int)
         
         
 class _BoundReq(namedtuple('_BoundReq', ('obj', 'requestor', 'request_handler',
@@ -769,7 +769,7 @@ def request(code):
             # Make a copy of ourselves with the response_coro set!
             # Due to memoization, we don't need to rewrite the code
             return type(self)(
-                request_coro = self._do_request,
+                request_coro = self._request_coro,
                 request_handler = handler_coro,
                 response_handler = self._response_handler_coro
             )
@@ -781,7 +781,7 @@ def request(code):
             # Make a copy of ourselves with the response_coro set!
             # Due to memoization, we don't need to rewrite the code
             return type(self)(
-                request_coro = self._do_request,
+                request_coro = self._request_coro,
                 request_handler = self._request_handler_coro,
                 response_handler = handler_coro
             )
@@ -853,7 +853,9 @@ class _ReqResMixin:
     async def packit(self, code, token, body):
         ''' Serialize a message.
         '''
-        return self._VERSION_STR + code + bytes(token) + body
+        # Token is an actual int, so bytes()ing it tries to make that many
+        # bytes instead of re-casting it (which is very inconvenient)
+        return self._VERSION_STR + code + token.to_bytes() + body
         
     async def unpackit(self, msg):
         ''' Deserialize a message.
@@ -862,7 +864,7 @@ class _ReqResMixin:
         field_lengths = [
             self._VERSION_LEN,
             self._MSG_CODE_LEN,
-            len(_RequestToken)
+            _RequestToken._PACK_LEN
         ]
         
         results = []
@@ -934,7 +936,7 @@ class _ReqResMixin:
             else:
                 logger.info(
                     req_id + ' SUCCESSFULLY HANDLED w/ partial response ' +
-                    response[:10]
+                    str(response[:10])
                 )
             
         # Attempt to actually send the response
@@ -1056,6 +1058,11 @@ class _ReqResMixin:
         # condition) and return the token
         self._responses[connection][token] = None
         return token
+        
+        
+########################################################################
+# THIS IS ALL OF THE OLD STUFF!!!
+########################################################################
         
         
 class Autoresponder(LooperTrooper):
@@ -1847,7 +1854,7 @@ class WSBasicClient(WSBase, loopa.TaskLooper):
         if threaded:
             call_coroutine_threadsafe(
                 coro = self._ctx.wait(),
-                loop = self._loop,
+               loop = self._loop,
             )
     
     async def loop_init(self):

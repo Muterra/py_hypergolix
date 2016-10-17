@@ -54,8 +54,8 @@ from daemoniker.exceptions import ReceivedSignal
 # daemonization)
 from hypergolix import logutils
 from hypergolix.utils import Aengel
-from hypergolix.comms import Autocomms
-from hypergolix.comms import WSBasicServer
+from hypergolix.comms import RequestResponseProtocol as Autocomms
+from hypergolix.comms import BasicServer as WSBasicServer
 from hypergolix.remotes import PersisterBridgeServer
 from hypergolix.remotes import RemotePersistenceServer
 

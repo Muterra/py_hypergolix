@@ -33,6 +33,7 @@ hypergolix: A python Golix client.
 
 '''
 
+import logging
 import IPython
 import unittest
 import warnings
@@ -42,14 +43,21 @@ import time
 import asyncio
 import random
 import traceback
-import logging
+import os
+import sys
+from contextlib import contextmanager
 
 from hypergolix.utils import Aengel
 
-from hypergolix.comms import WSBasicServer
-from hypergolix.comms import WSBasicClient
-from hypergolix.comms import Autoresponder
-from hypergolix.comms import Autocomms
+from loopa import TaskCommander
+from loopa.utils import await_coroutine_threadsafe
+
+from hypergolix.comms import RequestResponseProtocol
+from hypergolix.comms import request
+from hypergolix.comms import BasicServer
+from hypergolix.comms import MsgBuffer
+from hypergolix.comms import WSConnection
+from hypergolix.comms import ConnectionManager
 
 from hypergolix.exceptions import RequestFinished
 
@@ -59,59 +67,50 @@ from hypergolix.exceptions import RequestFinished
 # ###############################################
 
 
-class TestParrot(Autoresponder):
-    def __init__(self, name=None, *args, **kwargs):
-        req_handlers = {
-            # Parrot
-            b'!P': self.parrot,
-        }
+class TestParrot(metaclass=RequestResponseProtocol):
+    @request(b'!P')
+    async def parrot(self, connection, timeout, msg):
+        self.flag.clear()
+        return msg
         
+    @parrot.request_handler
+    async def parrot(self, connection, body):
+        return body
+        
+    @parrot.response_handler
+    async def parrot(self, response, exc):
+        self.result = response
+        self.flag.set()
+        
+    @request(b'!!')
+    async def announce(self, connection):
+        self.flag.clear()
+        return b''
+        
+    @announce.request_handler
+    async def announce(self, connection, body):
+        self.connections.append(connection)
+        return b''
+        
+    def check_result(self, timeout=1):
+        result_available = self.flag.wait(timeout=timeout)
+        self.flag.clear()
+        
+        if result_available:
+            return self.result
+    
+    def __init__(self, name=None, *args, **kwargs):
+        # We really shouldn't be using strong references, but whatever, it's
+        # just a test.
+        self.connections = []
+        self.flag = threading.Event()
         self._name = name
         self._incoming_counter = 0
         
-        super().__init__(
-            req_handlers = req_handlers, 
-            failure_code = b'-S', 
-            success_code = b'+S', 
-            *args, **kwargs)
-        
-    async def parrot(self, session, msg):
-        # print('Msg from client ' + str(connection.connid) + ': ' + repr(msg))
-        return msg
+        super().__init__(*args, **kwargs)
         
         
-TEST_ITERATIONS = 1
-
-
-SERVER_FLAG = threading.Event()
-SERVER_CHECK = collections.deque()
-async def server_notifier(connection, msg):
-    SERVER_FLAG.set()
-    SERVER_CHECK.appendleft(msg)
-def server_notification_checker(timeout=1):
-    result = SERVER_FLAG.wait(timeout)
-    SERVER_FLAG.clear()
-    return result
-
-CLIENT1_FLAG = threading.Event()
-CLIENT1_CHECK = collections.deque()
-async def client1_notifier(connection, msg):
-    CLIENT1_FLAG.set()
-    CLIENT1_CHECK.appendleft(msg)
-def client1_notification_checker(timeout=1):
-    result = CLIENT1_FLAG.wait(timeout)
-    CLIENT1_FLAG.clear()
-    return result
-
-CLIENT2_FLAG = threading.Event()
-CLIENT2_CHECK = collections.deque()
-async def client2_notifier(connection, msg):
-    CLIENT2_FLAG.set()
-    CLIENT2_CHECK.appendleft(msg)
-def client2_notification_checker(timeout=1):
-    result = CLIENT2_FLAG.wait(timeout)
-    CLIENT2_FLAG.clear()
-    return result
+TEST_ITERATIONS = 10
 
 
 # ###############################################
@@ -120,217 +119,125 @@ def client2_notification_checker(timeout=1):
         
         
 class WSBasicTrashTest(unittest.TestCase):
-    # @classmethod
-    # def setUpClass(cls):
-    #     cls.server = WSBasicServer(
-    #         host = 'localhost',
-    #         port = 9318,
-    #         receiver = server_notifier,
-    #         threaded = True,
-    #         # debug = True
-    #     )
-        
-    #     cls.client1 = WSBasicClient(
-    #         host = 'localhost', 
-    #         port = 9318, 
-    #         receiver = client1_notifier,
-    #         threaded = True,
-    #         # debug = True
-    #     )
-        
-    #     cls.client2 = WSBasicClient(
-    #         host = 'localhost', 
-    #         port = 9318, 
-    #         receiver = client2_notifier,
-    #         threaded = True,
-    #         # debug = True
-    #     )
         
     def setUp(self):
-        self.server = WSBasicServer(
+        # Use a different thread for each of the clients/server
+        self.server_commander = TaskCommander(
+            reusable_loop = False,
+            # We do need this to be threaded so we can handle testing stuff
+            # independently
+            threaded = True,
+            debug = True,
+            name = 'server'
+        )
+        self.server_protocol = TestParrot()
+        self.server = BasicServer(connection_cls=WSConnection)
+        self.server_commander.register_task(
+            self.server,
+            msg_handler = self.server_protocol,
             host = 'localhost',
             port = 9318,
-            receiver = server_notifier,
-            threaded = True,
-            tls = False
             # debug = True
         )
         
-        self.client1 = WSBasicClient(
-            host = 'localhost', 
-            port = 9318, 
-            receiver = client1_notifier,
+        self.client1_commander = TaskCommander(
+            reusable_loop = False,
+            # We do need this to be threaded so we can handle testing stuff
+            # independently
             threaded = True,
+            debug = True,
+            name = 'client1'
+        )
+        self.client1_protocol = TestParrot()
+        self.client1 = ConnectionManager(
+            connection_cls = WSConnection,
+            msg_handler = self.client1_protocol,
+        )
+        self.client1_commander.register_task(
+            self.client1,
+            host = 'localhost',
+            port = 9318,
             tls = False
-            # debug = True
         )
         
-        self.client2 = WSBasicClient(
-            host = 'localhost', 
-            port = 9318, 
-            receiver = client2_notifier,
+        self.client2_commander = TaskCommander(
+            reusable_loop = False,
+            # We do need this to be threaded so we can handle testing stuff
+            # independently
             threaded = True,
-            tls = False
-            # debug = True
+            debug = True,
+            name = 'client2'
         )
+        self.client2_protocol = TestParrot()
+        self.client2 = ConnectionManager(
+            connection_cls = WSConnection,
+            msg_handler = self.client2_protocol,
+        )
+        self.client2_commander.register_task(
+            self.client2,
+            host = 'localhost',
+            port = 9318,
+            tls = False
+        )
+        self.server_commander.start()
+        self.client1_commander.start()
+        self.client2_commander.start()
         
     def test_client1(self):
         for ii in range(TEST_ITERATIONS):
-            msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
+            msg = ''.join([chr(random.randint(0, 255)) for i in range(0, 25)])
             msg = msg.encode('utf-8')
             
-            self.client1.send_threadsafe(msg)
-            self.assertTrue(server_notification_checker())
-            self.assertEqual(msg, SERVER_CHECK.pop())
-        
-    def test_client2(self):
+            await_coroutine_threadsafe(
+                coro = self.client1.parrot(msg, timeout=1),
+                loop = self.client1_commander._loop
+            )
+            self.assertEqual(msg, self.client1.check_result())
+            
         for ii in range(TEST_ITERATIONS):
-            msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
+            msg = ''.join([chr(random.randint(0, 255)) for i in range(0, 25)])
             msg = msg.encode('utf-8')
             
-            self.client2.send_threadsafe(msg)
-            self.assertTrue(server_notification_checker())
-            self.assertEqual(msg, SERVER_CHECK.pop())
+            await_coroutine_threadsafe(
+                coro = self.client2.parrot(msg, timeout=1),
+                loop = self.client2_commander._loop
+            )
+            self.assertEqual(msg, self.client2.check_result())
         
     def test_server(self):
-        # Okay so on the one hand, this is bad. On the other hand, we're never
-        # going to just rattle off server connections and shoot things off.
-        # But, that being said, be careful because there's a race condition 
-        # between connid assignment and adding the connection to the lookup.
-        # See: async def new_connection in comms.py.
-        time.sleep(.1)
+        ''' Test sending messages from the server to the client.
+        '''
+        # First we need to get the server to record the connections. This is
+        # a hack, but, well, we're not intending to have things behave this way
+        # normally.
+        await_coroutine_threadsafe(
+            coro = self.client1.announce(),
+            loop = self.client1_commander._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.client2.announce(),
+            loop = self.client2_commander._loop
+        )
         
-        for connection in list(self.server._connections.values()):
+        # Pick a connection at random for each iteration. Double the test
+        # iterations so that we get approximately that many iterations for each
+        # connection.
+        for ii in range(TEST_ITERATIONS * 2):
+            connection = random.choice(self.server.connections)
+            msg = ''.join([chr(random.randint(0, 255)) for i in range(0, 25)])
+            msg = msg.encode('utf-8')
             
-            connection.send_threadsafe(msg=b'test')
-            if client1_notification_checker():
-                note_checker = client1_notification_checker
-                val_checker = CLIENT1_CHECK
-            elif client2_notification_checker():
-                note_checker = client2_notification_checker
-                val_checker = CLIENT2_CHECK
-            else:
-                raise RuntimeError('Could not successfully retrieve client.')
-            val_checker.pop()
-            
-            for ii in range(TEST_ITERATIONS):
-                msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
-                msg = msg.encode('utf-8')
-                
-                connection.send_threadsafe(msg)
-                self.assertTrue(note_checker())
-                self.assertEqual(msg, val_checker.pop())
+            await_coroutine_threadsafe(
+                coro = self.server.parrot(connection, msg, timeout=1),
+                loop = self.server_commander._loop
+            )
+            self.assertEqual(msg, self.server.check_result())
                 
     def tearDown(self):
-        time.sleep(1)
-        self.client1.stop_threadsafe()
-        self.client2.stop_threadsafe()
-        self.server.stop_threadsafe()
-        
-    # @classmethod
-    # def tearDownClass(cls):
-    #     cls.client1.stop_threadsafe()
-    #     cls.client2.stop_threadsafe()
-    #     cls.server.stop_threadsafe()
-    #     # time.sleep(5)
-        
-        
-class WSAutoTrashtest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.aengel = Aengel()
-        
-        cls.server = Autocomms(
-            autoresponder_class = TestParrot,
-            connector_class = WSBasicServer,
-            connector_kwargs = {
-                'host': 'localhost',
-                'port': 9319,
-                'tls': False,
-            },
-            debug = True,
-            aengel = cls.aengel,
-        )
-        
-        cls.client1 = Autocomms(
-            autoresponder_class = TestParrot,
-            autoresponder_args = ('OneTrueMorty',),
-            connector_class = WSBasicClient,
-            connector_kwargs = {
-                'host': 'localhost',
-                'port': 9319,
-                'tls': False,
-            },
-            debug = True,
-            aengel = cls.aengel,
-        )
-        
-        cls.client2 = Autocomms(
-            autoresponder_class = TestParrot,
-            autoresponder_args = ('HammerMorty',),
-            connector_class = WSBasicClient,
-            connector_kwargs = {
-                'host': 'localhost',
-                'port': 9319,
-                'tls': False,
-            },
-            debug = True,
-            aengel = cls.aengel,
-        )
-        
-    def test_client1(self):
-        for ii in range(TEST_ITERATIONS):
-            msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
-            msg = msg.encode('utf-8')
-            response = self.client1.send_threadsafe(
-                session = self.client1.any_session, 
-                msg = msg,
-                request_code = b'!P'
-            )
-            self.assertEqual(msg, response)
-        
-    def test_client2(self):
-        for ii in range(TEST_ITERATIONS):
-            msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
-            msg = msg.encode('utf-8')
-            response = self.client2.send_threadsafe(
-                session = self.client2.any_session, 
-                msg = msg,
-                request_code = b'!P'
-            )
-            self.assertEqual(msg, response)
-        
-    def test_server(self):
-        for ii in range(TEST_ITERATIONS):
-            for session in self.server.sessions:
-                msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
-                msg = msg.encode('utf-8')
-                response = self.server.send_threadsafe(
-                    session = session, 
-                    msg = msg,
-                    request_code = b'!P'
-                )
-                self.assertEqual(msg, response)
-        # pass
-        # self.server._halt()
-        
-        # --------------------------------------------------------------------
-        # Comment this out if no interactivity desired
-            
-        # # Start an interactive IPython interpreter with local namespace, but
-        # # suppress all IPython-related warnings.
-        # with warnings.catch_warnings():
-        #     warnings.simplefilter('ignore')
-        #     IPython.embed()
-        
-    @classmethod
-    def tearDownClass(cls):
-        cls.aengel.stop()
-        # time.sleep(5)
+        self.client2_commander.stop_threadsafe_nowait()
+        self.client1_commander.stop_threadsafe_nowait()
+        self.server_commander.stop_threadsafe_nowait()
 
-import os
-import sys
-from contextlib import contextmanager
 
 def fileno(file_or_fd):
     fd = getattr(file_or_fd, 'fileno', lambda: file_or_fd)()
@@ -338,15 +245,17 @@ def fileno(file_or_fd):
         raise ValueError("Expected a file (`.fileno()`) or a file descriptor")
     return fd
 
+
 @contextmanager
 def stdout_redirected(to=os.devnull, stdout=None):
     if stdout is None:
-       stdout = sys.stdout
+        stdout = sys.stdout
 
     stdout_fd = fileno(stdout)
     # copy stdout_fd before it is overwritten
-    #NOTE: `copied` is inheritable on Windows when duplicating a standard stream
-    with os.fdopen(os.dup(stdout_fd), 'wb') as copied: 
+    # NOTE: `copied` is inheritable on Windows when duplicating a standard
+    # stream
+    with os.fdopen(os.dup(stdout_fd), 'wb') as copied:
         stdout.flush()  # flush library buffers that dup2 knows nothing about
         try:
             os.dup2(fileno(to), stdout_fd)  # $ exec >&to
@@ -354,24 +263,26 @@ def stdout_redirected(to=os.devnull, stdout=None):
             with open(to, 'wb') as to_file:
                 os.dup2(to_file.fileno(), stdout_fd)  # $ exec > to
         try:
-            yield stdout # allow code to be run with the redirected stdout
+            yield stdout    # allow code to be run with the redirected stdout
         finally:
             # restore stdout to its previous value
-            #NOTE: dup2 makes stdout_fd inheritable unconditionally
+            # NOTE: dup2 makes stdout_fd inheritable unconditionally
             stdout.flush()
             os.dup2(copied.fileno(), stdout_fd)  # $ exec >&copied
+            
             
 def merged_stderr_stdout():  # $ exec 2>&1
     return stdout_redirected(to=sys.stdout, stdout=sys.stderr)
 
+
 if __name__ == "__main__":
     from hypergolix import logutils
-    logutils.autoconfig()
+    logutils.autoconfig(loglevel='info')
     
-    # from hypergolix.utils import TraceLogger
-    # with TraceLogger(interval=10):
-    #     unittest.main()
-    unittest.main()
+    from hypergolix.utils import TraceLogger
+    with TraceLogger(interval=10):
+        unittest.main()
+    # unittest.main()
     
     # with open('std.py', 'w') as f:
     #     with stdout_redirected(to=f), merged_stderr_stdout():

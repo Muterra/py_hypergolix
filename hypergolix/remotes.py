@@ -91,8 +91,8 @@ from .utils import _generate_threadnames
 
 # from .comms import WSAutoServer
 # from .comms import WSAutoClient
-from .comms import _AutoresponderSession
-from .comms import Autoresponder
+from .comms import WSConnection as _AutoresponderSession
+from .comms import RequestResponseProtocol as Autoresponder
 
 
 # ###############################################

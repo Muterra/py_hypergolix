@@ -92,9 +92,9 @@ from .utils import WeakSetMap
 from .utils import SetMap
 from .utils import _generate_threadnames
 
-from .comms import _AutoresponderSession
-from .comms import Autoresponder
-from .comms import AutoresponseConnector
+from .comms import WSConnection as _AutoresponderSession
+from .comms import RequestResponseProtocol as Autoresponder
+from .comms import MsgBuffer as AutoresponseConnector
 
 from .dispatch import _Dispatchable
 from .dispatch import _DispatchableState

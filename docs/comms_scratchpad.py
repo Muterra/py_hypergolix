@@ -1,14 +1,14 @@
 from loopa import TaskCommander
-from hypergolix.comms import ProtocolDef
+from hypergolix.comms import RequestResponseProtocol
 from hypergolix.comms import request
 from hypergolix.comms import BasicServer
 from hypergolix.comms import MsgBuffer
-from hypergolix.comms import _WSConnection
+from hypergolix.comms import WSConnection
 from hypergolix.comms import ConnectionManager
 
 
-class ProtoDef(metaclass=ProtocolDef, success_code=b'AK', failure_code=b'NK',
-               error_codes={}, version=b''):
+class ProtoDef(metaclass=RequestResponseProtocol, success_code=b'AK',
+               failure_code=b'NK', error_codes={}, version=b''):
     @request(b'PB')
     async def publish(self, connection, timeout, *args, **kwargs):
         ''' Explicitly specify timeout=None to wait forever.
@@ -71,12 +71,12 @@ server_commander = TaskCommander(
 
 responder = Responder()
 msg_buffer = MsgBuffer(responder)
-managed_server = BasicServer(connection_cls=_WSConnection)
+managed_server = BasicServer(connection_cls=WSConnection)
 
 server_commander.register_task(
     managed_server,
     # This is where we specify what handles incoming requests
-    conn_handler = msg_buffer,
+    msg_handler = msg_buffer,
     # Here we specify the server's host
     host = '',
     # And here, the server's port
@@ -105,12 +105,12 @@ server_commander = TaskCommander(
 )
 
 responder = Responder()
-managed_server = BasicServer(connection_cls=_WSConnection)
+managed_server = BasicServer(connection_cls=WSConnection)
 
 server_commander.register_task(
     managed_server,
     # This is where we specify what handles incoming requests
-    conn_handler = responder,
+    msg_handler = responder,
     # Here we specify the server's host
     host = '',
     # And here, the server's port
@@ -140,7 +140,7 @@ requestor = Requestor()
 # ConnectionManager handles everything else re: connections, including creating
 # them. It wraps the Requestor, passing all requests to the current connection.
 client = ConnectionManager(
-    connection_cls = _WSConnection,
+    connection_cls = WSConnection,
     msg_handler = requestor
 )
 # We can directly use the requestor as the handler, since we're not expecting

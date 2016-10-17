@@ -313,13 +313,14 @@ class _JitDictDict(dict):
         
         
 class _BijectDict:
-    ''' A bijective dictionary. Aka, a dictionary where one key 
+    ''' A bijective dictionary. Aka, a dictionary where one key
     corresponds to exactly one value, and one value to exactly one key.
     
     Implemented as two dicts, with forward and backwards versions.
     
     Threadsafe.
     '''
+    
     def __init__(self, *args, **kwargs):
         self._opslock = threading.Lock()
         self._fwd = dict(*args, **kwargs)
@@ -342,7 +343,7 @@ class _BijectDict:
                 raise ValueError('Value already exists as a forward key.')
             if key in self._rev:
                 raise ValueError('Key already exists as a forward value.')
-            # Note: this isn't perfectly atomic, as it won't restore a previous 
+            # Note: this isn't perfectly atomic, as it won't restore a previous
             # value that we just failed to replace.
             try:
                 self._fwd[key] = value
@@ -368,6 +369,17 @@ class _BijectDict:
     def __contains__(self, key):
         with self._opslock:
             return key in self._fwd or key in self._rev
+            
+    def __iter__(self):
+        ''' Pass iter directly on to self._fwd
+        '''
+        return iter(self._fwd)
+        
+    def __reversed__(self):
+        ''' Mappings don't have a strict order, so re-purpose reversed
+        to look in the opposite direction (the self._rev dict).
+        '''
+        return iter(self._rev)
         
         
 
@@ -1056,7 +1068,7 @@ class TraceLogger:
             time.sleep(self.interval)
             traces = self.get_traces()
             logger.info(
-                '#####################################################\n' + 
+                '#####################################################\n' +
                 'TraceLogger frame:\n' +
                 traces
             )
@@ -1071,9 +1083,23 @@ class TraceLogger:
         for thread_id, stack in sys._current_frames().items():
             # Don't dump the trace for the TraceLogger!
             if thread_id != threading.get_ident():
-                code.extend(cls._dump_thread(thread_id, stack))
+                thread_name = cls.get_thread_name_from_id(thread_id)
+                code.extend(cls._dump_thread(thread_id, thread_name, stack))
                     
         return '\n'.join(code)
+        
+    @staticmethod
+    def get_thread_name_from_id(thread_id):
+        threads = {}
+        for thread in threading.enumerate():
+            threads[thread.ident] = thread.name
+            
+        try:
+            thread_name = threads[thread_id]
+        except KeyError:
+            thread_name = 'UNKNOWN'
+        
+        return thread_name
         
     @classmethod
     def dump_my_trace(cls):
@@ -1081,14 +1107,15 @@ class TraceLogger:
         for thread_id, stack in sys._current_frames().items():
             # Don't dump the trace for the TraceLogger!
             if thread_id == threading.get_ident():
-                code.extend(cls._dump_thread(thread_id, stack))
+                thread_name = cls.get_thread_name_from_id(thread_id)
+                code.extend(cls._dump_thread(thread_id, thread_name, stack))
                     
         return '\n'.join(code)
         
     @classmethod
-    def _dump_thread(cls, thread_id, stack):
+    def _dump_thread(cls, thread_id, thread_name, stack):
         code = []
-        code.append("\n# Thread ID: %s" % thread_id)
+        code.append('\n# Thread: ' + thread_name + ' w/ ID ' + str(thread_id))
         for filename, lineno, name, line in traceback.extract_stack(stack):
             code.append('File: "%s", line %d, in %s' % (filename, lineno, name))
             if line:

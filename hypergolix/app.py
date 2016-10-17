@@ -41,9 +41,9 @@ from hypergolix.bootstrapping import AgentBootstrap
 from hypergolix.utils import Aengel
 from hypergolix.utils import _generate_threadnames
 
-from hypergolix.comms import Autocomms
-from hypergolix.comms import WSBasicClient
-from hypergolix.comms import WSBasicServer
+from hypergolix.comms import RequestResponseProtocol as Autocomms
+from hypergolix.comms import ConnectionManager as WSBasicClient
+from hypergolix.comms import BasicServer as WSBasicServer
 
 from hypergolix.remotes import PersisterBridgeClient
 
