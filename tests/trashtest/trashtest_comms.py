@@ -67,7 +67,13 @@ from hypergolix.exceptions import RequestFinished
 # ###############################################
 
 
-class TestParrot(metaclass=RequestResponseProtocol):
+ERROR_LOOKUP = {
+    b'\x00\x00': Exception,
+    b'\x00\x00': ValueError
+}
+
+
+class TestParrot(metaclass=RequestResponseProtocol, error_codes=ERROR_LOOKUP):
     @request(b'!P')
     async def parrot(self, connection, msg):
         self.flag.clear()
@@ -91,6 +97,27 @@ class TestParrot(metaclass=RequestResponseProtocol):
     async def announce(self, connection, body):
         self.connections.append(connection)
         return b''
+        
+    @request(b'FF')
+    async def make_fail(self, connection):
+        ''' Intentionally evoke server failure.
+        '''
+        return b''
+        
+    @make_fail.request_handler
+    async def make_fail(self, connection, body):
+        raise ValueError()
+        
+    @request(b'XD')
+    async def make_death(self, connection):
+        ''' Intentionally evoke server failure that has non-specific
+        error code.
+        '''
+        return b''
+        
+    @make_death.request_handler
+    async def make_death(self, connection, body):
+        raise RuntimeError()
         
     def check_result(self, timeout=1):
         result_available = self.flag.wait(timeout=timeout)
@@ -211,11 +238,11 @@ class WSBasicTrashTest(unittest.TestCase):
         # a hack, but, well, we're not intending to have things behave this way
         # normally.
         await_coroutine_threadsafe(
-            coro = self.client1.announce(),
+            coro = self.client1.announce(timeout=1),
             loop = self.client1_commander._loop
         )
         await_coroutine_threadsafe(
-            coro = self.client2.announce(),
+            coro = self.client2.announce(timeout=1),
             loop = self.client2_commander._loop
         )
         
@@ -236,6 +263,21 @@ class WSBasicTrashTest(unittest.TestCase):
                 loop = self.server_commander._loop
             )
             self.assertEqual(msg, self.server_protocol.check_result())
+            
+    def test_failures(self):
+        # This kind of failure has a specific error defined
+        with self.assertRaises(ValueError):
+            await_coroutine_threadsafe(
+                coro = self.client1.make_fail(timeout=1),
+                loop = self.client1_commander._loop
+            )
+            
+        # This kind of error does not, and should fall back to exception.
+        with self.assertRaises(Exception):
+            await_coroutine_threadsafe(
+                coro = self.client1.make_death(timeout=1),
+                loop = self.client1_commander._loop
+            )
                 
     def tearDown(self):
         self.client2_commander.stop_threadsafe_nowait()
@@ -281,12 +323,12 @@ def merged_stderr_stdout():  # $ exec 2>&1
 
 if __name__ == "__main__":
     from hypergolix import logutils
-    logutils.autoconfig(loglevel='info')
+    logutils.autoconfig(loglevel='debug')
     
-    from hypergolix.utils import TraceLogger
-    with TraceLogger(interval=10):
-        unittest.main()
-    # unittest.main()
+    # from hypergolix.utils import TraceLogger
+    # with TraceLogger(interval=10):
+    #     unittest.main()
+    unittest.main()
     
     # with open('std.py', 'w') as f:
     #     with stdout_redirected(to=f), merged_stderr_stdout():

@@ -645,6 +645,11 @@ class RequestResponseProtocol(type):
         # Now do anything else we need to modify the thingajobber
         return cls
         
+    def __init__(self, *args, **kwargs):
+        # Since we're doing everything in __new__, at least right now, don't
+        # even bother with this.
+        super().__init__(*args)
+        
         
 class _RequestToken(int):
     ''' Add a specific bytes representation for the int for token
@@ -960,16 +965,33 @@ class _ReqResMixin:
     def _pack_failure(self, exc):
         ''' Converts an exception into an error code and reply body
         '''
-        try:
-            error_code = self._ERROR_CODES[type(exc)]
-            reply_body = str(exc).encode('utf-8')
-            # For privacy/security reasons, don't pack the traceback.
-            
-        except KeyError:
-            return b''
-            
+        # This will get the most-specific error code available for the
+        # exception. It's not perfect, but it's a good way to allow smart
+        # catching and re-raising down the road.
+        search_path = type(exc).mro()
+        
+        for cls in search_path:
+            # Try assigning an error code.
+            try:
+                error_code = self._ERROR_CODES[cls]
+                
+            # No error code was found; continue to the exception's
+            # next-most-specific base class
+            except KeyError:
+                pass
+                
+            # We found an error code, so stop searching.
+            else:
+                # For privacy/security reasons, don't pack the traceback.
+                reply_body = str(exc).encode('utf-8')
+                break
+        
+        # We searched all defined error codes and got no match. Don't
+        # return an error code.
         else:
-            return error_code + reply_body
+            return b''
+                
+        return error_code + reply_body
         
     def _unpack_failure(self, body):
         ''' Converts a failure back into an exception.
