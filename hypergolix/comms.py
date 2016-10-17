@@ -561,7 +561,7 @@ class ConnectionManager(loopa.TaskLooper):
         # Wait for the connection to be available.
         method = getattr(self.protocol_def, request_name)
         await self._conn_available.wait()
-        return (await method(connection=self._connection, *args, **kwargs))
+        return (await method(self._connection, *args, **kwargs))
 
 
 class RequestResponseProtocol(type):
@@ -706,17 +706,17 @@ class _BoundReq(namedtuple('_BoundReq', ('obj', 'requestor', 'request_handler',
     self[4] == self.code
     '''
     
-    def __call__(self, *args, connection, **kwargs):
+    def __call__(self, connection, *args, **kwargs):
         ''' Get the object's wrapped_requestor, passing it the unwrapped
         request method (which needs an explicit self passing) and any
         *args and **kwargs that we were invoked with.
         '''
         return self.obj.wrap_requestor(
             connection,
+            *args,
             requestor = self.requestor,
             response_handler = self.response_handler,
             code = self.code,
-            *args,
             **kwargs
         )
         

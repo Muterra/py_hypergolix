@@ -229,8 +229,8 @@ class WSBasicTrashTest(unittest.TestCase):
             
             await_coroutine_threadsafe(
                 coro = self.server_protocol.parrot(
+                    connection,
                     msg,
-                    connection = connection,
                     timeout = 1
                 ),
                 loop = self.server_commander._loop
