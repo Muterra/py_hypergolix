@@ -102,7 +102,7 @@ setup(
     # https://packaging.python.org/en/latest/requirements.html
     install_requires=[
         'golix>=0.1.3',
-        'websockets>=3.1',
+        'websockets>=3.2',
         'cryptography>=1.4',
         'pycryptodome>=3.4',  # waiting for cryptography to include scrypt
         'daemoniker>=0.2.2',

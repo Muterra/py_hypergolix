@@ -561,7 +561,7 @@ class ConnectionManager(loopa.TaskLooper):
         # Wait for the connection to be available.
         method = getattr(self.protocol_def, request_name)
         await self._conn_available.wait()
-        return (await method(self._connection, *args, **kwargs))
+        return (await method(connection=self._connection, *args, **kwargs))
 
 
 class RequestResponseProtocol(type):
@@ -655,9 +655,9 @@ class _RequestToken(int):
     # Set the string length to be that of the largest possible value
     _STR_LEN = len(str(_MAX_VAL))
     
-    def __new__(cls, *args, **kwargs):
+    def __new__(*args, **kwargs):
         # Note that the magic in int() happens in __new__ and not in __init__
-        self = super().__new__(*args, **kwargs)
+        self = int.__new__(*args, **kwargs)
         
         # Enforce positive integers only
         if self < 0:
@@ -669,8 +669,9 @@ class _RequestToken(int):
             
         return self
         
-    def to_bytes(self):
-        return super().to_bytes(
+    def __bytes__(self):
+        # Wrap int.to_bytes()
+        return self.to_bytes(
             length = self._PACK_LEN,
             byteorder = 'big',
             signed = False
@@ -705,15 +706,16 @@ class _BoundReq(namedtuple('_BoundReq', ('obj', 'requestor', 'request_handler',
     self[4] == self.code
     '''
     
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, connection, **kwargs):
         ''' Get the object's wrapped_requestor, passing it the unwrapped
         request method (which needs an explicit self passing) and any
         *args and **kwargs that we were invoked with.
         '''
         return self.obj.wrap_requestor(
-            self.requestor,
-            self.response_handler,
-            self.code,
+            connection,
+            requestor = self.requestor,
+            response_handler = self.response_handler,
+            code = self.code,
             *args,
             **kwargs
         )
@@ -855,7 +857,7 @@ class _ReqResMixin:
         '''
         # Token is an actual int, so bytes()ing it tries to make that many
         # bytes instead of re-casting it (which is very inconvenient)
-        return self._VERSION_STR + code + token.to_bytes() + body
+        return self._VERSION_STR + code + bytes(token) + body
         
     async def unpackit(self, msg):
         ''' Deserialize a message.
@@ -1004,8 +1006,8 @@ class _ReqResMixin:
             
         return result
         
-    async def wrap_requestor(self, requestor, response_handler, code,
-                             connection, timeout=None, *args, **kwargs):
+    async def wrap_requestor(self, connection, *args, requestor,
+                             response_handler, code, timeout=None, **kwargs):
         ''' Does anything necessary to turn a requestor into something
         that can actually perform the request.
         '''
@@ -1030,7 +1032,8 @@ class _ReqResMixin:
             
             # If a response handler was defined, use it!
             if response_handler is not None:
-                return (await response_handler(response, exc))
+                # Again, note use of explicit self.
+                return (await response_handler(self, response, exc))
                 
             # Otherwise, make sure we have no exception, raising if we do
             elif exc is not None:
@@ -1054,6 +1057,7 @@ class _ReqResMixin:
         # Repeat until unique
         while token in self._responses[connection]:
             token = random.getrandbits(16)
+        token = _RequestToken(token)
         # Now create an empty entry in the _responses entry (to avoid a race
         # condition) and return the token
         self._responses[connection][token] = None

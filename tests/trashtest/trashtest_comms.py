@@ -69,7 +69,7 @@ from hypergolix.exceptions import RequestFinished
 
 class TestParrot(metaclass=RequestResponseProtocol):
     @request(b'!P')
-    async def parrot(self, connection, timeout, msg):
+    async def parrot(self, connection, msg):
         self.flag.clear()
         return msg
         
@@ -192,7 +192,7 @@ class WSBasicTrashTest(unittest.TestCase):
                 coro = self.client1.parrot(msg, timeout=1),
                 loop = self.client1_commander._loop
             )
-            self.assertEqual(msg, self.client1.check_result())
+            self.assertEqual(msg, self.client1_protocol.check_result())
             
         for ii in range(TEST_ITERATIONS):
             msg = ''.join([chr(random.randint(0, 255)) for i in range(0, 25)])
@@ -202,7 +202,7 @@ class WSBasicTrashTest(unittest.TestCase):
                 coro = self.client2.parrot(msg, timeout=1),
                 loop = self.client2_commander._loop
             )
-            self.assertEqual(msg, self.client2.check_result())
+            self.assertEqual(msg, self.client2_protocol.check_result())
         
     def test_server(self):
         ''' Test sending messages from the server to the client.
@@ -223,15 +223,19 @@ class WSBasicTrashTest(unittest.TestCase):
         # iterations so that we get approximately that many iterations for each
         # connection.
         for ii in range(TEST_ITERATIONS * 2):
-            connection = random.choice(self.server.connections)
+            connection = random.choice(self.server_protocol.connections)
             msg = ''.join([chr(random.randint(0, 255)) for i in range(0, 25)])
             msg = msg.encode('utf-8')
             
             await_coroutine_threadsafe(
-                coro = self.server.parrot(connection, msg, timeout=1),
+                coro = self.server_protocol.parrot(
+                    msg,
+                    connection = connection,
+                    timeout = 1
+                ),
                 loop = self.server_commander._loop
             )
-            self.assertEqual(msg, self.server.check_result())
+            self.assertEqual(msg, self.server_protocol.check_result())
                 
     def tearDown(self):
         self.client2_commander.stop_threadsafe_nowait()
