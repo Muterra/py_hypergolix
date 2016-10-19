@@ -63,11 +63,11 @@ from .persistence import DiskLibrarian
 from .persistence import MemoryLibrarian
 from .persistence import MrPostman
 from .persistence import Undertaker
-from .persistence import Salmonator
 
 from .dispatch import Dispatcher
 from .dispatch import _Dispatchable
 
+from .remotes import Salmonator
 from .ipc import IPCCore
 from .privateer import Privateer
 from .privateer import Charon

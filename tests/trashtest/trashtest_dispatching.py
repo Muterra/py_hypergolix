@@ -58,7 +58,8 @@ from hypergolix.dispatch import _Dispatchable
 from hypergolix.dispatch import _AppDef
 
 from hypergolix.ipc import IPCCore
-from hypergolix.persistence import SalmonatorNoop
+
+from hypergolix.remotes import SalmonatorNoop
 
 from hypergolix.exceptions import UnknownToken
 

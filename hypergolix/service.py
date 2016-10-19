@@ -56,8 +56,20 @@ from hypergolix import logutils
 from hypergolix.utils import Aengel
 from hypergolix.comms import RequestResponseProtocol as Autocomms
 from hypergolix.comms import BasicServer as WSBasicServer
+
 from hypergolix.remotes import PersisterBridgeServer
-from hypergolix.remotes import RemotePersistenceServer
+from hypergolix.remotes import SalmonatorNoop
+
+from hypergolix.persistence import PersistenceCore
+from hypergolix.persistence import Doorman
+from hypergolix.persistence import PostOffice
+from hypergolix.persistence import Undertaker
+from hypergolix.persistence import Lawyer
+from hypergolix.persistence import Enforcer
+from hypergolix.persistence import Bookie
+from hypergolix.persistence import DiskLibrarian
+from hypergolix.persistence import MemoryLibrarian
+from hypergolix.persistence import Enlitener
 
 
 # ###############################################
@@ -162,6 +174,61 @@ def _shielded_server(host, port, cache_dir, debug, traceur, aengel=None):
                 'Server failed with traceback:\n' +
                 ''.join(traceback.format_exc())
             )
+
+
+class RemotePersistenceServer:
+    ''' Simple persistence server.
+    Expected defaults:
+    host:       'localhost'
+    port:       7770
+    logfile:    None
+    verbosity:  'warning'
+    debug:      False
+    traceur:    False
+    '''
+    
+    def __init__(self, cache_dir=None):
+        self.bridge = None
+        
+        self.percore = PersistenceCore()
+        self.doorman = Doorman()
+        self.enforcer = Enforcer()
+        self.lawyer = Lawyer()
+        self.bookie = Bookie()
+        
+        if cache_dir is None:
+            self.librarian = MemoryLibrarian()
+        else:
+            self.librarian = DiskLibrarian(cache_dir)
+            
+        self.postman = PostOffice()
+        self.undertaker = Undertaker()
+        # I mean, this won't be used unless we set up peering, but it saves us
+        # needing to do a modal switch for remote persistence servers
+        self.salmonator = SalmonatorNoop()
+        
+    def assemble(self, bridge):
+        # Now we need to link everything together.
+        self.percore.assemble(self.doorman, self.enforcer,
+                              self.lawyer, self.bookie,
+                              self.librarian, self.postman,
+                              self.undertaker, self.salmonator)
+        self.doorman.assemble(self.librarian)
+        self.enforcer.assemble(self.librarian)
+        self.lawyer.assemble(self.librarian)
+        self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
+        self.librarian.assemble(self.percore)
+        self.postman.assemble(self.librarian, self.bookie)
+        self.undertaker.assemble(self.librarian, self.bookie, self.postman)
+        # Note that this will break if we ever try to use it, because
+        # golix_core isn't actually a golix_core.
+        self.salmonator.assemble(self, self.percore, self.doorman,
+                                 self.postman, self.librarian)
+        
+        # Okay, now set up the bridge, and we should be ready.
+        self.bridge = bridge
+        self.bridge.assemble(self.percore, self.bookie,
+                             self.librarian, self.postman)
 
 
 def _hgx_server(host, port, cache_dir, debug, traceur, aengel=None):

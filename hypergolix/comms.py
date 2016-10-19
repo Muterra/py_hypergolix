@@ -1055,7 +1055,9 @@ class _ReqResMixin:
             # If a response handler was defined, use it!
             if response_handler is not None:
                 # Again, note use of explicit self.
-                return (await response_handler(self, response, exc))
+                return (
+                    await response_handler(self, connection, response, exc)
+                )
                 
             # Otherwise, make sure we have no exception, raising if we do
             elif exc is not None:

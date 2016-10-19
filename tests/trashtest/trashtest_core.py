@@ -48,6 +48,8 @@ from hypergolix.core import _GAO
 
 from hypergolix.privateer import Privateer
 
+from hypergolix.remotes import SalmonatorNoop
+
 from hypergolix.persistence import PersistenceCore
 from hypergolix.persistence import Doorman
 from hypergolix.persistence import Lawyer
@@ -56,7 +58,6 @@ from hypergolix.persistence import Bookie
 from hypergolix.persistence import MemoryLibrarian
 from hypergolix.persistence import MrPostman
 from hypergolix.persistence import Undertaker
-from hypergolix.persistence import SalmonatorNoop
 from hypergolix.persistence import _GidcLite
 from hypergolix.persistence import _GeocLite
 from hypergolix.persistence import _GobdLite

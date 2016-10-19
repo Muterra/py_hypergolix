@@ -84,7 +84,7 @@ class TestParrot(metaclass=RequestResponseProtocol, error_codes=ERROR_LOOKUP):
         return body
         
     @parrot.response_handler
-    async def parrot(self, response, exc):
+    async def parrot(self, connection, response, exc):
         self.result = response
         self.flag.set()
         

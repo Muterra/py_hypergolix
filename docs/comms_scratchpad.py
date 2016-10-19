@@ -26,7 +26,7 @@ class ProtoDef(metaclass=RequestResponseProtocol, success_code=b'AK',
         pass
 
     @publish.response_handler
-    async def publish(self, response, exc):
+    async def publish(self, connection, response, exc):
         ''' What to do with the response. What this returns will be
         returned as the result of publish(). By default, we will raise
         any exception and return any result.

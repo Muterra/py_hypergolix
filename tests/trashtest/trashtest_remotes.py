@@ -42,11 +42,10 @@ import logging
 import pathlib
 
 # These are normal imports
-from hypergolix.remotes import MemoryPersister
-from hypergolix.remotes import DiskCachePersister
 from hypergolix.remotes import PersisterBridgeServer
 from hypergolix.remotes import PersisterBridgeClient
-from hypergolix.remotes import RemotePersistenceServer
+
+from hypergolix.service import RemotePersistenceServer
 
 from hypergolix.utils import Aengel
 
@@ -384,50 +383,6 @@ class _GenericPersisterTest:
 # ###############################################
 # Testing
 # ###############################################
-
-    
-# class MemoryPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
-#     @classmethod
-#     def setUpClass(cls):
-#         cls.remote1 = MemoryPersister()
-#         cls.remote2 = cls.remote1
-#         cls.vault = cls.remote1.librarian
-#         cls.debound_by_ghid = cls.remote1.bookie._debound_by_ghid
-
-    
-# class DiskPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
-#     @classmethod
-#     def setUp(self):
-#         # Do this on a per-test basis so we have a clean ghidcache for the 
-#         # restoration test
-#         clear_ghidcache('/ghidcache_test')
-#         self.remote1 = DiskCachePersister('/ghidcache_test')
-#         self.remote2 = self.remote1
-#         self.vault = self.remote1.librarian
-#         self.debound_by_ghid = self.remote1.bookie._debound_by_ghid
-        
-#     def test_restoration(self):
-#         ''' This is really an indirect test for 
-#         persistence.DiskCachePersister, and therefore should really be
-#         in trashtest_persistence.
-        
-#         '''
-#         self.test_trash()
-#         persister2 = DiskCachePersister('/ghidcache_test')
-#         vault2 = persister2.librarian
-#         debound_by_ghid2 = persister2.bookie._debound_by_ghid
-#         vault2.restore()
-        
-#         self.assertEqual(self.vault._catalog, vault2._catalog)
-        
-#         all_debound = self.remote1.bookie._debound_by_ghid.combine(
-#             self.remote1.bookie._debound_by_ghid_staged
-#         )
-#         all_debound2 = persister2.bookie._debound_by_ghid.combine(
-#             persister2.bookie._debound_by_ghid_staged
-#         )
-        
-#         self.assertEqual(all_debound, all_debound2)
         
     
 class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):

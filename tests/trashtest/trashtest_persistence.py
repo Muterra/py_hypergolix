@@ -51,7 +51,8 @@ from hypergolix.persistence import Enforcer
 from hypergolix.persistence import Bookie
 from hypergolix.persistence import DiskLibrarian
 from hypergolix.persistence import MemoryLibrarian
-from hypergolix.persistence import SalmonatorNoop
+
+from hypergolix.remotes import SalmonatorNoop
 
 from hypergolix.exceptions import PersistenceError
 from hypergolix.exceptions import StillBoundWarning
