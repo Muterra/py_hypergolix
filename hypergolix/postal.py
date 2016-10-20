@@ -188,7 +188,7 @@ class _PostmanBase(loopa.TaskLooper):
                     'Obj flagged removed, but bookie lacks debinding for it.'
                 )
             for debinding_ghid in debinding_ghids:
-                self._scheduled.put(
+                await self._scheduled.put(
                     _MrPostcard(obj.ghid, debinding_ghid)
                 )
         else:
@@ -199,7 +199,7 @@ class _PostmanBase(loopa.TaskLooper):
                     postcard = notifier,
                 )
             else:
-                self._scheduled.put(notifier)
+                await self._scheduled.put(notifier)
         
     async def _schedule_gdxx(self, obj, removed):
         # GDXX will never directly trigger a subscription. If they are removing
@@ -216,11 +216,11 @@ class _PostmanBase(loopa.TaskLooper):
                     'Obj flagged removed, but bookie lacks debinding for it.'
                 )
             for debinding_ghid in debinding_ghids:
-                self._scheduled.put(
+                await self._scheduled.put(
                     _MrPostcard(obj.recipient, debinding_ghid)
                 )
         else:
-            self._scheduled.put(
+            await self._scheduled.put(
                 _MrPostcard(obj.recipient, obj.ghid)
             )
             
