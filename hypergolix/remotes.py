@@ -31,6 +31,7 @@ hypergolix: A python Golix client.
 
 RemoteNak status code conventions:
 -----
+0x0000: Non-specific exception
 0x0001: Does not appear to be a Golix object.
 0x0002: Failed to verify.
 0x0003: Unknown or invalid author or recipient.
@@ -46,8 +47,6 @@ RemoteNak status code conventions:
 '''
 
 # Global dependencies
-import abc
-import collections
 import weakref
 import concurrent.futures
 import threading
@@ -61,17 +60,6 @@ from golix import SecurityError
 from golix.utils import generate_ghidlist_parser
 
 # Local dependencies
-from .persistence import PersistenceCore
-from .persistence import Doorman
-from .persistence import PostOffice
-from .persistence import Undertaker
-from .persistence import Lawyer
-from .persistence import Enforcer
-from .persistence import Bookie
-from .persistence import DiskLibrarian
-from .persistence import MemoryLibrarian
-from .persistence import Enlitener
-
 from .persistence import _GidcLite
 from .persistence import _GeocLite
 from .persistence import _GobsLite
@@ -92,9 +80,7 @@ from .exceptions import IllegalDynamicFrame
 from .exceptions import IntegrityError
 from .exceptions import UnavailableUpstream
 
-from .utils import _JitSetDict
 from .utils import call_coroutine_threadsafe
-from .utils import _generate_threadnames
 
 from .comms import RequestResponseProtocol
 from .comms import request
@@ -216,29 +202,8 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
             False                   # remotable
         )
         
-        # If we already have an exact copy of the object, do not go on a mail
-        # run.
-        if obj is not None:
-            # Silence any notifications for the object ghid.
-            # If it has a frame_ghid, silence that
-            try:
-                session.silence(obj.frame_ghid)
-            # Otherwise, silence the object ghid
-            except AttributeError:
-                session.silence(obj.ghid)
-                
-            # Execute a parallel call to postman.do_mail_run()
-            # Well, it was parallel, until I made it not parallel.
-            try:
-                await self._loop.run_in_executor(
-                    executor = self._mailrunner,
-                    func = self._postman.do_mail_run
-                )
-            except Exception:
-                logger.error(
-                    'Error during mail run: \n' +
-                    ''.join(traceback.format_exc())
-                )
+        # Note that obj will be None if the object already existed.
+        # TODO: how do we handle silencing the update to this connection?
             
         # We don't need to wait for the mail run to have a successful return
         return b'\x01'

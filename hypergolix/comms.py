@@ -34,16 +34,14 @@ import logging
 import abc
 import asyncio
 import websockets
-import threading
-import collections.abc
-import collections
 import traceback
-import functools
-# Note that random is only used for exponential backoff
-import random
 import weakref
 import base64
 import loopa
+# Note that time is only used for request timing
+import time
+# Note that random is only used for exponential backoff
+import random
 
 from collections import namedtuple
 
@@ -1047,10 +1045,20 @@ class _ReqResMixin:
         waiter = asyncio.Queue(maxsize=1)
         try:
             self._responses[connection][token] = waiter
+            # For diagnostic purposes (and because it's negligently expensive),
+            # time the duration of the request.
+            start = time.monotonic()
             await connection.send(request)
             
             # Wait for the response
             response, exc = await asyncio.wait_for(waiter.get(), timeout)
+            end = time.monotonic()
+            
+            logger.info(
+                'CONN {!s} REQ {!s} response took {:.3f} seconds.'.format(
+                    connection, token, end - start
+                )
+            )
             
             # If a response handler was defined, use it!
             if response_handler is not None:

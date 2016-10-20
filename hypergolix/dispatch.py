@@ -317,8 +317,9 @@ class Dispatcher:
 class _Dispatchable(_GAO):
     ''' A dispatchable object.
     '''
-    def __init__(self, dispatch, ipc_core, api_id=None, private=False, 
-                state=None, *args, **kwargs):
+    
+    def __init__(self, dispatch, ipc_core, api_id=None, private=False,
+                 state=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Dispatch is already a weakref.proxy...
         self._dispatch = dispatch
@@ -434,6 +435,6 @@ class _Dispatchable(_GAO):
     def apply_delete(self):
         super().apply_delete()
         call_coroutine_threadsafe(
-            coro = self._ipccore.notify_update(ghid, deleted=True),
+            coro = self._ipccore.notify_update(self.ghid, deleted=True),
             loop = self._ipccore._loop
         )

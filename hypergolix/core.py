@@ -472,16 +472,17 @@ _GAOBootstrap = collections.namedtuple(
         
     
 class _GAO(_GAOBase):
-    ''' Base class for Golix-Aware Objects (Golix Accountability 
+    ''' Base class for Golix-Aware Objects (Golix Accountability
     Objects?). Anyways, used by core to handle plaintexts and things.
     
     TODO: thread safety? or async safety?
     TODO: support reference nesting.
     '''
-    def __init__(self, golix_core, ghidproxy, privateer, persistence_core, 
-                bookie, librarian, dynamic, _legroom=None, _bootstrap=None, 
-                accountant=None, inquisitor=None, *args, **kwargs):
-        ''' Creates a golix-aware object. If ghid is passed, will 
+    
+    def __init__(self, golix_core, ghidproxy, privateer, persistence_core,
+                 bookie, librarian, dynamic, _legroom=None, _bootstrap=None,
+                 accountant=None, inquisitor=None, *args, **kwargs):
+        ''' Creates a golix-aware object. If ghid is passed, will
         immediately pull from core to sync with existing object. If not,
         will create new object on first push. If ghid is not None, then
         dynamic will be ignored.
@@ -496,7 +497,7 @@ class _GAO(_GAOBase):
         self._deleted = False
         
         # Note that, since all of these are (in production) passed through the
-        # oracle, which already has weak references, these will also all be 
+        # oracle, which already has weak references, these will also all be
         # weakly referenced. So we don't need to re-proxy them.
         self._golcore = golix_core
         self._ghidproxy = ghidproxy
@@ -950,7 +951,7 @@ class _GAO(_GAOBase):
                     
                 logger.debug(
                     'GAO touch (modified=' + str(modified) + ') finished for '
-                    'subscription ' + str(subscription) + ' at notification ' + 
+                    'subscription ' + str(subscription) + ' at notification ' +
                     str(notification)
                 )
         
