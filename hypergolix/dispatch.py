@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -33,20 +33,15 @@ Some notes:
 
 '''
 
-# Control * imports. Therefore controls what is available to toplevel
-# package through __init__.py
-__all__ = [
-    'Dispatcher', 
-]
-
 # Global dependencies
+import logging
 import collections
 import weakref
 import threading
 import os
 import abc
-# import traceback
-import warnings
+import traceback
+import loopa
 
 from golix import Ghid
 
@@ -60,6 +55,7 @@ from .core import Oracle
 from .utils import _JitSetDict
 from .utils import _JitDictDict
 from .utils import SetMap
+from .utils import WeakSetMap
 from .utils import call_coroutine_threadsafe
 
 from .exceptions import DispatchError
@@ -74,8 +70,14 @@ from .exceptions import UnknownToken
 # ###############################################
 
 
-import logging
 logger = logging.getLogger(__name__)
+
+
+# Control * imports. Therefore controls what is available to toplevel
+# package through __init__.py
+__all__ = [
+    'Dispatcher',
+]
 
         
 # ###############################################
@@ -135,7 +137,7 @@ _DispatchableState = collections.namedtuple(
 )
 
 
-class Dispatcher:
+class Dispatcher(loopa.TaskLooper):
     ''' The Dispatcher decides which objects should be delivered where.
     This is decided through either:
     
@@ -145,7 +147,7 @@ class Dispatcher:
         will internally (though distributedly) maintain that object to
         be exclusively available to an app token.
         
-    Objects, once declared as non-private, cannot be retroactively 
+    Objects, once declared as non-private, cannot be retroactively
     privatized. That cat has officially left the bag/building/rodeo.
     However, a private object can be made non-private at a later time,
     provided it has defined an API ID.
@@ -163,6 +165,7 @@ class Dispatcher:
     TODO: support notification mechanism to push new objects to other
     concurrent hypergolix instances. See note in ipc.ipccore.send_object
     '''
+    
     def __init__(self):
         ''' Yup yup yup yup yup yup yup
         '''
@@ -176,11 +179,34 @@ class Dispatcher:
         # Distributed lock for adding app tokens
         self._token_lock = None
         
+        # Set of incoming shared ghids that had no endpoint
+        # set(<ghid, sender tuples>)
+        self._orphan_incoming_shares = None
+        # Setmap-like lookup for share acks that had no endpoint
+        # <app token>: set(<ghids>)
+        self._orphan_share_acks = None
+        # Setmap-like lookup for share naks that had no endpoint
+        # <app token>: set(<ghids>)
+        self._orphan_share_naks = None
+        
+        # Lookup <app token>: <connection/session/endpoint>
+        self._endpoint_from_token = weakref.WeakValueDictionary()
+        # Reverse lookup <connection/session/endpoint>: <app token>
+        self._token_from_endpoint = weakref.WeakKeyDictionary()
+        
+        # Lookup <api ID>: set(<connection/session/endpoint>)
+        self._endpoints_from_api = WeakSetMap()
+        
+        # This lookup directly tracks who has a copy of the object
+        # Lookup <object ghid>: set(<connection/session/endpoint>)
+        self._update_listeners = WeakSetMap()
+        
     def assemble(self):
         # Huh. We've nothing to do here yet.
         pass
         
-    def bootstrap(self, all_tokens, startup_objs, private_by_ghid, token_lock):
+    def bootstrap(self, all_tokens, startup_objs, private_by_ghid, token_lock,
+                  incoming_shares, orphan_acks, orphan_naks):
         ''' Initialize distributed state.
         '''
         # Now init distributed state.
@@ -199,6 +225,27 @@ class Dispatcher:
         # Distributed lock for adding app tokens
         self._token_lock = token_lock
         
+        # Set of incoming shared ghids that had no endpoint
+        # set(<ghid, sender tuples>)
+        self._orphan_incoming_shares = incoming_shares
+        # Setmap-like lookup for share acks that had no endpoint
+        # <app token>: set(<ghid, recipient tuples>)
+        self._orphan_share_acks = orphan_acks
+        # Setmap-like lookup for share naks that had no endpoint
+        # <app token>: set(<ghid, recipient tuples>)
+        self._orphan_share_naks = orphan_naks
+        
+    def add_api(self, connection, api_id):
+        ''' Register the connection as currently tracking the api_id.
+        '''
+        self._endpoints_from_api.add(api_id, connection)
+        
+    def remove_api(self, connection, api_id):
+        ''' Remove a connection's registration for the api_id. Happens
+        automatically when connections are GC'd.
+        '''
+        self._endpoints_from_api.discard(api_id, connection)
+        
     def new_token(self):
         # Use a dummy api_id to force the while condition to be true initially
         token = b'\x00\x00\x00\x00'
@@ -207,13 +254,13 @@ class Dispatcher:
             token = os.urandom(4)
         return token
         
-    def register_application(self):
+    def register_application(self, connection):
         ''' Creates a new application at the dispatcher.
         
-        Currently, that just means creating an app token and adding it 
-        to the master list of all available app tokens. But, in the 
-        future, it will also encompass any information necessary to 
-        actually start the app, as Hypergolix makes the transition from 
+        Currently, that just means creating an app token and adding it
+        to the master list of all available app tokens. But, in the
+        future, it will also encompass any information necessary to
+        actually start the app, as Hypergolix makes the transition from
         backround service to core OS service.
         '''
         # TODO: this lock actually needs to be a distributed lock across all
@@ -224,12 +271,16 @@ class Dispatcher:
             # Do this right away to prevent race condition
             self._all_known_tokens.add(token)
             
+            # TODO: should these be enclosed within an operations lock?
+            self._endpoint_from_token[token] = connection
+            self._token_from_endpoint[connection] = token
+            
         return _AppDef(token)
         
-    def start_application(self, appdef):
+    def start_application(self, connection, appdef):
         ''' Ensures that an application is known to the dispatcher.
         
-        Currently just checks within all known tokens. In the future, 
+        Currently just checks within all known tokens. In the future,
         this be responsible for starting the application (unless we move
         that responsibility elsewhere), and then sending all of the
         startup objects to the application.
@@ -238,13 +289,115 @@ class Dispatcher:
         if appdef[0] not in self._all_known_tokens:
             raise UnknownToken('App token unknown to dispatcher.')
             
-    def register_startup(self, token, ghid):
+        # TODO: should these be enclosed within an operations lock?
+        self._endpoint_from_token[appdef.app_token] = connection
+        self._token_from_endpoint[connection] = appdef.app_token
+            
+    def track_object(self, connection, ghid):
+        ''' Registers a connection as tracking a ghid.
+        '''
+        self._update_listeners.add(ghid, connection)
+        
+    def untrack_object(self, connection, ghid):
+        ''' Remove a connection as tracking a ghid.
+        '''
+        self._update_listeners.discard(ghid, connection)
+        
+    async def register_object(self, connection, ghid, private):
+        ''' Call this every time a new object is created to register it
+        with the dispatcher, recording it as private or distributing it
+        to other applications as needed.
+        '''
+        # If the object is private, register it as such.
+        if private:
+            try:
+                token = self._token_from_endpoint[connection]
+            
+            except KeyError as exc:
+                raise UnknownToken(
+                    'Must register app token before creating private objects.'
+                ) from exc
+                
+            else:
+                logger.debug(
+                    'Creating private object for ' + str(connection) +
+                    '; bypassing distribution.'
+                )
+                self._private_by_ghid[ghid] = token
+            
+        # Otherwise, make sure to notify any other interested parties.
+        else:
+            await self.schedule_share_distribution(
+                ghid,
+                origin = self._golcore.whoami,
+                skip_conn = connection
+            )
+    
+    async def schedule_share_distribution(self, ghid, origin, skip_conn=None):
+        ''' Schedules a distribution of an object share.
+        '''
+        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        # TODO: fix this mess, because it's wrong.
+        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        
+        # TODO: change send_object to just send the ghid, not the object
+        # itself, so that the app doesn't have to be constantly discarding
+        # stuff it didn't create?
+        callsheet = await self._make_callsheet(
+            ghid,
+            skip_endpoint = skip_conn
+        )
+         
+        # Note that self._obj_sender handles adding update listeners
+        await self.distribute_to_endpoints(
+            callsheet,
+            self.send_share,
+            ghid,
+            self._golcore.whoami
+        )
+    
+    async def schedule_update_distribution(self, ghid, skip_conn=None):
+        ''' Schedules a distribution of an object update.
+        '''
+        
+        if ghid not in self._private_by_ghid:
+            logger.debug('Object is NOT private; distributing.')
+            callsheet = await self._make_callsheet(
+                ghid,
+                skip_endpoint = skip_conn
+            )
+                
+            await self.distribute_to_endpoints(
+                callsheet,
+                self.send_update,
+                ghid
+            )
+        else:
+            logger.debug('Object IS private; skipping distribution.')
+            
+    def which_token(self, connection):
+        ''' Return the token associated with the connection, or None if
+        there is no currently defined token.
+        '''
+        try:
+            return self._token_from_endpoint[connection]
+            
+        except KeyError as exc:
+            return None
+            
+    def register_startup(self, connection, ghid):
         ''' Registers a ghid to be used as a startup object for token.
         '''
-        with self._token_lock:
-            if token not in self._all_known_tokens:
-                raise UnknownToken()
-            elif token in self._startup_by_token:
+        try:
+            token = self._token_from_endpoint[connection]
+            
+        except KeyError as exc:
+            raise UnknownToken(
+                'Must register app token before registering startup objects.'
+            ) from exc
+            
+        else:
+            if token in self._startup_by_token:
                 raise ValueError(
                     'Startup object already defined for that application. '
                     'Deregister it before registering a new startup object.'
@@ -266,9 +419,9 @@ class Dispatcher:
                 del self._startup_by_token[token]
         
     def get_startup_obj(self, token):
-        ''' Returns the ghid of the declared startup object for that 
+        ''' Returns the ghid of the declared startup object for that
         token, or None if none has been declared.
-        ''' 
+        '''
         with self._token_lock:
             if token not in self._all_known_tokens:
                 raise UnknownToken()
@@ -276,21 +429,6 @@ class Dispatcher:
                 return None
             else:
                 return self._startup_by_token[token]
-        
-    def register_private(self, token, ghid):
-        ''' Called by oracle's new_object to register an object as 
-        private. Should only be called at object creation, but this is
-        only enforced through the ipccore.
-        '''
-        token = bytes(token)
-        if len(token) != 4:
-            raise ValueError('App tokens must be 4 bytes long.')
-            
-        with self._token_lock:
-            if token not in self._all_known_tokens:
-                raise UnknownToken()
-            
-        self._private_by_ghid[ghid] = token
         
     def make_public(self, ghid):
         ''' Makes a private object public.

@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -32,8 +32,8 @@ hypergolix: A python Golix client.
 
 Some thoughts:
 
-Misc extras: 
-    + More likely than not, all persistence remotes should also use a 
+Misc extras:
+    + More likely than not, all persistence remotes should also use a
         single autoresponder, through the salmonator. Salmonator should
         then be moved into hypergolix.remotes instead of .persistence.
     + At least for now, applications must ephemerally declare themselves
@@ -45,7 +45,7 @@ It'd be nice to remove the msgpack dependency in utils.IPCPackerMixIn.
     + Very heavyweight for such a silly thing.
     + It would take very little time to remove.
     + This should wait until we have a different serialization for all
-        of the core bootstrapping _GAOs. This, in turn, should wait 
+        of the core bootstrapping _GAOs. This, in turn, should wait
         until after SmartyParse is converted to be async.
         
 IPC Apps should not have access to objects that are not _Dispatchable.
@@ -85,7 +85,19 @@ from .exceptions import HandshakeError
 from .exceptions import HandshakeWarning
 from .exceptions import IPCError
 
-from .utils import IPCPackerMixIn
+from .exceptions import RemoteNak
+from .exceptions import MalformedGolixPrimitive
+from .exceptions import VerificationFailure
+from .exceptions import UnboundContainer
+from .exceptions import InvalidIdentity
+from .exceptions import DoesNotExist
+from .exceptions import AlreadyDebound
+from .exceptions import InvalidTarget
+from .exceptions import InconsistentAuthor
+from .exceptions import IllegalDynamicFrame
+from .exceptions import IntegrityError
+from .exceptions import UnavailableUpstream
+
 from .utils import call_coroutine_threadsafe
 from .utils import await_sync_future
 from .utils import WeakSetMap
@@ -95,6 +107,9 @@ from .utils import _generate_threadnames
 from .comms import WSConnection as _AutoresponderSession
 from .comms import RequestResponseProtocol as Autoresponder
 from .comms import MsgBuffer as AutoresponseConnector
+
+from .comms import RequestResponseProtocol
+from .comms import request
 
 from .dispatch import _Dispatchable
 from .dispatch import _DispatchableState
@@ -113,13 +128,29 @@ logger = logging.getLogger(__name__)
 
 # Control * imports.
 __all__ = [
-    # 'Inquisitor', 
+    # 'Inquisitor',
 ]
 
 
 # ###############################################
 # Library
 # ###############################################
+
+
+ERROR_CODES = {
+    b'\x00\x00': Exception,
+    b'\x00\x01': MalformedGolixPrimitive,
+    b'\x00\x02': VerificationFailure,
+    b'\x00\x03': InvalidIdentity,
+    b'\x00\x04': UnboundContainer,
+    b'\x00\x05': AlreadyDebound,
+    b'\x00\x06': InvalidTarget,
+    b'\x00\x07': InconsistentAuthor,
+    b'\x00\x08': DoesNotExist,
+    b'\x00\x09': IllegalDynamicFrame,
+    b'\x00\x0A': RemoteNak,
+    b'\xFF\xFF': IPCError
+}
             
             
 # Identity here can be either a sender or recipient dependent upon context
@@ -129,14 +160,842 @@ _ShareLog = collections.namedtuple(
 )
 
 
-class IPCCore(Autoresponder, IPCPackerMixIn):
+class _IPCSerializer:
+    ''' This helper class defines the IPC serialization process.
+    '''
+        
+    def _pack_object_def(self, address, author, state, is_link, api_id,
+                         private, dynamic, _legroom):
+        ''' Serializes an object definition.
+        
+        This is crude, but it's getting the job done for now. Also, for
+        the record, I was previously using msgpack, but good lord is it
+        slow.
+        
+        General format:
+        version     1B      int16 unsigned
+        address     65B     ghid
+        author      65B     ghid
+        private     1B      bool
+        dynamic     1B      bool
+        _legroom    1B      int8 unsigned
+        api_id      65B     bytes
+        is_link     1B      bool
+        state       ?B      bytes (implicit length)
+        '''
+        version = b'\x00'
+            
+        if address is None:
+            address = bytes(65)
+        else:
+            address = bytes(address)
+        
+        if author is None:
+            author = bytes(65)
+        else:
+            author = bytes(author)
+            
+        private = bool(private).to_bytes(length=1, byteorder='big')
+        dynamic = bool(dynamic).to_bytes(length=1, byteorder='big')
+        if _legroom is None:
+            _legroom = b'\x00'
+        else:
+            _legroom = int(_legroom).to_bytes(length=1, byteorder='big')
+        if api_id is None:
+            api_id = bytes(65)
+        is_link = bool(is_link).to_bytes(length=1, byteorder='big')
+        # State need not be modified
+        
+        return (version +
+                address +
+                author +
+                private +
+                dynamic +
+                _legroom +
+                api_id +
+                is_link +
+                state)
+        
+    def _unpack_object_def(self, data):
+        ''' Deserializes an object from bytes.
+        
+        General format:
+        version     1B      int16 unsigned
+        address     65B     ghid
+        author      65B     ghid
+        private     1B      bool
+        dynamic     1B      bool
+        _legroom    1B      int8 unsigned
+        api_id      65B     bytes
+        is_link     1B      bool
+        state       ?B      bytes (implicit length)
+        '''
+        try:
+            version = data[0:1]
+            address = data[1:66]
+            author = data[66:131]
+            private = data[131:132]
+            dynamic = data[132:133]
+            _legroom = data[133:134]
+            api_id = data[134:199]
+            is_link = data[199:200]
+            state = data[200:]
+            
+        except Exception:
+            logger.error(
+                'Unable to unpack IPC object definition w/ traceback:\n'
+                ''.join(traceback.format_exc())
+            )
+            raise
+            
+        # Version stays unmodified (unused)
+        if address == bytes(65):
+            address = None
+        else:
+            address = Ghid.from_bytes(address)
+        if author == bytes(65):
+            author = None
+        else:
+            author = Ghid.from_bytes(author)
+        private = bool(int.from_bytes(private, 'big'))
+        dynamic = bool(int.from_bytes(dynamic, 'big'))
+        _legroom = int.from_bytes(_legroom, 'big')
+        if _legroom == 0:
+            _legroom = None
+        if api_id == bytes(65):
+            api_id = None
+        is_link = bool(int.from_bytes(is_link, 'big'))
+        # state also stays unmodified
+        
+        return (address,
+                author,
+                state,
+                is_link,
+                api_id,
+                private,
+                dynamic,
+                _legroom)
+
+
+class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
+                        error_codes=ERROR_CODES):
+    ''' Defines the protocol for IPC, with handlers specific to servers.
+    '''
+    
+    def __init__(self, *args, **kwargs):
+        ''' Add intentionally invalid init to force assemblage.
+        '''
+        self._dispatch = None
+        self._oracle = None
+        self._golcore = None
+        self._rolodex = None
+        self._salmonator = None
+        
+    def assemble(self, golix_core, oracle, dispatch, rolodex, salmonator):
+        # Chicken, egg, etc.
+        self._golcore = weakref.proxy(golix_core)
+        self._oracle = weakref.proxy(oracle)
+        self._dispatch = weakref.proxy(dispatch)
+        self._rolodex = weakref.proxy(rolodex)
+        self._salmonator = weakref.proxy(salmonator)
+        
+    @request(b'$T')
+    async def set_token(self, connection, token=None):
+        ''' Register an existing token or get a new token, or notify an
+        app of its existing token.
+        '''
+        # On the server side, this will only be implemented once actual
+        # application launching is available.
+        raise NotImplementedError()
+        
+    @set_token.request_handler
+    async def set_token(self, connection, body):
+        ''' Handles token-setting requests.
+        '''
+        app_token = body[:4]
+        
+        # Getting a new token.
+        if app_token == b'':
+            appdef = self._dispatch.register_application()
+            app_token = appdef.app_token
+            
+        # Setting an existing token.
+        else:
+            if app_token in self._endpoint_from_token:
+                raise RuntimeError(
+                    'Attempt to reregister a new concurrent connection for ' +
+                    'an existing token. Each app may only use one connection.'
+                )
+        
+            appdef = _AppDef(app_token)
+            # Check our app token
+            self._dispatch.start_application(connection, appdef)
+            
+            startup_ghid = self._dispatch.get_startup_obj(app_token)
+            if startup_ghid is not None:
+                await self.startup_obj(connection, startup_ghid)
+        
+        return app_token
+        
+    @request(b'$A')
+    async def register_api(self, connection):
+        ''' Registers the application as supporting an API. Client only.
+        '''
+        raise NotImplementedError()
+        
+    @register_api.request_handler
+    async def register_api(self, connection, body):
+        ''' Handles API registration requests. Server only.
+        '''
+        if len(body) != 65:
+            raise ValueError('Invalid API ID format.')
+            
+        self._dispatch.add_api(connection, body)
+        
+        return b'\x01'
+        
+    @request(b'XA')
+    async def deregister_api(self, connection):
+        ''' Removes any existing registration for the app supporting an
+        API. Client only.
+        '''
+        raise NotImplementedError()
+        
+    @deregister_api.request_handler
+    async def deregister_api(self, connection, body):
+        ''' Handles API deregistration requests. Server only.
+        '''
+        if len(body) != 65:
+            raise ValueError('Invalid API ID format.')
+            
+        self._dispatch.remove_api(connection, body)
+        
+        return b'\x01'
+        
+    @request(b'?I')
+    async def whoami(self, connection):
+        ''' Get the current hypergolix fingerprint, or notify an app of
+        the current hypergolix fingerprint.
+        '''
+        # On the server side, this will only be implemented once actual
+        # application launching is available.
+        raise NotImplementedError()
+        
+    @whoami.request_handler
+    async def whoami(self, connection, body):
+        ''' Handles whoami requests.
+        '''
+        ghid = self._golcore.whoami
+        return bytes(ghid)
+        
+    @request(b'$O')
+    async def startup_obj(self, connection, ghid):
+        ''' Declare a startup object, or notify an app of its declared
+        startup object.
+        '''
+        return bytes(ghid)
+        
+    @startup_obj.request_handler
+    async def startup_obj(self, connection, body):
+        ''' Handles requests for startup objects.
+        '''
+        ghid = Ghid.from_bytes(body)
+        self._dispatch.register_startup(connection, ghid)
+        return b'\x01'
+        
+    @request(b'>O')
+    async def get_obj(self, connection):
+        ''' Get an object with the specified address. Client only.
+        '''
+        raise NotImplementedError()
+        
+    @get_obj.request_handler
+    async def get_obj(self, connection, body):
+        ''' Handles requests for an object. Server only.
+        '''
+        ghid = Ghid.from_bytes(body)
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            ghid = ghid,
+            dispatch = self._dispatch,
+            ipc_core = self
+        )
+        
+        self._dispatch.track_object(connection, ghid)
+            
+        if isinstance(obj.state, Ghid):
+            is_link = True
+            state = bytes(obj.state)
+        else:
+            is_link = False
+            state = obj.state
+            
+        # For now, anyways.
+        # Note: need to add some kind of handling for legroom.
+        _legroom = None
+        
+        return self._pack_object_def(
+            obj.ghid,
+            obj.author,
+            state,
+            is_link,
+            obj.api_id,
+            obj.private,
+            obj.dynamic,
+            _legroom
+        )
+        
+    @request(b'+O')
+    async def new_obj(self, connection):
+        ''' Create a new object, or notify an app of a new object
+        created by a concurrent instance of the app on a different
+        hypergolix session.
+        '''
+        # Not currently supported.
+        raise NotImplementedError()
+        
+    @new_obj.request_handler
+    async def new_obj(self, connection, body):
+        ''' Handles requests for new objects.
+        '''
+        (address,    # Unused and set to None.
+         author,     # Unused and set to None.
+         state,
+         is_link,
+         api_id,
+         private,
+         dynamic,
+         _legroom) = self._unpack_object_def(body)
+        
+        if is_link:
+            raise NotImplementedError('Linked objects are not yet supported.')
+            state = Ghid.from_bytes(state)
+        
+        obj = self._oracle.new_object(
+            gaoclass = _Dispatchable,
+            dispatch = self._dispatch,
+            ipc_core = self,
+            state = _DispatchableState(api_id, state),
+            dynamic = dynamic,
+            _legroom = _legroom,
+            api_id = api_id,
+        )
+            
+        # Add the endpoint as a listener.
+        await self._dispatch.register_object(connection, obj.ghid, private)
+        self._dispatch.track_object(connection, obj.ghid)
+        
+        return bytes(obj.ghid)
+        
+    @request(b'!O')
+    async def update_obj(self, connection, ghid):
+        ''' Update an object or notify an app of an incoming update.
+        '''
+        try:
+            obj = self._oracle.get_object(
+                gaoclass = _Dispatchable,
+                ghid = ghid,
+                dispatch = self._dispatch,
+                ipc_core = self
+            )
+            
+        except Exception:
+            # At some point we'll need some kind of proper handling for this.
+            logger.error(
+                'Failed to retrieve object at ' + str(ghid) + '\n' +
+                ''.join(traceback.format_exc())
+            )
+            raise
+            
+        else:
+            return self._pack_object_def(
+                obj.ghid,
+                obj.author,
+                obj.state,
+                False, # is_link is currently unsupported
+                obj.api_id,
+                None,
+                obj.dynamic,
+                None
+            )
+        
+    @update_obj.request_handler
+    async def update_obj(self, connection, body):
+        ''' Handles update object requests.
+        '''
+        logger.debug('Handling update request from ' + str(connection))
+        (address,
+         author,    # Unused and set to None.
+         state,
+         is_link,
+         api_id,    # Unused and set to None.
+         private,   # Unused and set to None.
+         dynamic,   # Unused and set to None.
+         _legroom   # Unused and set to None.
+         ) = self._unpack_object_def(body)
+        
+        if is_link:
+            raise NotImplementedError('Linked objects are not yet supported.')
+            state = Ghid.from_bytes(state)
+            
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            ghid = address,
+            dispatch = self._dispatch,
+            ipc_core = self
+        )
+        obj.update(state)
+        
+        await self._dispatch.schedule_update_distribution(
+            obj.ghid,
+            skip_conn = connection
+        )
+        
+        return b'\x01'
+        
+    @request(b'~O')
+    async def sync_obj(self, connection):
+        ''' Manually force Hypergolix to check an object for updates.
+        Client only.
+        '''
+        raise NotImplementedError()
+        
+    @sync_obj.request_handler
+    async def sync_obj(self, connection, body):
+        ''' Handles manual syncing requests. Server only.
+        '''
+        ghid = Ghid.from_bytes(body)
+        await self._salmonator.attempt_pull(ghid)
+        return b'\x01'
+        
+    @request(b'@O')
+    async def share_obj(self, connection, ghid, origin):
+        ''' Request an object share or notify an app of an incoming
+        share.
+        '''
+        return bytes(ghid) + bytes(origin)
+        
+    @share_obj.request_handler
+    async def share_obj(self, connection, body):
+        ''' Handles object share requests.
+        '''
+        ghid = Ghid.from_bytes(body[0:65])
+        recipient = Ghid.from_bytes(body[65:130])
+        
+        # Instead of forbidding unregistered apps from sharing objects,
+        # go for it, but document that you will never be notified of a
+        # share success or failure without an app token.
+        requesting_token = self._dispatch.which_token(connection)
+        if requesting_token is None:
+            logger.info(
+                (
+                    'CONN {!s} is sharing {!s} with {!s} without defining ' +
+                    'an app token, and therefore cannot be notified of ' +
+                    'share success or failure.'
+                ).format(connection, ghid, recipient)
+            )
+            
+        await self._rolodex.share_object(ghid, recipient, requesting_token)
+        return b'\x01'
+        
+    @request(b'^S')
+    async def notify_share_success(self, connection, ghid, recipient):
+        ''' Notify app of successful share. Server only.
+        '''
+        return bytes(ghid) + bytes(recipient)
+        
+    @notify_share_success.request_handler
+    async def notify_share_success(self, connection, body):
+        ''' Handles app notifications for successful shares. Client
+        only.
+        '''
+        raise NotImplementedError()
+        
+    @request(b'^F')
+    async def notify_share_failure(self, connection, ghid, recipient):
+        ''' Notify app of unsuccessful share. Server only.
+        '''
+        return bytes(ghid) + bytes(recipient)
+        
+    @notify_share_failure.request_handler
+    async def notify_share_failure(self, connection, body):
+        ''' Handles app notifications for unsuccessful shares. Client
+        only.
+        '''
+        raise NotImplementedError()
+        
+    @request(b'*O')
+    async def freeze_obj(self, connection):
+        ''' Creates a new static copy of the object, or notifies an app
+        of a frozen copy of an existing object created by a concurrent
+        instance of the app.
+        '''
+        # Not currently supported.
+        raise NotImplementedError()
+        
+    @freeze_obj.request_handler
+    async def freeze_obj(self, connection, body):
+        ''' Handles object freezing requests.
+        '''
+        ghid = Ghid.from_bytes(body)
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            ghid = ghid,
+            dispatch = self._dispatch,
+            ipc_core = self
+        )
+        frozen_address = obj.freeze()
+        
+        return bytes(frozen_address)
+        
+    @request(b'#O')
+    async def hold_obj(self, connection):
+        ''' Creates a new static binding for the object, or notifies an
+        app of a static binding created by a concurrent instance of the
+        app.
+        '''
+        # Not currently supported.
+        raise NotImplementedError()
+        
+    @hold_obj.request_handler
+    async def hold_obj(self, connection, body):
+        ''' Handles object holding requests.
+        '''
+        ghid = Ghid.from_bytes(body)
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            ghid = ghid,
+            dispatch = self._dispatch,
+            ipc_core = self
+        )
+        obj.hold()
+        return b'\x01'
+        
+    @request(b'-O')
+    async def discard_obj(self, connection):
+        ''' Stop listening to object updates. Client only.
+        '''
+        raise NotImplementedError()
+        
+    @discard_obj.request_handler
+    async def discard_obj(self, connection, body):
+        ''' Handles object discarding requests. Server only.
+        '''
+        ghid = Ghid.from_bytes(body)
+        self._dispatch.untrack_object(connection, ghid)
+        return b'\x01'
+        
+    @request(b'XO')
+    async def delete_obj(self, connection, ghid):
+        ''' Request an object deletion or notify an app of an incoming
+        deletion.
+        '''
+        if not isinstance(ghid, Ghid):
+            raise TypeError('ghid must be type Ghid or similar.')
+        
+        return bytes(ghid)
+        
+    @delete_obj.request_handler
+    async def delete_obj(self, connection, body):
+        ''' Handles object deletion requests.
+        '''
+        ghid = Ghid.from_bytes(body)
+        obj = self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            ghid = ghid,
+            dispatch = self._dispatch,
+            ipc_core = self
+        )
+        self._dispatch.untrack_object(connection, ghid)
+        obj.delete()
+        return b'\x01'
+
+
+class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
+                        error_codes=ERROR_CODES):
+    ''' Defines the protocol for IPC, with handlers specific to clients.
+    '''
+    
+    def __init__(self, *args, **kwargs):
+        ''' Add intentionally invalid init to force assemblage.
+        '''
+        self._dispatch = None
+        self._oracle = None
+        self._golcore = None
+        self._rolodex = None
+        self._salmonator = None
+        
+    def assemble(self, golix_core, oracle, dispatch, rolodex, salmonator):
+        # Chicken, egg, etc.
+        self._golcore = weakref.proxy(golix_core)
+        self._oracle = weakref.proxy(oracle)
+        self._dispatch = weakref.proxy(dispatch)
+        self._rolodex = weakref.proxy(rolodex)
+        self._salmonator = weakref.proxy(salmonator)
+        
+    @request(b'$T')
+    async def set_token(self, connection, token=None):
+        ''' Register an existing token or get a new token, or notify an
+        app of its existing token.
+        '''
+        
+    @set_token.request_handler
+    async def set_token(self, connection, body):
+        ''' Handles token-setting requests.
+        '''
+        
+    @set_token.response_handler
+    async def set_token(self, connection, response, exc):
+        ''' Handles responses to token-setting requests.
+        '''
+        
+    @request(b'$A')
+    async def register_api(self, connection):
+        ''' Registers the application as supporting an API. Client only.
+        '''
+        
+    @register_api.request_handler
+    async def register_api(self, connection, body):
+        ''' Handles API registration requests. Server only.
+        '''
+        raise NotImplementedError()
+        
+    @register_api.response_handler
+    async def register_api(self, connection, response, exc):
+        ''' Handles responses to API registration requests. Client only.
+        '''
+        
+    @request(b'XA')
+    async def deregister_api(self, connection):
+        ''' Removes any existing registration for the app supporting an
+        API. Client only.
+        '''
+        
+    @deregister_api.request_handler
+    async def deregister_api(self, connection, body):
+        ''' Handles API deregistration requests. Server only.
+        '''
+        raise NotImplementedError()
+        
+    @deregister_api.response_handler
+    async def deregister_api(self, connection, response, exc):
+        ''' Handles responses to API deregistration requests. Client
+        only.
+        '''
+        
+    @request(b'?I')
+    async def whoami(self, connection):
+        ''' Get the current hypergolix fingerprint, or notify an app of
+        the current hypergolix fingerprint.
+        '''
+        
+    @whoami.request_handler
+    async def whoami(self, connection, body):
+        ''' Handles whoami requests.
+        '''
+        
+    @whoami.response_handler
+    async def whoami(self, connection, response, exc):
+        ''' Handles responses to whoami requests.
+        '''
+        
+    @request(b'>O')
+    async def get_obj(self, connection):
+        ''' Get an object with the specified address. Client only.
+        '''
+        
+    @get_obj.request_handler
+    async def get_obj(self, connection, body):
+        ''' Handles requests for an object. Server only.
+        '''
+        raise NotImplementedError()
+        
+    @get_obj.response_handler
+    async def get_obj(self, connection, response, exc):
+        ''' Handles responses to get object requests. Client only.
+        '''
+        
+    @request(b'$O')
+    async def startup_obj(self, connection):
+        ''' Declare a startup object, or notify an app of its declared
+        startup object.
+        '''
+        
+    @startup_obj.request_handler
+    async def startup_obj(self, connection, body):
+        ''' Handles requests for startup objects.
+        '''
+        
+    @startup_obj.response_handler
+    async def startup_obj(self, connection, response, exc):
+        ''' Handles responses to startup object requests.
+        '''
+        
+    @request(b'+O')
+    async def new_obj(self, connection):
+        ''' Create a new object, or notify an app of a new object
+        created by a concurrent instance of the app on a different
+        hypergolix session.
+        '''
+        
+    @new_obj.request_handler
+    async def new_obj(self, connection, body):
+        ''' Handles requests for new objects.
+        '''
+        
+    @new_obj.response_handler
+    async def new_obj(self, connection, response, exc):
+        ''' Handles responses to requests for new objects.
+        '''
+        
+    @request(b'!O')
+    async def update_obj(self, connection):
+        ''' Update an object or notify an app of an incoming update.
+        '''
+        
+    @update_obj.request_handler
+    async def update_obj(self, connection, body):
+        ''' Handles update object requests.
+        '''
+        
+    @update_obj.response_handler
+    async def update_obj(self, connection, response, exc):
+        ''' Handles responses to update object requests.
+        '''
+        
+    @request(b'~O')
+    async def sync_obj(self, connection):
+        ''' Manually force Hypergolix to check an object for updates.
+        Client only.
+        '''
+        
+    @sync_obj.request_handler
+    async def sync_obj(self, connection, body):
+        ''' Handles manual syncing requests. Server only.
+        '''
+        raise NotImplementedError()
+        
+    @sync_obj.response_handler
+    async def sync_obj(self, connection, response, exc):
+        ''' Handles responses to manual syncing requests. Client only.
+        '''
+        
+    @request(b'XO')
+    async def delete_obj(self, connection):
+        ''' Request an object deletion or notify an app of an incoming
+        deletion.
+        '''
+        
+    @delete_obj.request_handler
+    async def delete_obj(self, connection, body):
+        ''' Handles object deletion requests.
+        '''
+        
+    @delete_obj.response_handler
+    async def delete_obj(self, connection, response, exc):
+        ''' Handles responses to object deletion requests.
+        '''
+        
+    @request(b'@O')
+    async def share_obj(self, connection):
+        ''' Request an object share or notify an app of an incoming
+        share.
+        '''
+        
+    @share_obj.request_handler
+    async def share_obj(self, connection, body):
+        ''' Handles object share requests.
+        '''
+        
+    @share_obj.response_handler
+    async def share_obj(self, connection, response, exc):
+        ''' Handles responses to object share requests.
+        '''
+        
+    @request(b'^S')
+    async def share_success(self, connection):
+        ''' Notify app of successful share. Server only.
+        '''
+        raise NotImplementedError()
+        
+    @share_success.request_handler
+    async def share_success(self, connection, body):
+        ''' Handles app notifications for successful shares. Client
+        only.
+        '''
+        
+    @request(b'^F')
+    async def share_failure(self, connection):
+        ''' Notify app of unsuccessful share. Server only.
+        '''
+        raise NotImplementedError()
+        
+    @share_failure.request_handler
+    async def share_failure(self, connection, body):
+        ''' Handles app notifications for unsuccessful shares. Client
+        only.
+        '''
+        
+    @request(b'*O')
+    async def freeze_obj(self, connection):
+        ''' Creates a new static copy of the object, or notifies an app
+        of a frozen copy of an existing object created by a concurrent
+        instance of the app.
+        '''
+        
+    @freeze_obj.request_handler
+    async def freeze_obj(self, connection, body):
+        ''' Handles object freezing requests.
+        '''
+        
+    @freeze_obj.response_handler
+    async def freeze_obj(self, connection, response, exc):
+        ''' Handles responses to object freezing requests.
+        '''
+        
+    @request(b'#O')
+    async def hold_obj(self, connection):
+        ''' Creates a new static binding for the object, or notifies an
+        app of a static binding created by a concurrent instance of the
+        app.
+        '''
+        
+    @hold_obj.request_handler
+    async def hold_obj(self, connection, body):
+        ''' Handles object holding requests.
+        '''
+        
+    @hold_obj.response_handler
+    async def hold_obj(self, connection, response, exc):
+        ''' Handles responses to object holding requests.
+        '''
+        
+    @request(b'-O')
+    async def discard_obj(self, connection):
+        ''' Stop listening to object updates. Client only.
+        '''
+        
+    @discard_obj.request_handler
+    async def discard_obj(self, connection, body):
+        ''' Handles object discarding requests. Server only.
+        '''
+        raise NotImplementedError()
+        
+    @discard_obj.response_handler
+    async def discard_obj(self, connection, response, exc):
+        ''' Handles responses to object discarding requests. Client
+        only.
+        '''
+
+
+class IPCCore:
     ''' The core IPC system, including the server autoresponder. Add the
     individual IPC servers to the IPC Core.
     
     NOTE: this class, with the exception of initialization, is wholly
-    asynchronous. Outside entities should call into it using 
+    asynchronous. Outside entities should call into it using
     utils.call_coroutine_threadsafe. Any thread-wrapping that needs to
-    happen to break in-loop chains should also be executed in the 
+    happen to break in-loop chains should also be executed in the
     outside entity.
     '''
     REQUEST_CODES = {
