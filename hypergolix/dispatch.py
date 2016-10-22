@@ -33,41 +33,28 @@ Some notes:
 
 '''
 
-# Global dependencies
+# External dependencies
 import logging
 import collections
 import weakref
-import threading
 import os
 import abc
 import traceback
 import asyncio
 import loopa
 
-from golix import Ghid
-
 # Intra-package dependencies
 from .core import _GAO
-from .core import _GAODict
-from .core import _GAOSet
-from .core import Oracle
 
-# Intra-package dependencies
-from .utils import _JitSetDict
-from .utils import _JitDictDict
-from .utils import SetMap
 from .utils import WeakSetMap
 from .utils import call_coroutine_threadsafe
 
 from .exceptions import DispatchError
-from .exceptions import DispatchWarning
 from .exceptions import UnknownToken
-
-# from .exceptions import HandshakeError
 
 
 # ###############################################
-# Logging boilerplate
+# Boilerplate
 # ###############################################
 
 
@@ -87,8 +74,8 @@ __all__ = [
 
         
 class DispatcherBase(metaclass=abc.ABCMeta):
-    ''' Base class for dispatchers. Dispatchers handle objects; they 
-    translate between raw Golix payloads and application objects, as 
+    ''' Base class for dispatchers. Dispatchers handle objects; they
+    translate between raw Golix payloads and application objects, as
     well as shepherding objects appropriately to/from/between different
     applications. Dispatchers are intended to be combined with agents,
     and vice versa.
@@ -98,8 +85,8 @@ class DispatcherBase(metaclass=abc.ABCMeta):
         
     @abc.abstractmethod
     def dispatch_handshake(self, target):
-        ''' Receives the target *object* for a handshake (note: NOT the 
-        handshake itself) and dispatches it to the appropriate 
+        ''' Receives the target *object* for a handshake (note: NOT the
+        handshake itself) and dispatches it to the appropriate
         application.
         
         handshake is a StaticObject or DynamicObject.
@@ -688,7 +675,7 @@ class _Dispatchable(_GAO):
         return bool(self._dispatch.get_parent_token(self.ghid))
         
     def pull(self, *args, **kwargs):
-        ''' Refreshes self from upstream. Should NOT be called at object 
+        ''' Refreshes self from upstream. Should NOT be called at object
         instantiation for any existing objects. Should instead be called
         directly, or through _weak_pull for any new status.
         '''
@@ -713,8 +700,8 @@ class _Dispatchable(_GAO):
         
     @staticmethod
     def _unpack(packed):
-        ''' Unpacks state from a bytes object. May be overwritten in 
-        subs to unpack more complex objects. Should always be a 
+        ''' Unpacks state from a bytes object. May be overwritten in
+        subs to unpack more complex objects. Should always be a
         staticmethod or classmethod.
         '''
         magic = packed[0:4]
