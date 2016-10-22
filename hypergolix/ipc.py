@@ -285,6 +285,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
     def __init__(self, *args, **kwargs):
         ''' Add intentionally invalid init to force assemblage.
         '''
+        super().__init__(*args, **kwargs)
+        
         self._dispatch = None
         self._oracle = None
         self._golcore = None
@@ -498,6 +500,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
                 dispatch = self._dispatch,
                 ipc_core = self
             )
+            
+        # No CancelledError catch necessary because we're re-raising any exc
             
         except Exception:
             # At some point we'll need some kind of proper handling for this.

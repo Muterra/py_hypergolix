@@ -543,14 +543,15 @@ class Salmonator(loopa.TaskLooper):
             return_when = asyncio.FIRST_COMPLETED
         )
         
-        # One or the other has to be done. Here, it's pull.
+        # Avoid race conditions by immediately cancelling the unfinished task.
+        # Note that it's not guaranteed that we'll only get a single task.
+        for task in pending:
+            task.cancel()
+        
         if to_pull in finished:
-            to_push.cancel()
             await self.pull(to_pull.result())
         
-        # Here, it's push.
-        else:
-            to_pull.cancel()
+        if to_push in finished:
             await self.push(to_push.result())
         
     def schedule_pull(self, ghid):
@@ -618,7 +619,7 @@ class Salmonator(loopa.TaskLooper):
         subs update from a slower remote would always be overridden by
         the faster one.
         '''
-        finished = None
+        pull_complete = None
         tasks_available = set()
         for remote in self._upstream_remotes:
             this_pull = asyncio.ensure_future(
@@ -632,50 +633,65 @@ class Salmonator(loopa.TaskLooper):
             tasks_available.add(this_pull)
             
         # Wait until the first successful task completion
-        while tasks_available and not finished:
+        while tasks_available and not pull_complete:
             finished, pending = await asyncio.wait(
                 fs = tasks_available,
                 return_when = asyncio.FIRST_COMPLETED
             )
         
-            finished = finished.pop()
-            tasks_available.discard(finished)
-            exc = finished.exception()
-            
-            # If there's been an exception, continue waiting for the rest.
-            if exc is not None:
-                logger.error(
-                    'Error while pulling from remote:\n' +
-                    ''.join(traceback.format_tb(exc.__traceback__)) +
-                    repr(exc)
-                )
-                finished = None
-            
-            # Completed successfully, but it could be a 404 (or other error),
-            # which would present as result() = False. So, assign the result to
-            # finished and let the while loop handle the rest.
-            else:
-                finished = finished.result()
+            # Despite FIRST_COMPLETED, asyncio may return more than one task
+            for task in finished:
+                # The task finished, so discard it from the available and reap
+                # any exception
+                tasks_available.discard(task)
+                exc = finished.exception()
+                
+                # If there's been an exception, continue waiting for the rest.
+                if exc is not None:
+                    logger.error(
+                        'Error while pulling from remote:\n' +
+                        ''.join(traceback.format_tb(exc.__traceback__)) +
+                        repr(exc)
+                    )
+                    pull_complete = None
+                
+                # Completed successfully, but it could be a 404 (or other error),
+                # which would present as result() = False.
+                # Instead of letting the while loop handle this, since more
+                # than one task can complete simultaneously, make sure we don't
+                # already have a finalized result before blindly assigning the
+                # task's result.
+                elif not pull_complete:
+                    pull_complete = task.result()
+                    
+                # Multiple tasks completed at once. An earlier one was
+                # successful. We need to grab the result to suppress asyncio
+                # complaints.
+                else:
+                    task.result()
                 
         # No dice. Either finished is None (no remotes), None (no successful
         # pulls), or False (exactly one remote had the object, but it was
         # unloadable). Raise.
-        if not finished:
+        if not pull_complete:
             raise UnavailableUpstream(
                 'Object was unavailable or unacceptable at all '
                 'currently-registered remotes.'
             )
-                
-        logger.debug(
-            'Successfully pulled ' + str(ghid) + ' from upstream remote. ' +
-            'Handling...'
-        )
-        # Now we have one complete task (finished) and potentially still some
-        # pending. So, cancel all remaining...
+            
+        # Log success.
+        else:
+            logger.debug(
+                'Successful remote pull for {!s}. Handling...'.format(ghid)
+            )
+        
+        # We may still have some pending tasks. Cancel them. Note that we have
+        # not yielded control to the event loop, so there is no race.
         for task in pending:
             task.cancel()
-        # And handle the result.
-        await self._handle_successful_pull(finished)
+            
+        # Now handle the result.
+        await self._handle_successful_pull(pull_complete)
             
     async def _handle_successful_pull(self, maybe_obj):
         ''' Dispatches the object in the successful pull.

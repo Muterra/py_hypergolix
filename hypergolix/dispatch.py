@@ -41,6 +41,7 @@ import threading
 import os
 import abc
 import traceback
+import asyncio
 import loopa
 
 from golix import Ghid
@@ -135,6 +136,13 @@ _DispatchableState = collections.namedtuple(
     typename = '_DispatchableState',
     field_names = ('api_id', 'state'),
 )
+            
+            
+# Identity here can be either a sender or recipient dependent upon context
+_ShareLog = collections.namedtuple(
+    typename = '_ShareLog',
+    field_names = ('ghid', 'identity'),
+)
 
 
 class Dispatcher(loopa.TaskLooper):
@@ -166,9 +174,13 @@ class Dispatcher(loopa.TaskLooper):
     concurrent hypergolix instances. See note in ipc.ipccore.send_object
     '''
     
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         ''' Yup yup yup yup yup yup yup
         '''
+        super().__init__(*args, **kwargs)
+        
+        self._ipc_protocol_server = None
+        
         # Temporarily set distributed state to None.
         # Lookup for all known tokens: set(<tokens>)
         self._all_known_tokens = None
@@ -189,6 +201,9 @@ class Dispatcher(loopa.TaskLooper):
         # <app token>: set(<ghids>)
         self._orphan_share_naks = None
         
+        # This is used for updating apps
+        self._dispatch_q = None
+        
         # Lookup <app token>: <connection/session/endpoint>
         self._endpoint_from_token = weakref.WeakValueDictionary()
         # Reverse lookup <connection/session/endpoint>: <app token>
@@ -201,9 +216,9 @@ class Dispatcher(loopa.TaskLooper):
         # Lookup <object ghid>: set(<connection/session/endpoint>)
         self._update_listeners = WeakSetMap()
         
-    def assemble(self):
-        # Huh. We've nothing to do here yet.
-        pass
+    def assemble(self, ipc_protocol_server):
+        # Set up a weakref to the ipc system
+        self._ipc_protocol_server = weakref.proxy(ipc_protocol_server)
         
     def bootstrap(self, all_tokens, startup_objs, private_by_ghid, token_lock,
                   incoming_shares, orphan_acks, orphan_naks):
@@ -234,6 +249,33 @@ class Dispatcher(loopa.TaskLooper):
         # Setmap-like lookup for share naks that had no endpoint
         # <app token>: set(<ghid, recipient tuples>)
         self._orphan_share_naks = orphan_naks
+            
+    async def loop_init(self):
+        ''' Init the two async queues.
+        '''
+        self._dispatch_q = asyncio.Queue()
+        
+    async def loop_run(self):
+        ''' Wait for anything incoming.
+        '''
+        try:
+            dispatch_coro, args, kwargs = await self._dispatch_q.get()
+            await dispatch_coro(*args, **kwargs)
+            
+        except asyncio.CancelledError:
+            raise
+        
+        except Exception:
+            # At some point we'll need some kind of proper handling for this.
+            logger.error(
+                'Dispatch raised with traceback:\n' +
+                ''.join(traceback.format_exc())
+            )
+        
+    async def loop_stop(self):
+        ''' Remove the async queues.
+        '''
+        self._dispatch_q = None
         
     def add_api(self, connection, api_id):
         ''' Register the connection as currently tracking the api_id.
@@ -336,44 +378,209 @@ class Dispatcher(loopa.TaskLooper):
     async def schedule_share_distribution(self, ghid, origin, skip_conn=None):
         ''' Schedules a distribution of an object share.
         '''
-        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        # TODO: fix this mess, because it's wrong.
-        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        logger.debug('Scheduling share dispatch for {!s}.'.format(ghid))
+        await self._dispatch_q.put((
+            self._distribute_update, ghid, origin, skip_conn
+        ))
         
-        # TODO: change send_object to just send the ghid, not the object
-        # itself, so that the app doesn't have to be constantly discarding
-        # stuff it didn't create?
-        callsheet = await self._make_callsheet(
-            ghid,
-            skip_endpoint = skip_conn
-        )
-         
-        # Note that self._obj_sender handles adding update listeners
-        await self.distribute_to_endpoints(
-            callsheet,
-            self.send_share,
-            ghid,
-            self._golcore.whoami
-        )
+    async def _distribute_share(self, ghid, origin, skip_conn):
+        ''' Perform an actual share distribution.
+        '''
+        callsheet = set()
+        private_owner = self.get_parent_token(ghid)
+        
+        # The object has a private owner, so we're exclusively going to it.
+        if private_owner:
+            try:
+                callsheet.add(
+                    self._endpoint_from_token[private_owner]
+                )
+            except KeyError:
+                logger.warning(
+                    'Connection unavailable for app token {!s}.'.format(
+                        private_owner
+                    )
+                )
+            
+        # This is not a private object, so we're going to anyone who wants it
+        else:
+            obj = self._oracle.get_object(
+                gaoclass = _Dispatchable,
+                ghid = ghid,
+                dispatch = self._dispatch,
+                ipc_core = self
+            )
+            
+            callsheet.update(
+                # Get any connections that have registered the api_id
+                self._endpoints_from_api.get_any(obj.api_id)
+            )
+            callsheet.update(
+                # Get any connections that have an instance of the object
+                self._update_listeners.get_any(obj.ghid)
+            )
+            
+        # Now, check to see if we have anything in the callsheet. Do it before
+        # discarding, so that we know if it's actually an orphan share.
+        if callsheet:
+            # Discard the skipped connection, if one is defined
+            callsheet.discard(skip_conn)
+            logger.debug(
+                'Distributing {!s} share from {!s} to {!r}.'.format(
+                    ghid, origin, callsheet
+                )
+            )
+            
+            await self._distribute(
+                self._ipc_protocol_server.share_obj,    # distr_coro
+                callsheet,
+                ghid,
+                origin
+            )
+            
+        else:
+            sharelog = _ShareLog(ghid, origin)
+            self._orphan_incoming_shares.add(sharelog)
     
-    async def schedule_update_distribution(self, ghid, skip_conn=None):
+    async def schedule_update_distribution(self, ghid, deleted=False,
+                                           skip_conn=None):
         ''' Schedules a distribution of an object update.
         '''
+        logger.debug('Scheduling update dispatch for {!s}.'.format(ghid))
+        await self._dispatch_q.put((
+            self._distribute_update, ghid, deleted, skip_conn
+        ))
         
-        if ghid not in self._private_by_ghid:
-            logger.debug('Object is NOT private; distributing.')
-            callsheet = await self._make_callsheet(
-                ghid,
-                skip_endpoint = skip_conn
-            )
-                
-            await self.distribute_to_endpoints(
+    async def _distribute_update(self, ghid, deleted, skip_conn):
+        ''' Perform an actual update distribution.
+        '''
+        # Get any connections that have an instance of the object
+        callsheet = set()
+        # Note that this call returns a frozenset, hence the copy.
+        callsheet.update(self._update_listeners.get_any(ghid))
+        # Skip the connection if one is passed.
+        callsheet.discard(skip_conn)
+        
+        logger.debug(
+            'Distributing {!s} update to {!r}.'.format(ghid, callsheet)
+        )
+        
+        if deleted:
+            await self._distribute(
+                self._ipc_protocol_server.delete_obj,   # distr_coro
                 callsheet,
-                self.send_update,
                 ghid
             )
+            
         else:
-            logger.debug('Object IS private; skipping distribution.')
+            await self._distribute(
+                self._ipc_protocol_server.update_obj,   # distr_coro
+                callsheet,
+                ghid
+            )
+            
+    async def schedule_sharesuccess_distribution(self, ghid, recipient,
+                                                 tokens):
+        ''' Schedules notification of any available connections for all
+        passed <tokens> of a share failure.
+        '''
+        logger.debug(
+            'Scheduling share success dispatch for {!s}.'.format(ghid)
+        )
+        await self._dispatch_q.put((
+            self._distribute_sharesuccess, ghid, recipient, tokens
+        ))
+    
+    async def _distribute_sharesuccess(self, ghid, recipient, tokens):
+        ''' Notify any available connections for all passed <tokens> of
+        a share failure.
+        '''
+        callsheet = set()
+        for token in tokens:
+            # Escape any keys that have gone missing during the rat race
+            try:
+                callsheet.add(self._endpoint_from_token[token])
+            except KeyError:
+                logger.info('No connection for token ' + str(token))
+        
+        # Distribute the share failure to all apps that requested its delivery
+        await self._distribute(
+            self._ipc_protocol_server.notify_share_success,   # distr_coro
+            callsheet,
+            ghid,
+            recipient
+        )
+            
+    async def schedule_sharefailure_distribution(self, ghid, recipient,
+                                                 tokens):
+        ''' Schedules notification of any available connections for all
+        passed <tokens> of a share failure.
+        '''
+        logger.debug(
+            'Scheduling share failure dispatch for {!s}.'.format(ghid)
+        )
+        await self._dispatch_q.put((
+            self._distribute_sharefailure, ghid, recipient, tokens
+        ))
+    
+    async def _distribute_sharefailure(self, ghid, recipient, tokens):
+        ''' Notify any available connections for all passed <tokens> of
+        a share failure.
+        '''
+        callsheet = set()
+        for token in tokens:
+            # Escape any keys that have gone missing during the rat race
+            try:
+                callsheet.add(self._endpoint_from_token[token])
+            except KeyError:
+                logger.info('No connection for token ' + str(token))
+        
+        # Distribute the share failure to all apps that requested its delivery
+        await self._distribute(
+            self._ipc_protocol_server.notify_share_failure,   # distr_coro
+            callsheet,
+            ghid,
+            recipient
+        )
+                
+    async def _distribute(self, distr_coro, callsheet, *args, **kwargs):
+        ''' Call distr_coro with *args and **kwargs at each of the
+        connections in the callsheet. Log (but don't raise) any errors.
+        '''
+        distributions = []
+        for connection in callsheet:
+            # For each connection...
+            distributions.append(
+                # ...in parallel, schedule a single execution of the
+                # distribution coroutine.
+                asyncio.ensure_future(distr_coro(connection, *args, **kwargs))
+            )
+            
+        # And gather the results, logging (but not raising) any exceptions
+        try:
+            distribution_task = asyncio.gather(
+                *distributions,
+                return_exceptions = True
+            )
+            results = await distribution_task
+            
+        except asyncio.CancelledError:
+            distribution_task.cancel()
+            raise
+        
+        else:
+            exceptions = [
+                result for result in results if isinstance(result, Exception)
+            ]
+            for exc in exceptions:
+                logger.error(
+                    'Error distributing share:\n' +
+                    ''.join(traceback.format_exception(
+                        type(exc),
+                        exc,
+                        exc.__traceback__
+                    ))
+                )
             
     def which_token(self, connection):
         ''' Return the token associated with the connection, or None if

@@ -127,6 +127,9 @@ class _PostmanBase(loopa.TaskLooper):
             # We can't spin this out into a thread because some of our
             # delivery mechanisms want this to have an event loop.
             await self._deliver(subscription, notification)
+            
+        except asyncio.CancelledError:
+            raise
         
         except Exception:
             logger.error(

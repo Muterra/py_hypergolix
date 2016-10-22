@@ -201,6 +201,9 @@ class _ConnectionBase(metaclass=abc.ABCMeta):
                 # When we pass to the receiver, make sure we give them a strong
                 # reference, so hashing and stuff continues to work.
                 await receiver(self, msg)
+                
+            except asyncio.CancelledError:
+                raise
             
             except Exception:
                 logger.error(
@@ -410,12 +413,16 @@ class MsgBuffer(loopa.TaskLooper):
             return_when = asyncio.FIRST_COMPLETED
         )
         
+        # Immediately cancel all pending, to prevent them finishing in the
+        # background and dropping things.
+        for task in pending:
+            task.cancel()
+        
+        # Technically, both of these can be finished.
         try:
             if incoming in finished:
                 connection, msg = incoming.result()
                 await self._handler(connection, msg)
-            else:
-                incoming.cancel()
                 
             # Cannot elif because they may both finish simultaneously enough
             # to be returned together
@@ -423,8 +430,9 @@ class MsgBuffer(loopa.TaskLooper):
                 request_name, args, kwargs = outgoing.result()
                 method = getattr(self._handler, request_name)
                 await method(*args, **kwargs)
-            else:
-                outgoing.cancel()
+                
+        except asyncio.CancelledError:
+            raise
         
         except Exception:
             logger.error(
@@ -517,7 +525,7 @@ class ConnectionManager(loopa.TaskLooper):
             
         # Need to catch this specifically, lest we accidentally do this forever
         except asyncio.CancelledError:
-            return
+            raise
             
         # The connection failed. Wait before reattempting it.
         except Exception:
@@ -922,6 +930,9 @@ class _ReqResMixin:
             try:
                 result = await handler.handle(connection, body)
                 response = await self.packit(self._SUCCESS_CODE, token, body)
+                
+            except asyncio.CancelledError:
+                raise
             
             # Response attempt failed. Pack a failed response with the
             # exception instead.
@@ -947,6 +958,9 @@ class _ReqResMixin:
         # Attempt to actually send the response
         try:
             await connection.send(response)
+            
+        except asyncio.CancelledError:
+            raise
             
         # Unsuccessful. Log the failure.
         except Exception:
@@ -1410,6 +1424,9 @@ class Autoresponder(LooperTrooper):
                 data = response_msg,
             )
             response_code = self._success_code
+            
+        except asyncio.CancelledError:
+            raise
             
         except Exception as exc:
             # Instrumentation
