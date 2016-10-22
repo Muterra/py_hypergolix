@@ -1050,7 +1050,7 @@ class _ReqResMixin:
         # key, so we don't need to call _ensure_responseable later.
         token = self._new_request_token(connection)
         # Note the use of an explicit self!
-        body = await requestor(self, connection, *args, **kwargs)
+        body, *namespace = await requestor(self, connection, *args, **kwargs)
         # Pack the request
         request = await self.packit(code, token, body)
         
@@ -1078,7 +1078,13 @@ class _ReqResMixin:
             if response_handler is not None:
                 # Again, note use of explicit self.
                 return (
-                    await response_handler(self, connection, response, exc)
+                    await response_handler(
+                        self,
+                        connection,
+                        response,
+                        exc,
+                        *namespace
+                    )
                 )
                 
             # Otherwise, make sure we have no exception, raising if we do
