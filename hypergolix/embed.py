@@ -28,12 +28,29 @@ hypergolix: A python Golix client.
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
-
 '''
 
-# TODO: audit entire library for late-binding closure safety, particularly with
-# internal function definitions. See the wrapped share handlers within
-# ipc.IPCEmbed.register_share_handler_loopsafe as an example of proper safety.
+
+# Global dependencies
+import logging
+import collections
+import weakref
+import queue
+import threading
+import traceback
+import asyncio
+import loopa
+
+# Local dependencies
+from .persistence import _GidcLite
+from .persistence import _GeocLite
+from .persistence import _GobsLite
+from .persistence import _GobdLite
+from .persistence import _GdxxLite
+from .persistence import _GarqLite
+
+from .utils import SetMap
+from .utils import WeakSetMap
 
 
 # ###############################################
@@ -41,58 +58,49 @@ hypergolix: A python Golix client.
 # ###############################################
 
 
-# Logging shenanigans
-import logging
-# Py2.7+, but this is Py3.5.1+
-from logging import NullHandler
-logging.getLogger(__name__).addHandler(NullHandler())
+logger = logging.getLogger(__name__)
+
 
 # Control * imports.
 __all__ = [
-    'HGXLink',
-    'Ghid',
-    'ObjBase',
-    'ProxyBase',
-    'PickleObj',
-    'PickleProxy',
-    'JsonObj',
-    'JsonProxy',
+    # 'PersistenceCore',
 ]
 
 
 # ###############################################
-# Library
+# Lib
 # ###############################################
+            
 
-# Submodules
-from . import accounting
-from . import app
-from . import bootstrapping
-from . import comms
-from . import core
-from . import dispatch
-from . import embed
-from . import exceptions
-from . import inquisition
-from . import ipc
-from . import logutils
-from . import objproxy
-from . import persistence
-from . import postal
-from . import privateer
-from . import remotes
-from . import rolodex
-from . import service
-from . import utils
+class HGXLink:
+    ''' Do the thing with the thing.
+    '''
+    
+    def __init__(self, ipc_port=7772, debug=False, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-# Add in toplevel stuff
-from golix import Ghid
 
-from .objproxy import ObjBase
-from .objproxy import ProxyBase
-from .objproxy import PickleObj
-from .objproxy import PickleProxy
-from .objproxy import JsonObj
-from .objproxy import JsonProxy
-
-from .embed import HGXLink
+def HGXLink(ipc_port=7772, debug=False, aengel=None):
+    if not aengel:
+        aengel = utils.Aengel()
+        
+    embed = ipc.IPCEmbed(
+        aengel = aengel,
+        threaded = True,
+        thread_name = utils._generate_threadnames('em-aure')[0],
+        debug = debug,
+    )
+    
+    embed.add_ipc_threadsafe(
+        client_class = comms.WSBasicClient,
+        host = 'localhost',
+        port = ipc_port,
+        debug = debug,
+        aengel = aengel,
+        threaded = True,
+        thread_name = utils._generate_threadnames('emb-ws')[0],
+        tls = False
+    )
+        
+    embed.aengel = aengel
+    return embed
