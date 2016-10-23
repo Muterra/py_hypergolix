@@ -85,6 +85,7 @@ from .exceptions import HandshakeError
 from .exceptions import HandshakeWarning
 from .exceptions import IPCError
 
+from .exceptions import HGXLinkError
 from .exceptions import RemoteNak
 from .exceptions import MalformedGolixPrimitive
 from .exceptions import VerificationFailure
@@ -116,6 +117,8 @@ from .dispatch import _DispatchableState
 from .dispatch import _AppDef
 
 from .objproxy import ObjBase
+
+from .embed import ApiID
 
 
 # ###############################################
@@ -339,7 +342,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         
         return app_token
         
-    @request(b'$A')
+    @request(b'+A')
     async def register_api(self, connection):
         ''' Registers the application as supporting an API. Client only.
         '''
@@ -356,7 +359,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         
         return b'\x01'
         
-    @request(b'XA')
+    @request(b'-A')
     async def deregister_api(self, connection):
         ''' Removes any existing registration for the app supporting an
         API. Client only.
@@ -533,9 +536,9 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
          state,
          is_link,
          api_id,    # Unused and set to None.
-         private,   # Unused and set to None.
+         private,   # TODO: use this.
          dynamic,   # Unused and set to None.
-         _legroom   # Unused and set to None.
+         _legroom   # TODO: use this.
          ) = self._unpack_object_def(body)
         
         if is_link:
@@ -723,40 +726,37 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
     def __init__(self, *args, **kwargs):
         ''' Add intentionally invalid init to force assemblage.
         '''
-        self._dispatch = None
-        self._oracle = None
-        self._golcore = None
-        self._rolodex = None
-        self._salmonator = None
+        super().__init__(*args, **kwargs)
+        self._hgxlink = None
         
-    def assemble(self, golix_core, oracle, dispatch, rolodex, salmonator):
+    def assemble(self, hgxlink, embed):
         # Chicken, egg, etc.
-        self._golcore = weakref.proxy(golix_core)
-        self._oracle = weakref.proxy(oracle)
-        self._dispatch = weakref.proxy(dispatch)
-        self._rolodex = weakref.proxy(rolodex)
-        self._salmonator = weakref.proxy(salmonator)
+        self._hgxlink = weakref.proxy(hgxlink)
         
     @request(b'$T')
-    async def set_token(self, connection, token=None):
+    async def set_token(self, connection, token):
         ''' Register an existing token or get a new token, or notify an
         app of its existing token.
         '''
+        if token is None:
+            return b''
+        else:
+            return token
         
     @set_token.request_handler
     async def set_token(self, connection, body):
         ''' Handles token-setting requests.
         '''
+        self._hgxlink.app_token = body
         
-    @set_token.response_handler
-    async def set_token(self, connection, response, exc):
-        ''' Handles responses to token-setting requests.
-        '''
-        
-    @request(b'$A')
-    async def register_api(self, connection):
+    @request(b'+A')
+    async def register_api(self, connection, api_id):
         ''' Registers the application as supporting an API. Client only.
         '''
+        if not isinstance(api_id, ApiID):
+            raise TypeError('api_id must be ApiID.')
+            
+        return bytes(api_id)
         
     @register_api.request_handler
     async def register_api(self, connection, body):
@@ -768,12 +768,22 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
     async def register_api(self, connection, response, exc):
         ''' Handles responses to API registration requests. Client only.
         '''
+        if exc is not None:
+            raise exc
+        elif response == b'\x01':
+            return True
+        else:
+            raise IPCError('Unknown error while registering API.')
         
-    @request(b'XA')
-    async def deregister_api(self, connection):
+    @request(b'-A')
+    async def deregister_api(self, connection, api_id):
         ''' Removes any existing registration for the app supporting an
         API. Client only.
         '''
+        if not isinstance(api_id, ApiID):
+            raise TypeError('api_id must be ApiID.')
+            
+        return bytes(api_id)
         
     @deregister_api.request_handler
     async def deregister_api(self, connection, body):
@@ -786,135 +796,221 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         ''' Handles responses to API deregistration requests. Client
         only.
         '''
+        if exc is not None:
+            raise exc
+        elif response == b'\x01':
+            return True
+        else:
+            raise IPCError('Unknown error while deregistering API.')
         
     @request(b'?I')
-    async def whoami(self, connection):
+    async def set_whoami(self, connection):
         ''' Get the current hypergolix fingerprint, or notify an app of
         the current hypergolix fingerprint.
         '''
+        return b''
         
-    @whoami.request_handler
-    async def whoami(self, connection, body):
+    @set_whoami.request_handler
+    async def set_whoami(self, connection, body):
         ''' Handles whoami requests.
         '''
+        ghid = Ghid.from_bytes(body)
+        self._hgxlink.whoami = ghid
+        return b''
         
-    @whoami.response_handler
-    async def whoami(self, connection, response, exc):
+    @set_whoami.response_handler
+    async def set_whoami(self, connection, response, exc):
         ''' Handles responses to whoami requests.
         '''
+        if exc is not None:
+            raise exc
+        else:
+            ghid = Ghid.from_bytes(response)
+            return ghid
+        
+    @request(b'$O')
+    async def startup_ghid(self, connection, ghid):
+        ''' Declare a startup object, or notify an app of its declared
+        startup object.
+        '''
+        return bytes(ghid)
+        
+    @startup_ghid.request_handler
+    async def startup_ghid(self, connection, body):
+        ''' Handles requests for startup objects.
+        '''
+        ghid = Ghid.from_bytes(body)
+        obj = await self.get(ghid, ObjBase)
+        self._hgxlink._startup_obj = obj
+        return b'\x01'
         
     @request(b'>O')
-    async def get_obj(self, connection):
+    async def get_ghid(self, connection, ghid):
         ''' Get an object with the specified address. Client only.
         '''
+        return bytes(ghid)
         
-    @get_obj.request_handler
-    async def get_obj(self, connection, body):
+    @get_ghid.request_handler
+    async def get_ghid(self, connection, body):
         ''' Handles requests for an object. Server only.
         '''
         raise NotImplementedError()
         
-    @get_obj.response_handler
-    async def get_obj(self, connection, response, exc):
+    @get_ghid.response_handler
+    async def get_ghid(self, connection, response, exc):
         ''' Handles responses to get object requests. Client only.
         '''
-        
-    @request(b'$O')
-    async def startup_obj(self, connection):
-        ''' Declare a startup object, or notify an app of its declared
-        startup object.
-        '''
-        
-    @startup_obj.request_handler
-    async def startup_obj(self, connection, body):
-        ''' Handles requests for startup objects.
-        '''
-        
-    @startup_obj.response_handler
-    async def startup_obj(self, connection, response, exc):
-        ''' Handles responses to startup object requests.
-        '''
+        if exc is not None:
+            raise exc
+            
+        return self._unpack_object_def(response)
         
     @request(b'+O')
-    async def new_obj(self, connection):
+    async def new_ghid(self, connection, state, api_id, dynamic, private,
+                       _legroom):
         ''' Create a new object, or notify an app of a new object
         created by a concurrent instance of the app on a different
         hypergolix session.
         '''
+        # If state is Ghid, it's a link.
+        if isinstance(state, Ghid):
+            is_link = True
+        else:
+            is_link = False
         
-    @new_obj.request_handler
-    async def new_obj(self, connection, body):
+        return self._pack_object_def(
+            None,               # address
+            None,               # author
+            state,              # state
+            is_link,            # is_link
+            bytes(api_id),      # api_id
+            private,            # private
+            dynamic,            # dynamic
+            _legroom            # legroom
+        )
+        
+    @new_ghid.request_handler
+    async def new_ghid(self, connection, body):
         ''' Handles requests for new objects.
         '''
+        raise NotImplementedError()
         
-    @new_obj.response_handler
-    async def new_obj(self, connection, response, exc):
+    @new_ghid.response_handler
+    async def new_ghid(self, connection, response, exc):
         ''' Handles responses to requests for new objects.
         '''
+        if exc is not None:
+            raise exc
+        
+        else:
+            return Ghid.from_bytes(response)
         
     @request(b'!O')
-    async def update_obj(self, connection):
+    async def update_ghid(self, connection, ghid, state, private, _legroom):
         ''' Update an object or notify an app of an incoming update.
         '''
+        # If state is Ghid, it's a link.
+        if isinstance(state, Ghid):
+            is_link = True
+        else:
+            is_link = False
+            
+        return self._pack_object_def(
+            ghid,       # ghid
+            None,       # Author
+            state,      # state
+            is_link,    # is_link
+            None,       # api_id
+            private,    # private
+            None,       # dynamic
+            _legroom    # legroom
+        )
         
-    @update_obj.request_handler
-    async def update_obj(self, connection, body):
+    @update_ghid.request_handler
+    async def update_ghid(self, connection, body):
         ''' Handles update object requests.
         '''
+        (address,
+         author,    # Will be unused and set to None
+         state,
+         is_link,
+         api_id,    # Will be unused and set to None
+         private,   # Will be unused and set to None
+         dynamic,   # Will be unused and set to None
+         _legroom   # Will be unused and set to None
+         ) = self._unpack_object_def(body)
         
-    @update_obj.response_handler
-    async def update_obj(self, connection, response, exc):
+        if is_link:
+            state = Ghid.from_bytes(state)
+            
+        await self._hgxlink._pull_state(address, state)
+            
+        return b'\x01'
+        
+    @update_ghid.response_handler
+    async def update_ghid(self, connection, response, exc):
         ''' Handles responses to update object requests.
         '''
+        if exc is not None:
+            raise exc
+            
+        elif response != b'\x01':
+            raise HGXLinkError('Unknown error while updating object.')
+            
+        else:
+            return True
         
     @request(b'~O')
-    async def sync_obj(self, connection):
+    async def sync_ghid(self, connection, ghid):
         ''' Manually force Hypergolix to check an object for updates.
         Client only.
         '''
+        return bytes(ghid)
         
-    @sync_obj.request_handler
-    async def sync_obj(self, connection, body):
+    @sync_ghid.request_handler
+    async def sync_ghid(self, connection, body):
         ''' Handles manual syncing requests. Server only.
         '''
         raise NotImplementedError()
         
-    @sync_obj.response_handler
-    async def sync_obj(self, connection, response, exc):
+    @sync_ghid.response_handler
+    async def sync_ghid(self, connection, response, exc):
         ''' Handles responses to manual syncing requests. Client only.
         '''
-        
-    @request(b'XO')
-    async def delete_obj(self, connection):
-        ''' Request an object deletion or notify an app of an incoming
-        deletion.
-        '''
-        
-    @delete_obj.request_handler
-    async def delete_obj(self, connection, body):
-        ''' Handles object deletion requests.
-        '''
-        
-    @delete_obj.response_handler
-    async def delete_obj(self, connection, response, exc):
-        ''' Handles responses to object deletion requests.
-        '''
+        if exc is not None:
+            raise exc
+        elif response != b'\x01':
+            raise IPCError('Unknown error while updating object.')
+        else:
+            return True
         
     @request(b'@O')
-    async def share_obj(self, connection):
+    async def share_ghid(self, connection, ghid, recipient):
         ''' Request an object share or notify an app of an incoming
         share.
         '''
+        return bytes(ghid) + bytes(recipient)
         
-    @share_obj.request_handler
-    async def share_obj(self, connection, body):
+    @share_ghid.request_handler
+    async def share_ghid(self, connection, body):
         ''' Handles object share requests.
         '''
+        ghid = Ghid.from_bytes(body[0:65])
+        origin = Ghid.from_bytes(body[65:130])
         
-    @share_obj.response_handler
-    async def share_obj(self, connection, response, exc):
+        await self._hgxlink.handle_share(ghid, origin)
+        return b'\x01'
+        
+    @share_ghid.response_handler
+    async def share_ghid(self, connection, response, exc):
         ''' Handles responses to object share requests.
         '''
+        if exc is not None:
+            raise exc
+        elif response == b'\x01':
+            return True
+        else:
+            raise IPCError('Unknown error while sharing object.')
         
     @request(b'^S')
     async def share_success(self, connection):
@@ -927,6 +1023,10 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         ''' Handles app notifications for successful shares. Client
         only.
         '''
+        # Don't raise NotImplementedError, just because this will be called for
+        # every share, and we're perfectly well aware that it isn't implemented
+        # TODO: implement this.
+        return b''
         
     @request(b'^F')
     async def share_failure(self, connection):
@@ -939,57 +1039,111 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         ''' Handles app notifications for unsuccessful shares. Client
         only.
         '''
+        # Don't raise NotImplementedError, just because this will be called for
+        # every share, and we're perfectly well aware that it isn't implemented
+        # TODO: implement this.
+        return b''
         
     @request(b'*O')
-    async def freeze_obj(self, connection):
+    async def freeze_ghid(self, connection, ghid):
         ''' Creates a new static copy of the object, or notifies an app
         of a frozen copy of an existing object created by a concurrent
         instance of the app.
         '''
+        return bytes(ghid)
         
-    @freeze_obj.request_handler
-    async def freeze_obj(self, connection, body):
+    @freeze_ghid.request_handler
+    async def freeze_ghid(self, connection, body):
         ''' Handles object freezing requests.
         '''
+        # Not currently supported.
+        raise NotImplementedError()
         
-    @freeze_obj.response_handler
-    async def freeze_obj(self, connection, response, exc):
+    @freeze_ghid.response_handler
+    async def freeze_ghid(self, connection, response, exc):
         ''' Handles responses to object freezing requests.
         '''
+        if exc is not None:
+            raise exc
+        
+        else:
+            return Ghid.from_bytes(response)
         
     @request(b'#O')
-    async def hold_obj(self, connection):
+    async def hold_ghid(self, connection, ghid):
         ''' Creates a new static binding for the object, or notifies an
         app of a static binding created by a concurrent instance of the
         app.
         '''
+        return bytes(ghid)
         
-    @hold_obj.request_handler
-    async def hold_obj(self, connection, body):
+    @hold_ghid.request_handler
+    async def hold_ghid(self, connection, body):
         ''' Handles object holding requests.
         '''
+        # Not currently supported.
+        raise NotImplementedError()
         
-    @hold_obj.response_handler
-    async def hold_obj(self, connection, response, exc):
+    @hold_ghid.response_handler
+    async def hold_ghid(self, connection, response, exc):
         ''' Handles responses to object holding requests.
         '''
+        if exc is not None:
+            raise exc
+        elif response == b'\x01':
+            return True
+        else:
+            raise IPCError('Unknown error while holding object.')
         
     @request(b'-O')
-    async def discard_obj(self, connection):
+    async def discard_ghid(self, connection, ghid):
         ''' Stop listening to object updates. Client only.
         '''
+        return bytes(ghid)
         
-    @discard_obj.request_handler
-    async def discard_obj(self, connection, body):
+    @discard_ghid.request_handler
+    async def discard_ghid(self, connection, body):
         ''' Handles object discarding requests. Server only.
         '''
         raise NotImplementedError()
         
-    @discard_obj.response_handler
-    async def discard_obj(self, connection, response, exc):
+    @discard_ghid.response_handler
+    async def discard_ghid(self, connection, response, exc):
         ''' Handles responses to object discarding requests. Client
         only.
         '''
+        if exc is not None:
+            raise exc
+        elif response == b'\x01':
+            return True
+        else:
+            raise IPCError('Unknown error while discarding object.')
+        
+    @request(b'XO')
+    async def delete_ghid(self, connection, ghid):
+        ''' Request an object deletion or notify an app of an incoming
+        deletion.
+        '''
+        return bytes(ghid)
+        
+    @delete_ghid.request_handler
+    async def delete_ghid(self, connection, body):
+        ''' Handles object deletion requests.
+        '''
+        ghid = Ghid.from_bytes(body)
+        await self._hgxlink.handle_delete(ghid)
+        return b'\x01'
+        
+    @delete_ghid.response_handler
+    async def delete_ghid(self, connection, response, exc):
+        ''' Handles responses to object deletion requests.
+        '''
+        if exc is not None:
+            raise exc
+        elif response == b'\x01':
+            return True
+        else:
+            raise IPCError('Unknown error while deleting object.')
 
 
 class IPCCore:

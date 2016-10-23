@@ -73,6 +73,8 @@ __all__ = [
     'RatchetError',
     # These are configuration errors
     'ConfigError',
+    # These are HGXLink errors
+    'HGXLinkError',
 ]
 
 
@@ -323,5 +325,12 @@ class SecretUnknown(PrivateerError, KeyError):
 class ConfigError(HypergolixException, RuntimeError):
     ''' This exception (or a subclass thereof) is raised for all failed
     operations with configuration.
+    '''
+    pass
+
+
+class HGXLinkError(HypergolixException, RuntimeError):
+    ''' This exception (or a subclass thereof) is raised for errors
+    originating in the HGXLink itself.
     '''
     pass
