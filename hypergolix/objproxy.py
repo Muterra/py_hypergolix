@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -37,8 +37,6 @@ import asyncio
 import operator
 import json
 import pickle
-
-from golix import Ghid
 
 # Local dependencies
 from .exceptions import DeadObject
@@ -59,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 # Control * imports.
 __all__ = [
-    # 'Inquisitor', 
+    # 'Inquisitor',
 ]
 
 
@@ -69,84 +67,84 @@ __all__ = [
         
 # These are all the names in a plain 'ole object()
 _OBJECT_NAMESPACE = {
-    '__class__', 
-    '__delattr__', 
-    '__dir__', 
-    '__doc__', 
-    '__eq__', 
-    '__format__', 
-    '__ge__', 
-    '__getattribute__', 
-    '__gt__', 
-    '__hash__', 
-    '__init__', 
-    '__le__', 
-    '__lt__', 
-    '__ne__', 
-    '__new__', 
-    '__reduce__', 
-    '__reduce_ex__', 
-    '__repr__', 
-    '__setattr__', 
-    '__sizeof__', 
-    '__str__', 
+    '__class__',
+    '__delattr__',
+    '__dir__',
+    '__doc__',
+    '__eq__',
+    '__format__',
+    '__ge__',
+    '__getattribute__',
+    '__gt__',
+    '__hash__',
+    '__init__',
+    '__le__',
+    '__lt__',
+    '__ne__',
+    '__new__',
+    '__reduce__',
+    '__reduce_ex__',
+    '__repr__',
+    '__setattr__',
+    '__sizeof__',
+    '__str__',
     '__subclasshook__'
 }
 
 # These are all of the names in a user-defined class object, as best I can tell
 _USER_NAMESPACE = {
-    '__class__', 
-    '__delattr__', 
-    '__dict__', 
-    '__dir__', 
-    '__doc__', 
-    '__eq__', 
-    '__format__', 
-    '__ge__', 
-    '__getattr__', 
-    '__getattribute__', 
-    '__gt__', 
-    '__hash__', 
-    '__init__', 
-    '__le__', 
-    '__lt__', 
-    '__module__', 
-    '__ne__', 
-    '__new__', 
-    '__reduce__', 
-    '__reduce_ex__', 
-    '__repr__', 
-    '__setattr__', 
-    '__sizeof__', 
-    '__str__', 
-    '__subclasshook__', 
-    '__weakref__', 
+    '__class__',
+    '__delattr__',
+    '__dict__',
+    '__dir__',
+    '__doc__',
+    '__eq__',
+    '__format__',
+    '__ge__',
+    '__getattr__',
+    '__getattribute__',
+    '__gt__',
+    '__hash__',
+    '__init__',
+    '__le__',
+    '__lt__',
+    '__module__',
+    '__ne__',
+    '__new__',
+    '__reduce__',
+    '__reduce_ex__',
+    '__repr__',
+    '__setattr__',
+    '__sizeof__',
+    '__str__',
+    '__subclasshook__',
+    '__weakref__',
 }
 _USER_NAMESPACE_2 = {
-    '__init__', 
-    '__doc__', 
-    '__module__', 
-    '__gt__', 
-    '__subclasshook__', 
-    '__dir__', 
-    '__eq__', 
-    '__le__', 
-    '__dict__', 
-    '__class__', 
-    '__ge__', 
-    '__format__', 
-    '__hash__', 
-    '__repr__', 
-    '__lt__', 
-    '__setattr__', 
-    '__weakref__', 
-    '__delattr__', 
-    '__getattribute__', 
-    '__reduce_ex__', 
-    '__sizeof__', 
-    '__ne__', 
-    '__reduce__', 
-    '__str__', 
+    '__init__',
+    '__doc__',
+    '__module__',
+    '__gt__',
+    '__subclasshook__',
+    '__dir__',
+    '__eq__',
+    '__le__',
+    '__dict__',
+    '__class__',
+    '__ge__',
+    '__format__',
+    '__hash__',
+    '__repr__',
+    '__lt__',
+    '__setattr__',
+    '__weakref__',
+    '__delattr__',
+    '__getattribute__',
+    '__reduce_ex__',
+    '__sizeof__',
+    '__ne__',
+    '__reduce__',
+    '__str__',
     '__new__'
 }
 
@@ -154,18 +152,18 @@ _USER_NAMESPACE_2 = {
 class ObjBase:
     ''' This is a base object to make an object hypergolix-aware.
     
-    TODO: separate this out into a DoublePlusBase class that exposes 
+    TODO: separate this out into a DoublePlusBase class that exposes
     only name-mangled methods, and then turn this into a wrapper around
     that, so that the ObjBase objects can expose more concise access to
-    attributes and methods than "hgx_<something>", ie ObjBase.state 
+    attributes and methods than "hgx_<something>", ie ObjBase.state
     instead of (better yet, in addition to) ObjBase.hgx_state. Then, the
     proxybase can also subclass DoublePlusBase.
     '''
     _HASHMIX_3141592 = 3141592
     _hgx_DEFAULT_API_ID = bytes(63) + b'\x01'
     
-    def __init__(self, hgxlink, state, api_id, dynamic, private, ghid=None, 
-                binder=None):
+    def __init__(self, hgxlink, state, api_id, dynamic, private, ghid=None,
+                 binder=None, _legroom=None):
         ''' Allocates the object locally, but does NOT create it. You
         have to explicitly call hgx_push, hgx_push_threadsafe, or
         hgx_push_loopsafe to actually create the sync'd object and get
@@ -188,6 +186,8 @@ class ObjBase:
         self._dynamic_3141592 = bool(dynamic)
         # TODO: move this into hgxlink.subscribe_to_updates
         self._isalive_3141592 = True
+        # TODO: think about this
+        self._legroom_3141592 = _legroom
         
     @property
     def hgx_state(self):
@@ -200,7 +200,7 @@ class ObjBase:
         
     @hgx_state.setter
     def hgx_state(self, value):
-        ''' Allow direct overwriting of the internal state. Does not 
+        ''' Allow direct overwriting of the internal state. Does not
         ensure serializability, nor does it push upstream.
         '''
         self._proxy_3141592 = value
@@ -214,7 +214,7 @@ class ObjBase:
         
     @property
     def hgx_api_id(self):
-        ''' An identifier for the kind of object. Used during sharing 
+        ''' An identifier for the kind of object. Used during sharing
         and delivery. Read-only.
         '''
         # Just, yknow, proxy to our internal normalization.
@@ -225,7 +225,7 @@ class ObjBase:
         
     @property
     def hgx_private(self):
-        ''' A private object is only accessible by this particular 
+        ''' A private object is only accessible by this particular
         application, with this particular user. Subsequent instances of
         the application will require the same app_token to retrieve any
         of its private objects. Read-only.
@@ -242,7 +242,7 @@ class ObjBase:
         
     @property
     def hgx_binder(self):
-        ''' Essentially the object's author... more or less. Sometimes 
+        ''' Essentially the object's author... more or less. Sometimes
         less.
         '''
         return self._binder_3141592
@@ -260,8 +260,8 @@ class ObjBase:
         garbage collection by the Python process.
         
         May be:
-            'strong'    Object is retained until hgx_delete is 
-                        explicitly called, regardless of python runtime 
+            'strong'    Object is retained until hgx_delete is
+                        explicitly called, regardless of python runtime
                         behavior / garbage collection. Default.
             'weak'      Object is retained until hgx_delete is
                         explicitly called, or when python runtime
@@ -296,7 +296,7 @@ class ObjBase:
         object will also stop receiving updates from hgxlink.
         
         As examples:
-            + ObjBase.hgx_recast(<PickleProxy object>) returns the object 
+            + ObjBase.hgx_recast(<PickleProxy object>) returns the object
                 recast as an ObjBase
             + PickleProxy.hgx_recast(<ObjBase object>) returns the object
                 recast as a PickleProxy
@@ -310,7 +310,7 @@ class ObjBase:
         
         # We are going from parent to child
         elif issubclass(cls, type(obj)):
-            # We still need to do this, in case something got weird with 
+            # We still need to do this, in case something got weird with
             # serialization.
             # Re-pack the object, and then unpack it.
             state = await obj._hgx_pack(obj._proxy_3141592)
@@ -337,7 +337,7 @@ class ObjBase:
         # Copy over the existing isalive and callback.
         recast._callback_3141592 = obj._callback_3141592
         recast._isalive_3141592 = obj._isalive_3141592
-        # Now transfer the subscription to the new object and render the old 
+        # Now transfer the subscription to the new object and render the old
         # inoperable
         obj._hgxlink_3141592.subscribe_to_updates(recast)
         obj._render_inop_3141592()
@@ -358,7 +358,7 @@ class ObjBase:
         object will also stop receiving updates from hgxlink.
         
         As examples:
-            + ObjBase.hgx_recast(<PickleProxy object>) returns the object 
+            + ObjBase.hgx_recast(<PickleProxy object>) returns the object
                 recast as an ObjBase
             + PickleProxy.hgx_recast(<ObjBase object>) returns the object
                 recast as a PickleProxy
@@ -383,7 +383,7 @@ class ObjBase:
         object will also stop receiving updates from hgxlink.
         
         As examples:
-            + ObjBase.hgx_recast(<PickleProxy object>) returns the object 
+            + ObjBase.hgx_recast(<PickleProxy object>) returns the object
                 recast as an ObjBase
             + PickleProxy.hgx_recast(<ObjBase object>) returns the object
                 recast as a PickleProxy
@@ -400,13 +400,13 @@ class ObjBase:
         one callback, of any type (internal, threadsafe, loopsafe), at
         any given time.
         
-        This CALLBACK will be called from within the IPC embed's 
+        This CALLBACK will be called from within the IPC embed's
         internal event loop.
         
         This METHOD may be called anywhere.
         '''
-        # Any handlers passed to us this way can already be called natively 
-        # from within our own event loop, so they just need to be wrapped such 
+        # Any handlers passed to us this way can already be called natively
+        # from within our own event loop, so they just need to be wrapped such
         # that they never raise.
         async def wrap_callback(*args, callback=callback, **kwargs):
             try:
@@ -429,7 +429,7 @@ class ObjBase:
         This CALLBACK will be called from within a single-use, dedicated
         thread.
         
-        This METHOD may be called anywhere except from within the 
+        This METHOD may be called anywhere except from within the
         internal event loop.
         '''
         # For simplicity, wrap the handler, so that any shares can be called
@@ -548,7 +548,7 @@ class ObjBase:
             raise Unsharable('Cannot share a private object.')
         else:
             await self._hgxlink_3141592._make_share(
-                obj = self, 
+                obj = self,
                 recipient = recipient
             )
 
@@ -576,7 +576,7 @@ class ObjBase:
             raise DeadObject()
         elif not self.hgx_dynamic:
             raise LocallyImmutable('Cannot freeze a static object.')
-        else:    
+        else:
             frozen = await self._hgxlink_3141592._make_freeze(obj=self)
             return frozen
 
@@ -672,14 +672,14 @@ class ObjBase:
     
     @staticmethod
     async def _hgx_pack(state):
-        ''' Packs the object into bytes. For the base proxy, treat the 
+        ''' Packs the object into bytes. For the base proxy, treat the
         input as bytes and return immediately.
         '''
         return state
     
     @staticmethod
     async def _hgx_unpack(packed):
-        ''' Unpacks the object from bytes. For the base proxy, treat the 
+        ''' Unpacks the object from bytes. For the base proxy, treat the
         input as bytes and return immediately.
         '''
         return packed
@@ -699,7 +699,7 @@ class ObjBase:
             raise ValueError('Illegal api_id.')
         
     def _render_inop_3141592(self):
-        ''' Renders the object locally inoperable, either through a 
+        ''' Renders the object locally inoperable, either through a
         delete or discard.
         '''
         self._isalive_3141592 = False
@@ -738,16 +738,16 @@ class ObjBase:
     def __repr__(self):
         classname = type(self).__name__
         return (
-            '<' + classname + ' with state ' + repr(self._proxy_3141592) + 
+            '<' + classname + ' with state ' + repr(self._proxy_3141592) +
             ' at ' + str(self.hgx_ghid) + '>'
         )
         
     def __hash__(self):
-        ''' Have a hash, if our ghid address is defined; otherwise, 
-        return None (which will in turn cause Python to raise a 
+        ''' Have a hash, if our ghid address is defined; otherwise,
+        return None (which will in turn cause Python to raise a
         TypeError in the parent call).
         
-        The hashmix is a random value that has been included to allow 
+        The hashmix is a random value that has been included to allow
         faster hash bucket differentiation between ghids and objproxies.
         '''
         if self.hgx_ghid is not None:
@@ -776,8 +776,8 @@ class ObjBase:
             
         except AttributeError as exc:
             raise TypeError(
-                'Incomparable types: ' + 
-                type(self).__name__ + ', ' + 
+                'Incomparable types: ' +
+                type(self).__name__ + ', ' +
                 type(other).__name__
             ) from exc
             
@@ -791,7 +791,7 @@ class ProxyBase(ObjBase):
     
     Several "magic method" / "dunder methods" are explicitly sent to the
     proxy object. If the proxy object does not support those methods,
-    they will raise... something or other (it's a little hard to tell, 
+    they will raise... something or other (it's a little hard to tell,
     and varies on a case-by-case basis). These are:
         1. __str__
         2. __format__
@@ -838,38 +838,38 @@ class ProxyBase(ObjBase):
         39. _hgx_pack
         40. _hgx_unpack
         41. _hgx_DEFAULT_API_ID
-    (as well as some name-mangled internal attributes; see note [3] 
+    (as well as some name-mangled internal attributes; see note [3]
     below).
     
-    [1] Proxies are hashable if their ghids are defined, but unhashable 
+    [1] Proxies are hashable if their ghids are defined, but unhashable
     otherwise. Note, however, that their hashes have nothing to do with
-    their proxied objects. Also note that 
+    their proxied objects. Also note that
         isinstance(obj, collections.Hashable)
-    will always identify ObjProxies as hashable, regardless of their 
+    will always identify ObjProxies as hashable, regardless of their
     actual runtime behavior.
     
-    [2] Equality comparisons, on the other hand, reference the proxy's 
-    state directly. So if the states compare equally, the two ObjProxies 
-    will compare equally, regardless of the proxy state (ghid, api_id, 
+    [2] Equality comparisons, on the other hand, reference the proxy's
+    state directly. So if the states compare equally, the two ObjProxies
+    will compare equally, regardless of the proxy state (ghid, api_id,
     etc).
     
     [3] The primary concern here is NOT enforcing access restrictions,
     which you cannot do in python anyways (we're all consenting adults!)
-    but rather to prevent name conflicts, particularly since we're 
+    but rather to prevent name conflicts, particularly since we're
     passing through attribute access to arbitrary proxy objets. As such,
     instead of manually enumerating all of the possible implementation
-    detail methods, we're name mangling them by postpending '_3141592' 
+    detail methods, we're name mangling them by postpending '_3141592'
     to the method name. We're doing this instead of the default python
     name mangling, because we'd like them to be trivially available to
     subclasses (if necessary).
     
     Side note: as per python docs, support for magic methods ("dunder",
-    or "double underscore" methods) is only reliable if declared 
+    or "double underscore" methods) is only reliable if declared
     directly and explicitly within the class.
     '''
     _HASHMIX_3141592 = 936930316
     
-    # Declare a static namespace, so that all of these attributes will 
+    # Declare a static namespace, so that all of these attributes will
     # be accessible HERE using getattr/setattr. Because the proxy lookup
     # for setattr (in particular) first checks to see if we can find it
     # locally, by setting the namespace like this for the class itself,
@@ -884,8 +884,8 @@ class ProxyBase(ObjBase):
     _isalive_3141592 = None
     _callback_3141592 = None
     
-    def __init__(self, hgxlink, state, api_id, dynamic, private, ghid=None, 
-                binder=None):
+    def __init__(self, hgxlink, state, api_id, dynamic, private, ghid=None,
+                 binder=None):
         ''' Allocates the object locally, but does NOT create it. You
         have to explicitly call hgx_push, hgx_push_threadsafe, or
         hgx_push_loopsafe to actually create the sync'd object and get
@@ -896,7 +896,15 @@ class ProxyBase(ObjBase):
         if isinstance(state, ObjBase):
             state = state._proxy_3141592
             
-        super().__init__(hgxlink, state, api_id, dynamic, private, ghid, binder)
+        super().__init__(
+            hgxlink,
+            state,
+            api_id,
+            dynamic,
+            private,
+            ghid,
+            binder
+        )
         
     @property
     def hgx_state(self):
@@ -909,7 +917,7 @@ class ProxyBase(ObjBase):
         
     @hgx_state.setter
     def hgx_state(self, value):
-        ''' Allow direct overwriting of the internal state. Does not 
+        ''' Allow direct overwriting of the internal state. Does not
         ensure serializability, nor does it push upstream.
         '''
         # For now, do this to extract the state from any proxy objects, instead
@@ -922,14 +930,14 @@ class ProxyBase(ObjBase):
     def __repr__(self):
         classname = type(self).__name__
         return (
-            '<' + classname + ' to ' + repr(self._proxy_3141592) + 
+            '<' + classname + ' to ' + repr(self._proxy_3141592) +
             ' at ' + str(self.hgx_ghid) + '>'
         )
             
     def __setattr__(self, name, value):
-        ''' Redirect all setting of currently missing attributes to the 
-        proxy. This implies that setting anything for the first time 
-        will require 
+        ''' Redirect all setting of currently missing attributes to the
+        proxy. This implies that setting anything for the first time
+        will require
         '''
         # Try to GET the attribute with US, the actual proxy.
         try:
@@ -945,14 +953,14 @@ class ProxyBase(ObjBase):
         
     def __getattr__(self, name):
         ''' Redirect all missing attribute lookups to the proxy.
-        Note that getattr is only called if the normal lookup fails. So, 
-        we don't need to check for an attributeerror locally, because 
+        Note that getattr is only called if the normal lookup fails. So,
+        we don't need to check for an attributeerror locally, because
         we're guaranteed to get one.
         '''
         return getattr(self._proxy_3141592, name)
         
     def __delattr__(self, name):
-        ''' Permanently prevent deletion of all local attributes, and 
+        ''' Permanently prevent deletion of all local attributes, and
         pass any others to the referenced object.
         '''
         # Try to GET the attribute with US, the actual proxy.
@@ -1128,7 +1136,7 @@ class ProxyBase(ObjBase):
     def __bool__(self):
         ''' Wrap __bool__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return bool(self._proxy_3141592)
@@ -1136,7 +1144,7 @@ class ProxyBase(ObjBase):
     def __bytes__(self):
         ''' Wrap __bytes__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return bytes(self._proxy_3141592)
@@ -1144,7 +1152,7 @@ class ProxyBase(ObjBase):
     def __str__(self):
         ''' Wrap __str__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return str(self._proxy_3141592)
@@ -1152,7 +1160,7 @@ class ProxyBase(ObjBase):
     def __format__(self, *args, **kwargs):
         ''' Wrap __format__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return format(self._proxy_3141592, *args, **kwargs)
@@ -1160,7 +1168,7 @@ class ProxyBase(ObjBase):
     def __len__(self):
         ''' Wrap __len__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return len(self._proxy_3141592)
@@ -1168,7 +1176,7 @@ class ProxyBase(ObjBase):
     def __length_hint__(self):
         ''' Wrap __length_hint__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return operator.length_hint(self._proxy_3141592)
@@ -1176,7 +1184,7 @@ class ProxyBase(ObjBase):
     def __call__(self, *args, **kwargs):
         ''' Wrap __call__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return self._proxy_3141592(*args, **kwargs)
@@ -1184,7 +1192,7 @@ class ProxyBase(ObjBase):
     def __getitem__(self, key):
         ''' Wrap __getitem__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return self._proxy_3141592[key]
@@ -1192,7 +1200,7 @@ class ProxyBase(ObjBase):
     def __missing__(self, key):
         ''' Wrap __missing__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return self._proxy_3141592.__missing__(key)
@@ -1200,7 +1208,7 @@ class ProxyBase(ObjBase):
     def __setitem__(self, key, value):
         ''' Wrap __setitem__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         self._proxy_3141592[key] = value
@@ -1208,7 +1216,7 @@ class ProxyBase(ObjBase):
     def __delitem__(self, key):
         ''' Wrap __delitem__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         del self._proxy_3141592[key]
@@ -1216,7 +1224,7 @@ class ProxyBase(ObjBase):
     def __iter__(self):
         ''' Wrap __iter__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return iter(self._proxy_3141592)
@@ -1224,7 +1232,7 @@ class ProxyBase(ObjBase):
     def __reversed__(self):
         ''' Wrap __reversed__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return reversed(self._proxy_3141592)
@@ -1232,7 +1240,7 @@ class ProxyBase(ObjBase):
     def __contains__(self, item):
         ''' Wrap __contains__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return item in self._proxy_3141592
@@ -1240,7 +1248,7 @@ class ProxyBase(ObjBase):
     def __enter__(self):
         ''' Wrap __enter__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return self._proxy_3141592.__enter__()
@@ -1248,7 +1256,7 @@ class ProxyBase(ObjBase):
     def __exit__(self, *args, **kwargs):
         ''' Wrap __exit__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return self._proxy_3141592.__exit__(*args, **kwargs)
@@ -1256,7 +1264,7 @@ class ProxyBase(ObjBase):
     def __aenter__(self):
         ''' Wrap __aenter__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return self._proxy_3141592.__aenter__()
@@ -1264,7 +1272,7 @@ class ProxyBase(ObjBase):
     def __aexit__(self, *args, **kwargs):
         ''' Wrap __aexit__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return self._proxy_3141592.__aexit__(*args, **kwargs)
@@ -1272,7 +1280,7 @@ class ProxyBase(ObjBase):
     def __await__(self):
         ''' Wrap __await__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return self._proxy_3141592.__await__()
@@ -1280,7 +1288,7 @@ class ProxyBase(ObjBase):
     def __aiter__(self):
         ''' Wrap __aiter__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return self._proxy_3141592.__aiter__()
@@ -1288,7 +1296,7 @@ class ProxyBase(ObjBase):
     def __anext__(self):
         ''' Wrap __anext__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return self._proxy_3141592.__anext__()
@@ -1296,12 +1304,12 @@ class ProxyBase(ObjBase):
     def __add__(self, other):
         ''' Wrap __add__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return self._proxy_3141592 + other._proxy_3141592
@@ -1312,12 +1320,12 @@ class ProxyBase(ObjBase):
     def __sub__(self, other):
         ''' Wrap __sub__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return self._proxy_3141592 - other._proxy_3141592
@@ -1328,12 +1336,12 @@ class ProxyBase(ObjBase):
     def __mul__(self, other):
         ''' Wrap __mul__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return self._proxy_3141592 * other._proxy_3141592
@@ -1344,12 +1352,12 @@ class ProxyBase(ObjBase):
     def __matmul__(self, other):
         ''' Wrap __matmul__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return self._proxy_3141592 @ other._proxy_3141592
@@ -1360,12 +1368,12 @@ class ProxyBase(ObjBase):
     def __truediv__(self, other):
         ''' Wrap __truediv__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return self._proxy_3141592 / other._proxy_3141592
@@ -1376,12 +1384,12 @@ class ProxyBase(ObjBase):
     def __floordiv__(self, other):
         ''' Wrap __floordiv__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return self._proxy_3141592 // other._proxy_3141592
@@ -1392,12 +1400,12 @@ class ProxyBase(ObjBase):
     def __mod__(self, other):
         ''' Wrap __mod__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return self._proxy_3141592 % other._proxy_3141592
@@ -1408,64 +1416,64 @@ class ProxyBase(ObjBase):
     def __divmod__(self, other, *args, **kwargs):
         ''' Wrap __divmod__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return divmod(
-                self._proxy_3141592, 
+                self._proxy_3141592,
                 other._proxy_3141592,
-                *args, 
+                *args,
                 **kwargs
             )
         
         else:
             return divmod(
-                self._proxy_3141592, 
+                self._proxy_3141592,
                 other,
-                *args, 
+                *args,
                 **kwargs
             )
             
     def __pow__(self, other, *args, **kwargs):
         ''' Wrap __pow__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return pow(
-                self._proxy_3141592, 
+                self._proxy_3141592,
                 other._proxy_3141592,
-                *args, 
+                *args,
                 **kwargs
             )
         
         else:
             return pow(
-                self._proxy_3141592, 
+                self._proxy_3141592,
                 other,
-                *args, 
+                *args,
                 **kwargs
             )
             
     def __lshift__(self, other):
         ''' Wrap __lshift__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return self._proxy_3141592 << other._proxy_3141592
@@ -1476,12 +1484,12 @@ class ProxyBase(ObjBase):
     def __rshift__(self, other):
         ''' Wrap __rshift__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return self._proxy_3141592 >> other._proxy_3141592
@@ -1492,12 +1500,12 @@ class ProxyBase(ObjBase):
     def __and__(self, other):
         ''' Wrap __and__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return self._proxy_3141592 & other._proxy_3141592
@@ -1508,12 +1516,12 @@ class ProxyBase(ObjBase):
     def __xor__(self, other):
         ''' Wrap __xor__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return self._proxy_3141592 ^ other._proxy_3141592
@@ -1524,12 +1532,12 @@ class ProxyBase(ObjBase):
     def __or__(self, other):
         ''' Wrap __or__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
             return self._proxy_3141592 | other._proxy_3141592
@@ -1540,17 +1548,17 @@ class ProxyBase(ObjBase):
     def __radd__(self, other):
         ''' Wrap __radd__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 + self._proxy_3141592
         
@@ -1560,17 +1568,17 @@ class ProxyBase(ObjBase):
     def __rsub__(self, other):
         ''' Wrap __rsub__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 - self._proxy_3141592
         
@@ -1580,17 +1588,17 @@ class ProxyBase(ObjBase):
     def __rmul__(self, other):
         ''' Wrap __rmul__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 * self._proxy_3141592
         
@@ -1600,17 +1608,17 @@ class ProxyBase(ObjBase):
     def __rmatmul__(self, other):
         ''' Wrap __rmatmul__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 @ self._proxy_3141592
         
@@ -1620,17 +1628,17 @@ class ProxyBase(ObjBase):
     def __rtruediv__(self, other):
         ''' Wrap __rtruediv__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 / self._proxy_3141592
         
@@ -1640,17 +1648,17 @@ class ProxyBase(ObjBase):
     def __rfloordiv__(self, other):
         ''' Wrap __rfloordiv__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 // self._proxy_3141592
         
@@ -1660,17 +1668,17 @@ class ProxyBase(ObjBase):
     def __rmod__(self, other):
         ''' Wrap __rmod__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 % self._proxy_3141592
         
@@ -1680,17 +1688,17 @@ class ProxyBase(ObjBase):
     def __rdivmod__(self, other):
         ''' Wrap __rdivmod__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return divmod(other._proxy_3141592, self._proxy_3141592)
         
@@ -1700,17 +1708,17 @@ class ProxyBase(ObjBase):
     def __rpow__(self, other):
         ''' Wrap __rpow__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return pow(other._proxy_3141592, self._proxy_3141592)
         
@@ -1720,17 +1728,17 @@ class ProxyBase(ObjBase):
     def __rlshift__(self, other):
         ''' Wrap __rlshift__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 << self._proxy_3141592
         
@@ -1740,17 +1748,17 @@ class ProxyBase(ObjBase):
     def __rrshift__(self, other):
         ''' Wrap __rrshift__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 >> self._proxy_3141592
         
@@ -1760,17 +1768,17 @@ class ProxyBase(ObjBase):
     def __rand__(self, other):
         ''' Wrap __rand__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 & self._proxy_3141592
         
@@ -1780,17 +1788,17 @@ class ProxyBase(ObjBase):
     def __rxor__(self, other):
         ''' Wrap __rxor__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 ^ self._proxy_3141592
         
@@ -1800,17 +1808,17 @@ class ProxyBase(ObjBase):
     def __ror__(self, other):
         ''' Wrap __ror__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no reversed operations are passed *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             return other._proxy_3141592 | self._proxy_3141592
         
@@ -1820,17 +1828,17 @@ class ProxyBase(ObjBase):
     def __iadd__(self, other):
         ''' Wrap __iadd__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 += other._proxy_3141592
         
@@ -1842,17 +1850,17 @@ class ProxyBase(ObjBase):
     def __isub__(self, other):
         ''' Wrap __isub__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 -= other._proxy_3141592
         
@@ -1864,17 +1872,17 @@ class ProxyBase(ObjBase):
     def __imul__(self, other):
         ''' Wrap __imul__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 *= other._proxy_3141592
         
@@ -1886,17 +1894,17 @@ class ProxyBase(ObjBase):
     def __imatmul__(self, other):
         ''' Wrap __imatmul__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 @= other._proxy_3141592
         
@@ -1908,17 +1916,17 @@ class ProxyBase(ObjBase):
     def __itruediv__(self, other):
         ''' Wrap __itruediv__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 /= other._proxy_3141592
         
@@ -1930,17 +1938,17 @@ class ProxyBase(ObjBase):
     def __ifloordiv__(self, other):
         ''' Wrap __ifloordiv__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 //= other._proxy_3141592
         
@@ -1952,17 +1960,17 @@ class ProxyBase(ObjBase):
     def __imod__(self, other):
         ''' Wrap __imod__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 %= other._proxy_3141592
         
@@ -1974,17 +1982,17 @@ class ProxyBase(ObjBase):
     def __ipow__(self, other):
         ''' Wrap __ipow__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 **= other._proxy_3141592
         
@@ -1996,17 +2004,17 @@ class ProxyBase(ObjBase):
     def __ilshift__(self, other):
         ''' Wrap __ilshift__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 <<= other._proxy_3141592
         
@@ -2018,17 +2026,17 @@ class ProxyBase(ObjBase):
     def __irshift__(self, other):
         ''' Wrap __irshift__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 >>= other._proxy_3141592
         
@@ -2040,17 +2048,17 @@ class ProxyBase(ObjBase):
     def __iand__(self, other):
         ''' Wrap __iand__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 &= other._proxy_3141592
         
@@ -2062,17 +2070,17 @@ class ProxyBase(ObjBase):
     def __ixor__(self, other):
         ''' Wrap __ixor__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 ^= other._proxy_3141592
         
@@ -2084,17 +2092,17 @@ class ProxyBase(ObjBase):
     def __ior__(self, other):
         ''' Wrap __ior__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         # Note that no incremental operations are PASSED *args or **kwargs
         
         # We could do this to *any* ObjBase, but I don't like the idea of
         # forcibly upgrading those, since they might do, for example, some
-        # different comparison operation or something. This seems like a 
+        # different comparison operation or something. This seems like a
         # much safer bet.
         if isinstance(other, ProxyBase):
-            # Other proxies are very likely to fail, since the reveresed call 
+            # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
             self._proxy_3141592 |= other._proxy_3141592
         
@@ -2106,7 +2114,7 @@ class ProxyBase(ObjBase):
     def __neg__(self):
         ''' Wrap __neg__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return -(self._proxy_3141592)
@@ -2114,7 +2122,7 @@ class ProxyBase(ObjBase):
     def __pos__(self):
         ''' Wrap __pos__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return +(self._proxy_3141592)
@@ -2122,7 +2130,7 @@ class ProxyBase(ObjBase):
     def __abs__(self):
         ''' Wrap __abs__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return abs(self._proxy_3141592)
@@ -2130,7 +2138,7 @@ class ProxyBase(ObjBase):
     def __invert__(self):
         ''' Wrap __invert__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return ~(self._proxy_3141592)
@@ -2138,7 +2146,7 @@ class ProxyBase(ObjBase):
     def __complex__(self):
         ''' Wrap __complex__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return complex(self._proxy_3141592)
@@ -2146,7 +2154,7 @@ class ProxyBase(ObjBase):
     def __int__(self):
         ''' Wrap __int__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return int(self._proxy_3141592)
@@ -2154,7 +2162,7 @@ class ProxyBase(ObjBase):
     def __float__(self):
         ''' Wrap __float__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return float(self._proxy_3141592)
@@ -2162,7 +2170,7 @@ class ProxyBase(ObjBase):
     def __round__(self):
         ''' Wrap __round__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return round(self._proxy_3141592)
@@ -2170,25 +2178,25 @@ class ProxyBase(ObjBase):
     def __index__(self):
         ''' Wrap __index__ to pass into the _proxy object.
         
-        This method was (partially?) programmatically generated by a 
+        This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
         return operator.index(self._proxy_3141592)
             
 
 class PickleObj(ObjBase):
-    ''' An ObjProxy that uses Pickle for serialization. DO NOT, UNDER 
+    ''' An ObjProxy that uses Pickle for serialization. DO NOT, UNDER
     ANY CIRCUMSTANCE, LOAD A PICKLEPROXY FROM AN UNTRUSTED SOURCE. As
-    pickled objects can control their own pickling process, and python 
+    pickled objects can control their own pickling process, and python
     can execute arbitrary shell commands, PickleProxies can be trivially
-    used as a rootkit (within the privilege confines of the current 
+    used as a rootkit (within the privilege confines of the current
     python process).
     '''
     _hgx_DEFAULT_API_ID = bytes(63) + b'\x02'
     
     @staticmethod
     async def _hgx_pack(state):
-        ''' Packs the object into bytes. For the base proxy, treat the 
+        ''' Packs the object into bytes. For the base proxy, treat the
         input as bytes and return immediately.
         '''
         try:
@@ -2203,7 +2211,7 @@ class PickleObj(ObjBase):
     
     @staticmethod
     async def _hgx_unpack(packed):
-        ''' Unpacks the object from bytes. For the base proxy, treat the 
+        ''' Unpacks the object from bytes. For the base proxy, treat the
         input as bytes and return immediately.
         '''
         try:
@@ -2230,7 +2238,7 @@ class JsonObj(ObjBase):
     
     @staticmethod
     async def _hgx_pack(state):
-        ''' Packs the object into bytes. For the base proxy, treat the 
+        ''' Packs the object into bytes. For the base proxy, treat the
         input as bytes and return immediately.
         '''
         try:
@@ -2246,7 +2254,7 @@ class JsonObj(ObjBase):
     
     @staticmethod
     async def _hgx_unpack(packed):
-        ''' Unpacks the object from bytes. For the base proxy, treat the 
+        ''' Unpacks the object from bytes. For the base proxy, treat the
         input as bytes and return immediately.
         '''
         try:
