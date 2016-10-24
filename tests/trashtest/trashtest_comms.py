@@ -74,6 +74,8 @@ ERROR_LOOKUP = {
 
 
 class TestParrot(metaclass=RequestResponseProtocol, error_codes=ERROR_LOOKUP):
+    STATIC_RESPONSE = b'\xFF'
+    
     @request(b'!P')
     async def parrot(self, connection, msg):
         self.flag.clear()
@@ -82,6 +84,33 @@ class TestParrot(metaclass=RequestResponseProtocol, error_codes=ERROR_LOOKUP):
     @parrot.request_handler
     async def parrot(self, connection, body):
         return body
+        
+    @parrot.response_handler
+    async def parrot(self, connection, response, exc):
+        self.result = response
+        self.flag.set()
+    
+    @request(b'+P')
+    async def incr_parrot(self, connection, msg):
+        self.flag.clear()
+        return msg
+        
+    @incr_parrot.request_handler
+    async def incr_parrot(self, connection, body):
+        return self.STATIC_RESPONSE + body
+        
+    @incr_parrot.response_handler
+    async def incr_parrot(self, connection, response, exc):
+        self.result = response
+        self.flag.set()
+        
+    @request(b'!S')
+    async def static(self, connection):
+        return b''
+        
+    @static.request_handler
+    async def static(self, connection, body):
+        return self.STATIC_RESPONSE
         
     @parrot.response_handler
     async def parrot(self, connection, response, exc):
@@ -215,21 +244,57 @@ class WSBasicTrashTest(unittest.TestCase):
             msg = ''.join([chr(random.randint(0, 255)) for i in range(0, 25)])
             msg = msg.encode('utf-8')
             
+            # Test a standart parrot
             await_coroutine_threadsafe(
                 coro = self.client1.parrot(msg, timeout=1),
                 loop = self.client1_commander._loop
             )
             self.assertEqual(msg, self.client1_protocol.check_result())
             
+            # Test a version of parrot that modifies the input
+            await_coroutine_threadsafe(
+                coro = self.client1.incr_parrot(msg, timeout=1),
+                loop = self.client1_commander._loop
+            )
+            self.assertEqual(
+                self.client1_protocol.STATIC_RESPONSE + msg,
+                self.client1_protocol.check_result()
+            )
+            
+            # Test a static response
+            response = await_coroutine_threadsafe(
+                coro = self.client1.static(timeout=1),
+                loop = self.client1_commander._loop
+            )
+            self.assertEqual(response, self.client1_protocol.STATIC_RESPONSE)
+            
         for ii in range(TEST_ITERATIONS):
             msg = ''.join([chr(random.randint(0, 255)) for i in range(0, 25)])
             msg = msg.encode('utf-8')
             
+            # Test a standart parrot
             await_coroutine_threadsafe(
                 coro = self.client2.parrot(msg, timeout=1),
                 loop = self.client2_commander._loop
             )
             self.assertEqual(msg, self.client2_protocol.check_result())
+            
+            # Test a version of parrot that modifies the input
+            await_coroutine_threadsafe(
+                coro = self.client2.incr_parrot(msg, timeout=1),
+                loop = self.client2_commander._loop
+            )
+            self.assertEqual(
+                self.client2_protocol.STATIC_RESPONSE + msg,
+                self.client2_protocol.check_result()
+            )
+            
+            # Test a static response
+            response = await_coroutine_threadsafe(
+                coro = self.client2.static(timeout=1),
+                loop = self.client2_commander._loop
+            )
+            self.assertEqual(response, self.client2_protocol.STATIC_RESPONSE)
         
     def test_server(self):
         ''' Test sending messages from the server to the client.

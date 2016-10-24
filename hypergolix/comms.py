@@ -828,6 +828,7 @@ class _ReqResMixin:
         # First unpack the request. Catch bad version numbers and stuff.
         try:
             code, token, body = await self.unpackit(msg)
+            msg_id = 'CONN ' + str(connection) + ' REQ ' + str(token)
             
         # Log the bad request and then return, ignoring it.
         except ValueError:
@@ -840,14 +841,21 @@ class _ReqResMixin:
         # This block dispatches the call. We handle **everything** within this
         # coroutine, so it could be an ACK or a NAK as well as a request.
         if code == self._SUCCESS_CODE:
+            logger.debug(
+                msg_id + ' SUCCESS received w/ partial body: ' + str(body[:10])
+            )
             response = (body, None)
             
         # For failures, result=None and failure=Exception()
         elif code == self._FAILURE_CODE:
+            logger.debug(
+                msg_id + ' FAILURE received w/ partial body: ' + str(body[:10])
+            )
             response = (None, self._unpack_failure(body))
             
         # Handle a new request then.
         else:
+            logger.debug(msg_id + ' starting.')
             await self.handle_request(connection, code, token, body)
             # Important to avoid trying to awaken a pending response
             return
@@ -858,10 +866,7 @@ class _ReqResMixin:
         try:
             await self._responses[connection][token].put(response)
         except KeyError:
-            logger.warning(
-                'CONN ' + str(connection) + ' REQ ' + str(token) +
-                ' token unknown.'
-            )
+            logger.warning(msg_id + ' token unknown.')
         
     async def packit(self, code, token, body):
         ''' Serialize a message.
@@ -928,8 +933,9 @@ class _ReqResMixin:
         else:
             # Attempt response
             try:
+                logger.debug(req_id + ' has handler ' + req_code_attr)
                 result = await handler.handle(connection, body)
-                response = await self.packit(self._SUCCESS_CODE, token, body)
+                response = await self.packit(self._SUCCESS_CODE, token, result)
                 
             except asyncio.CancelledError:
                 raise
@@ -1076,6 +1082,11 @@ class _ReqResMixin:
             
             # If a response handler was defined, use it!
             if response_handler is not None:
+                logger.debug(
+                    'CONN {!s} REQ {!s} response using BYOB handler.'.format(
+                        connection, token
+                    )
+                )
                 # Again, note use of explicit self.
                 return (
                     await response_handler(
@@ -1093,6 +1104,11 @@ class _ReqResMixin:
             # There's no define response handler, but the request succeeded.
             # Return the response without modification.
             else:
+                logger.debug(
+                    'CONN {!s} REQ {!s} response using stock handler.'.format(
+                        connection, token
+                    )
+                )
                 return response
                 
         finally:
