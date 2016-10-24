@@ -57,12 +57,11 @@ from hypergolix.utils import Aengel
 from hypergolix.comms import RequestResponseProtocol as Autocomms
 from hypergolix.comms import BasicServer as WSBasicServer
 
-from hypergolix.remotes import PersisterBridgeServer
+from hypergolix.remotes import RemotePersistenceProtocol
 from hypergolix.remotes import SalmonatorNoop
 
 from hypergolix.persistence import PersistenceCore
 from hypergolix.persistence import Doorman
-from hypergolix.persistence import PostOffice
 from hypergolix.persistence import Undertaker
 from hypergolix.persistence import Lawyer
 from hypergolix.persistence import Enforcer
@@ -70,6 +69,8 @@ from hypergolix.persistence import Bookie
 from hypergolix.persistence import DiskLibrarian
 from hypergolix.persistence import MemoryLibrarian
 from hypergolix.persistence import Enlitener
+
+from hypergolix.postal import PostOffice
 
 
 # ###############################################

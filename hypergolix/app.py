@@ -45,7 +45,7 @@ from hypergolix.comms import RequestResponseProtocol as Autocomms
 from hypergolix.comms import ConnectionManager as WSBasicClient
 from hypergolix.comms import BasicServer as WSBasicServer
 
-from hypergolix.remotes import PersisterBridgeClient
+from hypergolix.remotes import RemotePersistenceProtocol
 
 from hypergolix.config import Config
 

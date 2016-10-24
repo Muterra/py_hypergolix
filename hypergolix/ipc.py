@@ -1972,7 +1972,7 @@ class IPCCore:
         return b'\x01'
         
         
-class IPCEmbed(Autoresponder, IPCPackerMixIn):
+class IPCEmbed:
     ''' The thing you actually put in your app. 
     '''
     REQUEST_CODES = {

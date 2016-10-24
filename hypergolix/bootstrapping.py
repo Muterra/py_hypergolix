@@ -61,8 +61,9 @@ from .persistence import Lawyer
 from .persistence import Bookie
 from .persistence import DiskLibrarian
 from .persistence import MemoryLibrarian
-from .persistence import MrPostman
 from .persistence import Undertaker
+
+from .postal import MrPostman
 
 from .dispatch import Dispatcher
 from .dispatch import _Dispatchable
