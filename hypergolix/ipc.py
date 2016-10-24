@@ -719,7 +719,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
 
 
 class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
-                        error_codes=ERROR_CODES):
+                        error_codes=ERROR_CODES, default_version=b'\x00\x00'):
     ''' Defines the protocol for IPC, with handlers specific to clients.
     '''
     

@@ -121,7 +121,8 @@ ERROR_CODES = {
         
         
 class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
-                                error_codes=ERROR_CODES):
+                                error_codes=ERROR_CODES,
+                                default_version=b'\x00\x00'):
     ''' Defines the protocol for remote persisters.
     '''
     

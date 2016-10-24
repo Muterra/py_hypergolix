@@ -8,10 +8,19 @@ from hypergolix.comms import ConnectionManager
 
 
 class ProtoDef(metaclass=RequestResponseProtocol, success_code=b'AK',
-               failure_code=b'NK', error_codes={}, version=b''):
+               failure_code=b'NK', error_codes={}, default_version=b'\x02'):
+    ''' Note that there should probably be a way to specify an optional
+    maximum version in addition to the default version. Otherwise,
+    defaults will always attempt to handle things. Perhaps should also
+    support a current version, so that loggers can warn when running
+    requests for newer, unknown protocol versions that are still below
+    the max version.
+    '''
+    # Note that the decorator defaults to versions=None, which supports any and
+    # all versions.
     @request(b'PB')
-    async def publish(self, connection, timeout, *args, **kwargs):
-        ''' Explicitly specify timeout=None to wait forever.
+    async def publish(self, connection, *args, **kwargs):
+        ''' Explicitly specify to wait forever.
         '''
         # Returns bytes to send
         return bytes(14)
@@ -23,7 +32,7 @@ class ProtoDef(metaclass=RequestResponseProtocol, success_code=b'AK',
         '''
         # expects bytes in body
         # returns bytes in result
-        pass
+        return b''
 
     @publish.response_handler
     async def publish(self, connection, response, exc):
@@ -37,11 +46,53 @@ class ProtoDef(metaclass=RequestResponseProtocol, success_code=b'AK',
             raise exc
         else:
             return response
+            
+    @request(b'TT', versions=[b'\x00'])
+    async def versioned_0(self, connection, *args, **kwargs):
+        ''' Do things.
+        '''
+        return bytes(5)
+        
+    @versioned_0.request_handler
+    async def versioned_0(self, connection, body):
+        ''' Response handler for this version only.
+        '''
+        return b''
+        
+    # Note that response handlers are not required.
+            
+    @request(b'TT', versions=[b'\x01'])
+    async def versioned_1(self, connection, *args, **kwargs):
+        ''' Do things with a different version.
+        '''
+        return bytes(10)
+        
+    @versioned_1.request_handler
+    async def versioned_1(self, connection, body):
+        ''' Response handler for the different version only.
+        '''
+        # Must be different method, even if same content.
+        return b''
+            
+    @request(b'TT')
+    async def versioned_2(self, connection, *args, **kwargs):
+        ''' With no version specified, all other versions use this
+        method.
+        '''
+        return bytes(10)
+        
+    @versioned_2.request_handler
+    async def versioned_2(self, connection, body):
+        ''' Requests that don't match other versions will use this
+        method.
+        '''
+        return b'defaultversion'
         
 
 class Responder(ProtoDef):
     ''' Add in response-specific stuff here if necessary.
     '''
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.example_responder_needs_this = 5
@@ -50,6 +101,7 @@ class Responder(ProtoDef):
 class Requestor(ProtoDef):
     ''' Add in request-specific server stuff here if necessary.
     '''
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.example_requestor_needs_this = 5

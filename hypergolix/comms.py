@@ -575,7 +575,7 @@ class RequestResponseProtocol(type):
     '''
     
     def __new__(mcls, name, bases, namespace, success_code=b'AK',
-                failure_code=b'NK', error_codes=tuple(), version=b''):
+                failure_code=b'NK', error_codes=tuple(), default_version=b''):
         ''' Modify the existing namespace to include success codes,
         failure codes, the responders, etc. Ensure every request code
         has both a requestor and a request handler.
@@ -633,8 +633,8 @@ class RequestResponseProtocol(type):
         cls = super().__new__(mcls, name, bases, namespace)
         
         # Add a version identifier (or whatever else it could be)
-        cls._VERSION_STR = version
-        cls._VERSION_LEN = len(version)
+        cls._VERSION_STR = default_version
+        cls._VERSION_LEN = len(default_version)
         
         # Add any and all error codes as a class attr
         cls._ERROR_CODES = error_codes
