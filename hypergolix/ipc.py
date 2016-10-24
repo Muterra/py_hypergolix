@@ -154,8 +154,8 @@ ERROR_CODES = {
     b'\x00\x0A': RemoteNak,
     b'\xFF\xFF': IPCError
 }
-            
-            
+
+
 # Identity here can be either a sender or recipient dependent upon context
 _ShareLog = collections.namedtuple(
     typename = '_ShareLog',
@@ -281,7 +281,7 @@ class _IPCSerializer:
 
 
 class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
-                        error_codes=ERROR_CODES):
+                        error_codes=ERROR_CODES, default_version=b'\x00\x00'):
     ''' Defines the protocol for IPC, with handlers specific to servers.
     '''
     
@@ -304,7 +304,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         self._rolodex = weakref.proxy(rolodex)
         self._salmonator = weakref.proxy(salmonator)
         
-    @request(b'$T')
+    @request(b'+T')
     async def set_token(self, connection, token=None):
         ''' Register an existing token or get a new token, or notify an
         app of its existing token.
@@ -317,30 +317,38 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
     async def set_token(self, connection, body):
         ''' Handles token-setting requests.
         '''
-        app_token = body[:4]
+        token = body[:4]
         
         # Getting a new token.
-        if app_token == b'':
-            appdef = self._dispatch.register_application()
-            app_token = appdef.app_token
+        if token == b'':
+            token = self._dispatch.start_application(connection)
+            logger.info(''.join((
+                'CONN ', str(connection), ' generating new token: ', str(token)
+            )))
+        
+        # Setting an existing token, but the connection already exists.
+        elif self._dispatch.which_token(connection):
+            raise IPCError(
+                'Attempt to reregister a new concurrent token for an ' +
+                'existing connection. Each app may use only one token.'
+            )
             
-        # Setting an existing token.
+        # Setting an existing token, but the token already exists.
+        elif self._dispatch.which_connection(token):
+            raise IPCError(
+                'Attempt to reregister a new concurrent connection for ' +
+                'an existing token. Each app may only use one connection.'
+            )
+        
+        # Setting an existing token, with valid state.
         else:
-            if app_token in self._endpoint_from_token:
-                raise RuntimeError(
-                    'Attempt to reregister a new concurrent connection for ' +
-                    'an existing token. Each app may only use one connection.'
-                )
+            logger.info(''.join((
+                'CONN ', str(connection), ' registering existing token: ',
+                str(token)
+            )))
+            self._dispatch.start_application(connection, token)
         
-            appdef = _AppDef(app_token)
-            # Check our app token
-            self._dispatch.start_application(connection, appdef)
-            
-            startup_ghid = self._dispatch.get_startup_obj(app_token)
-            if startup_ghid is not None:
-                await self.startup_obj(connection, startup_ghid)
-        
-        return app_token
+        return token
         
     @request(b'+A')
     async def register_api(self, connection):
@@ -393,16 +401,40 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         ghid = self._golcore.whoami
         return bytes(ghid)
         
-    @request(b'$O')
-    async def startup_obj(self, connection, ghid):
-        ''' Declare a startup object, or notify an app of its declared
+    @request(b'>$')
+    async def get_startup_obj(self, connection):
+        ''' Request a startup object, or notify an app of its declared
         startup object.
         '''
-        return bytes(ghid)
+        token = self._dispatch.which_token(connection)
+        ghid = self._dispatch.get_startup_obj(token)
         
-    @startup_obj.request_handler
-    async def startup_obj(self, connection, body):
+        if ghid is not None:
+            return bytes(ghid)
+        else:
+            return b''
+        
+    @get_startup_obj.request_handler
+    async def get_startup_obj(self, connection, body):
         ''' Handles requests for startup objects.
+        '''
+        token = self._dispatch.which_token(connection)
+        ghid = self._dispatch.get_startup_obj(token)
+        
+        if ghid is not None:
+            return bytes(ghid)
+        else:
+            return b''
+        
+    @request(b'+$')
+    async def register_startup_obj(self, connection, ghid):
+        ''' Register a startup object. Client only.
+        '''
+        raise NotImplementedError()
+        
+    @register_startup_obj.request_handler
+    async def register_startup_obj(self, connection, body):
+        ''' Handles startup object registration. Server only.
         '''
         ghid = Ghid.from_bytes(body)
         self._dispatch.register_startup(connection, ghid)
@@ -729,11 +761,11 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         super().__init__(*args, **kwargs)
         self._hgxlink = None
         
-    def assemble(self, hgxlink, embed):
+    def assemble(self, hgxlink):
         # Chicken, egg, etc.
         self._hgxlink = weakref.proxy(hgxlink)
         
-    @request(b'$T')
+    @request(b'+T')
     async def set_token(self, connection, token):
         ''' Register an existing token or get a new token, or notify an
         app of its existing token.
@@ -828,21 +860,44 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
             ghid = Ghid.from_bytes(response)
             return ghid
         
-    @request(b'$O')
-    async def startup_ghid(self, connection, ghid):
-        ''' Declare a startup object, or notify an app of its declared
+    @request(b'>$')
+    async def get_startup_obj(self, connection):
+        ''' Request a startup object, or notify an app of its declared
         startup object.
         '''
-        return bytes(ghid)
+        return b''
         
-    @startup_ghid.request_handler
-    async def startup_ghid(self, connection, body):
+    @get_startup_obj.request_handler
+    async def get_startup_obj(self, connection, body):
         ''' Handles requests for startup objects.
         '''
         ghid = Ghid.from_bytes(body)
-        obj = await self.get(ghid, ObjBase)
-        self._hgxlink._startup_obj = obj
+        self._hgxlink._startup_obj = ghid
         return b'\x01'
+        
+    @get_startup_obj.response_handler
+    async def get_startup_obj(self, connection, response, exc):
+        ''' Handle the response to retrieving startup obj ghids.
+        '''
+        if exc is not None:
+            raise exc
+        elif response == b'':
+            return None
+        else:
+            ghid = Ghid.from_bytes(response)
+            return ghid
+        
+    @request(b'+$')
+    async def register_startup_obj(self, connection, ghid):
+        ''' Register a startup object. Client only.
+        '''
+        return bytes(ghid)
+        
+    @register_startup_obj.request_handler
+    async def register_startup_obj(self, connection, body):
+        ''' Handles startup object registration. Server only.
+        '''
+        raise NotImplementedError()
         
     @request(b'>O')
     async def get_ghid(self, connection, ghid):

@@ -9,7 +9,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -23,28 +23,36 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
 
 '''
 
-import IPython
 import unittest
-import warnings
-import collections
 import threading
 import time
+import os
+import warnings
+import collections
+import IPython
 import asyncio
 import random
 import traceback
 import logging
-import os
 import copy
+import weakref
+
+from loopa import TaskCommander
+from loopa.utils import await_coroutine_threadsafe
+
+from hypergolix.comms import BasicServer
+from hypergolix.comms import WSConnection
+from hypergolix.comms import ConnectionManager
 
 from hypergolix.dispatch import _Dispatchable
 from hypergolix.dispatch import Dispatcher
@@ -55,18 +63,17 @@ from hypergolix.remotes import SalmonatorNoop
 from hypergolix.utils import Aengel
 from hypergolix.utils import SetMap
 
-from hypergolix.comms import Autocomms
-from hypergolix.comms import WSBasicServer
-from hypergolix.comms import WSBasicClient
-
-from hypergolix.ipc import IPCCore
-from hypergolix.ipc import IPCEmbed
-
 from hypergolix.objproxy import ProxyBase
 
 from golix import Ghid
 
-# from hypergolix.embeds import WebsocketsEmbed
+from hypergolix.exceptions import HypergolixException
+from hypergolix.exceptions import IPCError
+
+# Imports within the scope of tests
+
+from hypergolix.ipc import IPCServerProtocol
+from hypergolix.ipc import IPCClientProtocol
 
 
 # ###############################################
@@ -94,9 +101,9 @@ class MockOracle:
     def new_object(self, state, dynamic, api_id, *args, **kwargs):
         # Make a random address for the ghid
         obj = MockDispatchable(
-            author = self.whoami, 
-            dynamic = dynamic, 
-            api_id = api_id, 
+            author = self.whoami,
+            dynamic = dynamic,
+            api_id = api_id,
             state = state,
             frozen = False,
             held = False,
@@ -117,9 +124,35 @@ class MockRolodex:
         
 class MockDispatch:
     def __init__(self):
+        ''' Just pass through to reset. No further init necessary.
+        '''
+        self.RESET()
+        
+    def RESET(self):
+        ''' Return self to pristine state.
+        '''
         self.startups = {}
         self.parents = {}
         self.tokens = set()
+        
+        # Lookup <app token>: <connection/session/endpoint>
+        self._endpoint_from_token = weakref.WeakValueDictionary()
+        # Reverse lookup <connection/session/endpoint>: <app token>
+        self._token_from_endpoint = weakref.WeakKeyDictionary()
+        
+    def which_token(self, connection):
+        try:
+            return self._token_from_endpoint[connection]
+            
+        except KeyError as exc:
+            return None
+        
+    def which_connection(self, token):
+        try:
+            return self._endpoint_from_token[token]
+            
+        except KeyError as exc:
+            return None
         
     def get_parent_token(self, ghid):
         if ghid in self.parents:
@@ -127,8 +160,8 @@ class MockDispatch:
         else:
             return None
         
-    def get_startup_objs(self, token):
-        return frozenset([self.startups[token]])
+    def get_startup_obj(self, token):
+        return self.startups[token]
         
     def register_startup(self, token, ghid):
         self.startups[token] = ghid
@@ -136,20 +169,22 @@ class MockDispatch:
     def register_private(self, token, ghid):
         self.parents[ghid] = token
         
-    def start_application(self, appdef):
-        if appdef.app_token not in self.tokens:
-            raise RuntimeError()
-        else:
-            return True
+    def start_application(self, connection, token=None):
+        if token is None:
+            token = os.urandom(4)
         
-    def register_application(self):
-        token = os.urandom(4)
+        # Don't emulate normal dispatcher behavior here; let everything start,
+        # regardless of status re: "exists in tokens"
         self.tokens.add(token)
-        return _AppDef(token)
+        self._endpoint_from_token[token] = connection
+        self._token_from_endpoint[connection] = token
+        
+        return token
 
 
 class MockDispatchable:
-    def __init__(self, dispatch, ipc_core, author, dynamic, api_id, frozen, held, deleted, state, oracle, *args, **kwargs):
+    def __init__(self, dispatch, ipc_core, author, dynamic, api_id, frozen,
+                 held, deleted, state, oracle, *args, **kwargs):
         self.ghid = Ghid.from_bytes(b'\x01' + os.urandom(64))
         self.author = author
         self.dynamic = dynamic
@@ -178,7 +213,7 @@ class MockDispatchable:
             comp &= (self.held == other.held)
             comp &= (self.deleted == other.deleted)
             
-        except:
+        except (AttributeError, TypeError):
             comp = False
             
         return comp
@@ -189,9 +224,9 @@ class MockDispatchable:
         
     def freeze(self):
         frozen = type(self)(
-            dispatch = self.dispatch, 
+            dispatch = self.dispatch,
             ipc_core = self.ipccore,
-            oracle = self.oracle, 
+            oracle = self.oracle,
             deleted = self.deleted,
             held = self.held,
             frozen = self.frozen,
@@ -217,9 +252,124 @@ class MockDispatchable:
 # ###############################################
 # Testing
 # ###############################################
+
+
+class WSIPCTest(unittest.TestCase):
+    
+    @classmethod
+    def setUpClass(cls):
+        # Set up the IPC server.
+        cls.server_commander = TaskCommander(
+            reusable_loop=False,
+            threaded = True,
+            debug = True,
+            name = 'server'
+        )
+        cls.server_protocol = IPCServerProtocol()
+        cls.server = BasicServer(connection_cls=WSConnection)
+        cls.server_commander.register_task(
+            cls.server,
+            msg_handler = cls.server_protocol,
+            host = 'localhost',
+            port = 4628,
+            # debug = True
+        )
+        cls.golcore = MockGolcore(TEST_AGENT1)
+        cls.oracle = MockOracle(TEST_AGENT1)
+        cls.dispatch = MockDispatch()
+        cls.rolodex = MockRolodex()
+        cls.salmonator = SalmonatorNoop()
+        cls.server_protocol.assemble(cls.golcore, cls.oracle, cls.dispatch,
+                                     cls.rolodex, cls.salmonator)
         
+        # Set up the first IPC client.
+        cls.client1_commander = TaskCommander(
+            reusable_loop = False,
+            threaded = True,
+            debug = True,
+            name = 'client'
+        )
+        cls.client1_protocol = IPCClientProtocol()
+        cls.client1 = ConnectionManager(
+            connection_cls = WSConnection,
+            msg_handler = cls.client1_protocol
+        )
+        cls.client1_commander.register_task(
+            cls.client1,
+            host = 'localhost',
+            port = 4628,
+            tls = False
+        )
         
-class WebsocketsIPCTrashTest(unittest.TestCase):
+        # Set up the second IPC client.
+        cls.client2_commander = TaskCommander(
+            reusable_loop = False,
+            threaded = True,
+            debug = True,
+            name = 'client'
+        )
+        cls.client2_protocol = IPCClientProtocol()
+        cls.client2 = ConnectionManager(
+            connection_cls = WSConnection,
+            msg_handler = cls.client2_protocol
+        )
+        cls.client2_commander.register_task(
+            cls.client2,
+            host = 'localhost',
+            port = 4628,
+            tls = False
+        )
+        
+        # Finally, start both.
+        cls.server_commander.start()
+        cls.client1_commander.start()
+        cls.client2_commander.start()
+        
+    @classmethod
+    def tearDownClass(cls):
+        cls.client1_commander.stop_threadsafe_nowait()
+        cls.client2_commander.stop_threadsafe_nowait()
+        cls.server_commander.stop_threadsafe_nowait()
+        
+    def test_token(self):
+        ''' Test everything in set_token.
+        '''
+        # Test creating a new token
+        self.dispatch.RESET()
+        token = await_coroutine_threadsafe(
+            coro = self.client1.set_token(None, timeout=1),
+            loop = self.client1_commander._loop
+        )
+        self.assertIn(token, self.dispatch.tokens)
+        
+        # Test re-creating the same token concurrently from a different conn
+        with self.assertRaises(IPCError):
+            await_coroutine_threadsafe(
+                coro = self.client2.set_token(token, timeout=1),
+                loop = self.client2_commander._loop
+            )
+        self.assertIn(token, self.dispatch.tokens)
+        
+        # Test re-creating the same token concurrently from the same conn
+        with self.assertRaises(IPCError):
+            await_coroutine_threadsafe(
+                coro = self.client1.set_token(token, timeout=1),
+                loop = self.client1_commander._loop
+            )
+        self.assertIn(token, self.dispatch.tokens)
+        
+        # Remove the token and test setting the token.
+        self.dispatch.RESET()
+        token2 = await_coroutine_threadsafe(
+            coro = self.client1.set_token(token, timeout=1),
+            loop = self.client1_commander._loop
+        )
+        self.assertEqual(token2, token)
+        self.assertIn(token, self.dispatch.tokens)
+        
+
+@unittest.skipIf(True, 'skip deprecated until retooled for testing hgx embed')
+class HGXLinkTrashtest(unittest.TestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._notifier_1 = threading.Event()
@@ -491,8 +641,9 @@ class WebsocketsIPCTrashTest(unittest.TestCase):
         #     warnings.simplefilter('ignore')
         #     IPython.embed()
 
+
 if __name__ == "__main__":
     from hypergolix import logutils
-    logutils.autoconfig('debug')
+    logutils.autoconfig(loglevel='debug')
     
     unittest.main()

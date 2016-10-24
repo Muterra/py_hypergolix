@@ -283,30 +283,7 @@ class Dispatcher(loopa.TaskLooper):
             token = os.urandom(4)
         return token
         
-    def register_application(self, connection):
-        ''' Creates a new application at the dispatcher.
-        
-        Currently, that just means creating an app token and adding it
-        to the master list of all available app tokens. But, in the
-        future, it will also encompass any information necessary to
-        actually start the app, as Hypergolix makes the transition from
-        backround service to core OS service.
-        '''
-        # TODO: this lock actually needs to be a distributed lock across all
-        # Hypergolix processes. There's a race condition currently. It's going
-        # to be a very, very unlikely one to hit, but existant nonetheless.
-        with self._token_lock:
-            token = self.new_token()
-            # Do this right away to prevent race condition
-            self._all_known_tokens.add(token)
-            
-            # TODO: should these be enclosed within an operations lock?
-            self._endpoint_from_token[token] = connection
-            self._token_from_endpoint[connection] = token
-            
-        return _AppDef(token)
-        
-    def start_application(self, connection, appdef):
+    def start_application(self, connection, token=None):
         ''' Ensures that an application is known to the dispatcher.
         
         Currently just checks within all known tokens. In the future,
@@ -314,13 +291,20 @@ class Dispatcher(loopa.TaskLooper):
         that responsibility elsewhere), and then sending all of the
         startup objects to the application.
         '''
-        # This cannot be used to create new app tokens!
-        if appdef[0] not in self._all_known_tokens:
+        if token is None:
+            with self._token_lock:
+                token = self.new_token()
+                # Do this right away to prevent race condition
+                self._all_known_tokens.add(token)
+            
+        elif token not in self._all_known_tokens:
             raise UnknownToken('App token unknown to dispatcher.')
             
         # TODO: should these be enclosed within an operations lock?
-        self._endpoint_from_token[appdef.app_token] = connection
-        self._token_from_endpoint[connection] = appdef.app_token
+        self._endpoint_from_token[token] = connection
+        self._token_from_endpoint[connection] = token
+        
+        return token
             
     def track_object(self, connection, ghid):
         ''' Registers a connection as tracking a ghid.
@@ -575,6 +559,16 @@ class Dispatcher(loopa.TaskLooper):
         '''
         try:
             return self._token_from_endpoint[connection]
+            
+        except KeyError as exc:
+            return None
+            
+    def which_connection(self, token):
+        ''' Returns the current connection associated with the token, or
+        None if there is no currently available connection.
+        '''
+        try:
+            return self._endpoint_from_token[token]
             
         except KeyError as exc:
             return None

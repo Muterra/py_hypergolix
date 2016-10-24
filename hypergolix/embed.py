@@ -369,27 +369,19 @@ class HGXLink1(loopa.TaskCommander):
         
     async def register_token(self, token=None):
         ''' Registers the application as using a particular token, OR
-        gets a new token. Returns a startup object (if one has already
-        been defined), or None. Tokens will be available in app_token.
+        gets a new token. Returns the ghid for the startup object (if
+        one has already been defined), or None. Tokens are be available
+        in app_token.
         '''
-        token = await self._ipc_manager.set_token(token)
-        self.app_token = token
+        # The result of this will be the actual token.
+        self.app_token = await self._ipc_manager.set_token(token)
         
-        # Note that, due to:
-        #   1. the way the request/response system works
-        #   2. the ipc host sending any startup obj during token registration
-        #   3. the ipc host awaiting OUR ack from the startup-object-sending
-        #       before acking the original token setting
-        #   4. us awaiting that last ack
-        # we are guaranteed to already have received any previously-declared
-        # startup object.
-        # TODO: make that an explicit call.
+        if token is not None:
+            self._startup_obj = await self._ipc_manager.get_startup_obj()
         
-        # Get our actual startup object instead of the ghid.
-        if self._startup_obj is not None:
-            return (await self.get(self._startup_obj, ObjBase))
-        else:
-            return None
+        # Let applications manually request the startup object, so that they
+        # can deal with casting it appropriately.
+        return self._startup_obj
         
     async def get(self, ghid, cls):
         ''' Pass to connection manager. Also, turn the object into the
