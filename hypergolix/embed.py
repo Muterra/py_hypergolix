@@ -86,15 +86,24 @@ __all__ = [
 class ApiID(Ghid):
     ''' Subclass Ghid in a way that makes the API ID seem like a normal
     64-byte string.
+    
+    Remind me again why the hell I'm subclassing ghid for this when I'm
+    ending up removing just about everything that makes it a ghid?
     '''
     
-    def __init__(self, value):
+    def __init__(self, address, algo=None):
         ''' Wrap the normal Ghid creation with a forced algo.
         '''
-        if len(value) != 64:
+        if len(address) != 64:
             raise ValueError('Improper API ID length.')
         
-        super().__init__(b'\x00', value)
+        elif algo is None:
+            algo = 0
+            
+        elif algo != 0:
+            raise ValueError('Improper API ID format.')
+        
+        super().__init__(algo, address)
         
     def __repr__(self):
         ''' Hide that this is a ghid.
@@ -105,6 +114,26 @@ class ApiID(Ghid):
             self.address,
             ')'
         )
+        
+    @property
+    def algo(self):
+        return self._algo
+        
+    @algo.setter
+    def algo(self, value):
+        # Currently, ensure algo is b'\x00'
+        if value == 0:
+            self._algo = value
+        else:
+            raise ValueError('Invalid address algorithm.')
+            
+    @property
+    def address(self):
+        return self._address
+            
+    @address.setter
+    def address(self, address):
+        self._address = address
             
 
 class HGXLink1(loopa.TaskCommander):

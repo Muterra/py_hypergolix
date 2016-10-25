@@ -62,6 +62,9 @@ from hypergolix.remotes import SalmonatorNoop
 
 from hypergolix.utils import Aengel
 from hypergolix.utils import SetMap
+from hypergolix.utils import WeakSetMap
+
+from hypergolix.embed import ApiID
 
 from hypergolix.objproxy import ProxyBase
 
@@ -135,6 +138,9 @@ class MockDispatch:
         self.parents = {}
         self.tokens = set()
         
+        # Lookup <api ID>: set(<connection/session/endpoint>)
+        self._endpoints_from_api = WeakSetMap()
+        
         # Lookup <app token>: <connection/session/endpoint>
         self._endpoint_from_token = weakref.WeakValueDictionary()
         # Reverse lookup <connection/session/endpoint>: <app token>
@@ -154,6 +160,30 @@ class MockDispatch:
         except KeyError as exc:
             return None
         
+    def start_application(self, connection, token=None):
+        if token is None:
+            token = os.urandom(4)
+        
+        # Don't emulate normal dispatcher behavior here; let everything start,
+        # regardless of status re: "exists in tokens"
+        self.tokens.add(token)
+        self._endpoint_from_token[token] = connection
+        self._token_from_endpoint[connection] = token
+        
+        return token
+        
+    def add_api(self, connection, api_id):
+        ''' Fixtures adding an api.
+        '''
+        self._endpoints_from_api.add(api_id, connection)
+        
+    def remove_api(self, connection, api_id):
+        ''' Fixtures removing an api.
+        '''
+        self._endpoints_from_api.discard(api_id, connection)
+            
+    # These are old fixturing methods
+        
     def get_parent_token(self, ghid):
         if ghid in self.parents:
             return self.parents[ghid]
@@ -168,18 +198,6 @@ class MockDispatch:
         
     def register_private(self, token, ghid):
         self.parents[ghid] = token
-        
-    def start_application(self, connection, token=None):
-        if token is None:
-            token = os.urandom(4)
-        
-        # Don't emulate normal dispatcher behavior here; let everything start,
-        # regardless of status re: "exists in tokens"
-        self.tokens.add(token)
-        self._endpoint_from_token[token] = connection
-        self._token_from_endpoint[connection] = token
-        
-        return token
 
 
 class MockDispatchable:
@@ -366,6 +384,36 @@ class WSIPCTest(unittest.TestCase):
         )
         self.assertEqual(token2, token)
         self.assertIn(token, self.dispatch.tokens)
+        
+    def test_register_api(self):
+        ''' Test registration and deregistration of api_ids.
+        '''
+        # Generate some pseudorandom api ids
+        apiid_1 = ApiID(bytes([random.randint(0, 255) for i in range(0, 64)]))
+        apiid_2 = ApiID(bytes([random.randint(0, 255) for i in range(0, 64)]))
+        
+        # Test registering a new api id
+        self.dispatch.RESET()
+        await_coroutine_threadsafe(
+            coro = self.client1.register_api(apiid_1, timeout=1),
+            loop = self.client1_commander._loop
+        )
+        self.assertIn(apiid_1, self.dispatch._endpoints_from_api)
+        
+        # Test adding a second
+        await_coroutine_threadsafe(
+            coro = self.client1.register_api(apiid_2, timeout=1),
+            loop = self.client1_commander._loop
+        )
+        self.assertIn(apiid_2, self.dispatch._endpoints_from_api)
+        
+        # Now test removing the first
+        await_coroutine_threadsafe(
+            coro = self.client1.deregister_api(apiid_1, timeout=1),
+            loop = self.client1_commander._loop
+        )
+        self.assertNotIn(apiid_1, self.dispatch._endpoints_from_api)
+        self.assertIn(apiid_2, self.dispatch._endpoints_from_api)
         
 
 @unittest.skipIf(True, 'skip deprecated until retooled for testing hgx embed')

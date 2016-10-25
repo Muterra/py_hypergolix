@@ -360,10 +360,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
     async def register_api(self, connection, body):
         ''' Handles API registration requests. Server only.
         '''
-        if len(body) != 65:
-            raise ValueError('Invalid API ID format.')
-            
-        self._dispatch.add_api(connection, body)
+        api_id = ApiID.from_bytes(body)
+        self._dispatch.add_api(connection, api_id)
         
         return b'\x01'
         
@@ -378,10 +376,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
     async def deregister_api(self, connection, body):
         ''' Handles API deregistration requests. Server only.
         '''
-        if len(body) != 65:
-            raise ValueError('Invalid API ID format.')
-            
-        self._dispatch.remove_api(connection, body)
+        api_id = ApiID.from_bytes(body)
+        self._dispatch.remove_api(connection, api_id)
         
         return b'\x01'
         

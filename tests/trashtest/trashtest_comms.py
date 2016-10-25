@@ -241,8 +241,8 @@ class WSBasicTrashTest(unittest.TestCase):
         
     def test_client1(self):
         for ii in range(TEST_ITERATIONS):
-            msg = ''.join([chr(random.randint(0, 255)) for i in range(0, 25)])
-            msg = msg.encode('utf-8')
+            # Generate pseudorandom bytes w/ length 25
+            msg = bytes([random.randint(0, 255) for i in range(0, 25)])
             
             # Test a standart parrot
             await_coroutine_threadsafe(
@@ -269,8 +269,8 @@ class WSBasicTrashTest(unittest.TestCase):
             self.assertEqual(response, self.client1_protocol.STATIC_RESPONSE)
             
         for ii in range(TEST_ITERATIONS):
-            msg = ''.join([chr(random.randint(0, 255)) for i in range(0, 25)])
-            msg = msg.encode('utf-8')
+            # Generate pseudorandom bytes w/ length 25
+            msg = bytes([random.randint(0, 255) for i in range(0, 25)])
             
             # Test a standart parrot
             await_coroutine_threadsafe(
@@ -316,8 +316,8 @@ class WSBasicTrashTest(unittest.TestCase):
         # connection.
         for ii in range(TEST_ITERATIONS * 2):
             connection = random.choice(self.server_protocol.connections)
-            msg = ''.join([chr(random.randint(0, 255)) for i in range(0, 25)])
-            msg = msg.encode('utf-8')
+            # Generate pseudorandom bytes w/ length 25
+            msg = bytes([random.randint(0, 255) for i in range(0, 25)])
             
             await_coroutine_threadsafe(
                 coro = self.server_protocol.parrot(
