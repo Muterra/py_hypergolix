@@ -681,6 +681,7 @@ class TruthyLock:
 class SetMap:
     ''' Combines a mapping with a set. Threadsafe.
     '''
+    
     def __init__(self):
         ''' Create a lookup!
         
@@ -730,14 +731,14 @@ class SetMap:
                 return False
         
     def add(self, key, value):
-        ''' Adds the value to the set at key. Creates a new set there if 
+        ''' Adds the value to the set at key. Creates a new set there if
         none already exists.
         '''
         with self._lock:
             try:
                 self._mapping[key].add(value)
             except KeyError:
-                self._mapping[key] = { value }
+                self._mapping[key] = {value}
                 
     def update(self, key, value):
         ''' Updates the key with the value. Value must support being
@@ -760,7 +761,7 @@ class SetMap:
             pass
         
     def remove(self, key, value):
-        ''' Removes the value from the set at key. Will raise KeyError 
+        ''' Removes the value from the set at key. Will raise KeyError
         if either the key is missing, or the value is not contained at
         the key.
         '''
@@ -782,7 +783,7 @@ class SetMap:
                 self._remove_if_empty(key)
         
     def clear(self, key):
-        ''' Clears the specified key. Raises KeyError if key is not 
+        ''' Clears the specified key. Raises KeyError if key is not
         found.
         '''
         with self._lock:
@@ -810,7 +811,7 @@ class SetMap:
         return len(self._mapping)
             
     def __iter__(self):
-        ''' Send this through to the dict, bypassing the usual route, 
+        ''' Send this through to the dict, bypassing the usual route,
         because otherwise we'll have a deadlock.
         '''
         with self._lock:
@@ -865,62 +866,415 @@ class SetMap:
         self.__dict__.update(state)
         # Restore the lock.
         self._lock = threading.RLock()
-            
-            
-class _WeakerSet(weakref.WeakSet):
-    ''' Used within a WeakSetMap to remove self when items are removed.
-    '''
-    def __init__(self, data=None, parent=None, key=None):
-        super().__init__(data)
         
-        if parent is None or key is None:
-            raise TypeError('Must declare parent and key explicitly.')
+        
+class _WeakSet(set):
+    ''' Re-write WeakSet to remove references ASAP, instead of lazily
+    removing references upon access.
+    
+    Note: to bypass resolving-and-then-remaking weakrefs, could add
+    a private iterator to iterate over self's refs directly instead of
+    returning the item themselves.
+    '''
+    
+    def __new__(cls, data=None, *args, **kwargs):
+        ''' Native sets don't really use init. Do this instead.
+        '''
+        # We want to bypass the normal set() init, so that we don't
+        # accidentally add a bunch of strong references through passing data.
+        # Use *args and **kwargs to support coop multi inheritance
+        self = super().__new__(cls, *args, **kwargs)
+        # Now we'll start modifying self appropriately.
+        
+        # This defers removals until after iteration completes. It holds strong
+        # references to the WEAK references of the objects themselves, IE:
+        # strongref{weakref(object_to_remove), weakref(object_to_remove), ...}
+        self._pending_removals = set()
+        # This is the count of how many iterators are currently running
+        self._iterators = 0
+        # Updating the iterator count is not atomic. This makes it threadsafe.
+        self._iterators_lock = threading.Lock()
+        
+        # This is added as a finalizer for all items added to the set. We need
+        # the fancy construction so that if our contained objects outlive us,
+        # they don't accidentally prevent self from deleting by holding strong
+        # references. Therefore, we memoize a weakref to self.
+        def _remove(item_weakref, self_weakref=weakref.ref(self)):
+            # One of our contained objects is being GC'd. Attempt to resolve
+            # the actual container reference.
+            self = self_weakref()
             
-        self.data = _SelfDestructingSet(self.data, parent, key)
+            # In this case, the actual container object is already dead. Note
+            # that using if-else may actually produce shorter bytecode. Not
+            # that this matters particularly much, just worth noting.
+            if self is None:
+                return
+                
+            # The container is still live!
+            else:
+                # Protect ourselves against concurrent access to _iterators,
+                # since operations with it are not atomic.
+                with self._iterators_lock:
+                    # HOLD UP! We have an iterator running.
+                    if self._iterators > 0:
+                        self._pending_removals.add(item_weakref)
+                    
+                    # No iterator is currently running, so discard the object
+                    # directly.
+                    else:
+                        self.discard(item_weakref)
+        
+        # And now add that to self as a normal function (NOT a bound/unbound
+        # method!)
+        self._remove = _remove
+        
+        # If data was passed, use update (instead of super().__init__())
+        if data is not None:
+            self.update(data)
+            
+        # This is __new__, not __init__, so don't forget to return self.
+        return self
+
+    def __iter__(self):
+        ''' Override normal iteration to handle all pending removals at
+        the conclusion of iteration. Otherwise, the size of the set will
+        mutate during iteration, which is a critical error.
+        
+        NOTE THAT calling this will yield STRONG REFERENCES to objects,
+        so iterating over the collection will necessary prevent
+        contained objects from being removed -- but only the one that is
+        CURRENTLY being used by the consumer of the iterator.
+        '''
+        # Incrementing is not atomic, so shield it. This also synchronizes with
+        # any reference finalizing copies of self._remove.
+        with self._iterators_lock:
+            self._iterators += 1
+            
+        try:
+            for item_weakref in super().__iter__():
+                item = item_weakref()
+                
+                # We do need to check if the item is actually dead, which would
+                # happen for every item that is sent to self._pending_removals.
+                if item is not None:
+                    yield item
+                    
+        # Finally, collect all removals and commit them. We DO need to shield
+        # this within the _iterators lock, because otherwise, the self._remove
+        # finalizer has a tiny race condition where it may add something to
+        # pending_removals after iteration completes but before the iterators
+        # count is decremented.
+        finally:
+            with self._iterators_lock:
+                try:
+                    memoized_pending_removals = self._pending_removals
+                    memoized_discard = self.discard
+                    
+                    # This IS thread-safe, but only because it's using while,
+                    # and because sets are themselves threadsafe.
+                    while memoized_pending_removals:
+                        memoized_discard(memoized_pending_removals.pop())
+            
+                # No matter what happens, be sure to decrement the iterators
+                # lock.
+                finally:
+                    self._iterators -= 1
+
+    def __len__(self):
+        ''' Wrap __len__ to always return the correct size.
+        '''
+        with self._iterators_lock:
+            return super().__len__() - len(self._pending_removals)
+
+    def __contains__(self, item):
+        ''' Wrap super.__contains__, since we need to know if the item's
+        WEAK REFERENCE is in the container, not the item itself.
+        '''
+        try:
+            # Support comparison with weakrefs.
+            if isinstance(item, weakref.ref):
+                item_weakref = item
+            else:
+                item_weakref = weakref.ref(item)
+        
+        # Non-weakref-able objects obviously cannot be in the collection.
+        except TypeError:
+            return False
+            
+        # No errors -> check in super().
+        else:
+            return super().__contains__(item_weakref)
+
+    def __reduce__(self):
+        ''' Punt on pickle support.
+        '''
+        raise TypeError('_WeakSets do not currently support pickling.')
+        # return (self.__class__, (list(self),),
+        #         getattr(self, '__dict__', None))
+
+    def add(self, item):
+        ''' Add a weak reference to the item, not the item itself. Note
+        that, just like normal sets, this will cause __iter__ to raise
+        if invoked during iteration.
+        '''
+        # Call super...
+        super().add(
+            # On a weakref to the item, using self._remove as its finalizer.
+            weakref.ref(item, self._remove)
+        )
+
+    def copy(self):
+        ''' Modify default set behavior to support subclassing.
+        '''
+        # I heard you liked a self in your self so I selfed your self.
+        return type(self)(item for item in self)
+
+    def pop(self):
+        ''' Pop stuff until a reference resolves.  Note that, just like
+        normal sets, this will cause __iter__ to raise if invoked during
+        iteration.
+        '''
+        # Run this until we KeyError or until we return.
+        while True:
+            try:
+                item_weakref = super().pop()
+            
+            except KeyError:
+                # Re-raise, and strip a level of context.
+                raise KeyError('pop from empty WeakSet') from None
+                
+            else:
+                item = item_weakref()
+                # Check for live reference.
+                if item is not None:
+                    return item
+
+    def remove(self, item):
+        ''' Wrap super to remove the weakref instead of the item itself.
+        '''
+        super().remove(weakref.ref(item))
+
+    def discard(self, item):
+        ''' Wrap super to discard the weakref instead of the item
+        itself.
+        '''
+        super().discard(weakref.ref(item))
+
+    def update(self, other):
+        ''' Wrap to add weakrefs instead of the items themselves.
+        '''
+        # Call super.add directly to avoid a stub function call to self.add.
+        super().add(
+            # As per above, call on a weakref to the item, and use
+            # self._remove as its finalizer.
+            weakref.ref(item, self._remove) for item in other
+        )
+
+    def __ior__(self, other):
+        ''' Needs to actually return self, unlike update().
+        '''
+        self.update(other)
+        return self
+
+    def difference(self, other):
+        ''' Return a copy of self, excluding anything contained in the
+        other.
+        '''
+        return type(self)(item for item in self if item not in other)
+    __sub__ = difference
+
+    def difference_update(self, other):
+        ''' Update, removing anything in the other set.
+        '''
+        # For performance reasons, short-circuit if identical. We could compare
+        # __eq__ instead, but it would be equivalent performance wise, and also
+        # potentially raise an error -- so avoid it.
+        if self is other:
+            self.clear()
+        
+        else:
+            # Call super() on a generator expression for weakrefs of the items
+            super().difference_update(weakref.ref(item) for item in other)
+    
+    def __isub__(self, other):
+        self.difference_update(other)
+        return self
+
+    def intersection(self, other):
+        ''' New set, with only elements common to both.
+        '''
+        return type(self)(item for item in other if item in self)
+    __and__ = intersection
+
+    def intersection_update(self, other):
+        ''' Update in-place, leaving only what is common to both.
+        '''
+        super().intersection_update(weakref.ref(item) for item in other)
+        
+    def __iand__(self, other):
+        self.intersection_update(other)
+        return self
+
+    def symmetric_difference(self, other):
+        ''' One set, or the other set, but not both.
+        '''
+        # See other notes re: optimizing.
+        if self is other:
+            return type(self)()
+        else:
+            # Okay, this is an incredibly complicated generator function to
+            # perform a symmetric difference. But, that's what it is.
+            return type(self)(
+                item for sset in (self, other) for item in sset if
+                ((item not in self) ^ (item not in other))
+            )
+    __xor__ = symmetric_difference
+
+    def symmetric_difference_update(self, other):
+        ''' In-place XOR.
+        '''
+        if self is other:
+            self.clear()
+        else:
+            super().symmetric_difference_update(
+                # Don't forget the finalizer!
+                weakref.ref(item, self._remove) for item in other
+            )
+    
+    def __ixor__(self, other):
+        self.symmetric_difference_update(other)
+        return self
+
+    def union(self, other):
+        ''' New set, with all items common to both.
+        '''
+        # Fancy merge generators are fun!
+        return type(self)(item for sset in (self, other) for item in sset)
+    __or__ = union
+
+    def isdisjoint(self, other):
+        ''' Ensure that this set has no elements in common with other.
+        '''
+        return super().isdisjoint(weakref.ref(item) for item in other)
+
+    def issubset(self, other):
+        ''' Ensure every item in self exists in other.
+        '''
+        return super().issubset(weakref.ref(item) for item in other)
+    __le__ = issubset
+
+    def __lt__(self, other):
+        ''' Test that every item in self exists in other, and that self
+        is not identical to other (a proper subset).
+        '''
+        # Hmmm, is there a race condition between these two?
+        return self.issubset(other) and len(self) != len(other)
+
+    def issuperset(self, other):
+        ''' Test if every element of other is contained in self.
+        '''
+        return super().issuperset(weakref.ref(item) for item in other)
+    __ge__ = issuperset
+
+    def __gt__(self, other):
+        ''' Test that every item in other exists in self, and that self
+        is not identical to other (a proper superset).
+        '''
+        # Hmmm, is there a race condition between these two?
+        return self.issuperset(other) and len(self) != len(other)
+
+    def __eq__(self, other):
+        ''' Compare with both. Note that we can't much compare with any
+        object, since that will be baaad (eg: dict == set). Instead,
+        check that we're comparing against a set or subclass, and then
+        do things accordingly.
+        '''
+        if not isinstance(other, set):
+            raise TypeError('Cannot compare to non-set-like objects.')
+        
+        # We CAN compare.
+        else:
+            # Calculate the symmetric difference -- elements present in one
+            # set XOR the other. If this is empty, we're equal.
+            symdiff = self.symmetric_difference(other)
+            return len(symdiff) == 0
                 
                 
-class _SelfDestructingSet(set):
-    def __init__(self, data, parent, key):
-        super().__init__(data)
-        self.__parent = weakref.proxy(parent)
-        self.__key = key
+class _WeakerSet(_WeakSet):
+    ''' A set subclass intended to be used within a WeakSetMap. It holds
+    all set members as weak references, and it holds a strong reference
+    to self. When self is empty, it kills the strong reference to self.
+    Assuming all other references to self are weak, the _WeakerSet will
+    then be GC'd. Doesn't currently support any of the difference
+    operators, so, uhhh, don't use them.
+    '''
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.__ref = self
         
     def discard(self, *args, **kwargs):
         super().discard(*args, **kwargs)
         if len(self) == 0:
-            with self.__parent._lock:
-                del self.__parent._mapping[self.__key]
+            del self.__ref
         
     def remove(self, *args, **kwargs):
         super().remove(*args, **kwargs)
         if len(self) == 0:
-            with self.__parent._lock:
-                del self.__parent._mapping[self.__key]
+            del self.__ref
         
     def pop(self, *args, **kwargs):
         result = super().pop(*args, **kwargs)
         if len(self) == 0:
-            with self.__parent._lock:
-                del self.__parent._mapping[self.__key]
+            del self.__ref
         return result
+        
+    def clear(self):
+        # Equivalent to deletion.
+        super().clear()
+        del self.__ref
+        
+    def difference_update(self, other):
+        ''' Update, allowing for self to be nixxed.
+        '''
+        super().difference_update(other)
+        if len(self) == 0:
+            del self.__ref
+
+    def intersection_update(self, other):
+        ''' Update, allowing for self to be nixxed.
+        '''
+        super().intersection_update(other)
+        if len(self) == 0:
+            del self.__ref
+
+    def symmetric_difference_update(self, other):
+        ''' Update, allowing for self to be nixxed.
+        '''
+        super().symmetric_difference_update(other)
+        if len(self) == 0:
+            del self.__ref
             
             
 class WeakSetMap(SetMap):
     ''' SetMap that uses WeakerSets internally.
-    ''' 
+    '''
+    
+    def __init__(self, *args, **kwargs):
+        ''' Override our mapping to be a weakref.WeakValueDict.
+        '''
+        super().__init__(*args, **kwargs)
+        self._mapping = weakref.WeakValueDictionary()
+    
     def add(self, key, value):
-        ''' Adds the value to the set at key. Creates a new set there if 
+        ''' Adds the value to the set at key. Creates a new set there if
         none already exists.
         '''
         with self._lock:
             try:
                 self._mapping[key].add(value)
             except KeyError:
-                self._mapping[key] = _WeakerSet(
-                    data = { value }, 
-                    parent = self, 
-                    key = key
-                )
+                self._mapping[key] = _WeakerSet((value,))
                 
     def update(self, key, value):
         ''' Updates the key with the value. Value must support being
@@ -930,11 +1284,7 @@ class WeakSetMap(SetMap):
             try:
                 self._mapping[key].update(value)
             except KeyError:
-                self._mapping[key] = _WeakerSet(
-                    data = value, 
-                    parent = self,
-                    key = key
-                )
+                self._mapping[key] = _WeakerSet(value)
         
 
 class TraceLogger:
