@@ -217,7 +217,7 @@ class _BijectDict:
     '''
     
     def __init__(self, *args, **kwargs):
-        self._opslock = threading.Lock()
+        self._opslock = threading.RLock()
         self._fwd = dict(*args, **kwargs)
         # Make sure no values repeat and that all are hashable
         if len(list(self._fwd.values())) != len(set(self._fwd.values())):
@@ -572,7 +572,7 @@ class Aengel:
         # That would actually break weakref proxies anyways.
         self._guardlings = collections.deque()
         self._dead = False
-        self._stoplock = threading.Lock()
+        self._stoplock = threading.RLock()
         
         if guardlings is not None:
             for guardling in guardlings:
@@ -639,7 +639,7 @@ class TruthyLock:
     used as a threadsafe blocking conditional.
     '''
     def __init__(self):
-        self._opslock = threading.Lock()
+        self._opslock = threading.RLock()
         self._mutexlock = threading.RLock()
         self._cond = False
         
@@ -687,7 +687,7 @@ class SetMap:
         Currently does not support pre-population during __init__().
         '''
         self._mapping = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
     
     def __getitem__(self, key):
         ''' Pass-through to the core lookup. Will return a frozenset.
@@ -864,7 +864,7 @@ class SetMap:
         # Restore instance attributes (i.e., filename and lineno).
         self.__dict__.update(state)
         # Restore the lock.
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
             
             
 class _WeakerSet(weakref.WeakSet):

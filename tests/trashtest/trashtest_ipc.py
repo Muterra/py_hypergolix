@@ -695,3 +695,7 @@ if __name__ == "__main__":
     logutils.autoconfig(loglevel='debug')
     
     unittest.main()
+    
+    # from hypergolix.utils import TraceLogger
+    # with TraceLogger(interval=10):
+    #     unittest.main()
