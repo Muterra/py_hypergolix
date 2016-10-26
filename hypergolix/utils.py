@@ -922,18 +922,24 @@ class _WeakSet(set):
                     # No iterator is currently running, so discard the object
                     # directly.
                     else:
-                        self.discard(item_weakref)
+                        self._discard_ref(item_weakref)
         
         # And now add that to self as a normal function (NOT a bound/unbound
         # method!)
         self._remove = _remove
+            
+        # This is __new__, not __init__, so don't forget to return self.
+        return self
+        
+    def __init__(self, data=None, *args, **kwargs):
+        ''' This is here to prevent set's standard __init__ from adding
+        data as a hard reference to self.
+        '''
+        super().__init__(*args, **kwargs)
         
         # If data was passed, use update (instead of super().__init__())
         if data is not None:
             self.update(data)
-            
-        # This is __new__, not __init__, so don't forget to return self.
-        return self
 
     def __iter__(self):
         ''' Override normal iteration to handle all pending removals at
@@ -966,18 +972,25 @@ class _WeakSet(set):
         # count is decremented.
         finally:
             with self._iterators_lock:
-                try:
-                    memoized_pending_removals = self._pending_removals
-                    memoized_discard = self.discard
+                # ONLY do this on the conclusion of the last iterator,
+                # though, lest we accidentally shaft some other iterator
+                # by changing our size mid-iteration. Also, it should never be
+                # less than 1, but just in case...
+                if self._iterators <= 1:
+                    try:
+                        memoized_pending_removals = self._pending_removals
+                        memoized_discard = self.discard
+                        
+                        # This IS thread-safe, but only because it's using
+                        # while, and because sets are themselves threadsafe.
+                        while memoized_pending_removals:
+                            memoized_discard(memoized_pending_removals.pop())
                     
-                    # This IS thread-safe, but only because it's using while,
-                    # and because sets are themselves threadsafe.
-                    while memoized_pending_removals:
-                        memoized_discard(memoized_pending_removals.pop())
-            
-                # No matter what happens, be sure to decrement the iterators
-                # lock.
-                finally:
+                    # No matter what, be sure to clear the iterator count.
+                    finally:
+                        self._iterators = 0
+                        
+                else:
                     self._iterators -= 1
 
     def __len__(self):
@@ -1059,12 +1072,17 @@ class _WeakSet(set):
         itself.
         '''
         super().discard(weakref.ref(item))
+        
+    def _discard_ref(self, ref):
+        ''' Discards a weakref directly.
+        '''
+        super().discard(ref)
 
     def update(self, other):
         ''' Wrap to add weakrefs instead of the items themselves.
         '''
         # Call super.add directly to avoid a stub function call to self.add.
-        super().add(
+        super().update(
             # As per above, call on a weakref to the item, and use
             # self._remove as its finalizer.
             weakref.ref(item, self._remove) for item in other

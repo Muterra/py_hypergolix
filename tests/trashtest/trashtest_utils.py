@@ -33,11 +33,14 @@ hypergolix: A python Golix client.
 
 '''
 
-# import IPython
 import unittest
-# import warnings
+import weakref
+import gc
 
-# from hypergolix.utils import LooperTrooper
+# These imports fall within the scope of testing.
+from hypergolix.utils import _WeakSet
+from hypergolix.utils import SetMap
+from hypergolix.utils import WeakSetMap
 
 
 # ###############################################
@@ -45,30 +48,36 @@ import unittest
 # ###############################################
 
 
-# TEST_THIS_MANY_THREADED_LOOPERS = 10
-
-
-# class LooperFixture(LooperTrooper):
-#     async def loop_init(self):
-#         self._sum = 0
-#         self._counter = 0
-        
-#     async def loop_run(self):
-#         ctr = self._counter
-#         self._counter += 1
-        
-#         if ctr > 100:
-#             self.stop()
-#         else:
-#             self._sum += self._counter
-        
-#     async def loop_stop(self):
-#         self._counter = 0
+class Refferee:
+    ''' Trivial class that supports both hashing and weak references.
+    '''
 
 
 # ###############################################
 # Testing
 # ###############################################
+
+
+class _WeakSetTest(unittest.TestCase):
+    ''' Test everything about a _WeakSet.
+    '''
+    
+    def test_make(self):
+        obj1 = Refferee()
+        obj2 = Refferee()
+        obj3 = Refferee()
+        obj4 = Refferee()
+        obj5 = Refferee()
+        
+        west0 = weakref.WeakSet((obj1, obj2, obj3, obj4, obj5))
+        
+        west1 = _WeakSet()
+        west2 = _WeakSet((obj1, obj2, obj3, obj4, obj5))
+        
+        for obj in west0:
+            self.assertIn(obj, west2)
+            self.assertNotIn(obj, gc.get_referents(west1))
+            self.assertNotIn(obj, gc.get_referents(west2))
         
         
 # class LooperTrooperTest(unittest.TestCase):
@@ -101,7 +110,7 @@ import unittest
 
 if __name__ == "__main__":
     from hypergolix import logutils
-    logutils.autoconfig()
+    logutils.autoconfig(loglevel='debug')
     
     # from hypergolix.utils import TraceLogger
     # with TraceLogger(interval=10):
