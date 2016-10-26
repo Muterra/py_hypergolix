@@ -87,7 +87,6 @@ class _WeakSetTest(unittest.TestCase):
         '''
         objs = [Refferee() for __ in range(10)]
         objrefs = [weakref.ref(obj) for obj in objs]
-        
         west1 = _WeakSet(objs)
         
         # Does iteration work?
@@ -122,35 +121,16 @@ class _WeakSetTest(unittest.TestCase):
             referents_before - 1,
             len(gc.get_referents(west1))
         )
+    
+    def test_contains(self):
+        ''' Here we want to test one quick thing: that contains works
+        with objects.
+        '''
+        objs = [Refferee() for __ in range(10)]
+        west1 = _WeakSet(objs)
         
-        
-# class LooperTrooperTest(unittest.TestCase):
-#     def test_samethread(self):
-#         looper = LooperFixture(threaded=False)
-#         looper.start()
-#         self.assertTrue(looper._sum >= 5050)
-#         self.assertEqual(looper._counter, 0)
-        
-#     def test_otherthreads(self):
-#         for __ in range(TEST_THIS_MANY_THREADED_LOOPERS):
-#             looper = LooperFixture(threaded=True)
-#             looper._thread.join(timeout=10)
-#             self.assertTrue(looper._sum >= 5050)
-#             self.assertEqual(looper._counter, 0)
-            
-#         looper.stop_threadsafe()
-            
-#         # pass
-#         # self.server._halt()
-        
-#         # -------------------------------------------------------------------
-#         # Comment this out if no interactivity desired
-            
-#         # # Start an interactive IPython interpreter with local namespace,
-#         # # but suppress all IPython-related warnings.
-#         # with warnings.catch_warnings():
-#         #     warnings.simplefilter('ignore')
-#         #     IPython.embed()
+        self.assertIn(objs[0], west1)
+
 
 if __name__ == "__main__":
     from hypergolix import logutils
