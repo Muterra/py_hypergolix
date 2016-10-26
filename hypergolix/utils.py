@@ -873,6 +873,57 @@ class SetMap:
     def __bool__(self):
         # Pass bool straight to mapping.
         return bool(self._mapping)
+            
+            
+class WeakSetMap(SetMap):
+    ''' SetMap that uses WeakerSets internally.
+    '''
+    
+    def __init__(self, *args, **kwargs):
+        ''' Override our mapping to be a weakref.WeakValueDict.
+        '''
+        super().__init__(*args, **kwargs)
+        self._mapping = {}
+    
+    def add(self, key, value):
+        ''' Adds the value to the set at key. Creates a new set there if
+        none already exists.
+        '''
+        with self._lock:
+            try:
+                self._mapping[key].add(value)
+            except KeyError:
+                self._mapping[key] = _KeyedWeakSet(
+                    data = (value,),
+                    parent = self,
+                    key = key,
+                )
+                
+    def update(self, key, value):
+        ''' Updates the key with the value. Value must support being
+        passed to set.update(), and the set constructor.
+        '''
+        with self._lock:
+            try:
+                self._mapping[key].update(value)
+            except KeyError:
+                self._mapping[key] = _KeyedWeakSet(
+                    data = (item for item in value),
+                    parent = self,
+                    key = key,
+                )
+                
+    def __getitem__(self, key):
+        ''' Resolves all of our references.
+        '''
+        result = super().__getitem__(key)
+        return frozenset(ref() for ref in result)
+        
+    def get_any(self, key):
+        ''' Resolve references.
+        '''
+        result = super().get_any(key)
+        return frozenset(ref() for ref in result)
         
         
 class _WeakSet(set):
@@ -900,7 +951,7 @@ class _WeakSet(set):
         # This is the count of how many iterators are currently running
         self._iterators = 0
         # Updating the iterator count is not atomic. This makes it threadsafe.
-        self._iterators_lock = threading.Lock()
+        self._iterators_lock = threading.RLock()
         
         # This is added as a finalizer for all items added to the set. We need
         # the fancy construction so that if our contained objects outlive us,
@@ -1221,13 +1272,128 @@ class _WeakSet(set):
         if not isinstance(other, collections.abc.Set) and \
            not isinstance(other, weakref.WeakSet):
                 raise TypeError('Cannot compare to non-set-like objects.')
+
+        # We're about to do an expensive comparison, so short-circuit if we can
+        elif self is other:
+            return True
         
         # We CAN compare.
         else:
             # Calculate the symmetric difference -- elements present in one
             # set XOR the other. If this is empty, we're equal.
-            symdiff = self.symmetric_difference(other)
+            # Okay, this is an incredibly complicated generator function to
+            # perform a symmetric difference. But, that's what it is.
+            # Don't use self.symmetric_difference, because we want this to
+            # always return a set, so that we don't have to worry about
+            # subclasses changing the behavior of __init__ or symm_diff
+            symdiff = set(
+                item for sset in (self, other) for item in sset if
+                ((item not in self) ^ (item not in other))
+            )
             return len(symdiff) == 0
+                
+                
+class _KeyedWeakSet(_WeakSet):
+    ''' A set subclass intended to be used within a WeakSetMap. It holds
+    all set members as weak references, and it holds a strong reference
+    to self. When self is empty, it kills the strong reference to self.
+    Assuming all other references to self are weak, the _WeakerSet will
+    then be GC'd. Doesn't currently support any of the difference
+    operators, so, uhhh, don't use them.
+    '''
+    
+    def __new__(cls, data, *args, parent, key, **kwargs):
+        ''' In this case, we must have data, parent, and key.
+        '''
+        return super().__new__(cls, data, *args, **kwargs)
+    
+    def __init__(self, data, *args, parent, key, **kwargs):
+        ''' Modify __init__ to add an explicit, intentionally circular
+        reference to self.
+        '''
+        super().__init__(data, *args, **kwargs)
+        self._parent = weakref.ref(parent)
+        self._key = key
+        
+    @property
+    def _live(self):
+        ''' Checks to see if self.__ref still exists. Intended strictly
+        for debugging and testing.
+        '''
+        try:
+            self.__ref
+            
+        except AttributeError:
+            return False
+            
+        else:
+            return True
+        
+    def _discard_ref(self, ref):
+        ''' Discard the reference, and if we have nothing, delete
+        self.__ref as well.
+        '''
+        super()._discard_ref(ref)
+        if len(self) == 0:
+            parent = self._parent()
+            if parent is not None:
+                parent.clear_any(self._key)
+        
+    def discard(self, *args, **kwargs):
+        super().discard(*args, **kwargs)
+        if len(self) == 0:
+            parent = self._parent()
+            if parent is not None:
+                parent.clear_any(self._key)
+        
+    def remove(self, *args, **kwargs):
+        super().remove(*args, **kwargs)
+        if len(self) == 0:
+            parent = self._parent()
+            if parent is not None:
+                parent.clear_any(self._key)
+        
+    def pop(self, *args, **kwargs):
+        result = super().pop(*args, **kwargs)
+        if len(self) == 0:
+            parent = self._parent()
+            if parent is not None:
+                parent.clear_any(self._key)
+        return result
+        
+    def clear(self):
+        # Equivalent to deletion.
+        super().clear()
+        parent = self._parent()
+        if parent is not None:
+            parent.clear_any(self._key)
+        
+    def difference_update(self, other):
+        ''' Update, allowing for self to be nixxed.
+        '''
+        super().difference_update(other)
+        if len(self) == 0:
+            parent = self._parent()
+            if parent is not None:
+                parent.clear_any(self._key)
+
+    def intersection_update(self, other):
+        ''' Update, allowing for self to be nixxed.
+        '''
+        super().intersection_update(other)
+        if len(self) == 0:
+            parent = self._parent()
+            if parent is not None:
+                parent.clear_any(self._key)
+
+    def symmetric_difference_update(self, other):
+        ''' Update, allowing for self to be nixxed.
+        '''
+        super().symmetric_difference_update(other)
+        if len(self) == 0:
+            parent = self._parent()
+            if parent is not None:
+                parent.clear_any(self._key)
                 
                 
 class _WeakerSet(_WeakSet):
@@ -1240,8 +1406,33 @@ class _WeakerSet(_WeakSet):
     '''
     
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        ''' Modify __init__ to add an explicit, intentionally circular
+        reference to self.
+        '''
         self.__ref = self
+        super().__init__(*args, **kwargs)
+        
+    @property
+    def _live(self):
+        ''' Checks to see if self.__ref still exists. Intended strictly
+        for debugging and testing.
+        '''
+        try:
+            self.__ref
+            
+        except AttributeError:
+            return False
+            
+        else:
+            return True
+        
+    def _discard_ref(self, ref):
+        ''' Discard the reference, and if we have nothing, delete
+        self.__ref as well.
+        '''
+        super()._discard_ref(ref)
+        if len(self) == 0:
+            del self.__ref
         
     def discard(self, *args, **kwargs):
         super().discard(*args, **kwargs)
@@ -1284,37 +1475,6 @@ class _WeakerSet(_WeakSet):
         super().symmetric_difference_update(other)
         if len(self) == 0:
             del self.__ref
-            
-            
-class WeakSetMap(SetMap):
-    ''' SetMap that uses WeakerSets internally.
-    '''
-    
-    def __init__(self, *args, **kwargs):
-        ''' Override our mapping to be a weakref.WeakValueDict.
-        '''
-        super().__init__(*args, **kwargs)
-        self._mapping = weakref.WeakValueDictionary()
-    
-    def add(self, key, value):
-        ''' Adds the value to the set at key. Creates a new set there if
-        none already exists.
-        '''
-        with self._lock:
-            try:
-                self._mapping[key].add(value)
-            except KeyError:
-                self._mapping[key] = _WeakerSet((value,))
-                
-    def update(self, key, value):
-        ''' Updates the key with the value. Value must support being
-        passed to set.update(), and the set constructor.
-        '''
-        with self._lock:
-            try:
-                self._mapping[key].update(value)
-            except KeyError:
-                self._mapping[key] = _WeakerSet(value)
         
 
 class TraceLogger:

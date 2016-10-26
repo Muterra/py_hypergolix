@@ -39,6 +39,7 @@ import gc
 
 # These imports fall within the scope of testing.
 from hypergolix.utils import _WeakSet
+# from hypergolix.utils import _WeakerSet
 from hypergolix.utils import SetMap
 from hypergolix.utils import WeakSetMap
 
@@ -63,6 +64,7 @@ class WeakSetTest(unittest.TestCase):
     
     TODO: 100% coverage (we don't have it yet).
     '''
+    TEST_CLS = _WeakSet
     
     def test_make(self):
         obj1 = Refferee()
@@ -73,8 +75,8 @@ class WeakSetTest(unittest.TestCase):
         
         west0 = weakref.WeakSet((obj1, obj2, obj3, obj4, obj5))
         
-        west1 = _WeakSet()
-        west2 = _WeakSet((obj1, obj2, obj3, obj4, obj5))
+        west1 = self.TEST_CLS()
+        west2 = self.TEST_CLS((obj1, obj2, obj3, obj4, obj5))
         
         for obj in west0:
             self.assertIn(obj, west2)
@@ -89,7 +91,7 @@ class WeakSetTest(unittest.TestCase):
         '''
         objs = [Refferee() for __ in range(10)]
         objrefs = [weakref.ref(obj) for obj in objs]
-        west1 = _WeakSet(objs)
+        west1 = self.TEST_CLS(objs)
         
         # Does iteration work?
         for obj1 in west1:
@@ -129,14 +131,14 @@ class WeakSetTest(unittest.TestCase):
         with objects.
         '''
         objs = [Refferee() for __ in range(10)]
-        west1 = _WeakSet(objs)
+        west1 = self.TEST_CLS(objs)
         
         self.assertIn(objs[0], west1)
     
     def test_add(self):
         objs = [Refferee() for __ in range(10)]
         other = Refferee()
-        west1 = _WeakSet(objs)
+        west1 = self.TEST_CLS(objs)
         
         self.assertNotIn(other, west1)
         
@@ -158,7 +160,7 @@ class WeakSetTest(unittest.TestCase):
         ''' Make sure removal of weakrefs happens appropriately.
         '''
         objs = [Refferee() for __ in range(10)]
-        west1 = _WeakSet(objs)
+        west1 = self.TEST_CLS(objs)
         self.assertEqual(len(objs), len(west1))
         del objs
         # Explicit GC call, just in case
@@ -166,23 +168,32 @@ class WeakSetTest(unittest.TestCase):
         self.assertEqual(len(west1), 0)
         
     def test_eq(self):
-        ''' Make sure equal things compare equally. Also, length, just
-        because it seems relevant.
+        ''' Make sure equal things compare equally.
         '''
         objs = {Refferee() for __ in range(10)}
         west0 = weakref.WeakSet(objs)
-        west1 = _WeakSet(objs)
+        west1 = self.TEST_CLS(objs)
+        gc.collect()
         self.assertEqual(west1, objs)
         self.assertEqual(west1, west0)
         
-        self.assertEqual(len(west0), len(west1))
+    def test_len(self):
+        ''' Make sure equal things compare equally. Also, length, just
+        because it seems relevant.
+        '''
+        objnum = 10
+        objs = {Refferee() for __ in range(objnum)}
+        west1 = self.TEST_CLS(objs)
+        gc.collect()
+        self.assertEqual(west1, objs)
+        self.assertEqual(objnum, len(west1))
     
     def test_inplace_stuff(self):
         ''' Test copy, pop, remove, etc.
         '''
         objs = {Refferee() for __ in range(10)}
         west0 = weakref.WeakSet(objs)
-        west1 = _WeakSet(objs)
+        west1 = self.TEST_CLS(objs)
         
         west2 = west1.copy()
         self.assertEqual(west1, west2)
@@ -206,117 +217,222 @@ class WeakSetTest(unittest.TestCase):
         self.assertNotEqual(west1, objs)
         
         
+@unittest.skipIf(True, 'DNE')
+class WeakerSetTest(WeakSetTest):
+    ''' Test creation of _WeakerSets.
+    '''
+    # TEST_CLS = _WeakerSet
+    
+    def test_make(self):
+        objs = {Refferee() for __ in range(10)}
+        west0 = {weakref.ref(item) for item in objs}
+        
+        west1 = self.TEST_CLS()
+        gc.collect()
+        self.assertTrue(west1._live)
+        west2 = self.TEST_CLS(objs)
+        gc.collect()
+        self.assertTrue(west2._live)
+        
+        for obj in objs:
+            self.assertTrue(west2._live)
+            self.assertIn(obj, west2)
+            self.assertNotIn(obj, gc.get_referents(west1))
+            self.assertNotIn(obj, gc.get_referents(west2))
+        
+        
 class SetMapTest(unittest.TestCase):
     ''' Test normal SetMaps.
     '''
+    TEST_CLS = SetMap
     
     def test_make(self):
         # Trivially check to see that it creates w/out error.
-        SetMap()
+        self.TEST_CLS()
         
     def test_setgetupdate(self):
         ''' Test setting items, getting items, and clear.
         '''
-        sm = SetMap()
+        sm = self.TEST_CLS()
         
-        sm.add(1, 'a')
+        a = Refferee()
+        b = Refferee()
+        c = Refferee()
+        
+        sm.add(1, a)
+        gc.collect()
         self.assertIn(1, sm._mapping)
-        self.assertIn('a', sm[1])
-        self.assertEqual(sm[1], {'a'})
+        self.assertIn(a, sm[1])
+        self.assertEqual(sm[1], {a})
         
-        sm.add(1, 'b')
+        sm.add(1, b)
+        gc.collect()
         self.assertIn(1, sm._mapping)
-        self.assertEqual(sm[1], {'a', 'b'})
+        self.assertEqual(sm[1], {a, b})
         
-        self.assertEqual(sm.get_any(1), {'a', 'b'})
+        self.assertEqual(sm.get_any(1), {a, b})
         # get_any should never raise, even if nothing is there
         self.assertEqual(sm.get_any(2), set())
         
         popped = sm.pop_any(1)
-        self.assertEqual(popped, {'a', 'b'})
+        self.assertEqual(popped, {a, b})
         empty = sm.pop_any(2)
         self.assertEqual(empty, set())
         
         sm.clear_all()
+        gc.collect()
         self.assertEqual(sm._mapping, {})
         
-        sm.update(2, {'a', 'b', 'c'})
-        self.assertEqual(sm._mapping[2], {'a', 'b', 'c'})
+        sm.update(2, {a, b, c})
+        gc.collect()
+        self.assertEqual(sm._mapping[2], {a, b, c})
         
         sm.clear(2)
+        gc.collect()
         self.assertEqual(sm._mapping, {})
         
-        sm.update(2, {'a', 'b', 'c'})
-        self.assertEqual(sm._mapping[2], {'a', 'b', 'c'})
+        sm.update(2, {a, b, c})
+        gc.collect()
+        self.assertEqual(sm._mapping[2], {a, b, c})
         
         sm.clear_any(2)
+        gc.collect()
         self.assertEqual(sm._mapping, {})
         sm.clear_any(2)
+        gc.collect()
         
-        sm.add(1, 'a')
-        sm.add(1, 'b')
-        self.assertTrue(sm.contains_within(1, 'b'))
-        sm.discard(1, 'b')
-        self.assertFalse(sm.contains_within(1, 'b'))
-        sm.discard(1, 'b')
-        sm.discard(1, 'b')
+        sm.add(1, a)
+        sm.add(1, b)
+        gc.collect()
+        self.assertTrue(sm.contains_within(1, b))
+        sm.discard(1, b)
+        gc.collect()
+        self.assertFalse(sm.contains_within(1, b))
+        sm.discard(1, b)
+        sm.discard(1, b)
+        gc.collect()
         
-        sm.remove(1, 'a')
+        sm.remove(1, a)
+        gc.collect()
         self.assertNotIn(1, sm)
         
     def test_contains(self):
         ''' Test contains and contains_within. Also, bool, len, eq,
         iter, and combine, just because.
         '''
-        sm = SetMap()
+        a = Refferee()
+        b = Refferee()
+        c = Refferee()
+        
+        sm = self.TEST_CLS()
+        gc.collect()
         self.assertFalse(bool(sm))
         
-        sm.add(1, 'a')
+        sm.add(1, a)
+        gc.collect()
         self.assertTrue(bool(sm))
         
         self.assertIn(1, sm)
         self.assertNotIn(2, sm)
-        self.assertTrue(sm.contains_within(1, 'a'))
-        self.assertFalse(sm.contains_within(2, 'a'))
-        self.assertFalse(sm.contains_within(1, 'b'))
+        self.assertTrue(sm.contains_within(1, a))
+        self.assertFalse(sm.contains_within(2, a))
+        self.assertFalse(sm.contains_within(1, b))
         
-        sm1 = SetMap()
-        sm2 = SetMap()
+        sm1 = self.TEST_CLS()
+        sm2 = self.TEST_CLS()
+        gc.collect()
         
         self.assertEqual(sm1, sm2)
-        sm1.add(1, 'a')
-        sm2.add(1, 'a')
+        sm1.add(1, a)
+        sm2.add(1, a)
+        gc.collect()
         self.assertEqual(sm1, sm2)
-        sm1.add(1, 'b')
+        sm1.add(1, b)
+        gc.collect()
         self.assertNotEqual(sm1, sm2)
         
         self.assertEqual(len(sm1), 1)
         self.assertEqual(len(sm2), 1)
         
-        sm = SetMap()
-        sm.add(1, 'a')
-        sm.add(2, 'a')
-        dd = {1: 'a', 2: 'a'}
+        sm = self.TEST_CLS()
+        sm.add(1, a)
+        sm.add(2, a)
+        gc.collect()
+        dd = {1: a, 2: a}
         for item in sm:
             self.assertIn(item, dd)
             
-        sm1 = SetMap()
-        sm2 = SetMap()
-        sm3 = SetMap()
-        sm1.add(1, 'a')
-        sm2.add(1, 'b')
-        sm3.add(2, 'ab')
+        sm1 = self.TEST_CLS()
+        sm2 = self.TEST_CLS()
+        sm3 = self.TEST_CLS()
+        sm1.add(1, a)
+        sm2.add(1, b)
+        sm3.add(2, c)
+        gc.collect()
         
-        sm12 = SetMap()
-        sm12.add(1, 'a')
-        sm12.add(1, 'b')
+        sm12 = self.TEST_CLS()
+        sm12.add(1, a)
+        sm12.add(1, b)
+        gc.collect()
         
-        sm13 = SetMap()
-        sm13.add(1, 'a')
-        sm13.add(2, 'ab')
+        sm13 = self.TEST_CLS()
+        sm13.add(1, a)
+        sm13.add(2, c)
+        gc.collect()
         
         self.assertEqual(sm1.combine(sm2), sm12)
         self.assertEqual(sm1.combine(sm3), sm13)
+        
+        
+class WeakSetMapTest(SetMapTest):
+    ''' Test weakreffed setmaps.
+    '''
+    TEST_CLS = WeakSetMap
+    
+    def test_weakness(self):
+        ''' Make sure all of the weak stuff works as advertised.
+        '''
+        sm = self.TEST_CLS()
+        
+        a = Refferee()
+        a1 = weakref.ref(a)
+        b = Refferee()
+        b1 = weakref.ref(b)
+        c = Refferee()
+        c1 = weakref.ref(c)
+        
+        sm.add(1, a)
+        sm.add(1, b)
+        sm.add(2, c)
+        
+        gc.collect()
+        self.assertIn(1, sm._mapping)
+        self.assertIn(2, sm._mapping)
+        self.assertTrue(sm.contains_within(1, a))
+        self.assertTrue(sm.contains_within(1, b))
+        self.assertTrue(sm.contains_within(2, c))
+        
+        # Do explicit GC just in case
+        del c
+        gc.collect()
+        self.assertIsNone(c1())
+        self.assertIsNotNone(b1())
+        self.assertIsNotNone(a1())
+        self.assertNotIn(2, sm._mapping)
+        self.assertIn(1, sm._mapping)
+        
+        del b
+        gc.collect()
+        self.assertIsNone(b1())
+        self.assertIsNotNone(a1())
+        self.assertNotIn(2, sm._mapping)
+        self.assertIn(1, sm._mapping)
+        
+        del a
+        gc.collect()
+        self.assertIsNone(a1())
+        self.assertNotIn(1, sm._mapping)
+        self.assertNotIn(2, sm._mapping)
 
 
 if __name__ == "__main__":
