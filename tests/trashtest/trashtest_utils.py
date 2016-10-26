@@ -130,6 +130,37 @@ class _WeakSetTest(unittest.TestCase):
         west1 = _WeakSet(objs)
         
         self.assertIn(objs[0], west1)
+    
+    def test_add(self):
+        objs = [Refferee() for __ in range(10)]
+        other = Refferee()
+        west1 = _WeakSet(objs)
+        
+        self.assertNotIn(other, west1)
+        
+        # Make sure we don't add extra references to the same thing
+        referents_before = len(gc.get_referents(west1))
+        west1.add(objs[0])
+        self.assertEqual(
+            referents_before,
+            len(gc.get_referents(west1))
+        )
+        # And that it's still there
+        self.assertIn(objs[0], west1)
+        
+        # Now make sure add works for something new
+        west1.add(other)
+        self.assertIn(other, west1)
+    
+    # def test_iter(self):
+    #     ''' Here we want to test three things:
+    #     1. that iteration works
+    #     2. that iteration correctly defers removal until after iteration
+    #     3. that removal occurs immediately after iteration
+    #     '''
+    #     objs = [Refferee() for __ in range(10)]
+    #     objrefs = [weakref.ref(obj) for obj in objs]
+    #     west1 = _WeakSet(objs)
 
 
 if __name__ == "__main__":
