@@ -58,7 +58,7 @@ class Refferee:
 # ###############################################
 
 
-class _WeakSetTest(unittest.TestCase):
+class WeakSetTest(unittest.TestCase):
     ''' Test everything about a _WeakSet.
     
     TODO: 100% coverage (we don't have it yet).
@@ -204,6 +204,119 @@ class _WeakSetTest(unittest.TestCase):
         west2.update(objs)
         self.assertEqual(west2, objs)
         self.assertNotEqual(west1, objs)
+        
+        
+class SetMapTest(unittest.TestCase):
+    ''' Test normal SetMaps.
+    '''
+    
+    def test_make(self):
+        # Trivially check to see that it creates w/out error.
+        SetMap()
+        
+    def test_setgetupdate(self):
+        ''' Test setting items, getting items, and clear.
+        '''
+        sm = SetMap()
+        
+        sm.add(1, 'a')
+        self.assertIn(1, sm._mapping)
+        self.assertIn('a', sm[1])
+        self.assertEqual(sm[1], {'a'})
+        
+        sm.add(1, 'b')
+        self.assertIn(1, sm._mapping)
+        self.assertEqual(sm[1], {'a', 'b'})
+        
+        self.assertEqual(sm.get_any(1), {'a', 'b'})
+        # get_any should never raise, even if nothing is there
+        self.assertEqual(sm.get_any(2), set())
+        
+        popped = sm.pop_any(1)
+        self.assertEqual(popped, {'a', 'b'})
+        empty = sm.pop_any(2)
+        self.assertEqual(empty, set())
+        
+        sm.clear_all()
+        self.assertEqual(sm._mapping, {})
+        
+        sm.update(2, {'a', 'b', 'c'})
+        self.assertEqual(sm._mapping[2], {'a', 'b', 'c'})
+        
+        sm.clear(2)
+        self.assertEqual(sm._mapping, {})
+        
+        sm.update(2, {'a', 'b', 'c'})
+        self.assertEqual(sm._mapping[2], {'a', 'b', 'c'})
+        
+        sm.clear_any(2)
+        self.assertEqual(sm._mapping, {})
+        sm.clear_any(2)
+        
+        sm.add(1, 'a')
+        sm.add(1, 'b')
+        self.assertTrue(sm.contains_within(1, 'b'))
+        sm.discard(1, 'b')
+        self.assertFalse(sm.contains_within(1, 'b'))
+        sm.discard(1, 'b')
+        sm.discard(1, 'b')
+        
+        sm.remove(1, 'a')
+        self.assertNotIn(1, sm)
+        
+    def test_contains(self):
+        ''' Test contains and contains_within. Also, bool, len, eq,
+        iter, and combine, just because.
+        '''
+        sm = SetMap()
+        self.assertFalse(bool(sm))
+        
+        sm.add(1, 'a')
+        self.assertTrue(bool(sm))
+        
+        self.assertIn(1, sm)
+        self.assertNotIn(2, sm)
+        self.assertTrue(sm.contains_within(1, 'a'))
+        self.assertFalse(sm.contains_within(2, 'a'))
+        self.assertFalse(sm.contains_within(1, 'b'))
+        
+        sm1 = SetMap()
+        sm2 = SetMap()
+        
+        self.assertEqual(sm1, sm2)
+        sm1.add(1, 'a')
+        sm2.add(1, 'a')
+        self.assertEqual(sm1, sm2)
+        sm1.add(1, 'b')
+        self.assertNotEqual(sm1, sm2)
+        
+        self.assertEqual(len(sm1), 1)
+        self.assertEqual(len(sm2), 1)
+        
+        sm = SetMap()
+        sm.add(1, 'a')
+        sm.add(2, 'a')
+        dd = {1: 'a', 2: 'a'}
+        for item in sm:
+            self.assertIn(item, dd)
+            
+        sm1 = SetMap()
+        sm2 = SetMap()
+        sm3 = SetMap()
+        sm1.add(1, 'a')
+        sm2.add(1, 'b')
+        sm3.add(2, 'ab')
+        
+        sm12 = SetMap()
+        sm12.add(1, 'a')
+        sm12.add(1, 'b')
+        
+        sm13 = SetMap()
+        sm13.add(1, 'a')
+        sm13.add(2, 'ab')
+        
+        self.assertEqual(sm1.combine(sm2), sm12)
+        self.assertEqual(sm1.combine(sm3), sm13)
 
 
 if __name__ == "__main__":

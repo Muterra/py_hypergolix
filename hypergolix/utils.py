@@ -709,11 +709,14 @@ class SetMap:
                 return frozenset()
                 
     def pop_any(self, key):
+        ''' Unlike other methods, pop_any returns the actual set,
+        instead of a frozenset copy.
+        '''
         with self._lock:
             try:
-                return frozenset(self._mapping.pop(key))
+                return self._mapping.pop(key)
             except KeyError:
-                return frozenset()
+                return set()
         
     def __contains__(self, key):
         ''' Check to see if the key exists.
@@ -866,6 +869,10 @@ class SetMap:
         self.__dict__.update(state)
         # Restore the lock.
         self._lock = threading.RLock()
+        
+    def __bool__(self):
+        # Pass bool straight to mapping.
+        return bool(self._mapping)
         
         
 class _WeakSet(set):
