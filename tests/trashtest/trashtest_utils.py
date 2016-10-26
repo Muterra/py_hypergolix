@@ -60,6 +60,8 @@ class Refferee:
 
 class _WeakSetTest(unittest.TestCase):
     ''' Test everything about a _WeakSet.
+    
+    TODO: 100% coverage (we don't have it yet).
     '''
     
     def test_make(self):
@@ -152,15 +154,56 @@ class _WeakSetTest(unittest.TestCase):
         west1.add(other)
         self.assertIn(other, west1)
     
-    # def test_iter(self):
-    #     ''' Here we want to test three things:
-    #     1. that iteration works
-    #     2. that iteration correctly defers removal until after iteration
-    #     3. that removal occurs immediately after iteration
-    #     '''
-    #     objs = [Refferee() for __ in range(10)]
-    #     objrefs = [weakref.ref(obj) for obj in objs]
-    #     west1 = _WeakSet(objs)
+    def test_weakness(self):
+        ''' Make sure removal of weakrefs happens appropriately.
+        '''
+        objs = [Refferee() for __ in range(10)]
+        west1 = _WeakSet(objs)
+        self.assertEqual(len(objs), len(west1))
+        del objs
+        # Explicit GC call, just in case
+        gc.collect()
+        self.assertEqual(len(west1), 0)
+        
+    def test_eq(self):
+        ''' Make sure equal things compare equally. Also, length, just
+        because it seems relevant.
+        '''
+        objs = {Refferee() for __ in range(10)}
+        west0 = weakref.WeakSet(objs)
+        west1 = _WeakSet(objs)
+        self.assertEqual(west1, objs)
+        self.assertEqual(west1, west0)
+        
+        self.assertEqual(len(west0), len(west1))
+    
+    def test_inplace_stuff(self):
+        ''' Test copy, pop, remove, etc.
+        '''
+        objs = {Refferee() for __ in range(10)}
+        west0 = weakref.WeakSet(objs)
+        west1 = _WeakSet(objs)
+        
+        west2 = west1.copy()
+        self.assertEqual(west1, west2)
+        self.assertEqual(west2, west0)
+        
+        obj = west1.pop()
+        self.assertNotIn(obj, west1)
+        self.assertIn(obj, west2)
+        
+        west2.remove(obj)
+        self.assertNotIn(obj, west2)
+        self.assertIn(obj, west0)
+        
+        obj = west1.pop()
+        west2.discard(obj)
+        self.assertNotIn(obj, west2)
+        west2.discard(obj)
+        
+        west2.update(objs)
+        self.assertEqual(west2, objs)
+        self.assertNotEqual(west1, objs)
 
 
 if __name__ == "__main__":

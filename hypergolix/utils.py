@@ -1211,8 +1211,9 @@ class _WeakSet(set):
         check that we're comparing against a set or subclass, and then
         do things accordingly.
         '''
-        if not isinstance(other, set):
-            raise TypeError('Cannot compare to non-set-like objects.')
+        if not isinstance(other, collections.abc.Set) and \
+           not isinstance(other, weakref.WeakSet):
+                raise TypeError('Cannot compare to non-set-like objects.')
         
         # We CAN compare.
         else:
