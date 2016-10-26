@@ -78,6 +78,50 @@ class _WeakSetTest(unittest.TestCase):
             self.assertIn(obj, west2)
             self.assertNotIn(obj, gc.get_referents(west1))
             self.assertNotIn(obj, gc.get_referents(west2))
+    
+    def test_iter(self):
+        ''' Here we want to test three things:
+        1. that iteration works
+        2. that iteration correctly defers removal until after iteration
+        3. that removal occurs immediately after iteration
+        '''
+        objs = [Refferee() for __ in range(10)]
+        objrefs = [weakref.ref(obj) for obj in objs]
+        
+        west1 = _WeakSet(objs)
+        
+        # Does iteration work?
+        for obj1 in west1:
+            self.assertIn(obj1, objs)
+            
+        # Does iteration defer removal until after iteration?
+        referents_before = len(gc.get_referents(west1))
+        for ii, obj1 in enumerate(west1):
+            # Delete the first member.
+            if ii == 0:
+                # Remove the only strong reference to objs[0] (which is not
+                # necessarily the same as the obj1 from enumerate, because
+                # set iteration order is undefined
+                del objs[0]
+                # Make sure the reference persists
+                self.assertEqual(
+                    referents_before,
+                    len(gc.get_referents(west1))
+                )
+            
+            # Wait until we get to the next object to make sure the reference
+            # is actually dead, just in case we were enumerating over the same
+            # object -- in which case, obj1 would hold a strong reference. For
+            # good measure, do an explicit GC call first.
+            elif ii == 1:
+                gc.collect()
+                self.assertIsNone(objrefs[0]())
+        
+        # Does removal occur immediately after iteration?
+        self.assertEqual(
+            referents_before - 1,
+            len(gc.get_referents(west1))
+        )
         
         
 # class LooperTrooperTest(unittest.TestCase):

@@ -979,7 +979,7 @@ class _WeakSet(set):
                 if self._iterators <= 1:
                     try:
                         memoized_pending_removals = self._pending_removals
-                        memoized_discard = self.discard
+                        memoized_discard = self._discard_ref
                         
                         # This IS thread-safe, but only because it's using
                         # while, and because sets are themselves threadsafe.
@@ -1004,11 +1004,9 @@ class _WeakSet(set):
         WEAK REFERENCE is in the container, not the item itself.
         '''
         try:
-            # Support comparison with weakrefs.
-            if isinstance(item, weakref.ref):
-                item_weakref = item
-            else:
-                item_weakref = weakref.ref(item)
+            # Don't automatically support comparison with weakrefs, because
+            # otherwise we don't know for sure that the reference is live.
+            item_weakref = weakref.ref(item)
         
         # Non-weakref-able objects obviously cannot be in the collection.
         except TypeError:
@@ -1017,6 +1015,12 @@ class _WeakSet(set):
         # No errors -> check in super().
         else:
             return super().__contains__(item_weakref)
+
+    def _has_ref(self, ref):
+        ''' Just like the above, but checks for a raw reference. Only
+        intended for debugging and testing.
+        '''
+        return super().__contains__(ref)
 
     def __reduce__(self):
         ''' Punt on pickle support.
