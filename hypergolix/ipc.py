@@ -234,7 +234,7 @@ class _IPCSerializer:
         state       ?B      bytes (implicit length)
         '''
         try:
-            version = data[0:1]
+            # version = data[0:1]
             address = data[1:66]
             author = data[66:131]
             private = data[131:132]

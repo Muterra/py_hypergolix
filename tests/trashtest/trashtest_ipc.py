@@ -125,64 +125,7 @@ class MockRolodex:
         self.shared_objects[ghid] = recipient, requesting_token
         
         
-class MockDispatch:
-    def __init__(self):
-        ''' Just pass through to reset. No further init necessary.
-        '''
-        self.RESET()
-        
-    def RESET(self):
-        ''' Return self to pristine state.
-        '''
-        self.startups = {}
-        self.parents = {}
-        self.tokens = set()
-        
-        # Lookup <api ID>: set(<connection/session/endpoint>)
-        self._endpoints_from_api = WeakSetMap()
-        
-        # Lookup <app token>: <connection/session/endpoint>
-        self._endpoint_from_token = weakref.WeakValueDictionary()
-        # Reverse lookup <connection/session/endpoint>: <app token>
-        self._token_from_endpoint = weakref.WeakKeyDictionary()
-        
-    def which_token(self, connection):
-        try:
-            return self._token_from_endpoint[connection]
-            
-        except KeyError as exc:
-            return None
-        
-    def which_connection(self, token):
-        try:
-            return self._endpoint_from_token[token]
-            
-        except KeyError as exc:
-            return None
-        
-    def start_application(self, connection, token=None):
-        if token is None:
-            token = os.urandom(4)
-        
-        # Don't emulate normal dispatcher behavior here; let everything start,
-        # regardless of status re: "exists in tokens"
-        self.tokens.add(token)
-        self._endpoint_from_token[token] = connection
-        self._token_from_endpoint[connection] = token
-        
-        return token
-        
-    def add_api(self, connection, api_id):
-        ''' Fixtures adding an api.
-        '''
-        self._endpoints_from_api.add(api_id, connection)
-        
-    def remove_api(self, connection, api_id):
-        ''' Fixtures removing an api.
-        '''
-        self._endpoints_from_api.discard(api_id, connection)
-            
-    # These are old fixturing methods
+class OldFakeDispatcher:
         
     def get_parent_token(self, ghid):
         if ghid in self.parents:
@@ -294,7 +237,7 @@ class WSIPCTest(unittest.TestCase):
         )
         cls.golcore = MockGolcore(TEST_AGENT1)
         cls.oracle = MockOracle(TEST_AGENT1)
-        cls.dispatch = MockDispatch()
+        cls.dispatch = Dispatcher.__fixture__()
         cls.rolodex = MockRolodex()
         cls.salmonator = SalmonatorNoop()
         cls.server_protocol.assemble(cls.golcore, cls.oracle, cls.dispatch,
@@ -460,7 +403,7 @@ class HGXLinkTrashtest(unittest.TestCase):
         
         self.golcore = MockGolcore(TEST_AGENT1)
         self.oracle = MockOracle(TEST_AGENT1)
-        self.dispatch = MockDispatch()
+        self.dispatch = Dispatcher.__fixture__()
         self.rolodex = MockRolodex()
         self.salmonator = SalmonatorNoop()
         

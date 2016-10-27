@@ -35,9 +35,9 @@ process control question, not a coding problem.
 '''
 
 
-from hypothetical import API
-from hypothetical import public_api
-from hypothetical import fixture_api
+from .hypothetical import API
+from .hypothetical import public_api
+from .hypothetical import fixture_api
 
 
 class ComponentWithFixturableAPI(metaclass=API):

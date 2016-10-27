@@ -44,6 +44,10 @@ import asyncio
 import loopa
 
 # Intra-package dependencies
+from .hypothetical import API
+from .hypothetical import public_api
+from .hypothetical import fixture_api
+
 from .core import _GAO
 
 from .utils import WeakSetMap
@@ -71,46 +75,6 @@ __all__ = [
 # ###############################################
 # Lib
 # ###############################################
-
-        
-class DispatcherBase(metaclass=abc.ABCMeta):
-    ''' Base class for dispatchers. Dispatchers handle objects; they
-    translate between raw Golix payloads and application objects, as
-    well as shepherding objects appropriately to/from/between different
-    applications. Dispatchers are intended to be combined with agents,
-    and vice versa.
-    '''
-    # def __init__(self, *args, **kwargs):
-    #     super().__init__(*args, **kwargs)
-        
-    @abc.abstractmethod
-    def dispatch_handshake(self, target):
-        ''' Receives the target *object* for a handshake (note: NOT the
-        handshake itself) and dispatches it to the appropriate
-        application.
-        
-        handshake is a StaticObject or DynamicObject.
-        Raises HandshakeError if unsuccessful.
-        '''
-        pass
-        
-    @abc.abstractmethod
-    def dispatch_handshake_ack(self, ack, target):
-        ''' Receives a handshake acknowledgement and dispatches it to
-        the appropriate application.
-        
-        ack is a golix.AsymAck object.
-        '''
-        pass
-    
-    @abc.abstractmethod
-    def dispatch_handshake_nak(self, nak, target):
-        ''' Receives a handshake nonacknowledgement and dispatches it to
-        the appropriate application.
-        
-        ack is a golix.AsymNak object.
-        '''
-        pass
             
             
 _AppDef = collections.namedtuple(
@@ -132,7 +96,7 @@ _ShareLog = collections.namedtuple(
 )
 
 
-class Dispatcher(loopa.TaskLooper):
+class Dispatcher(loopa.TaskLooper, metaclass=API):
     ''' The Dispatcher decides which objects should be delivered where.
     This is decided through either:
     
@@ -161,6 +125,7 @@ class Dispatcher(loopa.TaskLooper):
     concurrent hypergolix instances. See note in ipc.ipccore.send_object
     '''
     
+    @public_api
     def __init__(self, *args, **kwargs):
         ''' Yup yup yup yup yup yup yup
         '''
@@ -202,6 +167,28 @@ class Dispatcher(loopa.TaskLooper):
         # This lookup directly tracks who has a copy of the object
         # Lookup <object ghid>: set(<connection/session/endpoint>)
         self._update_listeners = WeakSetMap()
+        
+    @__init__.fixture
+    def __init__(self, *args, **kwargs):
+        ''' Create a dispatch fixture.
+        '''
+        self.startups = {}
+        self.parents = {}
+        self.tokens = set()
+        
+        # Lookup <api ID>: set(<connection/session/endpoint>)
+        self._endpoints_from_api = WeakSetMap()
+        
+        # Lookup <app token>: <connection/session/endpoint>
+        self._endpoint_from_token = weakref.WeakValueDictionary()
+        # Reverse lookup <connection/session/endpoint>: <app token>
+        self._token_from_endpoint = weakref.WeakKeyDictionary()
+        
+    @fixture_api
+    def RESET(self):
+        ''' Reset the fixture to a pristine state.
+        '''
+        self.__init__()
         
     def assemble(self, ipc_protocol_server):
         # Set up a weakref to the ipc system
@@ -264,11 +251,13 @@ class Dispatcher(loopa.TaskLooper):
         '''
         self._dispatch_q = None
         
+    @public_api
     def add_api(self, connection, api_id):
         ''' Register the connection as currently tracking the api_id.
         '''
         self._endpoints_from_api.add(api_id, connection)
         
+    @public_api
     def remove_api(self, connection, api_id):
         ''' Remove a connection's registration for the api_id. Happens
         automatically when connections are GC'd.
@@ -283,6 +272,7 @@ class Dispatcher(loopa.TaskLooper):
             token = os.urandom(4)
         return token
         
+    @public_api
     def start_application(self, connection, token=None):
         ''' Ensures that an application is known to the dispatcher.
         
@@ -301,6 +291,19 @@ class Dispatcher(loopa.TaskLooper):
             raise UnknownToken('App token unknown to dispatcher.')
             
         # TODO: should these be enclosed within an operations lock?
+        self._endpoint_from_token[token] = connection
+        self._token_from_endpoint[connection] = token
+        
+        return token
+        
+    @start_application.fixture
+    def start_application(self, connection, token=None):
+        if token is None:
+            token = os.urandom(4)
+        
+        # Don't emulate normal dispatcher behavior here; let everything start,
+        # regardless of status re: "exists in tokens"
+        self.tokens.add(token)
         self._endpoint_from_token[token] = connection
         self._token_from_endpoint[connection] = token
         
@@ -553,6 +556,7 @@ class Dispatcher(loopa.TaskLooper):
                     ))
                 )
             
+    @public_api
     def which_token(self, connection):
         ''' Return the token associated with the connection, or None if
         there is no currently defined token.
@@ -563,6 +567,7 @@ class Dispatcher(loopa.TaskLooper):
         except KeyError as exc:
             return None
             
+    @public_api
     def which_connection(self, token):
         ''' Returns the current connection associated with the token, or
         None if there is no currently available connection.
@@ -573,6 +578,7 @@ class Dispatcher(loopa.TaskLooper):
         except KeyError as exc:
             return None
             
+    @public_api
     def register_startup(self, connection, ghid):
         ''' Registers a ghid to be used as a startup object for token.
         '''
@@ -593,6 +599,7 @@ class Dispatcher(loopa.TaskLooper):
             else:
                 self._startup_by_token[token] = ghid
                 
+    @public_api
     def deregister_startup(self, token):
         ''' Deregisters a ghid to be used as a startup object for token.
         '''
