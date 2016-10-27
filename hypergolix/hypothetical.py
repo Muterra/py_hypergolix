@@ -60,12 +60,14 @@ def public_api(func):
     def fixture_closure(fixture_func, public_func=func):
         ''' Defines the decorator for @method.fixture.
         '''
+        # This is the actual __fixture__ method, to be defined via decorator
         public_func.__fixture__ = fixture_func
         return public_func
     
     def interface_closure(interface_func, public_func=func):
         ''' Defines the decorator for @method.fixture.
         '''
+        # This is the actual __interface method, to be defined via decorator
         public_func.__interface__ = interface_func
         return public_func
         
@@ -74,10 +76,6 @@ def public_api(func):
     
     # This denotes that it is an API
     func.__is_api__ = True
-    # This is the actual __fixture__ method, to be defined later
-    func.__fixture__ = None
-    # This is the actual __interface method, to be defined later
-    func.__interface__ = None
     
     return func
     

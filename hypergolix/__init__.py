@@ -73,6 +73,7 @@ from . import core
 from . import dispatch
 from . import embed
 from . import exceptions
+from . import hypothetical
 from . import inquisition
 from . import ipc
 from . import logutils
