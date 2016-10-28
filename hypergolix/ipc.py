@@ -62,22 +62,13 @@ IPC Apps should not have access to objects that are not _Dispatchable.
 '''
 
 # External dependencies
-import abc
-import os
-import warnings
 import weakref
-import threading
 import collections
 
 from golix import Ghid
 
 import concurrent
 import asyncio
-import websockets
-from websockets.exceptions import ConnectionClosed
-
-import time
-# import string
 import traceback
 
 # Intrapackage dependencies
@@ -100,10 +91,8 @@ from .exceptions import IntegrityError
 from .exceptions import UnavailableUpstream
 
 from .utils import call_coroutine_threadsafe
-from .utils import await_sync_future
 from .utils import WeakSetMap
-from .utils import SetMap
-from .utils import _generate_threadnames
+from .utils import ApiID
 
 from .comms import WSConnection as _AutoresponderSession
 from .comms import RequestResponseProtocol as Autoresponder
@@ -117,8 +106,6 @@ from .dispatch import _DispatchableState
 from .dispatch import _AppDef
 
 from .objproxy import ObjBase
-
-from .embed import ApiID
 
 
 # ###############################################
