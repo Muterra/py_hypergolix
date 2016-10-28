@@ -70,6 +70,8 @@ from hypergolix.utils import ApiID
 
 from hypergolix.objproxy import ProxyBase
 
+from hypergolix.embed import HGXLink
+
 from golix import Ghid
 
 from hypergolix.exceptions import HypergolixException
@@ -235,6 +237,8 @@ class WSIPCTest(unittest.TestCase):
             port = 4628,
             tls = False
         )
+        cls.hgxlink1 = HGXLink.__fixture__()
+        cls.client1_protocol.assemble(cls.hgxlink1)
         
         # Set up the second IPC client.
         cls.client2_commander = TaskCommander(
@@ -254,6 +258,8 @@ class WSIPCTest(unittest.TestCase):
             port = 4628,
             tls = False
         )
+        cls.hgxlink2 = HGXLink.__fixture__()
+        cls.client2_protocol.assemble(cls.hgxlink2)
         
         # Finally, start both.
         cls.server_commander.start()
@@ -265,6 +271,28 @@ class WSIPCTest(unittest.TestCase):
         cls.client1_commander.stop_threadsafe_nowait()
         cls.client2_commander.stop_threadsafe_nowait()
         cls.server_commander.stop_threadsafe_nowait()
+        
+    def get_client_conn(self, client, loop):
+        ''' Used to retrieve the server connection associated with
+        client1.
+        '''
+        # Create an arbitrary, unique API id and register it
+        apiid = ApiID(bytes([random.randint(0, 255) for i in range(0, 64)]))
+        await_coroutine_threadsafe(
+            coro = client.register_api(apiid, timeout=1),
+            loop = loop
+        )
+        # Convert the frozenset we'll get from getitem into a set and then pop
+        # the only member of it, thereby getting the connection
+        connection = set(self.dispatch._endpoints_from_api[apiid]).pop()
+        
+        # Restore the dispatch to its previous state
+        await_coroutine_threadsafe(
+            coro = client.deregister_api(apiid, timeout=1),
+            loop = loop
+        )
+        
+        return connection
         
     def test_token(self):
         ''' Test everything in set_token.
@@ -372,7 +400,9 @@ class WSIPCTest(unittest.TestCase):
     def test_objs(self):
         ''' Test getting and making objects.
         '''
+        # Test setup
         self.oracle.RESET()
+        self.dispatch.RESET()
         obj = MockDispatchable(
             author = self.golcore.whoami,
             dynamic = True,
@@ -387,6 +417,7 @@ class WSIPCTest(unittest.TestCase):
         )
         self.oracle.add_object(obj.ghid, obj)
         
+        # Test getting that object
         ghid, author, state, is_link, api_id, private, dynamic, _legroom =\
             await_coroutine_threadsafe(
                 coro = self.client1.get_ghid(obj.ghid),
@@ -396,6 +427,7 @@ class WSIPCTest(unittest.TestCase):
         self.assertEqual(state, b'hello world')
         self.assertEqual(author, self.golcore.whoami)
         
+        # Test "creating" a "new" object
         ghid = await_coroutine_threadsafe(
             coro = self.client1.new_ghid(
                 b'hello world',
@@ -407,6 +439,31 @@ class WSIPCTest(unittest.TestCase):
             loop = self.client1_commander._loop
         )
         self.assertEqual(ghid, obj.ghid)
+        
+        # Test updating an existing object from client
+        update_state = bytes([random.randint(0, 255) for i in range(0, 20)])
+        await_coroutine_threadsafe(
+            coro = self.client1.update_ghid(
+                obj.ghid,
+                update_state,
+                False,
+                7
+            ),
+            loop = self.client1_commander._loop
+        )
+        self.assertEqual(obj.state, update_state)
+        
+        # Test updating an existing object from server
+        conn = self.get_client_conn(
+            self.client1,
+            self.client1_commander._loop
+        )
+        obj.update(bytes([random.randint(0, 255) for i in range(0, 20)]))
+        await_coroutine_threadsafe(
+            coro = self.server_protocol.update_obj(conn, obj.ghid),
+            loop = self.server_commander._loop
+        )
+        self.assertEqual(obj.state, self.hgxlink1.state_lookup[obj.ghid])
         
 
 @unittest.skipIf(True, 'skip deprecated until retooled for testing hgx embed')

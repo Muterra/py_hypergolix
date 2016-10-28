@@ -47,12 +47,9 @@ from loopa.utils import await_coroutine_threadsafe
 from loopa.utils import await_coroutine_loopsafe
 
 # Local dependencies
-from .persistence import _GidcLite
-from .persistence import _GeocLite
-from .persistence import _GobsLite
-from .persistence import _GobdLite
-from .persistence import _GdxxLite
-from .persistence import _GarqLite
+from .hypothetical import API
+from .hypothetical import public_api
+from .hypothetical import fixture_api
 
 from .utils import SetMap
 from .utils import WeakSetMap
@@ -84,11 +81,12 @@ __all__ = [
 # ###############################################
             
 
-class HGXLink1(loopa.TaskCommander):
+class HGXLink(loopa.TaskCommander, metaclass=API):
     ''' Amalgamate all of the necessary app functions into a single
     namespace. Also, and threadsafe and loopsafe bindings for stuff.
     '''
     
+    @public_api
     def __init__(self, ipc_port=7772, autostart=True, debug=False, aengel=None,
                  *args, **kwargs):
         ''' Args:
@@ -123,6 +121,12 @@ class HGXLink1(loopa.TaskCommander):
         
         # Create an executor for awaiting threadsafe callbacks and handlers
         self._executor = concurrent.futures.ThreadPoolExecutor()
+        
+    @__init__.fixture
+    def __init__(self, *args, **kwargs):
+        ''' Fixture all the things!
+        '''
+        self.state_lookup = {}
             
     def track_for_updates(self, obj):
         ''' Called (primarily internally) to automatically subscribe the
@@ -494,6 +498,7 @@ class HGXLink1(loopa.TaskCommander):
             _legroom
         )
         
+    @public_api
     async def _pull_state(self, ghid, state):
         ''' Applies an incoming state update.
         '''
@@ -518,6 +523,12 @@ class HGXLink1(loopa.TaskCommander):
                 'Received update for ' + str(ghid) + '; forcing pull.'
             )
             await obj._force_pull_3141592(state)
+            
+    @_pull_state.fixture
+    async def _pull_state(self, ghid, state):
+        ''' Fixture for applying incoming state update.
+        '''
+        self.state_lookup[ghid] = state
             
     async def freeze(self, obj):
         ''' Wraps the IPC protocol to freeze an object instead of just
@@ -572,7 +583,7 @@ class HGXLink1(loopa.TaskCommander):
             await obj._force_delete_3141592()
 
 
-def HGXLink(ipc_port=7772, debug=False, aengel=None):
+def HGXLink1(ipc_port=7772, debug=False, aengel=None):
     if not aengel:
         aengel = utils.Aengel()
         

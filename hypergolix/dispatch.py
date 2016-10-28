@@ -387,6 +387,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
                 )
                 self._private_by_ghid[ghid] = token
     
+    @public_api
     async def schedule_share_distribution(self, ghid, origin, skip_conn=None):
         ''' Schedules a distribution of an object share.
         '''
@@ -394,6 +395,11 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         await self._dispatch_q.put((
             self._distribute_update, ghid, origin, skip_conn
         ))
+        
+    @schedule_share_distribution.fixture
+    async def schedule_share_distribution(self, *args, **kwargs):
+        # Do nothing.
+        pass
         
     async def _distribute_share(self, ghid, origin, skip_conn):
         ''' Perform an actual share distribution.
@@ -454,6 +460,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
             sharelog = _ShareLog(ghid, origin)
             self._orphan_incoming_shares.add(sharelog)
     
+    @public_api
     async def schedule_update_distribution(self, ghid, deleted=False,
                                            skip_conn=None):
         ''' Schedules a distribution of an object update.
@@ -462,6 +469,11 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         await self._dispatch_q.put((
             self._distribute_update, ghid, deleted, skip_conn
         ))
+    
+    @schedule_update_distribution.fixture
+    async def schedule_update_distribution(self, *args, **kwargs):
+        # Do nothing for the fixture.
+        pass
         
     async def _distribute_update(self, ghid, deleted, skip_conn):
         ''' Perform an actual update distribution.
