@@ -52,6 +52,7 @@ from .core import _GAO
 
 from .utils import WeakSetMap
 from .utils import call_coroutine_threadsafe
+from .utils import NoContext
 
 from .exceptions import DispatchError
 from .exceptions import UnknownToken
@@ -172,9 +173,13 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
     def __init__(self, *args, **kwargs):
         ''' Create a dispatch fixture.
         '''
-        self.startups = {}
-        self.parents = {}
-        self.tokens = set()
+        self._all_known_tokens = set()
+        # Lookup (dict-like) for <app token>: <startup ghid>
+        self._startup_by_token = {}
+        # Lookup (dict-like) for <obj ghid>: <private owner>
+        self._private_by_ghid = {}
+        # Distributed lock for adding app tokens
+        self._token_lock = NoContext()
         
         # Lookup <api ID>: set(<connection/session/endpoint>)
         self._endpoints_from_api = WeakSetMap()
@@ -303,22 +308,35 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         
         # Don't emulate normal dispatcher behavior here; let everything start,
         # regardless of status re: "exists in tokens"
-        self.tokens.add(token)
+        self._all_known_tokens.add(token)
         self._endpoint_from_token[token] = connection
         self._token_from_endpoint[connection] = token
         
         return token
             
+    @public_api
     def track_object(self, connection, ghid):
         ''' Registers a connection as tracking a ghid.
         '''
         self._update_listeners.add(ghid, connection)
         
+    @track_object.fixture
+    def track_object(self, connection, ghid):
+        ''' Don't do anything for this fixture.
+        '''
+        
+    @public_api
     def untrack_object(self, connection, ghid):
         ''' Remove a connection as tracking a ghid.
         '''
         self._update_listeners.discard(ghid, connection)
         
+    @untrack_object.fixture
+    def untrack_object(self, connection, ghid):
+        ''' Don't do anything for this fixture.
+        '''
+        
+    @public_api
     async def register_object(self, connection, ghid, private):
         ''' Call this every time a new object is created to register it
         with the dispatcher, recording it as private or distributing it
@@ -348,6 +366,26 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
                 origin = self._golcore.whoami,
                 skip_conn = connection
             )
+            
+    @register_object.fixture
+    async def register_object(self, connection, ghid, private):
+        ''' Just don't distribute the object.
+        '''
+        if private:
+            try:
+                token = self._token_from_endpoint[connection]
+            
+            except KeyError as exc:
+                raise UnknownToken(
+                    'Must register app token before creating private objects.'
+                ) from exc
+                
+            else:
+                logger.debug(
+                    'Creating private object for ' + str(connection) +
+                    '; bypassing distribution.'
+                )
+                self._private_by_ghid[ghid] = token
     
     async def schedule_share_distribution(self, ghid, origin, skip_conn=None):
         ''' Schedules a distribution of an object share.
@@ -612,7 +650,8 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
                 )
             else:
                 del self._startup_by_token[token]
-        
+    
+    @public_api
     def get_startup_obj(self, token):
         ''' Returns the ghid of the declared startup object for that
         token, or None if none has been declared.

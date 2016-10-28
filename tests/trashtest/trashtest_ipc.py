@@ -55,6 +55,7 @@ from hypergolix.comms import WSConnection
 from hypergolix.comms import ConnectionManager
 
 from hypergolix.core import GolixCore
+from hypergolix.core import Oracle
 
 from hypergolix.dispatch import _Dispatchable
 from hypergolix.dispatch import Dispatcher
@@ -65,8 +66,7 @@ from hypergolix.remotes import SalmonatorNoop
 from hypergolix.utils import Aengel
 from hypergolix.utils import SetMap
 from hypergolix.utils import WeakSetMap
-
-from hypergolix.embed import ApiID
+from hypergolix.utils import ApiID
 
 from hypergolix.objproxy import ProxyBase
 
@@ -86,32 +86,9 @@ from hypergolix.ipc import IPCClientProtocol
 # ###############################################
 
 
+from _fixtures.ghidutils import make_random_ghid
 from _fixtures.identities import TEST_AGENT1
 from _fixtures.identities import TEST_AGENT2
-        
-        
-class MockOracle:
-    def __init__(self, whoami):
-        self.objs = {}
-        self.whoami = whoami.ghid
-        
-    def get_object(self, gaoclass, ghid, *args, **kwargs):
-        return self.objs[ghid]
-        
-    def new_object(self, state, dynamic, api_id, *args, **kwargs):
-        # Make a random address for the ghid
-        obj = MockDispatchable(
-            author = self.whoami,
-            dynamic = dynamic,
-            api_id = api_id,
-            state = state,
-            frozen = False,
-            held = False,
-            deleted = False,
-            oracle = self,
-            *args, **kwargs)
-        self.objs[obj.ghid] = obj
-        return obj
         
         
 class MockRolodex:
@@ -143,12 +120,12 @@ class OldFakeDispatcher:
 class MockDispatchable:
     def __init__(self, dispatch, ipc_core, author, dynamic, api_id, frozen,
                  held, deleted, state, oracle, *args, **kwargs):
-        self.ghid = Ghid.from_bytes(b'\x01' + os.urandom(64))
+        self.ghid = make_random_ghid()
         self.author = author
         self.dynamic = dynamic
         self.api_id = api_id
         # Don't forget that dispatchables assign state as a _DispatchableState
-        self.state = state[1]
+        self.state = state
         self.frozen = frozen
         self.held = held
         self.deleted = deleted
@@ -178,7 +155,7 @@ class MockDispatchable:
         
     @property
     def private(self):
-        return self.ghid in self.dispatch.parents
+        return False
         
     def freeze(self):
         frozen = type(self)(
@@ -233,7 +210,7 @@ class WSIPCTest(unittest.TestCase):
             # debug = True
         )
         cls.golcore = GolixCore.__fixture__(TEST_AGENT1)
-        cls.oracle = MockOracle(TEST_AGENT1)
+        cls.oracle = Oracle.__fixture__()
         cls.dispatch = Dispatcher.__fixture__()
         cls.rolodex = MockRolodex()
         cls.salmonator = SalmonatorNoop()
@@ -298,7 +275,7 @@ class WSIPCTest(unittest.TestCase):
             coro = self.client1.set_token(None, timeout=1),
             loop = self.client1_commander._loop
         )
-        self.assertIn(token, self.dispatch.tokens)
+        self.assertIn(token, self.dispatch._all_known_tokens)
         
         # Test re-creating the same token concurrently from a different conn
         with self.assertRaises(IPCError):
@@ -306,7 +283,7 @@ class WSIPCTest(unittest.TestCase):
                 coro = self.client2.set_token(token, timeout=1),
                 loop = self.client2_commander._loop
             )
-        self.assertIn(token, self.dispatch.tokens)
+        self.assertIn(token, self.dispatch._all_known_tokens)
         
         # Test re-creating the same token concurrently from the same conn
         with self.assertRaises(IPCError):
@@ -314,7 +291,7 @@ class WSIPCTest(unittest.TestCase):
                 coro = self.client1.set_token(token, timeout=1),
                 loop = self.client1_commander._loop
             )
-        self.assertIn(token, self.dispatch.tokens)
+        self.assertIn(token, self.dispatch._all_known_tokens)
         
         # Remove the token and test setting the token.
         self.dispatch.RESET()
@@ -323,7 +300,7 @@ class WSIPCTest(unittest.TestCase):
             loop = self.client1_commander._loop
         )
         self.assertEqual(token2, token)
-        self.assertIn(token, self.dispatch.tokens)
+        self.assertIn(token, self.dispatch._all_known_tokens)
         
     def test_register_api(self):
         ''' Test registration and deregistration of api_ids.
@@ -362,6 +339,74 @@ class WSIPCTest(unittest.TestCase):
         )
         
         self.assertEqual(whoami, self.golcore.whoami)
+        
+    def test_startup_obj(self):
+        ''' Test getting and setting startup objects.
+        '''
+        self.dispatch.RESET()
+        
+        # We need a token to do anything with startup objects, but we don't
+        # need to do anything WITH the token.
+        await_coroutine_threadsafe(
+            coro = self.client1.set_token(None, timeout=1),
+            loop = self.client1_commander._loop
+        )
+        
+        ghid = await_coroutine_threadsafe(
+            coro = self.client1.get_startup_obj(timeout=1),
+            loop = self.client1_commander._loop
+        )
+        self.assertIsNone(ghid)
+        
+        obj = make_random_ghid()
+        await_coroutine_threadsafe(
+            coro = self.client1.register_startup_obj(obj, timeout=1),
+            loop = self.client1_commander._loop
+        )
+        ghid = await_coroutine_threadsafe(
+            coro = self.client1.get_startup_obj(timeout=1),
+            loop = self.client1_commander._loop
+        )
+        self.assertEqual(obj, ghid)
+        
+    def test_objs(self):
+        ''' Test getting and making objects.
+        '''
+        self.oracle.RESET()
+        obj = MockDispatchable(
+            author = self.golcore.whoami,
+            dynamic = True,
+            api_id = ApiID(bytes(64)),
+            state = b'hello world',
+            frozen = False,
+            held = False,
+            deleted = False,
+            oracle = self,
+            dispatch = self.dispatch,
+            ipc_core = self.server
+        )
+        self.oracle.add_object(obj.ghid, obj)
+        
+        ghid, author, state, is_link, api_id, private, dynamic, _legroom =\
+            await_coroutine_threadsafe(
+                coro = self.client1.get_ghid(obj.ghid),
+                loop = self.client1_commander._loop
+            )
+        self.assertEqual(ghid, obj.ghid)
+        self.assertEqual(state, b'hello world')
+        self.assertEqual(author, self.golcore.whoami)
+        
+        ghid = await_coroutine_threadsafe(
+            coro = self.client1.new_ghid(
+                b'hello world',
+                ApiID(bytes(64)),
+                True,
+                False,
+                7
+            ),
+            loop = self.client1_commander._loop
+        )
+        self.assertEqual(ghid, obj.ghid)
         
 
 @unittest.skipIf(True, 'skip deprecated until retooled for testing hgx embed')
@@ -407,7 +452,7 @@ class HGXLinkTrashtest(unittest.TestCase):
         )
         
         self.golcore = GolixCore.__fixture__(TEST_AGENT1)
-        self.oracle = MockOracle(TEST_AGENT1)
+        self.oracle = Oracle.__fixture__()
         self.dispatch = Dispatcher.__fixture__()
         self.rolodex = MockRolodex()
         self.salmonator = SalmonatorNoop()

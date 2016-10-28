@@ -921,6 +921,17 @@ class WeakSetMap(SetMap):
         '''
         result = super().get_any(key)
         return frozenset(ref() for ref in result)
+        
+        
+class NoContext:
+    ''' An empty context manager.
+    '''
+    
+    def __enter__(*args, **kwargs):
+        pass
+        
+    def __exit__(*args, **kwargs):
+        pass
 
 
 # ###############################################

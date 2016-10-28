@@ -202,7 +202,7 @@ class _IPCSerializer:
                 private +
                 dynamic +
                 _legroom +
-                api_id +
+                bytes(api_id) +
                 is_link +
                 state)
         
@@ -227,7 +227,7 @@ class _IPCSerializer:
             private = data[131:132]
             dynamic = data[132:133]
             _legroom = data[133:134]
-            api_id = data[134:199]
+            api_id = ApiID.from_bytes(data[134:199])
             is_link = data[199:200]
             state = data[200:]
             
@@ -252,8 +252,6 @@ class _IPCSerializer:
         _legroom = int.from_bytes(_legroom, 'big')
         if _legroom == 0:
             _legroom = None
-        if api_id == bytes(65):
-            api_id = None
         is_link = bool(int.from_bytes(is_link, 'big'))
         # state also stays unmodified
         

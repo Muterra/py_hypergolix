@@ -61,6 +61,7 @@ from .hypothetical import fixture_api
 
 from .utils import _generate_threadnames
 from .utils import SetMap
+from .utils import NoContext
 
 from .exceptions import RemoteNak
 from .exceptions import HandshakeError
@@ -316,13 +317,15 @@ class GhidProxier:
                 return ghid
         
         
-class Oracle:
+class Oracle(metaclass=API):
     ''' Source for total internal truth and state tracking of objects.
     
     Maintains <ghid>: <obj> lookup. Used by dispatchers to track obj
-    state. Might eventually be used by AgentBase. Just a quick way to 
+    state. Might eventually be used by AgentBase. Just a quick way to
     store and retrieve any objects based on an associated ghid.
     '''
+    
+    @public_api
     def __init__(self):
         ''' Sets up internal tracking.
         '''
@@ -338,8 +341,21 @@ class Oracle:
         self._postman = None
         self._salmonator = None
         
-    def assemble(self, golix_core, ghidproxy, privateer, persistence_core, 
-                bookie, librarian, postman, salmonator):
+    @__init__.fixture
+    def __init__(self):
+        ''' Fixture init.
+        '''
+        self._lookup = {}
+        self._opslock = NoContext()
+        
+    @fixture_api
+    def RESET(self):
+        ''' Simply re-call init.
+        '''
+        self.__init__()
+        
+    def assemble(self, golix_core, ghidproxy, privateer, persistence_core,
+                 bookie, librarian, postman, salmonator):
         # Chicken, meet egg.
         self._golcore = weakref.proxy(golix_core)
         self._ghidproxy = weakref.proxy(ghidproxy)
@@ -349,7 +365,14 @@ class Oracle:
         self._librarian = weakref.proxy(librarian)
         self._postman = weakref.proxy(postman)
         self._salmonator = weakref.proxy(salmonator)
+        
+    @fixture_api
+    def add_object(self, ghid, obj):
+        ''' Add an object to the fixture.
+        '''
+        self._lookup[ghid] = obj
             
+    @public_api
     def get_object(self, gaoclass, ghid, **kwargs):
         try:
             obj = self._lookup[ghid]
@@ -369,7 +392,7 @@ class Oracle:
                     self._salmonator.attempt_pull(ghid, quiet=True)
                 
                 obj = gaoclass.from_ghid(
-                    ghid = ghid, 
+                    ghid = ghid,
                     golix_core = self._golcore,
                     ghidproxy = self._ghidproxy,
                     privateer = self._privateer,
@@ -386,8 +409,15 @@ class Oracle:
             
         return obj
         
+    @get_object.fixture
+    def get_object(self, gaoclass, ghid, **kwargs):
+        ''' Do the easy thing and just pull it out of lookup.
+        '''
+        return self._lookup[ghid]
+        
+    @public_api
     def new_object(self, gaoclass, state, **kwargs):
-        ''' Creates a new object and returns it. Passes all *kwargs to 
+        ''' Creates a new object and returns it. Passes all *kwargs to
         the declared gao_class. Requires a zeroth state, and calls push
         internally.
         '''
@@ -407,6 +437,15 @@ class Oracle:
             self._postman.register(obj)
             self._salmonator.register(obj, skip_refresh=True)
             return obj
+            
+    @new_object.fixture
+    def new_object(self, *args, **kwargs):
+        ''' Relies upon add_object, but otherwise just pops something
+        from the lookup.
+        '''
+        ghid, obj = self._lookup.popitem()
+        self._lookup[ghid] = obj
+        return obj
         
     def forget(self, ghid):
         ''' Removes the object from the cache. Next time an application
