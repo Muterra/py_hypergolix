@@ -819,22 +819,22 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
             raise IPCError('Unknown error while deregistering API.')
         
     @request(b'?I')
-    async def set_whoami(self, connection):
+    async def get_whoami(self, connection):
         ''' Get the current hypergolix fingerprint, or notify an app of
         the current hypergolix fingerprint.
         '''
         return b''
         
-    @set_whoami.request_handler
-    async def set_whoami(self, connection, body):
+    @get_whoami.request_handler
+    async def get_whoami(self, connection, body):
         ''' Handles whoami requests.
         '''
         ghid = Ghid.from_bytes(body)
         self._hgxlink.whoami = ghid
         return b''
         
-    @set_whoami.response_handler
-    async def set_whoami(self, connection, response, exc):
+    @get_whoami.response_handler
+    async def get_whoami(self, connection, response, exc):
         ''' Handles responses to whoami requests.
         '''
         if exc is not None:

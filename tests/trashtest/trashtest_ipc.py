@@ -54,6 +54,8 @@ from hypergolix.comms import BasicServer
 from hypergolix.comms import WSConnection
 from hypergolix.comms import ConnectionManager
 
+from hypergolix.core import GolixCore
+
 from hypergolix.dispatch import _Dispatchable
 from hypergolix.dispatch import Dispatcher
 from hypergolix.dispatch import _AppDef
@@ -86,11 +88,6 @@ from hypergolix.ipc import IPCClientProtocol
 
 from _fixtures.identities import TEST_AGENT1
 from _fixtures.identities import TEST_AGENT2
-        
-        
-class MockGolcore:
-    def __init__(self, whoami):
-        self.whoami = whoami.ghid
         
         
 class MockOracle:
@@ -235,7 +232,7 @@ class WSIPCTest(unittest.TestCase):
             port = 4628,
             # debug = True
         )
-        cls.golcore = MockGolcore(TEST_AGENT1)
+        cls.golcore = GolixCore.__fixture__(TEST_AGENT1)
         cls.oracle = MockOracle(TEST_AGENT1)
         cls.dispatch = Dispatcher.__fixture__()
         cls.rolodex = MockRolodex()
@@ -358,6 +355,14 @@ class WSIPCTest(unittest.TestCase):
         self.assertNotIn(apiid_1, self.dispatch._endpoints_from_api)
         self.assertIn(apiid_2, self.dispatch._endpoints_from_api)
         
+    def test_whoami(self):
+        whoami = await_coroutine_threadsafe(
+            coro = self.client1.get_whoami(timeout=1),
+            loop = self.client1_commander._loop
+        )
+        
+        self.assertEqual(whoami, self.golcore.whoami)
+        
 
 @unittest.skipIf(True, 'skip deprecated until retooled for testing hgx embed')
 class HGXLinkTrashtest(unittest.TestCase):
@@ -401,7 +406,7 @@ class HGXLinkTrashtest(unittest.TestCase):
             thread_name = 'IPCCore'
         )
         
-        self.golcore = MockGolcore(TEST_AGENT1)
+        self.golcore = GolixCore.__fixture__(TEST_AGENT1)
         self.oracle = MockOracle(TEST_AGENT1)
         self.dispatch = Dispatcher.__fixture__()
         self.rolodex = MockRolodex()

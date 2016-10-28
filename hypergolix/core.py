@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -33,21 +33,14 @@ Some notes:
 
 '''
 
-# Control * imports. Therefore controls what is available to toplevel
-# package through __init__.py
-__all__ = [
-    'GolixCore', 
-]
-
 # Global dependencies
+import logging
 import collections
 # import collections.abc
 import weakref
 import threading
-import os
 import abc
 import traceback
-import warnings
 import pickle
 # import atexit
 
@@ -62,6 +55,10 @@ from golix._getlow import GARQ
 from golix._getlow import GDXX
 
 # Intra-package dependencies
+from .hypothetical import API
+from .hypothetical import public_api
+from .hypothetical import fixture_api
+
 from .utils import _generate_threadnames
 from .utils import SetMap
 
@@ -81,12 +78,18 @@ from .persistence import _GdxxLite
 
 
 # ###############################################
-# Logging boilerplate
+# Boilerplate
 # ###############################################
 
 
-import logging
 logger = logging.getLogger(__name__)
+
+
+# Control * imports. Therefore controls what is available to toplevel
+# package through __init__.py
+__all__ = [
+    'GolixCore',
+]
 
         
 # ###############################################
@@ -94,12 +97,13 @@ logger = logging.getLogger(__name__)
 # ###############################################
             
             
-class GolixCore:
+class GolixCore(metaclass=API):
     ''' Wrapper around Golix library that automates much of the state
     management, holds the Agent's identity, etc etc.
     '''
     DEFAULT_LEGROOM = 7
     
+    @public_api
     def __init__(self):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
@@ -115,6 +119,12 @@ class GolixCore:
         # Added during assembly
         self._librarian = None
         
+    @__init__.fixture
+    def __init__(self, test_agent):
+        ''' Just, yknow, throw in the towel. Err, agent. Whatever.
+        '''
+        self._identity = test_agent
+        
     def assemble(self, librarian):
         # Chicken, meet egg.
         self._librarian = weakref.proxy(librarian)
@@ -129,12 +139,13 @@ class GolixCore:
         
     @property
     def _legroom(self):
-        ''' Get the legroom from our bootstrap. If it hasn't been 
+        ''' Get the legroom from our bootstrap. If it hasn't been
         created yet (aka within __init__), return the class default.
         '''
         return self.DEFAULT_LEGROOM
         
     @property
+    @public_api
     def whoami(self):
         ''' Return the Agent's Ghid.
         '''
