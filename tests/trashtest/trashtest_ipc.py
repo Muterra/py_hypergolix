@@ -61,7 +61,7 @@ from hypergolix.dispatch import _Dispatchable
 from hypergolix.dispatch import Dispatcher
 from hypergolix.dispatch import _AppDef
 
-from hypergolix.remotes import SalmonatorNoop
+from hypergolix.remotes import Salmonator
 
 from hypergolix.utils import Aengel
 from hypergolix.utils import SetMap
@@ -215,7 +215,7 @@ class WSIPCTest(unittest.TestCase):
         cls.oracle = Oracle.__fixture__()
         cls.dispatch = Dispatcher.__fixture__()
         cls.rolodex = MockRolodex()
-        cls.salmonator = SalmonatorNoop()
+        cls.salmonator = Salmonator.__fixture__()
         cls.server_protocol.assemble(cls.golcore, cls.oracle, cls.dispatch,
                                      cls.rolodex, cls.salmonator)
         

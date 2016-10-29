@@ -60,6 +60,10 @@ from golix import SecurityError
 from golix.utils import generate_ghidlist_parser
 
 # Local dependencies
+from .hypothetical import API
+from .hypothetical import public_api
+from .hypothetical import fixture_api
+
 from .persistence import _GidcLite
 from .persistence import _GeocLite
 from .persistence import _GobsLite
@@ -404,11 +408,12 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
         return b'\x01'
 
 
-class Salmonator(loopa.TaskLooper):
+class Salmonator(loopa.TaskLooper, metaclass=API):
     ''' Responsible for disseminating Golix objects upstream and
     downstream. Handles all comms with them as well.
     '''
     
+    @public_api
     def __init__(self, *args, **kwargs):
         ''' Yarp.
         '''
@@ -432,6 +437,12 @@ class Salmonator(loopa.TaskLooper):
         
         super().__init__(*args, **kwargs)
         
+    @__init__.fixture
+    def __init__(self, *args, **kwargs):
+        ''' Do nothing.
+        '''
+        pass
+        
     def assemble(self, golix_core, persistence_core, doorman, postman,
                  librarian):
         self._golcore = weakref.proxy(golix_core)
@@ -439,6 +450,7 @@ class Salmonator(loopa.TaskLooper):
         self._postman = weakref.proxy(postman)
         self._librarian = weakref.proxy(librarian)
     
+    @public_api
     def add_upstream_remote(self, persister):
         ''' Adds an upstream persister.
         
@@ -479,6 +491,13 @@ class Salmonator(loopa.TaskLooper):
                 ''.join(traceback.format_exc())
             )
         
+    @add_upstream_remote.fixture
+    def add_upstream_remote(self, *args, **kwargs):
+        ''' Do nothing.
+        '''
+        pass
+        
+    @public_api
     def remove_upstream_remote(self, persister):
         ''' Inverse of above.
         '''
@@ -486,6 +505,12 @@ class Salmonator(loopa.TaskLooper):
             self._upstream_remotes.remove(persister)
             # Remove all subscriptions
             persister.disconnect()
+        
+    @remove_upstream_remote.fixture
+    def remove_upstream_remote(self, *args, **kwargs):
+        ''' Do nothing.
+        '''
+        pass
         
     def add_downstream_remote(self, persister):
         ''' Adds a downstream persister.
@@ -555,6 +580,7 @@ class Salmonator(loopa.TaskLooper):
         if to_push in finished:
             await self.push(to_push.result())
         
+    @public_api
     def schedule_pull(self, ghid):
         ''' Tells the salmonator to pull the ghid at the earliest
         opportunity and returns. Call from a different thread.
@@ -564,6 +590,13 @@ class Salmonator(loopa.TaskLooper):
             loop = self._loop
         )
         
+    @schedule_pull.fixture
+    def schedule_pull(self, *args, **kwargs):
+        ''' Do nothing.
+        '''
+        pass
+    
+    @public_api
     def schedule_push(self, ghid):
         ''' Grabs the ghid from librarian and sends it to all applicable
         remotes.
@@ -572,6 +605,12 @@ class Salmonator(loopa.TaskLooper):
             coro = self._push_q.put(ghid),
             loop = self._loop
         )
+        
+    @schedule_push.fixture
+    def schedule_push(self, *args, **kwargs):
+        ''' Do nothing.
+        '''
+        pass
         
     async def push(self, ghid):
         ''' Push a single ghid to all remotes.
@@ -725,6 +764,7 @@ class Salmonator(loopa.TaskLooper):
         
         logger.debug('Successful pull handled.')
         
+    @public_api
     def attempt_pull(self, ghid, quiet=False):
         ''' Grabs the ghid from remotes, if available, and puts it into
         the ingestion pipeline.
@@ -746,6 +786,12 @@ class Salmonator(loopa.TaskLooper):
                     'Object was unavailable or unacceptable upstream, but '
                     'pull was called quietly: ' + str(ghid)
                 )
+        
+    @attempt_pull.fixture
+    def attempt_pull(self, *args, **kwargs):
+        ''' Do nothing.
+        '''
+        pass
         
     def _attempt_pull_single(self, ghid, remote):
         ''' Attempt to fetch a single object from a single remote. If
@@ -849,7 +895,8 @@ class Salmonator(loopa.TaskLooper):
         # If we didn't find a loader, typeerror.
         else:
             raise TypeError('Invalid object type while verifying object.')
-            
+    
+    @public_api
     def register(self, gao, skip_refresh=False):
         ''' Tells the Salmonator to listen upstream for any updates
         while the gao is retained in memory.
@@ -880,7 +927,14 @@ class Salmonator(loopa.TaskLooper):
         # This should also catch any upstream deletes.
         if not skip_refresh:
             self.attempt_pull(gao.ghid, quiet=True)
-                
+    
+    @register.fixture
+    def register(self, *args, **kwargs):
+        ''' Do nothing.
+        '''
+        pass
+        
+    @public_api
     def deregister(self, ghid):
         ''' Tells the salmonator to stop listening for upstream
         object updates. Primarily intended for use as a finalizer
@@ -910,6 +964,12 @@ class Salmonator(loopa.TaskLooper):
                         ''.join(traceback.format_exc())
                     )
                 
+    @deregister.fixture
+    def deregister(self, *args, **kwargs):
+        ''' Do nothing.
+        '''
+        pass
+        
                 
 class SalmonatorNoop:
     ''' Currently used in remote persistence servers to hush everything
@@ -918,6 +978,8 @@ class SalmonatorNoop:
     And by "used", I mean "unused, but is intended to be added in at
     some point, because I forgot I was just using a standard Salmonator
     because the overhead is unimportant right now".
+    
+    This is deprecated and replaced by Salmonator.__fixture__().
     '''
     
     def __init__(self, *args, **kwargs):
