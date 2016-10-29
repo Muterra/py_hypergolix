@@ -152,8 +152,18 @@ class API(type):
         
         # Now add in the types for both the fixture and the interface.
         # Reuse same bases for both.
-        cls.__fixture__ = type(fixture_name, bases, fixture_namespace)
-        cls.__interface__ = type(interface_name, bases, interface_namespace)
+        cls.__fixture__ = super().__new__(
+            mcls,
+            fixture_name,
+            bases,
+            fixture_namespace
+        )
+        cls.__interface__ = super().__new__(
+            mcls,
+            interface_name,
+            bases,
+            interface_namespace
+        )
         
         # And don't forget to return the final cls object.
         return cls
