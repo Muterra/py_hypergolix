@@ -127,6 +127,8 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
         ''' Fixture all the things!
         '''
         self.state_lookup = {}
+        self.share_lookup = {}
+        self.deleted = set()
             
     def track_for_updates(self, obj):
         ''' Called (primarily internally) to automatically subscribe the
@@ -543,6 +545,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
         
         return frozen
             
+    @public_api
     async def handle_share(self, ghid, origin):
         ''' Handles an incoming shared object.
         '''
@@ -570,6 +573,13 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
             # req/res session
             asyncio.ensure_future(handler(obj))
             
+    @handle_share.fixture
+    async def handle_share(self, ghid, origin):
+        ''' Fixture handling an incoming share object.
+        '''
+        self.share_lookup[ghid] = origin
+            
+    @public_api
     async def handle_delete(self, ghid):
         ''' Applies an incoming delete.
         '''
@@ -581,6 +591,12 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
         
         else:
             await obj._force_delete_3141592()
+            
+    @handle_delete.fixture
+    async def handle_delete(self, ghid):
+        ''' Fixtures handling an incoming delete.
+        '''
+        self.deleted.add(ghid)
 
 
 def HGXLink1(ipc_port=7772, debug=False, aengel=None):

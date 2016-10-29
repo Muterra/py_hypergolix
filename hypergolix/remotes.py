@@ -765,17 +765,14 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         logger.debug('Successful pull handled.')
         
     @public_api
-    def attempt_pull(self, ghid, quiet=False):
+    async def attempt_pull(self, ghid, quiet=False):
         ''' Grabs the ghid from remotes, if available, and puts it into
         the ingestion pipeline.
         '''
         # TODO: check locally, run _inspect, check if mutable before blindly
         # pulling.
         try:
-            call_coroutine_threadsafe(
-                coro = self.pull(ghid),
-                loop = self._loop
-            )
+            await self.pull(ghid)
             
         except UnavailableUpstream:
             if not quiet:
@@ -788,7 +785,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                 )
         
     @attempt_pull.fixture
-    def attempt_pull(self, *args, **kwargs):
+    async def attempt_pull(self, *args, **kwargs):
         ''' Do nothing.
         '''
         pass

@@ -44,6 +44,10 @@ from golix.utils import AsymAck
 from golix.utils import AsymNak
 
 # Local dependencies
+from .hypothetical import API
+from .hypothetical import public_api
+from .hypothetical import fixture_api
+
 from .exceptions import UnknownParty
 
 from .persistence import _GarqLite
@@ -62,7 +66,7 @@ logger = logging.getLogger(__name__)
 
 # Control * imports.
 __all__ = [
-    'Rolodex', 
+    'Rolodex',
 ]
 
 
@@ -77,14 +81,16 @@ _SharePair = collections.namedtuple(
 )
 
 
-class Rolodex:
+class Rolodex(metaclass=API):
     ''' Handles sharing, requests, etc.
     
-    In the future, will maintain a contacts list to approve/reject 
+    In the future, will maintain a contacts list to approve/reject
     incoming requests. In the further future, will maintain sharing
     pipelines, negotiated through handshakes, to perform sharing
     symmetrically between contacts.
     '''
+    
+    @public_api
     def __init__(self):
         self._opslock = threading.Lock()
         
@@ -96,16 +102,30 @@ class Rolodex:
         self._ipccore = None
         self._salmonator = None
         
-        # Persistent dict-like lookup for 
+        # Persistent dict-like lookup for
         # request_ghid -> (request_target, request recipient)
         self._pending_requests = None
         # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
         self._outstanding_shares = None
         
+    @__init__.fixture
+    def __init__(self):
+        ''' Init the fixture.
+        '''
+        self.shared = {}
+        self._pending_requests = {}
+        self._outstanding_shares = {}
+        
+    @fixture_api
+    def RESET(self):
+        ''' Super simple reset alias to __init__.
+        '''
+        self.__init__()
+        
     def bootstrap(self, pending_requests, outstanding_shares):
         ''' Initialize distributed state.
         '''
-        # Persistent dict-like lookup for 
+        # Persistent dict-like lookup for
         # request_ghid -> (request_target, request recipient)
         self._pending_requests = pending_requests
         
@@ -113,8 +133,8 @@ class Rolodex:
         # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
         self._outstanding_shares = outstanding_shares
         
-    def assemble(self, golix_core, privateer, dispatch, persistence_core, 
-                librarian, salmonator, ghidproxy, ipc_core):
+    def assemble(self, golix_core, privateer, dispatch, persistence_core,
+                 librarian, salmonator, ghidproxy, ipc_core):
         # Chicken, meet egg.
         self._golcore = weakref.proxy(golix_core)
         self._privateer = weakref.proxy(privateer)
@@ -125,7 +145,8 @@ class Rolodex:
         self._ghidproxy = weakref.proxy(ghidproxy)
         self._ipccore = weakref.proxy(ipc_core)
         
-    def share_object(self, target, recipient, requesting_token):
+    @public_api
+    async def share_object(self, target, recipient, requesting_token):
         ''' Share a target ghid with the recipient.
         '''
         if not isinstance(target, Ghid):
@@ -144,6 +165,14 @@ class Rolodex:
         
         if requesting_token is not None:
             self._outstanding_shares.add(sharepair, requesting_token)
+            
+    @share_object.fixture
+    async def share_object(self, target, recipient, requesting_token):
+        ''' Pretty basic.
+        '''
+        # Ignore requesting token, because we won't generally set it when
+        # testing this.
+        self.shared[target] = recipient
         
     def _hand_object(self, target, recipient):
         ''' Initiates a handshake request with the recipient.

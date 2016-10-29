@@ -62,6 +62,7 @@ from hypergolix.dispatch import Dispatcher
 from hypergolix.dispatch import _AppDef
 
 from hypergolix.remotes import Salmonator
+from hypergolix.rolodex import Rolodex
 
 from hypergolix.utils import Aengel
 from hypergolix.utils import SetMap
@@ -91,14 +92,6 @@ from hypergolix.ipc import IPCClientProtocol
 from _fixtures.ghidutils import make_random_ghid
 from _fixtures.identities import TEST_AGENT1
 from _fixtures.identities import TEST_AGENT2
-        
-        
-class MockRolodex:
-    def __init__(self):
-        self.shared_objects = {}
-        
-    def share_object(self, ghid, recipient, requesting_token):
-        self.shared_objects[ghid] = recipient, requesting_token
         
         
 class OldFakeDispatcher:
@@ -214,7 +207,7 @@ class WSIPCTest(unittest.TestCase):
         cls.golcore = GolixCore.__fixture__(TEST_AGENT1)
         cls.oracle = Oracle.__fixture__()
         cls.dispatch = Dispatcher.__fixture__()
-        cls.rolodex = MockRolodex()
+        cls.rolodex = Rolodex.__fixture__()
         cls.salmonator = Salmonator.__fixture__()
         cls.server_protocol.assemble(cls.golcore, cls.oracle, cls.dispatch,
                                      cls.rolodex, cls.salmonator)
@@ -397,17 +390,18 @@ class WSIPCTest(unittest.TestCase):
         )
         self.assertEqual(obj, ghid)
         
-    def test_objs(self):
+    def test_obj_get(self):
         ''' Test getting and making objects.
         '''
         # Test setup
         self.oracle.RESET()
         self.dispatch.RESET()
+        seed_state = bytes([random.randint(0, 255) for i in range(0, 20)])
         obj = MockDispatchable(
             author = self.golcore.whoami,
             dynamic = True,
             api_id = ApiID(bytes(64)),
-            state = b'hello world',
+            state = seed_state,
             frozen = False,
             held = False,
             deleted = False,
@@ -424,8 +418,27 @@ class WSIPCTest(unittest.TestCase):
                 loop = self.client1_commander._loop
             )
         self.assertEqual(ghid, obj.ghid)
-        self.assertEqual(state, b'hello world')
+        self.assertEqual(state, seed_state)
         self.assertEqual(author, self.golcore.whoami)
+        
+    def test_obj_new(self):
+        # Test setup
+        self.oracle.RESET()
+        self.dispatch.RESET()
+        seed_state = bytes([random.randint(0, 255) for i in range(0, 20)])
+        obj = MockDispatchable(
+            author = self.golcore.whoami,
+            dynamic = True,
+            api_id = ApiID(bytes(64)),
+            state = seed_state,
+            frozen = False,
+            held = False,
+            deleted = False,
+            oracle = self,
+            dispatch = self.dispatch,
+            ipc_core = self.server
+        )
+        self.oracle.add_object(obj.ghid, obj)
         
         # Test "creating" a "new" object
         ghid = await_coroutine_threadsafe(
@@ -439,6 +452,25 @@ class WSIPCTest(unittest.TestCase):
             loop = self.client1_commander._loop
         )
         self.assertEqual(ghid, obj.ghid)
+        
+    def test_obj_update(self):
+        # Test setup
+        self.oracle.RESET()
+        self.dispatch.RESET()
+        seed_state = bytes([random.randint(0, 255) for i in range(0, 20)])
+        obj = MockDispatchable(
+            author = self.golcore.whoami,
+            dynamic = True,
+            api_id = ApiID(bytes(64)),
+            state = seed_state,
+            frozen = False,
+            held = False,
+            deleted = False,
+            oracle = self,
+            dispatch = self.dispatch,
+            ipc_core = self.server
+        )
+        self.oracle.add_object(obj.ghid, obj)
         
         # Test updating an existing object from client
         update_state = bytes([random.randint(0, 255) for i in range(0, 20)])
@@ -464,6 +496,48 @@ class WSIPCTest(unittest.TestCase):
             loop = self.server_commander._loop
         )
         self.assertEqual(obj.state, self.hgxlink1.state_lookup[obj.ghid])
+        
+    def test_obj_sync(self):
+        # Test forceful sync from client
+        # Test setup
+        self.oracle.RESET()
+        self.dispatch.RESET()
+        
+        await_coroutine_threadsafe(
+            coro = self.client1.sync_ghid(make_random_ghid()),
+            loop = self.client1_commander._loop
+        )
+        # This doesn't have a success test (yet)
+        
+    def test_obj_share(self):
+        ''' Test sharing. Bidirectional.
+        '''
+        # Test setup
+        self.oracle.RESET()
+        self.dispatch.RESET()
+        self.rolodex.RESET()
+        
+        # Test sharing object from client
+        recipient = make_random_ghid()
+        ghid = make_random_ghid()
+        await_coroutine_threadsafe(
+            coro = self.client1.share_ghid(ghid, recipient),
+            loop = self.client1_commander._loop
+        )
+        self.assertEqual(self.rolodex.shared[ghid], recipient)
+        
+        # Test updating an existing object from server
+        conn = self.get_client_conn(
+            self.client1,
+            self.client1_commander._loop
+        )
+        origin = make_random_ghid()
+        ghid = make_random_ghid()
+        await_coroutine_threadsafe(
+            coro = self.server_protocol.share_obj(conn, ghid, origin),
+            loop = self.server_commander._loop
+        )
+        self.assertEqual(self.hgxlink1.share_lookup[ghid], origin)
         
 
 @unittest.skipIf(True, 'skip deprecated until retooled for testing hgx embed')
