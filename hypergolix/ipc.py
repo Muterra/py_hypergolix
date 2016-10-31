@@ -72,6 +72,9 @@ import asyncio
 import traceback
 
 # Intrapackage dependencies
+from .hypothetical import public_api
+from .hypothetical import fixture_api
+
 from .exceptions import HandshakeError
 from .exceptions import HandshakeWarning
 from .exceptions import IPCError
@@ -94,10 +97,7 @@ from .utils import call_coroutine_threadsafe
 from .utils import WeakSetMap
 from .utils import ApiID
 
-from .comms import WSConnection as _AutoresponderSession
-from .comms import RequestResponseProtocol as Autoresponder
-from .comms import MsgBuffer as AutoresponseConnector
-
+from .comms import RequestResponseAPI
 from .comms import RequestResponseProtocol
 from .comms import request
 
@@ -265,11 +265,12 @@ class _IPCSerializer:
                 _legroom)
 
 
-class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
+class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
                         error_codes=ERROR_CODES, default_version=b'\x00\x00'):
     ''' Defines the protocol for IPC, with handlers specific to servers.
     '''
     
+    @public_api
     def __init__(self, *args, **kwargs):
         ''' Add intentionally invalid init to force assemblage.
         '''
@@ -280,6 +281,10 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         self._golcore = None
         self._rolodex = None
         self._salmonator = None
+        
+    @__init__.fixture
+    def __init__(self, whoami):
+        self._whoami = whoami
         
     def assemble(self, golix_core, oracle, dispatch, rolodex, salmonator):
         # Chicken, egg, etc.
@@ -366,6 +371,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         
         return b'\x01'
         
+    @public_api
     @request(b'?I')
     async def whoami(self, connection):
         ''' Get the current hypergolix fingerprint, or notify an app of
@@ -731,7 +737,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         return b'\x01'
 
 
-class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
+class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
                         error_codes=ERROR_CODES, default_version=b'\x00\x00'):
     ''' Defines the protocol for IPC, with handlers specific to clients.
     '''
@@ -816,6 +822,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         else:
             raise IPCError('Unknown error while deregistering API.')
         
+    @public_api
     @request(b'?I')
     async def get_whoami(self, connection):
         ''' Get the current hypergolix fingerprint, or notify an app of
@@ -840,6 +847,12 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseProtocol,
         else:
             ghid = Ghid.from_bytes(response)
             return ghid
+            
+    @get_whoami.fixture
+    async def get_whoami(self, connection):
+        ''' Fixture for get_whoami.
+        '''
+        return self._whoami
         
     @request(b'>$')
     async def get_startup_obj(self, connection):

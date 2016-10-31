@@ -156,13 +156,17 @@ class API(type):
             mcls,
             fixture_name,
             bases,
-            fixture_namespace
+            fixture_namespace,
+            *args,
+            **kwargs
         )
         cls.__interface__ = super().__new__(
             mcls,
             interface_name,
             bases,
-            interface_namespace
+            interface_namespace,
+            *args,
+            **kwargs
         )
         
         # And don't forget to return the final cls object.

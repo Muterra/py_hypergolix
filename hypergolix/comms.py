@@ -45,6 +45,9 @@ import random
 
 from collections import namedtuple
 
+# Internal deps
+from .hypothetical import API
+
 from .exceptions import RequestError
 from .exceptions import RequestFinished
 from .exceptions import RequestUnknown
@@ -657,6 +660,13 @@ class RequestResponseProtocol(type):
         super().__init__(*args)
         
         
+class RequestResponseAPI(API, RequestResponseProtocol):
+    ''' Combine the metaclass for a hypothetical.API with the
+    RequestResponseProtocol.
+    '''
+    pass
+        
+        
 class _RequestToken(int):
     ''' Add a specific bytes representation for the int for token
     packing, and modify str() to be a fixed length.
@@ -779,25 +789,17 @@ def request(code):
             ''' This is called by @request_coro.request_handler as a
             decorator for the response coro.
             '''
-            # Make a copy of ourselves with the response_coro set!
-            # Due to memoization, we don't need to rewrite the code
-            return type(self)(
-                request_coro = self._request_coro,
-                request_handler = handler_coro,
-                response_handler = self._response_handler_coro
-            )
+            # Modify our internal structure and return ourselves.
+            self._request_handler_coro = handler_coro
+            return self
             
         def response_handler(self, handler_coro):
             ''' This is called by @request_coro.response_handler as a
             decorator for the request coro.
             '''
-            # Make a copy of ourselves with the response_coro set!
-            # Due to memoization, we don't need to rewrite the code
-            return type(self)(
-                request_coro = self._request_coro,
-                request_handler = self._request_handler_coro,
-                response_handler = handler_coro
-            )
+            # Modify our internal structure and return ourselves.
+            self._response_handler_coro = handler_coro
+            return self
             
     # Don't forget to return the descriptor as the result of the decorator!
     return ReqResDescriptor
