@@ -427,6 +427,19 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         self._dispatch.register_startup(connection, ghid)
         return b'\x01'
         
+    @request(b'-$')
+    async def deregister_startup_obj(self, connection):
+        ''' Register a startup object. Client only.
+        '''
+        raise NotImplementedError()
+        
+    @deregister_startup_obj.request_handler
+    async def deregister_startup_obj(self, connection):
+        ''' Handles startup object registration. Server only.
+        '''
+        self._dispatch.deregister_startup(connection)
+        return b'\x01'
+        
     @request(b'>O')
     async def get_obj(self, connection):
         ''' Get an object with the specified address. Client only.
@@ -889,6 +902,18 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         
     @register_startup_obj.request_handler
     async def register_startup_obj(self, connection, body):
+        ''' Handles startup object registration. Server only.
+        '''
+        raise NotImplementedError()
+        
+    @request(b'-$')
+    async def deregister_startup_obj(self, connection):
+        ''' Register a startup object. Client only.
+        '''
+        return b''
+        
+    @deregister_startup_obj.request_handler
+    async def deregister_startup_obj(self, connection):
         ''' Handles startup object registration. Server only.
         '''
         raise NotImplementedError()

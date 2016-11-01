@@ -6,107 +6,107 @@ and productive, don't try to do this manually.
 otherless = [
     # def               (self                    ):
     ('__bool__',            '',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return bool(',                     ')'),
     
     # def               (self                    ):
     ('__bytes__',           '',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return bytes(',                    ')'),
     
     # def               (self                    ):
     ('__str__',             '',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return str(',                      ')'),
     
     # def               (self                    ):
     ('__format__',          ', *args, **kwargs',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return format(',                   ', *args, **kwargs)'),
     
     # def               (self                    ):
     ('__len__',             '',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return len(',                      ')'),
     
     # def               (self                    ):
     ('__length_hint__',     '',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return operator.length_hint(',     ')'),
     
     # def               (self                    ):
     ('__call__',            ', *args, **kwargs',    
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return ',                          '(*args, **kwargs)'),
     
     # def               (self                    ):
     ('__getitem__',         ', key',                
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return ',                          '[key]'),
     
     # def               (self                    ):
     ('__missing__',         ', key',                
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return ',                          '.__missing__(key)'),
     
     # def               (self                    ):
     ('__setitem__',         ', key, value',         
-                                # self._proxy_3141592
+                                # self._hgx_state
                 '',                                 '[key] = value'),
     
     # def               (self                    ):
     ('__delitem__',         ', key',                
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'del ',                             '[key]'),
     
     # def               (self                    ):
     ('__iter__',            '',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return iter(',                     ')'),
     
     # def               (self                    ):
     ('__reversed__',        '',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return reversed(',                 ')'),
     
     # def               (self                    ):
     ('__contains__',        ', item',               
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return item in ',                  ''),
     
     # def               (self                    ):
     ('__enter__',           '',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return ',                          '.__enter__()'),
     
     # def               (self                    ):
     ('__exit__',            ', *args, **kwargs',    
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return ',                          '.__exit__(*args, **kwargs)'),
     
     # def               (self                    ):
     ('__aenter__',          '',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return ',                          '.__aenter__()'),
     
     # def               (self                    ):
     ('__aexit__',           ', *args, **kwargs',    
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return ',                          '.__aexit__(*args, **kwargs)'),
     
     # def               (self                    ):
     ('__await__',           '',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return ',                          '.__await__()'),
     
     # def               (self                    ):
     ('__aiter__',           '',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return ',                          '.__aiter__()'),
     
     # def               (self                    ):
     ('__anext__',           '',                     
-                                # self._proxy_3141592
+                                # self._hgx_state
                 'return ',                          '.__anext__()'),
 ]
 
@@ -180,7 +180,7 @@ otherless_template = \
         This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
-        $opspec$self._proxy_3141592$closespec$
+        $opspec$self._hgx_state$closespec$
         
 """
 
@@ -195,11 +195,11 @@ othered_template_oper = \
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a
         # much safer bet.
-        if isinstance(other, ProxyBase):
-            return self._proxy_3141592 $dunder_oper$ other._proxy_3141592
+        if isinstance(other, Proxy):
+            return self._hgx_state $dunder_oper$ other._hgx_state
         
         else:
-            return self._proxy_3141592 $dunder_oper$ other
+            return self._hgx_state $dunder_oper$ other
             
 """
 
@@ -214,17 +214,17 @@ othered_template_func = \
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a
         # much safer bet.
-        if isinstance(other, ProxyBase):
+        if isinstance(other, Proxy):
             return $dunder_func$(
-                self._proxy_3141592,
-                other._proxy_3141592,
+                self._hgx_state,
+                other._hgx_state,
                 *args,
                 **kwargs
             )
         
         else:
             return $dunder_func$(
-                self._proxy_3141592,
+                self._hgx_state,
                 other,
                 *args,
                 **kwargs
@@ -245,13 +245,13 @@ rothered_template_oper = \
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a
         # much safer bet.
-        if isinstance(other, ProxyBase):
+        if isinstance(other, Proxy):
             # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
-            return other._proxy_3141592 $dunder_oper$ self._proxy_3141592
+            return other._hgx_state $dunder_oper$ self._hgx_state
         
         else:
-            return other $dunder_oper$ self._proxy_3141592
+            return other $dunder_oper$ self._hgx_state
             
 """
 
@@ -268,13 +268,13 @@ rothered_template_func = \
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a
         # much safer bet.
-        if isinstance(other, ProxyBase):
+        if isinstance(other, Proxy):
             # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
-            return $dunder_func$(other._proxy_3141592, self._proxy_3141592)
+            return $dunder_func$(other._hgx_state, self._hgx_state)
         
         else:
-            return $dunder_func$(other, self._proxy_3141592)
+            return $dunder_func$(other, self._hgx_state)
             
 """
 
@@ -291,13 +291,13 @@ incrd_template = \
         # forcibly upgrading those, since they might do, for example, some
         # different comparison operation or something. This seems like a
         # much safer bet.
-        if isinstance(other, ProxyBase):
+        if isinstance(other, Proxy):
             # Other proxies are very likely to fail, since the reveresed call
             # would normally have already been called -- but try them anyways.
-            self._proxy_3141592 $dunder_oper$ other._proxy_3141592
+            self._hgx_state $dunder_oper$ other._hgx_state
         
         else:
-            self._proxy_3141592 $dunder_oper$ other
+            self._hgx_state $dunder_oper$ other
             
         return self
             
@@ -312,7 +312,7 @@ unaryish_template = \
         This method was (partially?) programmatically generated by a
         purpose-built script.
         '''
-        return $dunder_oper$(self._proxy_3141592)
+        return $dunder_oper$(self._hgx_state)
             
 """
 
@@ -379,7 +379,7 @@ for dunder_tuple in unaryish:
     outstr += tempstr
     
 # And generate a class-defined set of all of the auto-generated methods
-prefix = '    _ALL_METAD_3141592 = {\n'
+prefix = '    _hgx_ALL_METAD = {\n'
 for dunder in all_genrates:
     prefix += ('        \'' + dunder + '\',\n')
 prefix += '    }\n\n'

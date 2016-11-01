@@ -932,6 +932,13 @@ class NoContext:
         
     def __exit__(*args, **kwargs):
         pass
+        
+            
+def _reap_wrapped_task(task):
+    ''' Reap a task that was wrapped to never raise and then
+    executed autonomously using ensure_future.
+    '''
+    task.result()
 
 
 # ###############################################

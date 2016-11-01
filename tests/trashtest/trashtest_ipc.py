@@ -372,6 +372,11 @@ class WSIPCTest(unittest.TestCase):
         )
         self.assertEqual(obj, ghid)
         
+        await_coroutine_threadsafe(
+            coro = self.client1.deregister_startup_obj(timeout=1),
+            loop = self.client1_commander._loop
+        )
+        
     def test_obj_get(self):
         ''' Test getting and making objects.
         '''

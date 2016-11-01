@@ -650,13 +650,19 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
                 self._startup_by_token[token] = ghid
                 
     @public_api
-    def deregister_startup(self, token):
+    def deregister_startup(self, connection):
         ''' Deregisters a ghid to be used as a startup object for token.
         '''
-        with self._token_lock:
-            if token not in self._all_known_tokens:
-                raise UnknownToken()
-            elif token not in self._startup_by_token:
+        try:
+            token = self._token_from_endpoint[connection]
+            
+        except KeyError as exc:
+            raise UnknownToken(
+                'Must register app token before deregistering startup objects.'
+            ) from exc
+            
+        else:
+            if token not in self._startup_by_token:
                 raise ValueError(
                     'Startup object has not been defined for that application.'
                 )

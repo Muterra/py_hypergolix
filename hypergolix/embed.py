@@ -45,6 +45,8 @@ import concurrent.futures
 from golix import Ghid
 from loopa.utils import await_coroutine_threadsafe
 from loopa.utils import await_coroutine_loopsafe
+from loopa.utils import Triplicate
+from loopa.utils import triplicated
 
 # Local dependencies
 from .hypothetical import API
@@ -54,12 +56,14 @@ from .hypothetical import fixture_api
 from .utils import SetMap
 from .utils import WeakSetMap
 from .utils import ApiID
+from .utils import _reap_wrapped_task
 
 from .exceptions import HGXLinkError
 
 from .comms import ConnectionManager
 
 from .objproxy import ObjBase
+from .objproxy import ObjCore
 
 
 # ###############################################
@@ -77,11 +81,21 @@ __all__ = [
 
 
 # ###############################################
+# Utils
+# ###############################################
+    
+    
+class TriplicateAPI(Triplicate, API):
+    ''' Combine loopa's triplicate metaclass with hypothetical.API.
+    '''
+
+
+# ###############################################
 # Lib
 # ###############################################
             
 
-class HGXLink(loopa.TaskCommander, metaclass=API):
+class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
     ''' Amalgamate all of the necessary app functions into a single
     namespace. Also, and threadsafe and loopsafe bindings for stuff.
     '''
@@ -137,7 +151,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
         lookup so that we can actually **apply** the updates we're
         already receiving.
         '''
-        self._objs_by_ghid[obj.hgx_ghid] = obj
+        self._objs_by_ghid[obj._hgx_ghid] = obj
         
     @property
     def whoami(self):
@@ -184,6 +198,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
                 'Token already set. It must be cleared before being re-set.'
             )
     
+    # This cannot be @triplicate, because of the specialized internal wrapping.
     async def register_share_handler(self, api_id, cls, handler):
         ''' Call this to register a handler for an object shared by a
         different hypergolix identity, or the same hypergolix identity
@@ -227,6 +242,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
         self._share_handlers[api_id] = wrap_handler
         self._share_typecast[api_id] = cls
     
+    # This cannot be @triplicate, because of the specialized internal wrapping.
     def register_share_handler_threadsafe(self, api_id, cls, handler):
         ''' Call this to register a handler for an object shared by a
         different hypergolix identity, or the same hypergolix identity
@@ -263,6 +279,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
             loop = self._loop
         )
     
+    # This cannot be @triplicate, because of the specialized internal wrapping.
     async def register_share_handler_loopsafe(self, api_id, cls, handler,
                                               target_loop):
         ''' Call this to register a handler for an object shared by a
@@ -301,6 +318,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
             loop = self._loop
         )
     
+    # This cannot be @triplicate, because of the specialized internal wrapping.
     async def register_nonlocal_handler(self, api_id, handler):
         ''' Call this to register a handler for any private objects
         created by the same hypergolix identity and the same hypergolix
@@ -317,6 +335,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
         
         # self._nonlocal_handlers = {}
     
+    # This cannot be @triplicate, because of the specialized internal wrapping.
     def register_nonlocal_handler_threadsafe(self, api_id, handler):
         ''' Call this to register a handler for any private objects
         created by the same hypergolix identity and the same hypergolix
@@ -333,6 +352,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
         
         # self._nonlocal_handlers = {}
     
+    # This cannot be @triplicate, because of the specialized internal wrapping.
     async def register_nonlocal_handler_loopsafe(self, api_id, handler, loop):
         ''' Call this to register a handler for any private objects
         created by the same hypergolix identity and the same hypergolix
@@ -350,6 +370,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
         
         # self._nonlocal_handlers = {}
         
+    @triplicated
     async def register_token(self, token=None):
         ''' Registers the application as using a particular token, OR
         gets a new token. Returns the ghid for the startup object (if
@@ -366,7 +387,20 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
         # can deal with casting it appropriately.
         return self._startup_obj
         
-    async def get(self, ghid, cls):
+    @triplicated
+    async def register_startup_obj(self, obj):
+        ''' Registers the object as the startup object.
+        '''
+        await self._ipc_manager.register_startup_obj(obj._hgx_ghid)
+        
+    @triplicated
+    async def deregister_startup(self, obj):
+        ''' Inverse of the above.
+        '''
+        await self._ipc_manager.deregister_startup_obj()
+        
+    @triplicated
+    async def get(self, cls, ghid):
         ''' Pass to connection manager. Also, turn the object into the
         specified class.
         '''
@@ -391,7 +425,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
             # link = Ghid.from_bytes(state)
             # state = await self._get(link)
         
-        state = await cls._hgx_unpack(state)
+        state = await cls.hgx_unpack(state)
         obj = cls(
             hgxlink = self,
             state = state,
@@ -400,7 +434,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
             private = private,
             ghid = address,
             binder = author,
-            # _legroom = _legroom,
+            _legroom = _legroom,
         )
             
         # Don't forget to add it to local lookup so we can apply updates.
@@ -408,47 +442,26 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
         
         return obj
         
-    def get_threadsafe(self, *args, **kwargs):
-        ''' Loads an object into local memory from the hypergolix
-        service.
-        '''
-        return await_coroutine_threadsafe(
-            coro = self.get(*args, **kwargs),
-            loop = self._loop,
-        )
-        
-    async def get_loopsafe(self, *args, **kwargs):
-        ''' Loads an object into local memory from the hypergolix
-        service.
-        '''
-        return (await await_coroutine_loopsafe(
-            coro = self.get(*args, **kwargs),
-            target_loop = self._loop,
-        ))
-        
+    @triplicated
     async def new(self, cls, state, api_id=None, dynamic=True, private=False,
                   _legroom=None, *args, **kwargs):
         ''' Create a new object w/ class cls.
         '''
-        if api_id is None:
-            api_id = cls._hgx_DEFAULT_API_ID
-            
         if _legroom is None:
             _legroom = self._legroom
             
         obj = cls(
             hgxlink = self,
+            _legroom = _legroom,
             state = state,
             api_id = api_id,
             dynamic = dynamic,
             private = private,
-            binder = self._hgxlink.whoami,
+            binder = self.whoami,
             *args, **kwargs
         )
         
-        packed_state = await obj._hgx_pack(
-            obj.hgx_state
-        )
+        packed_state = await obj.hgx_pack(state)
         
         address = await self._ipc_manager.new_ghid(
             packed_state,
@@ -458,47 +471,35 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
             _legroom
         )
         
-        obj._ghid_3141592 = address
+        obj._hgx_ghid = address
         # Don't forget to add it to local lookup so we can apply updates.
         self.track_for_updates(obj)
         return obj
         
-    def new_threadsafe(self, *args, **kwargs):
-        ''' Loads an object into local memory from the hypergolix
-        service.
-        '''
-        return await_coroutine_threadsafe(
-            coro = self.new(*args, **kwargs),
-            loop = self._loop,
-        )
-        
-    async def new_loopsafe(self, *args, **kwargs):
-        ''' Loads an object into local memory from the hypergolix
-        service.
-        '''
-        return (await await_coroutine_loopsafe(
-            coro = self.new(*args, **kwargs),
-            target_loop = self._loop,
-        ))
-        
     async def push(self, obj):
         ''' Pushes the object state to the managed connection.
         '''
-        packed_state = await obj._hgx_pack(
-            obj.hgx_state
-        )
-        
-        if obj._legroom_3141592 is None:
-            _legroom = self._legroom
-        else:
-            _legroom = obj._legroom_3141592
+        packed_state = await obj.hgx_pack(obj._hgx_state)
         
         await self._ipc_manager.update_ghid(
-            obj.hgx_ghid,
+            obj._hgx_ghid,
             packed_state,
-            obj.hgx_private,
-            _legroom
+            obj._hgx_private,
+            obj._hgx_legroom
         )
+            
+    async def freeze(self, obj):
+        ''' Wraps the IPC protocol to freeze an object instead of just
+        the ghid.
+        '''
+        frozen_address = await self._ipc_manager.freeze_ghid(obj._hgx_ghid)
+        
+        frozen = await self.get(
+            cls = type(obj),
+            ghid = frozen_address
+        )
+        
+        return frozen
         
     @public_api
     async def _pull_state(self, ghid, state):
@@ -524,7 +525,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
             logger.debug(
                 'Received update for ' + str(ghid) + '; forcing pull.'
             )
-            await obj._force_pull_3141592(state)
+            await obj._hgx_force_pull(state)
             
     @_pull_state.fixture
     async def _pull_state(self, ghid, state):
@@ -532,46 +533,37 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
         '''
         self.state_lookup[ghid] = state
             
-    async def freeze(self, obj):
-        ''' Wraps the IPC protocol to freeze an object instead of just
-        the ghid.
-        '''
-        frozen_address = await self._ipc_manager.freeze_ghid(obj.hgx_ghid)
-        
-        frozen = await self.get(
-            cls = type(obj),
-            ghid = frozen_address
-        )
-        
-        return frozen
-            
     @public_api
     async def handle_share(self, ghid, origin):
         ''' Handles an incoming shared object.
+        
+        TODO: remove internal casting; force the share handler to recast
+        internally.
         '''
-        obj = await self.get(ghid, ObjBase)
+        obj = await self.get(ghid, ObjCore)
         
         # This is async, which is single-threaded, so there's no race condition
         try:
-            handler = self._share_handlers[obj.hgx_api_id]
-            cls = self._share_typecast[obj.hgx_api_id]
+            handler = self._share_handlers[obj._hgx_api_id]
+            cls = self._share_typecast[obj._hgx_api_id]
             
         except KeyError:
             logger.warning(
                 'Received a share for an API_ID that was lacking a handler or '
                 'typecast. Deregistering the API_ID.'
             )
-            await self._ipc_manager.deregister_api(obj.hgx_api_id)
+            await self._ipc_manager.deregister_api(obj._hgx_api_id)
             await self._ipc_manager.discard_ghid(ghid)
             return
             
         else:
             # Convert the object to its intended class
-            obj = await cls.hgx_recast(obj)
+            obj = await cls._hgx_recast(obj)
             
             # Run the share handler concurrently, so that we can release the
             # req/res session
-            asyncio.ensure_future(handler(obj))
+            share_task = asyncio.ensure_future(handler(obj))
+            share_task.add_done_callback(_reap_wrapped_task)
             
     @handle_share.fixture
     async def handle_share(self, ghid, origin):
@@ -590,7 +582,7 @@ class HGXLink(loopa.TaskCommander, metaclass=API):
             logger.debug(str(ghid) + ' not known to IPCEmbed.')
         
         else:
-            await obj._force_delete_3141592()
+            await obj._hgx_force_delete()
             
     @handle_delete.fixture
     async def handle_delete(self, ghid):
