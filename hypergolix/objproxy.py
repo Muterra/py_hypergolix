@@ -93,7 +93,7 @@ class ObjCore:
     __legroom = None
     
     def __init__(self, state, api_id, dynamic, private, ghid=None, binder=None,
-                 *, hgxlink, _legroom, callback=None):
+                 *, hgxlink, ipc_manager, _legroom, callback=None):
         ''' Allocates the object locally, but does NOT create it. You
         have to explicitly call hgx_push, hgx_push_threadsafe, or
         hgx_push_loopsafe to actually create the sync'd object and get
@@ -102,6 +102,7 @@ class ObjCore:
         # Do this so we don't get circular references and can therefore support
         # our persistence declaration
         self.__hgxlink = weakref.ref(hgxlink)
+        self.__hgx_ipc = weakref.ref(ipc_manager)
         
         # All others can be set via their properties
         self._hgx_state = state
@@ -168,6 +169,18 @@ class ObjCore:
             )
         else:
             return hgxlink
+        
+    @property
+    def _hgx_ipc(self):
+        ''' Read-only access to the hgxlink.
+        '''
+        ipc = self.__hgx_ipc()
+        if ipc is None:
+            raise RuntimeError(
+                'The HGXLink has been garbage collected. Cannot continue.'
+            )
+        else:
+            return ipc
             
     @property
     def _hgx_legroom(self):
@@ -428,7 +441,7 @@ class ObjCore:
             
         # Use the state from above to create a new copy of the object.
         recast = cls(
-            hgxlink = self.__hgxlink,
+            hgxlink = self._hgxlink,
             state = state,
             api_id = self.__api_id,
             dynamic = self.__dynamic,
@@ -441,7 +454,7 @@ class ObjCore:
         recast._ObjCore_isalive = self.__isalive
         # Now transfer the subscription to the new object and render the old
         # inoperable
-        self.__hgxlink.subscribe_to_updates(recast)
+        self._hgxlink.subscribe_to_updates(recast)
         self.__render_inop()
         
         return recast
@@ -455,16 +468,18 @@ class ObjCore:
             raise DeadObject()
             
         # The object is still alive.
-        if self.__ghid is None:
-            # It's even new!
-            ghid, binder = await self.__hgxlink._make_new(obj=self)
-            self.__ghid = ghid
-            self.__binder = binder
+        elif self.__ghid is None:
+            # It's even new! Raise; this means it wasn't created through the
+            # normal hgxlink.get/hgxlink.new
+            raise RuntimeError(
+                'Object has no ghid; cannot update. Was the object created ' +
+                'through the HGXLink?'
+            )
         
         # The object is not new. Is it static?
         else:
             # Error trap if the object isn't "owned" by us
-            if self.__hgxlink.whoami != self._hgx_binder:
+            if self._hgxlink.whoami != self.__binder:
                 raise LocallyImmutable('No access rights to mutate object.')
             
             # Error trap if it's static
@@ -473,7 +488,13 @@ class ObjCore:
             
             # All traps passed. Make the call.
             else:
-                await self.__hgxlink._make_update(obj=self)
+                packed_state = await self.hgx_pack(self.__state)
+                await self._hgx_ipc.update_ghid(
+                    self.__ghid,
+                    packed_state,
+                    self.__private,
+                    self.__legroom
+                )
 
     @triplicated
     async def _hgx_sync(self):
@@ -482,7 +503,7 @@ class ObjCore:
         if not self.__isalive:
             raise DeadObject()
         else:
-            await self.__hgxlink._make_sync(obj=self)
+            await self._hgx_ipc.sync_ghid(self.__ghid)
 
     @triplicated
     async def _hgx_share(self, recipient):
@@ -491,13 +512,12 @@ class ObjCore:
         '''
         if not self.__isalive:
             raise DeadObject()
-        elif self._hgx_private:
+            
+        elif self.__private:
             raise Unsharable('Cannot share a private object.')
+            
         else:
-            await self.__hgxlink._make_share(
-                obj = self,
-                recipient = recipient
-            )
+            await self._hgx_ipc.share_ghid(self.__ghid, recipient)
 
     @triplicated
     async def _hgx_freeze(self):
@@ -506,10 +526,16 @@ class ObjCore:
         '''
         if not self.__isalive:
             raise DeadObject()
-        elif not self._hgx_dynamic:
+        
+        elif not self.__dynamic:
             raise LocallyImmutable('Cannot freeze a static object.')
+        
         else:
-            frozen = await self.__hgxlink._make_freeze(obj=self)
+            frozen_ghid = await self._hgx_ipc.freeze_ghid(self.__ghid)
+            frozen = await self._hgxlink.get(
+                cls = type(self),
+                ghid = frozen_ghid
+            )
             return frozen
 
     @triplicated
@@ -519,7 +545,7 @@ class ObjCore:
         if not self.__isalive:
             raise DeadObject()
         else:
-            await self.__hgxlink._make_hold(obj=self)
+            await self._hgx_ipc.hold_ghid(self.__ghid)
 
     @triplicated
     async def _hgx_discard(self):
@@ -528,7 +554,7 @@ class ObjCore:
         if not self.__isalive:
             raise DeadObject()
         else:
-            await self.__hgxlink._make_discard(obj=self)
+            await self._hgx_ipc.discard_ghid(self.__ghid)
             self.___render_inop()
 
     @triplicated
@@ -538,7 +564,7 @@ class ObjCore:
         if not self.__isalive:
             raise DeadObject()
         else:
-            await self.__hgxlink._make_delete(obj=self)
+            await self._hgx_ipc.delete_ghid(self.__ghid)
             self.__render_inop()
     
     @staticmethod

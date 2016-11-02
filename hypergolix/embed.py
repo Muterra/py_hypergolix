@@ -143,15 +143,6 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         self.state_lookup = {}
         self.share_lookup = {}
         self.deleted = set()
-            
-    def track_for_updates(self, obj):
-        ''' Called (primarily internally) to automatically subscribe the
-        object to updates from upstream. Except really, right now, this
-        just makes sure that we're tracking it in our local object
-        lookup so that we can actually **apply** the updates we're
-        already receiving.
-        '''
-        self._objs_by_ghid[obj._hgx_ghid] = obj
         
     @property
     def whoami(self):
@@ -428,6 +419,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         state = await cls.hgx_unpack(state)
         obj = cls(
             hgxlink = self,
+            ipc_manager = self._ipc_manager,
             state = state,
             api_id = api_id,
             dynamic = dynamic,
@@ -438,7 +430,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         )
             
         # Don't forget to add it to local lookup so we can apply updates.
-        self.track_for_updates(obj)
+        self._objs_by_ghid[obj._hgx_ghid] = obj
         
         return obj
         
@@ -452,6 +444,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
             
         obj = cls(
             hgxlink = self,
+            ipc_manager = self._ipc_manager,
             _legroom = _legroom,
             state = state,
             api_id = api_id,
@@ -473,33 +466,8 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         
         obj._hgx_ghid = address
         # Don't forget to add it to local lookup so we can apply updates.
-        self.track_for_updates(obj)
+        self._objs_by_ghid[obj._hgx_ghid] = obj
         return obj
-        
-    async def push(self, obj):
-        ''' Pushes the object state to the managed connection.
-        '''
-        packed_state = await obj.hgx_pack(obj._hgx_state)
-        
-        await self._ipc_manager.update_ghid(
-            obj._hgx_ghid,
-            packed_state,
-            obj._hgx_private,
-            obj._hgx_legroom
-        )
-            
-    async def freeze(self, obj):
-        ''' Wraps the IPC protocol to freeze an object instead of just
-        the ghid.
-        '''
-        frozen_address = await self._ipc_manager.freeze_ghid(obj._hgx_ghid)
-        
-        frozen = await self.get(
-            cls = type(obj),
-            ghid = frozen_address
-        )
-        
-        return frozen
         
     @public_api
     async def _pull_state(self, ghid, state):
@@ -539,6 +507,11 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         
         TODO: remove internal casting; force the share handler to recast
         internally.
+        
+        TODO: modify share sending to pass the ghid, origin, and api_id.
+        Then, change the share handler behavior to accept the same. That
+        way, we have exactly zero casting worries here, and ALL object
+        retrieval is through get.
         '''
         obj = await self.get(ghid, ObjCore)
         
@@ -583,6 +556,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         
         else:
             await obj._hgx_force_delete()
+            del self._objs_by_ghid[ghid]
             
     @handle_delete.fixture
     async def handle_delete(self, ghid):
