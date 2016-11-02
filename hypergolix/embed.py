@@ -62,8 +62,8 @@ from .exceptions import HGXLinkError
 
 from .comms import ConnectionManager
 
-from .objproxy import ObjBase
-from .objproxy import ObjCore
+# from .objproxy import ObjBase
+# from .objproxy import ObjCore
 
 
 # ###############################################
@@ -142,6 +142,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         '''
         self.state_lookup = {}
         self.share_lookup = {}
+        self.api_lookup = {}
         self.deleted = set()
         
     @property
@@ -189,16 +190,33 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
                 'Token already set. It must be cleared before being re-set.'
             )
     
-    # This cannot be @triplicate, because of the specialized internal wrapping.
-    async def register_share_handler(self, api_id, cls, handler):
+    @triplicated
+    async def register_nonlocal_handler(self, api_id, handler):
+        ''' Call this to register a handler for any private objects
+        created by the same hypergolix identity and the same hypergolix
+        application, but at a separate, concurrent session.
+        
+        This HANDLER will be called from within the IPC embed's internal
+        event loop.
+        
+        This METHOD must be called from within the IPC embed's internal
+        event loop.
+        '''
+        raise NotImplementedError()
+        api_id = self._normalize_api_id(api_id)
+        
+        # self._nonlocal_handlers = {}
+    
+    @triplicated
+    async def register_share_handler(self, api_id, handler):
         ''' Call this to register a handler for an object shared by a
         different hypergolix identity, or the same hypergolix identity
         but a different application. Any api_id can have at most one
         share handler, across ALL forms of callback (internal,
         threadsafe, loopsafe).
         
-        typecast determines what kind of ObjProxy class the object will
-        be cast into before being passed to the handler.
+        The handler will be called as:
+            await handler(ghid, origin, api_id)
         
         This HANDLER will be called from within the IPC embed's internal
         event loop.
@@ -231,10 +249,8 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         # and not ceding flow control to the loop, we don't need to worry about
         # synchro primitives here!
         self._share_handlers[api_id] = wrap_handler
-        self._share_typecast[api_id] = cls
     
-    # This cannot be @triplicate, because of the specialized internal wrapping.
-    def register_share_handler_threadsafe(self, api_id, cls, handler):
+    def wrap_threadsafe(self, callback):
         ''' Call this to register a handler for an object shared by a
         different hypergolix identity, or the same hypergolix identity
         but a different application. Any api_id can have at most one
@@ -252,27 +268,21 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         '''
         # For simplicity, wrap the handler, so that any shares can be called
         # normally from our own event loop.
-        async def wrapped_handler(*args, func=handler):
+        async def wrapped_handler(*args, self_weakref=weakref.ref(self),
+                                  func=callback):
             ''' Wrap the handler in run_in_executor.
             '''
-            await self._loop.run_in_executor(
-                self._executor,
-                func,
-                *args
-            )
-            
-        await_coroutine_threadsafe(
-            coro = self._register_share_handler(
-                api_id,
-                cls,
-                wrapped_handler
-            ),
-            loop = self._loop
-        )
+            self = self_weakref()
+            if self is not None:
+                await self._loop.run_in_executor(
+                    self._executor,
+                    func,
+                    *args
+                )
+        
+        return wrapped_handler
     
-    # This cannot be @triplicate, because of the specialized internal wrapping.
-    async def register_share_handler_loopsafe(self, api_id, cls, handler,
-                                              target_loop):
+    def wrap_loopsafe(self, callback, target_loop):
         ''' Call this to register a handler for an object shared by a
         different hypergolix identity, or the same hypergolix identity
         but a different application. Any api_id can have at most one
@@ -292,74 +302,15 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         # For simplicity, wrap the handler, so that any shares can be called
         # normally from our own event loop.
         async def wrapped_handler(*args, target_loop=target_loop,
-                                  coro=handler):
-            ''' Wrap the handler in run_in_executor.
+                                  coro=callback):
+            ''' Wrap the handler in await_coroutine_loopsafe.
             '''
             await await_coroutine_loopsafe(
                 coro = coro(*args),
                 target_loop = target_loop
             )
-            
-        await await_coroutine_loopsafe(
-            coro = self._register_share_handler(
-                api_id,
-                cls,
-                wrapped_handler
-            ),
-            loop = self._loop
-        )
-    
-    # This cannot be @triplicate, because of the specialized internal wrapping.
-    async def register_nonlocal_handler(self, api_id, handler):
-        ''' Call this to register a handler for any private objects
-        created by the same hypergolix identity and the same hypergolix
-        application, but at a separate, concurrent session.
         
-        This HANDLER will be called from within the IPC embed's internal
-        event loop.
-        
-        This METHOD must be called from within the IPC embed's internal
-        event loop.
-        '''
-        raise NotImplementedError()
-        api_id = self._normalize_api_id(api_id)
-        
-        # self._nonlocal_handlers = {}
-    
-    # This cannot be @triplicate, because of the specialized internal wrapping.
-    def register_nonlocal_handler_threadsafe(self, api_id, handler):
-        ''' Call this to register a handler for any private objects
-        created by the same hypergolix identity and the same hypergolix
-        application, but at a separate, concurrent session.
-        
-        This HANDLER will be called from within a single-use, dedicated
-        thread.
-        
-        This METHOD must be called from a different thread than the IPC
-        embed's internal event loop.
-        '''
-        raise NotImplementedError()
-        api_id = self._normalize_api_id(api_id)
-        
-        # self._nonlocal_handlers = {}
-    
-    # This cannot be @triplicate, because of the specialized internal wrapping.
-    async def register_nonlocal_handler_loopsafe(self, api_id, handler, loop):
-        ''' Call this to register a handler for any private objects
-        created by the same hypergolix identity and the same hypergolix
-        application, but at a separate, concurrent session.
-        
-        This HANDLER will be called within the specified event loop,
-        also implying the specified event loop context (ie thread).
-        
-        This METHOD must be called from a different event loop than the
-        IPC embed's internal event loop. It is internally loopsafe, and
-        need not be wrapped by run_coroutine_loopsafe.
-        '''
-        raise NotImplementedError()
-        api_id = self._normalize_api_id(api_id)
-        
-        # self._nonlocal_handlers = {}
+        return wrapped_handler
         
     @triplicated
     async def register_token(self, token=None):
@@ -502,47 +453,32 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         self.state_lookup[ghid] = state
             
     @public_api
-    async def handle_share(self, ghid, origin):
+    async def handle_share(self, ghid, origin, api_id):
         ''' Handles an incoming shared object.
-        
-        TODO: remove internal casting; force the share handler to recast
-        internally.
-        
-        TODO: modify share sending to pass the ghid, origin, and api_id.
-        Then, change the share handler behavior to accept the same. That
-        way, we have exactly zero casting worries here, and ALL object
-        retrieval is through get.
         '''
-        obj = await self.get(ghid, ObjCore)
-        
         # This is async, which is single-threaded, so there's no race condition
         try:
-            handler = self._share_handlers[obj._hgx_api_id]
-            cls = self._share_typecast[obj._hgx_api_id]
+            handler = self._share_handlers[api_id]
             
         except KeyError:
             logger.warning(
                 'Received a share for an API_ID that was lacking a handler or '
                 'typecast. Deregistering the API_ID.'
             )
-            await self._ipc_manager.deregister_api(obj._hgx_api_id)
-            await self._ipc_manager.discard_ghid(ghid)
-            return
+            await self._ipc_manager.deregister_api(api_id)
             
         else:
-            # Convert the object to its intended class
-            obj = await cls._hgx_recast(obj)
-            
             # Run the share handler concurrently, so that we can release the
             # req/res session
-            share_task = asyncio.ensure_future(handler(obj))
+            share_task = asyncio.ensure_future(handler(ghid, origin, api_id))
             share_task.add_done_callback(_reap_wrapped_task)
             
     @handle_share.fixture
-    async def handle_share(self, ghid, origin):
+    async def handle_share(self, ghid, origin, api_id):
         ''' Fixture handling an incoming share object.
         '''
         self.share_lookup[ghid] = origin
+        self.api_lookup[ghid] = api_id
             
     @public_api
     async def handle_delete(self, ghid):

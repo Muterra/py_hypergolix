@@ -453,7 +453,8 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
                 self._ipc_protocol_server.share_obj,    # distr_coro
                 callsheet,
                 ghid,
-                origin
+                origin,
+                obj.api_id
             )
             
         else:

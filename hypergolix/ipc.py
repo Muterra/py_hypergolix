@@ -105,7 +105,7 @@ from .dispatch import _Dispatchable
 from .dispatch import _DispatchableState
 from .dispatch import _AppDef
 
-from .objproxy import ObjBase
+# from .objproxy import ObjBase
 
 
 # ###############################################
@@ -434,7 +434,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         raise NotImplementedError()
         
     @deregister_startup_obj.request_handler
-    async def deregister_startup_obj(self, connection):
+    async def deregister_startup_obj(self, connection, body):
         ''' Handles startup object registration. Server only.
         '''
         self._dispatch.deregister_startup(connection)
@@ -608,11 +608,11 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         return b'\x01'
         
     @request(b'@O')
-    async def share_obj(self, connection, ghid, origin):
+    async def share_obj(self, connection, ghid, origin, api_id):
         ''' Request an object share or notify an app of an incoming
         share.
         '''
-        return bytes(ghid) + bytes(origin)
+        return bytes(ghid) + bytes(origin) + bytes(api_id)
         
     @share_obj.request_handler
     async def share_obj(self, connection, body):
@@ -913,7 +913,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         return b''
         
     @deregister_startup_obj.request_handler
-    async def deregister_startup_obj(self, connection):
+    async def deregister_startup_obj(self, connection, body):
         ''' Handles startup object registration. Server only.
         '''
         raise NotImplementedError()
@@ -1071,8 +1071,9 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         '''
         ghid = Ghid.from_bytes(body[0:65])
         origin = Ghid.from_bytes(body[65:130])
+        api_id = ApiID.from_bytes(body[130:195])
         
-        await self._hgxlink.handle_share(ghid, origin)
+        await self._hgxlink.handle_share(ghid, origin, api_id)
         return b'\x01'
         
     @share_ghid.response_handler

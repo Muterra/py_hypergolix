@@ -360,8 +360,8 @@ class ObjCore:
             '''
             self = self_weakref()
             if self is not None:
-                await self._ObjCore_hgxlink._loop.run_in_executor(
-                    self._ObjCore_hgxlink._executor,
+                await self._hgxlink._loop.run_in_executor(
+                    self._hgxlink._executor,
                     func,
                     *args
                 )

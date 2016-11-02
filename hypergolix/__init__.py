@@ -36,34 +36,6 @@ hypergolix: A python Golix client.
 # ipc.IPCEmbed.register_share_handler_loopsafe as an example of proper safety.
 
 
-# ###############################################
-# Boilerplate
-# ###############################################
-
-
-# Logging shenanigans
-import logging
-# Py2.7+, but this is Py3.5.1+
-from logging import NullHandler
-logging.getLogger(__name__).addHandler(NullHandler())
-
-# Control * imports.
-__all__ = [
-    'HGXLink',
-    'Ghid',
-    'ObjBase',
-    'ProxyBase',
-    'PickleObj',
-    'PickleProxy',
-    'JsonObj',
-    'JsonProxy',
-]
-
-
-# ###############################################
-# Library
-# ###############################################
-
 # Submodules
 from . import accounting
 from . import app
@@ -89,11 +61,36 @@ from . import utils
 # Add in toplevel stuff
 from golix import Ghid
 
-from .objproxy import ObjBase
-from .objproxy import ProxyBase
+from .objproxy import Obj
+from .objproxy import Proxy
 from .objproxy import PickleObj
 from .objproxy import PickleProxy
 from .objproxy import JsonObj
 from .objproxy import JsonProxy
 
 from .embed import HGXLink
+
+
+# ###############################################
+# Boilerplate
+# ###############################################
+
+
+# Logging shenanigans
+import logging
+# Py2.7+, but this is Py3.5.1+
+from logging import NullHandler
+logging.getLogger(__name__).addHandler(NullHandler())
+
+
+# Control * imports.
+__all__ = [
+    'HGXLink',
+    'Ghid',
+    'Obj',
+    'Proxy',
+    'PickleObj',
+    'PickleProxy',
+    'JsonObj',
+    'JsonProxy',
+]

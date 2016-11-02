@@ -69,7 +69,7 @@ from hypergolix.utils import SetMap
 from hypergolix.utils import WeakSetMap
 from hypergolix.utils import ApiID
 
-from hypergolix.objproxy import ProxyBase
+# from hypergolix.objproxy import ProxyBase
 
 from hypergolix.embed import HGXLink
 
@@ -521,11 +521,13 @@ class WSIPCTest(unittest.TestCase):
         
         origin = make_random_ghid()
         ghid = make_random_ghid()
+        api_id = ApiID(bytes([random.randint(0, 255) for i in range(0, 64)]))
         await_coroutine_threadsafe(
-            coro = self.server_protocol.share_obj(conn, ghid, origin),
+            coro = self.server_protocol.share_obj(conn, ghid, origin, api_id),
             loop = self.server_commander._loop
         )
         self.assertEqual(self.hgxlink1.share_lookup[ghid], origin)
+        self.assertEqual(self.hgxlink1.api_lookup[ghid], api_id)
         
     def test_share_response(self):
         ''' Test server sending share success and failure. Doesn't do
