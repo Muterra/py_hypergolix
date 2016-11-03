@@ -767,10 +767,12 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         self._hgxlink = None
         
     @__init__.fixture
-    def __init__(self, *args, **kwargs):
+    def __init__(self, whoami, *args, **kwargs):
         ''' Create the fixture internals.
         '''
-        super().__init__(*args, **kwargs)
+        # This is necessary because of the fixture_bases bit.
+        super(type(self), self).__init__(*args, **kwargs)
+        self.whoami = whoami
         self.apis = set()
         self.token = None
         self.startup = None
@@ -785,9 +787,9 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         
     @fixture_api
     def RESET(self):
-        ''' Nothing beyond just re-running __init__.
+        ''' Nothing beyond just re-running __init__, reusing whoami.
         '''
-        self.__init__()
+        self.__init__(self.whoami)
         
     @fixture_api
     def prep_obj(self, address, author, state, is_link, api_id, private,
@@ -831,7 +833,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
     async def set_token(self, connection, body):
         ''' Handles token-setting requests.
         '''
-        self._hgxlink.app_token = body
+        self._hgxlink.token = body
         
     @set_token.fixture
     async def set_token(self, token):
@@ -841,6 +843,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             token = bytes([random.randint(0, 255) for i in range(0, 4)])
             
         self.token = token
+        return token
     
     @public_api
     @request(b'+A')
@@ -940,7 +943,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
     async def get_whoami(self, connection):
         ''' Fixture for get_whoami.
         '''
-        return self._whoami
+        return self.whoami
         
     @public_api
     @request(b'>$')

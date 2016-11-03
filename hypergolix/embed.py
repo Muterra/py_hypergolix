@@ -90,6 +90,30 @@ __all__ = [
 class TriplicateAPI(Triplicate, API):
     ''' Combine loopa's triplicate metaclass with hypothetical.API.
     '''
+    
+    
+class IPCManager(ConnectionManager):
+    ''' Add connection init to acquire whoami.
+    '''
+    
+    def __init__(self, hgxlink, *args, **kwargs):
+        self.__hgxlink = weakref.ref(hgxlink)
+        
+    @property
+    def _hgxlink(self):
+        hgxlink = self.__hgxlink()
+        if hgxlink is None:
+            raise HGXLinkError(
+                'IPC connection manager separated from HGXLink; it appears ' +
+                'the HGXLink has been garbage collected.'
+            )
+        else:
+            return hgxlink
+            
+    async def connection_init(self, connection, protocol):
+        ''' Add connection init to grab whoami.
+        '''
+        self._hgxlink.whoami = await protocol.get_whoami(connection)
 
 
 # ###############################################
@@ -121,12 +145,13 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
             **kwargs
         )
         
-        # Handle fixturing (for testing)
+        # Normally we'll need to define the protocol and the connection manager
         if ipc_fixture is None:
             ipc_protocol = IPCClientProtocol()
-            ipc_manager = ConnectionManager(
+            ipc_manager = IPCManager(
                 connection_cls = WSConnection,
-                msg_handler = ipc_protocol
+                msg_handler = ipc_protocol,
+                hgxlink = self
             )
             self.register_task(
                 ipc_manager,
@@ -136,8 +161,11 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
             )
             self._ipc_manager = ipc_manager
             self._ipc_protocol = ipc_protocol
+        
+        # Handle fixturing (for testing)
         else:
             self._ipc_manager = ipc_fixture
+            self._ipc_protocol = None
             self.register_task(ipc_fixture)
         
         # All of the various object handlers
@@ -172,6 +200,14 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         self.share_lookup = {}
         self.api_lookup = {}
         self.deleted = set()
+            
+    def start(self, *args, **kwargs):
+        ''' Await a connection if we're running threaded-ly.
+        '''
+        super().start(*args, **kwargs)
+        
+        if self._ipc_protocol is not None and self.threaded:
+            self._ipc_manager.await_connection_threadsafe()
         
     @property
     def whoami(self):
@@ -199,7 +235,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
             )
     
     @property
-    def app_token(self):
+    def token(self):
         ''' Read-only access to the current app token.
         '''
         if self._token is None:
@@ -207,9 +243,9 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         else:
             return self._token
             
-    @app_token.setter
-    def app_token(self, value):
-        ''' Set app_token, if (and only if) it has yet to be set.
+    @token.setter
+    def token(self, value):
+        ''' Set the app token, if (and only if) it has yet to be set.
         '''
         if self._token is None:
             self._token = value
@@ -355,10 +391,10 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         ''' Registers the application as using a particular token, OR
         gets a new token. Returns the ghid for the startup object (if
         one has already been defined), or None. Tokens are be available
-        in app_token.
+        in self.token.
         '''
         # The result of this will be the actual token.
-        self.app_token = await self._ipc_manager.set_token(token)
+        self.token = await self._ipc_manager.set_token(token)
         
         if token is not None:
             self._startup_obj = await self._ipc_manager.get_startup_obj()

@@ -450,7 +450,7 @@ class MsgBuffer(loopa.TaskLooper):
         self._send_q = None
     
     
-class ConnectionManager(loopa.TaskLooper):
+class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
     ''' Use this client-side to automatically establish (and, whenever
     necessary, re-establish) a connection with a server. This adds
     exponential backoff for every consecutive failed connection attempt.
@@ -492,6 +492,10 @@ class ConnectionManager(loopa.TaskLooper):
             setattr(self, name, wrap_request)
         
         super().__init__(*args, **kwargs)
+        
+    async def connection_init(self, connection, protocol):
+        ''' Run any desired setup for the connection.
+        '''
     
     async def loop_init(self, *args, **kwargs):
         ''' *args and **kwargs will be passed to the connection class.
@@ -550,6 +554,7 @@ class ConnectionManager(loopa.TaskLooper):
             self._consecutive_attempts = 0
             # See note above re: strong/weak references
             self._connection = connection
+            await self.connection_init(connection, self.protocol_def)
             self._conn_available.set()
             
             try:
@@ -571,6 +576,12 @@ class ConnectionManager(loopa.TaskLooper):
         method = getattr(self.protocol_def, request_name)
         await self._conn_available.wait()
         return (await method(self._connection, *args, **kwargs))
+    
+    @loopa.utils.triplicated
+    async def await_connection(self):
+        ''' Wait for a connection to be available.
+        '''
+        await self._conn_available.wait()
 
 
 class RequestResponseProtocol(type):

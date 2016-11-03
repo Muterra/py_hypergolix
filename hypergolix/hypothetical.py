@@ -116,6 +116,11 @@ class API(type):
             fixture_bases = bases
         else:
             fixture_bases = (*fixture_bases, *bases)
+            # NOTE:
+            # See Python docs on super() with zero args: "the compiler fills in
+            # the necessary details to correctly retrieve the class being
+            # defined". Therefore, this is necessary when using fixture_bases:
+            # super(type(self), self).__init__(*args, **kwargs)
     
         # No need to modify bases, either for the actual type or the
         # fixture/interface

@@ -77,6 +77,7 @@ from golix import Ghid
 
 from hypergolix.exceptions import HypergolixException
 from hypergolix.exceptions import IPCError
+from hypergolix.exceptions import HGXLinkError
 
 # Imports within the scope of tests
 
@@ -166,6 +167,7 @@ class MockDispatchable:
 # ###############################################
 
 
+@unittest.skipIf(True, 'skip')
 class WSIPCTest(unittest.TestCase):
     
     @classmethod
@@ -673,35 +675,74 @@ class WSIPCTest(unittest.TestCase):
         
 
 class HGXLinkTrashtest(unittest.TestCase):
+    ''' Test HGXLink.
+    
+    TODO: figure out how hgxlink should run get_whoami!
+    '''
     
     @classmethod
     def setUpClass(cls):
-        # Set up the IPC server.
-        cls.ipc_fixture = IPCClientProtocol.__fixture__()
+        # Set up the IPC fixture
+        whoami = make_random_ghid()
+        cls.ipc_fixture = IPCClientProtocol.__fixture__(whoami)
+        # Set up HGXLink (and, because of autostart, start its event loop)
         cls.hgxlink = HGXLink(
             debug = True,
             threaded = True,
+            autostart = True,
             ipc_fixture = cls.ipc_fixture
         )
+        # Normally this is handled by the connection startup. Since we're
+        # fixturing the connection manager, we have to do it manually.
+        cls.hgxlink.whoami = whoami
         
+    @classmethod
+    def tearDownClass(cls):
+        # We just need to kill the hgxlink
+        cls.hgxlink.stop_threadsafe_nowait()
+        
+    def test_whoami(self):
+        # Trivial pass-through.
+        self.assertEqual(self.hgxlink.whoami, self.ipc_fixture.whoami)
+        
+    def test_token(self):
+        ''' Test token operations.
+        '''
+        self.ipc_fixture.RESET()
+        
+        with self.assertRaises(HGXLinkError):
+            self.hgxlink.token
+            
+        # Set a token
+        token = bytes([random.randint(0, 255) for i in range(0, 4)])
+        startup = self.hgxlink.register_token_threadsafe(token)
+        self.assertEqual(token, self.hgxlink.token)
+        self.assertIsNone(startup)
+        
+        # Ensure re-setting fails
+        with self.assertRaises(HGXLinkError):
+            self.hgxlink.register_token_threadsafe(bytes(4))
+        
+        # Call again with nothing as token
+        self.hgxlink._token = None
+        startup = self.hgxlink.register_token_threadsafe()
+        self.assertIsNone(startup)
+        
+        # Now set the startup object and run again
+        self.hgxlink._token = None
+        token = bytes([random.randint(0, 255) for i in range(0, 4)])
+        set_startup = make_random_ghid()
+        self.ipc_fixture.startup = set_startup
+        startup = self.hgxlink.register_token_threadsafe(token)
+        self.assertEqual(set_startup, startup)
+        
+        
+    ###################################################################
+    # Junk follows.
+    ###################################################################
+        
+    @unittest.skipIf(True, 'skip')
     def test_client1(self):
-        # Test app tokens.
-        # -----------
-        token1 = self.app1.get_new_token_threadsafe()
-        self.assertIn(token1, self.dispatch.tokens)
-        self.assertIn(token1, self.ipccore._endpoint_from_token)
-        self.assertTrue(isinstance(token1, bytes))
-        
-        with self.assertRaises(RuntimeError, 
-            msg='IPC allowed concurrent token re-registration.'):
-                self.app2.set_existing_token_threadsafe(token1)
-                
-        # Good, that didn't work
-        self.app2.get_new_token_threadsafe()
-        token2 = self.app2.app_token
-        self.assertIn(token2, self.dispatch.tokens)
-        self.assertIn(token2, self.ipccore._endpoint_from_token)
-        self.assertTrue(isinstance(token2, bytes))
         
         # Okay, now I'm satisfied about tokens. Get on with it already!
         pt0 = b'I am a sexy stagnant beast.'
@@ -709,11 +750,6 @@ class HGXLinkTrashtest(unittest.TestCase):
         pt2 = b'Hiyaback!'
         pt3 = b'Listening...'
         pt4 = b'All ears!'
-        
-        # Test whoami
-        # -----------
-        whoami = self.app1.whoami
-        self.assertEqual(whoami, TEST_AGENT1.ghid)
         
         # Test registering an api_id
         # -----------
@@ -837,15 +873,6 @@ class HGXLinkTrashtest(unittest.TestCase):
         obj1.hgx_delete_threadsafe()
         self.assertTrue(dispatchable1.deleted)
         self.assertFalse(obj1._isalive_3141592)
-        
-        # --------------------------------------------------------------------
-        # Comment this out if no interactivity desired
-            
-        # # Start an interactive IPython interpreter with local namespace, but
-        # # suppress all IPython-related warnings.
-        # with warnings.catch_warnings():
-        #     warnings.simplefilter('ignore')
-        #     IPython.embed()
 
 
 if __name__ == "__main__":
