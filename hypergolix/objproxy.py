@@ -52,6 +52,8 @@ from .utils import call_coroutine_threadsafe
 from .utils import ApiID
 from .utils import _reap_wrapped_task
 
+from .embed import TriplicateAPI
+
 
 # ###############################################
 # Boilerplate
@@ -72,7 +74,7 @@ __all__ = [
 # ###############################################
 
 
-class ObjCore:
+class ObjCore(metaclass=TriplicateAPI):
     ''' Core object that exposes all Hypergolix internals as
     manually-name-mangled stuff, which can then be re-assigned by
     subclasses to support a given API.
@@ -82,6 +84,7 @@ class ObjCore:
     
     # Initialize some defaults here, just for good measure.
     __hgxlink = None
+    __hgx_ipc = None
     __state = None
     __ghid = None
     __callback = None
@@ -112,8 +115,8 @@ class ObjCore:
         self._hgx_api_id = api_id
         self._hgx_private = private
         self._hgx_dynamic = dynamic
-        # TODO: move this into hgxlink.subscribe_to_updates
-        self._hgx_isalive = True
+        # TODO: think about this
+        self.__isalive = True
         # TODO: think about this
         self._hgx_legroom = _legroom
         
@@ -433,28 +436,33 @@ class ObjCore:
             +   <ObjBase object>.hgx_recast(PickleProxy) returns the
                 object recast as a PickleProxy
         '''
-        # We always need to do this, in case something got weird
-        # with serialization.
-        # Re-pack the object, and then unpack it.
-        state = await self._hgx_pack(self.__state)
-        state = await cls._hgx_unpack(state)
-            
+        # Re-pack the object for recasting. We always need to do this, in case
+        # something got weird with serialization.
+        state = await self.hgx_pack(self.__state)
+        
+        # Do this check afterwards to avoid a race condition.
+        if not self._hgx_isalive:
+            raise DeadObject('Cannot recast a dead object.')
+        
         # Use the state from above to create a new copy of the object.
-        recast = cls(
-            hgxlink = self._hgxlink,
-            state = state,
-            api_id = self.__api_id,
-            dynamic = self.__dynamic,
-            private = self.__private,
+        recast = await self._hgxlink.get(
+            cls,
             ghid = self.__ghid,
-            binder = self.__binder,
+            obj_def = (
+                self.__ghid,
+                self.__binder,
+                state,  # Note that this is the packed version from above
+                False,  # is_link
+                self.__api_id,
+                self.__private,
+                self.__dynamic,
+                self.__legroom
+            )
         )
-        # Copy over the existing isalive and callback.
+        # Copy over the existing callback. This will change when we move the
+        # callback wrapping into reap_anonymous_task
         recast._ObjCore_callback = self.__callback
-        recast._ObjCore_isalive = self.__isalive
-        # Now transfer the subscription to the new object and render the old
-        # inoperable
-        self._hgxlink.subscribe_to_updates(recast)
+        # Now render self (the old object) inoperable
         self.__render_inop()
         
         return recast

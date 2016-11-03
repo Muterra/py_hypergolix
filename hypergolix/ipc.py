@@ -1012,7 +1012,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         raise NotImplementedError()
         
     @deregister_startup_obj.fixture
-    def deregister_startup_obj(self):
+    async def deregister_startup_obj(self):
         ''' Still more fixtures.
         '''
         self.startup = None

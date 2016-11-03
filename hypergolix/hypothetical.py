@@ -151,9 +151,16 @@ class API(type):
                 public_namespace[name] = obj
                 fixture_namespace[name] = obj
         
+        # Remove ourselves from the metaclass chain
+        if mcls is API:
+            # ONLY if our metaclass is Triplicate itself should we change mcls
+            use_mcls = mcls.mro(mcls)[1]
+        else:
+            use_mcls = mcls
+        
         # Create the class
         cls = super().__new__(
-            mcls,
+            use_mcls,
             public_name,
             bases,
             public_namespace,
@@ -162,7 +169,9 @@ class API(type):
         )
         
         # Now add in the types for both the fixture and the interface.
-        # Reuse same bases for both.
+        # Reuse same bases for both, but use the REAL metaclass for it.
+        # TODO: make the fixture inherit from the cls above, so that it can
+        # have access to the original methods using super()
         cls.__fixture__ = super().__new__(
             mcls,
             fixture_name,

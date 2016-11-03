@@ -73,6 +73,8 @@ from hypergolix.utils import ApiID
 
 from hypergolix.embed import HGXLink
 
+from hypergolix.objproxy import ObjCore
+
 from golix import Ghid
 
 from hypergolix.exceptions import HypergolixException
@@ -93,73 +95,6 @@ from hypergolix.ipc import IPCClientProtocol
 from _fixtures.ghidutils import make_random_ghid
 from _fixtures.identities import TEST_AGENT1
 from _fixtures.identities import TEST_AGENT2
-
-
-class MockDispatchable:
-    def __init__(self, dispatch, ipc_core, author, dynamic, api_id, frozen,
-                 held, deleted, state, oracle, *args, **kwargs):
-        self.ghid = make_random_ghid()
-        self.author = author
-        self.dynamic = dynamic
-        self.api_id = api_id
-        # Don't forget that dispatchables assign state as a _DispatchableState
-        self.state = state
-        self.frozen = frozen
-        self.held = held
-        self.deleted = deleted
-        self.ipccore = ipc_core
-        
-        self.oracle = oracle
-        self.dispatch = dispatch
-        
-    def __eq__(self, other):
-        comp = True
-        
-        try:
-            comp &= (self.ghid == other.ghid)
-            comp &= (self.author == other.author)
-            comp &= (self.dynamic == other.dynamic)
-            comp &= (self.api_id == other.api_id)
-            comp &= (self.state == other.state)
-            comp &= (self.private == other.private)
-            comp &= (self.frozen == other.frozen)
-            comp &= (self.held == other.held)
-            comp &= (self.deleted == other.deleted)
-            
-        except (AttributeError, TypeError):
-            comp = False
-            
-        return comp
-        
-    @property
-    def private(self):
-        return False
-        
-    def freeze(self):
-        frozen = type(self)(
-            dispatch = self.dispatch,
-            ipc_core = self.ipccore,
-            oracle = self.oracle,
-            deleted = self.deleted,
-            held = self.held,
-            frozen = self.frozen,
-            state = (None, self.state),
-            api_id = self.api_id,
-            dynamic = self.dynamic,
-            author = self.author,
-        )
-        frozen.frozen = True
-        self.oracle.add_object(frozen.ghid, frozen)
-        return frozen.ghid
-        
-    def update(self, state):
-        self.state = state
-        
-    def hold(self):
-        self.held = True
-        
-    def delete(self):
-        self.deleted = True
 
 
 # ###############################################
@@ -701,6 +636,21 @@ class HGXLinkTrashtest(unittest.TestCase):
         # We just need to kill the hgxlink
         cls.hgxlink.stop_threadsafe_nowait()
         
+    def make_dummy_object(self):
+        return ObjCore.__fixture__(
+            hgxlink = self.hgxlink,
+            ipc_manager = self.ipc_fixture,
+            state = bytes([random.randint(0, 255) for i in range(0, 25)]),
+            api_id = ApiID(
+                bytes([random.randint(0, 255) for i in range(0, 64)])
+            ),
+            dynamic = True,
+            private = False,
+            ghid = make_random_ghid(),
+            binder = self.hgxlink.whoami,
+            _legroom = random.randint(5, 15)
+        )
+        
     def test_whoami(self):
         # Trivial pass-through.
         self.assertEqual(self.hgxlink.whoami, self.ipc_fixture.whoami)
@@ -735,6 +685,17 @@ class HGXLinkTrashtest(unittest.TestCase):
         self.ipc_fixture.startup = set_startup
         startup = self.hgxlink.register_token_threadsafe(token)
         self.assertEqual(set_startup, startup)
+        
+    def test_startup(self):
+        ''' Test startup registration and de-registration.
+        '''
+        self.ipc_fixture.RESET()
+        dummy_obj = self.make_dummy_object()
+        self.hgxlink.register_startup_obj_threadsafe(dummy_obj)
+        self.assertEqual(dummy_obj._hgx_ghid, self.ipc_fixture.startup)
+        
+        self.hgxlink.deregister_startup_obj_threadsafe()
+        self.assertIsNone(self.ipc_fixture.startup)
         
         
     ###################################################################

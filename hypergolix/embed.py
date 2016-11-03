@@ -193,13 +193,14 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
             self.start()
         
     @__init__.fixture
-    def __init__(self, *args, **kwargs):
+    def __init__(self, whoami=None, *args, **kwargs):
         ''' Fixture all the things!
         '''
         self.state_lookup = {}
         self.share_lookup = {}
         self.api_lookup = {}
         self.deleted = set()
+        self._whoami = whoami
             
     def start(self, *args, **kwargs):
         ''' Await a connection if we're running threaded-ly.
@@ -253,6 +254,135 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
             raise HGXLinkError(
                 'Token already set. It must be cleared before being re-set.'
             )
+        
+    @triplicated
+    async def register_token(self, token=None):
+        ''' Registers the application as using a particular token, OR
+        gets a new token. Returns the ghid for the startup object (if
+        one has already been defined), or None. Tokens are be available
+        in self.token.
+        '''
+        # The result of this will be the actual token.
+        self.token = await self._ipc_manager.set_token(token)
+        
+        if token is not None:
+            self._startup_obj = await self._ipc_manager.get_startup_obj()
+        
+        # Let applications manually request the startup object, so that they
+        # can deal with casting it appropriately.
+        return self._startup_obj
+        
+    @triplicated
+    async def register_startup_obj(self, obj):
+        ''' Registers the object as the startup object.
+        '''
+        await self._ipc_manager.register_startup_obj(obj._hgx_ghid)
+        
+    @triplicated
+    async def deregister_startup_obj(self):
+        ''' Inverse of the above.
+        '''
+        await self._ipc_manager.deregister_startup_obj()
+        
+    @triplicated
+    async def get(self, cls, ghid, obj_def=None):
+        ''' Pass to connection manager. Also, turn the object into the
+        specified class. If obj is not None, re-cast it as such.
+        '''
+        if obj_def is not None:
+            (address,
+             author,
+             state,
+             is_link,
+             api_id,
+             private,
+             dynamic,
+             _legroom) = obj_def
+            
+        elif ghid in self._objs_by_ghid:
+            obj = self._objs_by_ghid[ghid]
+            if type(obj) != cls:
+                raise HGXLinkError(
+                    'Cannot attempt to get a new copy of an object using a ' +
+                    'new class. Use obj.recast instead.'
+                )
+            else:
+                return obj
+        
+        else:
+            (address,
+             author,
+             state,
+             is_link,
+             api_id,
+             private,
+             dynamic,
+             _legroom) = await self._ipc_manager.get_ghid(ghid)
+            
+        if is_link:
+            # First discard the object, since we can't support it.
+            await self._ipc_manager.discard_ghid(ghid)
+            
+            # Now raise.
+            raise NotImplementedError(
+                'Hypergolix does not yet support nested links to other '
+                'dynamic objects.'
+            )
+            # link = Ghid.from_bytes(state)
+            # state = await self._get(link)
+        
+        state = await cls.hgx_unpack(state)
+        obj = cls(
+            hgxlink = self,
+            ipc_manager = self._ipc_manager,
+            state = state,
+            api_id = api_id,
+            dynamic = dynamic,
+            private = private,
+            ghid = address,
+            binder = author,
+            _legroom = _legroom,
+        )
+            
+        # Don't forget to add it to local lookup so we can apply updates.
+        self._objs_by_ghid[obj._hgx_ghid] = obj
+        
+        return obj
+        
+    @triplicated
+    async def new(self, cls, state, api_id=None, dynamic=True, private=False,
+                  _legroom=None, *args, **kwargs):
+        ''' Create a new object w/ class cls.
+        '''
+        if _legroom is None:
+            _legroom = self._legroom
+            
+        obj = cls(
+            hgxlink = self,
+            ipc_manager = self._ipc_manager,
+            _legroom = _legroom,
+            state = state,
+            api_id = api_id,
+            dynamic = dynamic,
+            private = private,
+            binder = self.whoami,
+            *args, **kwargs
+        )
+        
+        packed_state = await obj.hgx_pack(state)
+        
+        address = await self._ipc_manager.new_ghid(
+            packed_state,
+            api_id,
+            dynamic,
+            private,
+            _legroom
+        )
+        
+        obj._hgx_ghid = address
+        # Don't forget to add it to local lookup so we can apply updates.
+        self._objs_by_ghid[obj._hgx_ghid] = obj
+        return obj
     
     @triplicated
     async def register_nonlocal_handler(self, api_id, handler):
@@ -385,114 +515,6 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
             )
         
         return wrapped_handler
-        
-    @triplicated
-    async def register_token(self, token=None):
-        ''' Registers the application as using a particular token, OR
-        gets a new token. Returns the ghid for the startup object (if
-        one has already been defined), or None. Tokens are be available
-        in self.token.
-        '''
-        # The result of this will be the actual token.
-        self.token = await self._ipc_manager.set_token(token)
-        
-        if token is not None:
-            self._startup_obj = await self._ipc_manager.get_startup_obj()
-        
-        # Let applications manually request the startup object, so that they
-        # can deal with casting it appropriately.
-        return self._startup_obj
-        
-    @triplicated
-    async def register_startup_obj(self, obj):
-        ''' Registers the object as the startup object.
-        '''
-        await self._ipc_manager.register_startup_obj(obj._hgx_ghid)
-        
-    @triplicated
-    async def deregister_startup(self, obj):
-        ''' Inverse of the above.
-        '''
-        await self._ipc_manager.deregister_startup_obj()
-        
-    @triplicated
-    async def get(self, cls, ghid):
-        ''' Pass to connection manager. Also, turn the object into the
-        specified class.
-        '''
-        (address,
-         author,
-         state,
-         is_link,
-         api_id,
-         private,
-         dynamic,
-         _legroom) = await self._ipc_manager.get_ghid(ghid)
-            
-        if is_link:
-            # First discard the object, since we can't support it.
-            await self._ipc_manager.discard_ghid(ghid)
-            
-            # Now raise.
-            raise NotImplementedError(
-                'Hypergolix does not yet support nested links to other '
-                'dynamic objects.'
-            )
-            # link = Ghid.from_bytes(state)
-            # state = await self._get(link)
-        
-        state = await cls.hgx_unpack(state)
-        obj = cls(
-            hgxlink = self,
-            ipc_manager = self._ipc_manager,
-            state = state,
-            api_id = api_id,
-            dynamic = dynamic,
-            private = private,
-            ghid = address,
-            binder = author,
-            _legroom = _legroom,
-        )
-            
-        # Don't forget to add it to local lookup so we can apply updates.
-        self._objs_by_ghid[obj._hgx_ghid] = obj
-        
-        return obj
-        
-    @triplicated
-    async def new(self, cls, state, api_id=None, dynamic=True, private=False,
-                  _legroom=None, *args, **kwargs):
-        ''' Create a new object w/ class cls.
-        '''
-        if _legroom is None:
-            _legroom = self._legroom
-            
-        obj = cls(
-            hgxlink = self,
-            ipc_manager = self._ipc_manager,
-            _legroom = _legroom,
-            state = state,
-            api_id = api_id,
-            dynamic = dynamic,
-            private = private,
-            binder = self.whoami,
-            *args, **kwargs
-        )
-        
-        packed_state = await obj.hgx_pack(state)
-        
-        address = await self._ipc_manager.new_ghid(
-            packed_state,
-            api_id,
-            dynamic,
-            private,
-            _legroom
-        )
-        
-        obj._hgx_ghid = address
-        # Don't forget to add it to local lookup so we can apply updates.
-        self._objs_by_ghid[obj._hgx_ghid] = obj
-        return obj
         
     @public_api
     async def _pull_state(self, ghid, state):
