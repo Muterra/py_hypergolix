@@ -61,6 +61,8 @@ from .utils import _reap_wrapped_task
 from .exceptions import HGXLinkError
 
 from .comms import ConnectionManager
+from .comms import WSConnection
+from .ipc import IPCClientProtocol
 
 # from .objproxy import ObjBase
 # from .objproxy import ObjCore
@@ -102,7 +104,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
     
     @public_api
     def __init__(self, ipc_port=7772, autostart=True, debug=False, aengel=None,
-                 *args, **kwargs):
+                 *args, threaded=True, ipc_fixture=None, **kwargs):
         ''' Args:
         ipc_port    is self-explanatory
         autostart   True -> immediately start the link
@@ -110,10 +112,33 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         debug       Sets debug mode for eg. asyncio
         aengel      Set up a watcher for main thread exits
         '''
-        super().__init__(*args, **kwargs)
-        # Replace these with actual objects.
-        self._ipc_manager = None
-        self._ipc_protocol = None
+        super().__init__(
+            reusable_loop = False,
+            threaded = threaded,
+            debug = debug,
+            name = 'hgxlink',
+            *args,
+            **kwargs
+        )
+        
+        # Handle fixturing (for testing)
+        if ipc_fixture is None:
+            ipc_protocol = IPCClientProtocol()
+            ipc_manager = ConnectionManager(
+                connection_cls = WSConnection,
+                msg_handler = ipc_protocol
+            )
+            self.register_task(
+                ipc_manager,
+                host = 'localhost',
+                port = ipc_port,
+                tls = False
+            )
+            self._ipc_manager = ipc_manager
+            self._ipc_protocol = ipc_protocol
+        else:
+            self._ipc_manager = ipc_fixture
+            self.register_task(ipc_fixture)
         
         # All of the various object handlers
         # Lookup api_id: async awaitable share handler
@@ -135,6 +160,9 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         
         # Create an executor for awaiting threadsafe callbacks and handlers
         self._executor = concurrent.futures.ThreadPoolExecutor()
+        
+        if autostart:
+            self.start()
         
     @__init__.fixture
     def __init__(self, *args, **kwargs):
@@ -249,6 +277,16 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         # and not ceding flow control to the loop, we don't need to worry about
         # synchro primitives here!
         self._share_handlers[api_id] = wrap_handler
+        
+    @triplicated
+    async def deregister_share_handler(self, api_id):
+        ''' Removes a share handler.
+        '''
+        await self._ipc_manager.deregister_api(api_id)
+        try:
+            del self._share_handlers[api_id]
+        except KeyError:
+            logger.warning('No existing share handler for ' + str(api_id))
     
     def wrap_threadsafe(self, callback):
         ''' Call this to register a handler for an object shared by a
@@ -499,29 +537,3 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         ''' Fixtures handling an incoming delete.
         '''
         self.deleted.add(ghid)
-
-
-def HGXLink1(ipc_port=7772, debug=False, aengel=None):
-    if not aengel:
-        aengel = utils.Aengel()
-        
-    embed = ipc.IPCEmbed(
-        aengel = aengel,
-        threaded = True,
-        thread_name = utils._generate_threadnames('em-aure')[0],
-        debug = debug,
-    )
-    
-    embed.add_ipc_threadsafe(
-        client_class = comms.WSBasicClient,
-        host = 'localhost',
-        port = ipc_port,
-        debug = debug,
-        aengel = aengel,
-        threaded = True,
-        thread_name = utils._generate_threadnames('emb-ws')[0],
-        tls = False
-    )
-        
-    embed.aengel = aengel
-    return embed

@@ -95,7 +95,8 @@ class API(type):
     ''' Metaclass for defining an interfaceable API.
     '''
     
-    def __new__(mcls, name, bases, namespace, *args, **kwargs):
+    def __new__(mcls, name, bases, namespace, *args, fixture_bases=None,
+                **kwargs):
         ''' Modify the existing namespace:
         1.  remove any @fixture_api methods.
         2.  extract any @public_api.fixture methods
@@ -110,6 +111,11 @@ class API(type):
         public_namespace = {}
         fixture_namespace = {}
         interface_namespace = {}
+        
+        if fixture_bases is None:
+            fixture_bases = bases
+        else:
+            fixture_bases = (*fixture_bases, *bases)
     
         # No need to modify bases, either for the actual type or the
         # fixture/interface
@@ -155,7 +161,7 @@ class API(type):
         cls.__fixture__ = super().__new__(
             mcls,
             fixture_name,
-            bases,
+            fixture_bases,
             fixture_namespace,
             *args,
             **kwargs
@@ -171,3 +177,8 @@ class API(type):
         
         # And don't forget to return the final cls object.
         return cls
+        
+    def __init__(self, *args, fixture_bases=None, **kwargs):
+        ''' Just here to drop the fixture bases.
+        '''
+        super().__init__(*args, **kwargs)

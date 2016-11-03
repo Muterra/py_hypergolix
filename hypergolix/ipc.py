@@ -64,12 +64,14 @@ IPC Apps should not have access to objects that are not _Dispatchable.
 # External dependencies
 import weakref
 import collections
-
-from golix import Ghid
-
 import concurrent
 import asyncio
 import traceback
+# These are just used for fixturing.
+import random
+import loopa
+
+from golix import Ghid
 
 # Intrapackage dependencies
 from .hypothetical import public_api
@@ -95,6 +97,7 @@ from .exceptions import UnavailableUpstream
 
 from .utils import call_coroutine_threadsafe
 from .utils import WeakSetMap
+from .utils import SetMap
 from .utils import ApiID
 
 from .comms import RequestResponseAPI
@@ -751,20 +754,69 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
 
 
 class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
-                        error_codes=ERROR_CODES, default_version=b'\x00\x00'):
+                        error_codes=ERROR_CODES, default_version=b'\x00\x00',
+                        fixture_bases=(loopa.TaskLooper,)):
     ''' Defines the protocol for IPC, with handlers specific to clients.
     '''
     
+    @public_api
     def __init__(self, *args, **kwargs):
         ''' Add intentionally invalid init to force assemblage.
         '''
         super().__init__(*args, **kwargs)
         self._hgxlink = None
         
+    @__init__.fixture
+    def __init__(self, *args, **kwargs):
+        ''' Create the fixture internals.
+        '''
+        super().__init__(*args, **kwargs)
+        self.apis = set()
+        self.token = None
+        self.startup = None
+        self.pending_obj = None
+        self.discarded = set()
+        self.updates = []
+        self.syncs = []
+        self.shares = SetMap()
+        self.frozen = set()
+        self.held = set()
+        self.deleted = set()
+        
+    @fixture_api
+    def RESET(self):
+        ''' Nothing beyond just re-running __init__.
+        '''
+        self.__init__()
+        
+    @fixture_api
+    def prep_obj(self, address, author, state, is_link, api_id, private,
+                 dynamic, legroom):
+        ''' Define the next object to be returned in any obj-based
+        operations.
+        '''
+        self.pending_obj = (
+            address,
+            author,
+            state,
+            is_link,
+            api_id,
+            private,
+            dynamic,
+            legroom
+        )
+        
+    @fixture_api
+    async def loop_run(self, *args, **kwargs):
+        ''' Just busy loop forever for the fixture.
+        '''
+        await asyncio.sleep(.1)
+        
     def assemble(self, hgxlink):
         # Chicken, egg, etc.
         self._hgxlink = weakref.proxy(hgxlink)
         
+    @public_api
     @request(b'+T')
     async def set_token(self, connection, token):
         ''' Register an existing token or get a new token, or notify an
@@ -781,6 +833,16 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         '''
         self._hgxlink.app_token = body
         
+    @set_token.fixture
+    async def set_token(self, token):
+        ''' Fixture for setting a token (or getting a new one).
+        '''
+        if token is None:
+            token = bytes([random.randint(0, 255) for i in range(0, 4)])
+            
+        self.token = token
+    
+    @public_api
     @request(b'+A')
     async def register_api(self, connection, api_id):
         ''' Registers the application as supporting an API. Client only.
@@ -806,7 +868,14 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             return True
         else:
             raise IPCError('Unknown error while registering API.')
+            
+    @register_api.fixture
+    async def register_api(self, api_id):
+        ''' Fixture for registering an api.
+        '''
+        self.apis.add(api_id)
         
+    @public_api
     @request(b'-A')
     async def deregister_api(self, connection, api_id):
         ''' Removes any existing registration for the app supporting an
@@ -834,6 +903,12 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             return True
         else:
             raise IPCError('Unknown error while deregistering API.')
+            
+    @deregister_api.fixture
+    async def deregister_api(self, api_id):
+        ''' Fixture for api removal.
+        '''
+        self.apis.discard(api_id)
         
     @public_api
     @request(b'?I')
@@ -867,6 +942,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         '''
         return self._whoami
         
+    @public_api
     @request(b'>$')
     async def get_startup_obj(self, connection):
         ''' Request a startup object, or notify an app of its declared
@@ -893,7 +969,14 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         else:
             ghid = Ghid.from_bytes(response)
             return ghid
+            
+    @get_startup_obj.fixture
+    async def get_startup_obj(self):
+        ''' Yep, go ahead and fixture that, too.
+        '''
+        return self.startup
         
+    @public_api
     @request(b'+$')
     async def register_startup_obj(self, connection, ghid):
         ''' Register a startup object. Client only.
@@ -906,6 +989,13 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         '''
         raise NotImplementedError()
         
+    @register_startup_obj.fixture
+    async def register_startup_obj(self, ghid):
+        ''' Fixture startup obj registration and stuff.
+        '''
+        self.startup = ghid
+        
+    @public_api
     @request(b'-$')
     async def deregister_startup_obj(self, connection):
         ''' Register a startup object. Client only.
@@ -918,6 +1008,13 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         '''
         raise NotImplementedError()
         
+    @deregister_startup_obj.fixture
+    def deregister_startup_obj(self):
+        ''' Still more fixtures.
+        '''
+        self.startup = None
+        
+    @public_api
     @request(b'>O')
     async def get_ghid(self, connection, ghid):
         ''' Get an object with the specified address. Client only.
@@ -939,6 +1036,13 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             
         return self._unpack_object_def(response)
         
+    @get_ghid.fixture
+    async def get_ghid(self, ghid):
+        ''' Interact with pending_obj.
+        '''
+        return self.pending_obj
+        
+    @public_api
     @request(b'+O')
     async def new_ghid(self, connection, state, api_id, dynamic, private,
                        _legroom):
@@ -978,7 +1082,14 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         
         else:
             return Ghid.from_bytes(response)
+            
+    @new_ghid.fixture
+    async def new_ghid(self, *args, **kwargs):
+        ''' We just need an address.
+        '''
+        return self.pending_obj[0]
         
+    @public_api
     @request(b'!O')
     async def update_ghid(self, connection, ghid, state, private, _legroom):
         ''' Update an object or notify an app of an incoming update.
@@ -1033,7 +1144,16 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             
         else:
             return True
+            
+    @update_ghid.fixture
+    async def update_ghid(self, ghid, state, private, _legroom):
+        ''' Yarp, fixture that.
+        '''
+        self.updates.append(
+            {ghid: (state, private, _legroom)}
+        )
         
+    @public_api
     @request(b'~O')
     async def sync_ghid(self, connection, ghid):
         ''' Manually force Hypergolix to check an object for updates.
@@ -1057,7 +1177,13 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             raise IPCError('Unknown error while updating object.')
         else:
             return True
+            
+    @sync_ghid.fixture
+    async def sync_ghid(self, ghid):
+        # Moar fixturing.
+        self.syncs.append(ghid)
         
+    @public_api
     @request(b'@O')
     async def share_ghid(self, connection, ghid, recipient):
         ''' Request an object share or notify an app of an incoming
@@ -1086,6 +1212,11 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             return True
         else:
             raise IPCError('Unknown error while sharing object.')
+            
+    @share_ghid.fixture
+    async def share_ghid(self, ghid, recipient):
+        # Blahblah
+        self.shares.add(ghid, recipient)
         
     @request(b'^S')
     async def share_success(self, connection):
@@ -1119,6 +1250,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         # TODO: implement this.
         return b''
         
+    @public_api
     @request(b'*O')
     async def freeze_ghid(self, connection, ghid):
         ''' Creates a new static copy of the object, or notifies an app
@@ -1143,7 +1275,13 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         
         else:
             return Ghid.from_bytes(response)
+            
+    @freeze_ghid.fixture
+    async def freeze_ghid(self, ghid):
+        # Moar fixture.
+        self.frozen.add(ghid)
         
+    @public_api
     @request(b'#O')
     async def hold_ghid(self, connection, ghid):
         ''' Creates a new static binding for the object, or notifies an
@@ -1169,7 +1307,13 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             return True
         else:
             raise IPCError('Unknown error while holding object.')
+            
+    @hold_ghid.fixture
+    async def hold_ghid(self, ghid):
+        # Yep yep yep
+        self.held.add(ghid)
         
+    @public_api
     @request(b'-O')
     async def discard_ghid(self, connection, ghid):
         ''' Stop listening to object updates. Client only.
@@ -1193,7 +1337,13 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             return True
         else:
             raise IPCError('Unknown error while discarding object.')
+            
+    @discard_ghid.fixture
+    async def discard_ghid(self, ghid):
+        # Nothing special.
+        self.discarded.add(ghid)
         
+    @public_api
     @request(b'XO')
     async def delete_ghid(self, connection, ghid):
         ''' Request an object deletion or notify an app of an incoming
@@ -1219,6 +1369,11 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             return True
         else:
             raise IPCError('Unknown error while deleting object.')
+            
+    @delete_ghid.fixture
+    async def delete_ghid(self, ghid):
+        # mmmmhmmm
+        self.deleted.add(ghid)
 
 
 class IPCCore:
