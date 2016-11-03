@@ -697,6 +697,52 @@ class HGXLinkTrashtest(unittest.TestCase):
         self.hgxlink.deregister_startup_obj_threadsafe()
         self.assertIsNone(self.ipc_fixture.startup)
         
+    def test_get(self):
+        ''' Test getting an object.
+        '''
+        self.ipc_fixture.RESET()
+        dummy_obj = self.make_dummy_object()
+        self.ipc_fixture.prep_obj(dummy_obj)
+        
+        # Get that object normally.
+        obj = self.hgxlink.get_threadsafe(
+            ObjCore.__fixture__,
+            dummy_obj._hgx_ghid
+        )
+        self.assertEqual(dummy_obj._hgx_state, obj._hgx_state)
+        self.assertEqual(dummy_obj._hgx_ghid, obj._hgx_ghid)
+        self.assertIn(dummy_obj._hgx_ghid, self.hgxlink._objs_by_ghid)
+        
+        # Now re-get that object, as if we're calling again from somewhere else
+        self.ipc_fixture.RESET()
+        obj2 = self.hgxlink.get_threadsafe(
+            ObjCore.__fixture__,
+            dummy_obj._hgx_ghid
+        )
+        
+        # Now reset and get with an object def, like we're recasting.
+        self.ipc_fixture.RESET()
+        dummy_obj = self.make_dummy_object()
+        self.ipc_fixture.prep_obj(dummy_obj)
+        
+        # Get that object normally.
+        obj = self.hgxlink.get_threadsafe(
+            ObjCore.__fixture__,
+            dummy_obj._hgx_ghid,
+            obj_def = (
+                dummy_obj._hgx_ghid,
+                dummy_obj._hgx_binder,
+                dummy_obj._hgx_state,
+                dummy_obj._hgx_linked,
+                dummy_obj._hgx_api_id,
+                dummy_obj._hgx_private,
+                dummy_obj._hgx_dynamic,
+                dummy_obj._hgx_legroom
+            )
+        )
+        self.assertEqual(dummy_obj._hgx_state, obj._hgx_state)
+        self.assertEqual(dummy_obj._hgx_ghid, obj._hgx_ghid)
+        self.assertIn(dummy_obj._hgx_ghid, self.hgxlink._objs_by_ghid)
         
     ###################################################################
     # Junk follows.

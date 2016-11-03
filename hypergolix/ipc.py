@@ -792,20 +792,19 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         self.__init__(self.whoami)
         
     @fixture_api
-    def prep_obj(self, address, author, state, is_link, api_id, private,
-                 dynamic, legroom):
+    def prep_obj(self, obj):
         ''' Define the next object to be returned in any obj-based
         operations.
         '''
         self.pending_obj = (
-            address,
-            author,
-            state,
-            is_link,
-            api_id,
-            private,
-            dynamic,
-            legroom
+            obj._hgx_ghid,
+            obj._hgx_binder,
+            obj._hgx_state,
+            obj._hgx_linked,
+            obj._hgx_api_id,
+            obj._hgx_private,
+            obj._hgx_dynamic,
+            obj._hgx_legroom
         )
         
     @fixture_api

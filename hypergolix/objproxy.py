@@ -198,6 +198,12 @@ class ObjCore(metaclass=TriplicateAPI):
         self.__legroom = int(value)
         
     @property
+    def _hgx_linked(self):
+        ''' Dummy property until linking is supported.
+        '''
+        return False
+        
+    @property
     def _hgx_state(self):
         ''' Simple pass-through to the internal state. This is a strong
         reference, so if the state is mutable, modifications will be
