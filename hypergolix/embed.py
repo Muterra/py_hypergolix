@@ -37,6 +37,7 @@ import collections
 import weakref
 import queue
 import threading
+import inspect
 import traceback
 import asyncio
 import loopa
@@ -420,6 +421,10 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         '''
         if not isinstance(api_id, ApiID):
             raise TypeError('api_id must be ApiID.')
+        # Add this check to help shield against accidentally-incomplete
+        # loopsafe decorators, and attempts to directly set functions.
+        elif not inspect.iscoroutinefunction(handler):
+            raise TypeError('Handler must be defined with "async def".')
         
         await self._ipc_manager.register_api(api_id)
         
@@ -486,7 +491,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         
         return wrapped_handler
     
-    def wrap_loopsafe(self, callback, target_loop):
+    def wrap_loopsafe(self, callback, *, target_loop=None):
         ''' Call this to register a handler for an object shared by a
         different hypergolix identity, or the same hypergolix identity
         but a different application. Any api_id can have at most one
@@ -503,18 +508,43 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         IPC embed's internal event loop. It is internally loopsafe, and
         need not be wrapped by run_coroutine_loopsafe.
         '''
-        # For simplicity, wrap the handler, so that any shares can be called
-        # normally from our own event loop.
-        async def wrapped_handler(*args, target_loop=target_loop,
-                                  coro=callback):
-            ''' Wrap the handler in await_coroutine_loopsafe.
-            '''
-            await await_coroutine_loopsafe(
-                coro = coro(*args),
-                target_loop = target_loop
-            )
+        # This can be used as a decorator, or directly as a function. If used
+        # as a decorator, it will be called with a single argument -- the
+        # target loop -- which must then be used to construct a decorator that
+        # can then be invoked to make the actual wrapped function.
+        # No target loop, so this is a decorator generation call.
+        if target_loop is None:
+            def decorator_closure(func, self_weakref=weakref.ref(self),
+                                  target_loop=callback):
+                ''' Returns a decorator that can be used to wrap things
+                in loop safety.
+                '''
+                self = self_weakref()
+                if self is None:
+                    raise RuntimeError(
+                        'HGXLink garbage collected before properly wrapping ' +
+                        'a loopsafe callback.'
+                    )
+                else:
+                    # Note that target_loop must be passed as an explicit kwarg
+                    return self.wrap_loopsafe(func, target_loop=target_loop)
+                    
+            return decorator_closure
         
-        return wrapped_handler
+        # Target loop defined, so this is actually generating a wrapped handler
+        else:
+            # For simplicity, wrap the handler, so that any shares can be
+            # called normally from our own event loop.
+            async def wrapped_handler(*args, target_loop=target_loop,
+                                      coro=callback):
+                ''' Wrap the handler in await_coroutine_loopsafe.
+                '''
+                await await_coroutine_loopsafe(
+                    coro = coro(*args),
+                    loop = target_loop
+                )
+            
+            return wrapped_handler
         
     @public_api
     async def _pull_state(self, ghid, state):

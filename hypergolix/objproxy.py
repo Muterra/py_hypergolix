@@ -35,7 +35,7 @@ import weakref
 import traceback
 import asyncio
 import operator
-import abc
+import inspect
 import json
 import pickle
 
@@ -361,37 +361,6 @@ class ObjCore(metaclass=TriplicateAPI):
         '''
         raise NotImplementedError()
         
-    def _hgx_wrap_threadsafe(self, callback):
-        ''' Wraps a callback to make it threadsafe. The callback will be
-        executed from within a single-use, dedicated thread.
-        '''
-        # Note that we should prevent circular refs.
-        async def wrapped_callback(*args, self_weakref=weakref.ref(self),
-                                   func=callback):
-            ''' Wrap the handler in run_in_executor.
-            '''
-            self = self_weakref()
-            if self is not None:
-                await self._hgxlink._loop.run_in_executor(
-                    self._hgxlink._executor,
-                    func,
-                    *args
-                )
-        return wrapped_callback
-        
-    def _hgx_wrap_loopsafe(self, callback, target_loop):
-        ''' Wraps a callback to make it loopsafe. The callback will be
-        executed from within target_loop.
-        '''
-        async def wrapped_callback(*args, loop=target_loop, coro=callback):
-            ''' Wrap the handler in run_in_executor.
-            '''
-            await run_coroutine_loopsafe(
-                coro = coro(*args),
-                target_loop = loop
-            )
-        return wrapped_callback
-        
     @property
     def _hgx_callback(self):
         ''' Get the callback.
@@ -408,6 +377,13 @@ class ObjCore(metaclass=TriplicateAPI):
         This CALLBACK will be called from within the IPC embed's
         internal event loop.
         '''
+        # Add this check to help shield against accidentally-incomplete
+        # loopsafe decorators, and attempts to directly set functions.
+        if callback is None:
+            return
+        elif not inspect.isawaitable(callback):
+            raise TypeError('Callback must be defined with "async def".')
+        
         # Any handlers passed to us this way can already be called natively
         # from within our own event loop, so they just need to be wrapped such
         # that they never raise.
@@ -670,9 +646,6 @@ class Obj(ObjCore, metaclass=Triplicate):
     binder = ObjCore._hgx_binder
     isalive = ObjCore._hgx_isalive
     
-    wrap_threadsafe = ObjCore._hgx_wrap_threadsafe
-    wrap_loopsafe = ObjCore._hgx_wrap_loopsafe
-    
     recast = ObjCore._hgx_recast
     callback = ObjCore._hgx_callback
     
@@ -738,9 +711,6 @@ class Proxy(ObjCore, metaclass=Triplicate):
     hgx_dynamic = ObjCore._hgx_dynamic
     hgx_binder = ObjCore._hgx_binder
     hgx_isalive = ObjCore._hgx_isalive
-    
-    hgx_wrap_threadsafe = ObjCore._hgx_wrap_threadsafe
-    hgx_wrap_loopsafe = ObjCore._hgx_wrap_loopsafe
     
     hgx_recast = ObjCore._hgx_recast
     hgx_callback = ObjCore._hgx_callback
