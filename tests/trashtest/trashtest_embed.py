@@ -719,6 +719,9 @@ class HGXLinkTrashtest(unittest.TestCase):
             ObjCore.__fixture__,
             dummy_obj._hgx_ghid
         )
+        self.assertEqual(obj2._hgx_state, obj._hgx_state)
+        self.assertEqual(obj2._hgx_ghid, obj._hgx_ghid)
+        self.assertIn(obj2._hgx_ghid, self.hgxlink._objs_by_ghid)
         
         # Now reset and get with an object def, like we're recasting.
         self.ipc_fixture.RESET()
@@ -744,142 +747,46 @@ class HGXLinkTrashtest(unittest.TestCase):
         self.assertEqual(dummy_obj._hgx_ghid, obj._hgx_ghid)
         self.assertIn(dummy_obj._hgx_ghid, self.hgxlink._objs_by_ghid)
         
-    ###################################################################
-    # Junk follows.
-    ###################################################################
+    def test_new(self):
+        ''' Create a new object.
+        '''
+        self.ipc_fixture.RESET()
+        dummy_obj = self.make_dummy_object()
+        self.ipc_fixture.pending_ghid = dummy_obj._hgx_ghid
         
-    @unittest.skipIf(True, 'skip')
-    def test_client1(self):
-        
-        # Okay, now I'm satisfied about tokens. Get on with it already!
-        pt0 = b'I am a sexy stagnant beast.'
-        pt1 = b'Hello, world?'
-        pt2 = b'Hiyaback!'
-        pt3 = b'Listening...'
-        pt4 = b'All ears!'
-        
-        # Test registering an api_id
-        # -----------
-        self.app1.register_share_handler_threadsafe(
-            self.__api_id, 
-            ProxyBase,
-            self._objhandler_1
+        obj = self.hgxlink.new_threadsafe(
+            ObjCore.__fixture__,
+            dummy_obj._hgx_state,
+            dummy_obj._hgx_api_id,
+            dummy_obj._hgx_dynamic,
+            dummy_obj._hgx_private,
+            dummy_obj._hgx_legroom
         )
-        self.app2.register_share_handler_threadsafe(
-            self.__api_id, 
-            ProxyBase,
-            self._objhandler_2
+        self.assertEqual(dummy_obj._hgx_state, obj._hgx_state)
+        self.assertEqual(dummy_obj._hgx_ghid, obj._hgx_ghid)
+        self.assertIn(dummy_obj._hgx_ghid, self.hgxlink._objs_by_ghid)
+        
+    def test_upstream_pull(self):
+        ''' Test updates and deletion coming in from upstream.
+        '''
+        self.ipc_fixture.RESET()
+        # Manually make and load a dummy object
+        dummy_obj = self.make_dummy_object()
+        self.hgxlink._objs_by_ghid[dummy_obj._hgx_ghid] = dummy_obj
+        
+        # Test updates
+        new_state = bytes([random.randint(0, 255) for i in range(0, 25)])
+        await_coroutine_threadsafe(
+            coro = self.hgxlink._pull_state(dummy_obj._hgx_ghid, new_state),
+            loop = self.hgxlink._loop
         )
-        registered_apis = \
-            self.ipccore._endpoints_from_api.get_any(self.__api_id)
-        self.assertEqual(len(registered_apis), 2)
+        self.assertEqual(dummy_obj._hgx_state, new_state)
         
-        # Test creating a private, static new object with that api_id
-        # -----------
-        obj1 = self.app1.new_threadsafe(
-            cls = ProxyBase,
-            state = pt0,
-            api_id = self.__api_id,
-            dynamic = False,
-            private = True
+        # Test deletion
+        await_coroutine_threadsafe(
+            coro = self.hgxlink.handle_delete(dummy_obj._hgx_ghid),
+            loop = self.hgxlink._loop
         )
-        self.assertIn(obj1.hgx_ghid, self.oracle.objs)
-        # Private registration = app2 should not get a notification.
-        self.assertFalse(self.notification_checker_2(.25))
-        # Nor should app1, who created it.
-        self.assertFalse(self.notification_checker_1(.05))
-        self.assertNotIn(obj1.hgx_ghid, self.dispatch.startups)
-        # Private, so we should see it.
-        self.assertIn(obj1.hgx_ghid, self.dispatch.parents)
-        
-        # And again, but dynamic, and not private.
-        # -----------
-        obj2 = self.app1.new_threadsafe(
-            cls = ProxyBase,
-            state = pt1,
-            api_id = self.__api_id,
-            dynamic = True,
-        )
-        self.assertTrue(obj2.hgx_dynamic)
-        self.assertIn(obj2.hgx_ghid, self.oracle.objs)
-        # Since app2 also registered this API, it should get a notification.
-        self.assertTrue(self.notification_checker_2())
-        # But app1 should not, because it created the object.
-        self.assertFalse(self.notification_checker_1(.05))
-        self.assertNotIn(obj2.hgx_ghid, self.dispatch.startups)
-        self.assertNotIn(obj2.hgx_ghid, self.dispatch.parents)
-        # Also make sure we have listeners for it
-        dispatchable2 = self.oracle.objs[obj2.hgx_ghid]
-        # Note that currently, as we're immediately sending the whole object to
-        # apps, they are getting added as listeners immediately.
-        # self.assertEqual(
-        #     len(self.ipccore._update_listeners.get_any(dispatchable2.ghid)), 
-        #     1
-        # )
-        self.assertEqual(
-            len(self.ipccore._update_listeners.get_any(dispatchable2.ghid)), 
-            2
-        )
-        
-        # Test object retrieval from app2
-        # -----------
-        # Huh, interestingly this shouldn't fail, if the second app is able to
-        # directly guess the right address for the private object.
-        joint1 = self.app2.get_threadsafe(ProxyBase, obj1.hgx_ghid)
-        self.assertEqual(obj1, joint1)
-        
-        joint2 = self.app2.get_threadsafe(ProxyBase, obj2.hgx_ghid)
-        self.assertEqual(obj2, joint2)
-        self.assertEqual(
-            len(self.ipccore._update_listeners.get_any(dispatchable2.ghid)), 
-            2
-        )
-        
-        # Test object updates
-        # -----------
-        obj2.hgx_state = pt2
-        obj2.hgx_push_threadsafe()
-        # Note that we have to wait for the callback background process to 
-        # complete
-        time.sleep(.1)
-        self.assertEqual(obj2, joint2)
-        
-        # Test object sharing
-        # -----------
-        obj2.hgx_share_threadsafe(TEST_AGENT2.ghid)
-        self.assertIn(obj2.hgx_ghid, self.rolodex.shared_objects)
-        recipient, requesting_token = self.rolodex.shared_objects[obj2.hgx_ghid]
-        self.assertEqual(recipient, TEST_AGENT2.ghid)
-        self.assertEqual(requesting_token, token1)
-        
-        # Test object freezing
-        # -----------
-        frozen2 = obj2.hgx_freeze_threadsafe()
-        self.assertEqual(frozen2.hgx_state, obj2.hgx_state)
-        self.assertIn(frozen2.hgx_ghid, self.oracle.objs)
-        
-        # Test object holding
-        # -----------
-        frozen2.hgx_hold_threadsafe()
-        dispatchable3 = self.oracle.objs[frozen2.hgx_ghid]
-        self.assertTrue(dispatchable3.held)
-        
-        # Test object discarding
-        # -----------
-        joint2.hgx_discard_threadsafe()
-        self.assertFalse(joint2._isalive_3141592)
-        self.assertEqual(
-            len(self.ipccore._update_listeners.get_any(dispatchable2.ghid)), 
-            1
-        )
-        self.assertFalse(dispatchable2.deleted)
-        
-        # Test object discarding
-        # -----------
-        dispatchable1 = self.oracle.objs[obj1.hgx_ghid]
-        obj1.hgx_delete_threadsafe()
-        self.assertTrue(dispatchable1.deleted)
-        self.assertFalse(obj1._isalive_3141592)
 
 
 if __name__ == "__main__":

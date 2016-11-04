@@ -54,6 +54,9 @@ from .utils import _reap_wrapped_task
 
 from .embed import TriplicateAPI
 
+from .hypothetical import public_api
+from .hypothetical import fixture_api
+
 
 # ###############################################
 # Boilerplate
@@ -595,6 +598,7 @@ class ObjCore(metaclass=TriplicateAPI):
         '''
         return packed
         
+    @public_api
     async def _hgx_force_delete(self):
         ''' Does everything needed to clean up the object, after either
         an upstream or local delete.
@@ -605,7 +609,13 @@ class ObjCore(metaclass=TriplicateAPI):
         if self.__callback is not None:
             update_task = asyncio.ensure_future(self.__callback(self))
             update_task.add_done_callback(_reap_wrapped_task)
-        
+            
+    @_hgx_force_delete.fixture
+    async def _hgx_force_delete(self):
+        ''' Fixture upstream deletion. By doing nothing.
+        '''
+    
+    @public_api
     async def _hgx_force_pull(self, state):
         ''' Does everything needed to apply an upstream update to the
         object.
@@ -627,6 +637,12 @@ class ObjCore(metaclass=TriplicateAPI):
                 'Update pulled for ' + str(self.__ghid) + ', but it '
                 'has no callback.'
             )
+    
+    @_hgx_force_pull.fixture
+    async def _hgx_force_pull(self, state):
+        ''' Fixturing this actually requires a small degree of effort.
+        '''
+        self._hgx_state = state
         
     def __render_inop(self):
         ''' Renders the object locally inoperable, either through a

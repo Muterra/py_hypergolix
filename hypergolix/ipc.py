@@ -777,6 +777,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         self.token = None
         self.startup = None
         self.pending_obj = None
+        self.pending_ghid = None
         self.discarded = set()
         self.updates = []
         self.syncs = []
@@ -1086,10 +1087,20 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             return Ghid.from_bytes(response)
             
     @new_ghid.fixture
-    async def new_ghid(self, *args, **kwargs):
+    async def new_ghid(self, state, api_id, dynamic, private, _legroom):
         ''' We just need an address.
         '''
-        return self.pending_obj[0]
+        self.pending_obj = (
+            self.pending_ghid,
+            self.whoami,
+            state,
+            False,  # is_link
+            api_id,
+            private,
+            _legroom
+        )
+        
+        return self.pending_ghid
         
     @public_api
     @request(b'!O')
