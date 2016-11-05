@@ -37,6 +37,9 @@ import unittest
 import loopa
 import asyncio
 import random
+import threading
+
+from loopa.utils import await_coroutine_threadsafe
 
 from hypergolix.utils import ApiID
 from hypergolix.embed import HGXLink
@@ -296,6 +299,41 @@ class GenericObjTest:
         test_meth = getattr(obj, test_str)
         test_meth()
         self.assertIn(obj._hgx_ghid, self.ipc_fixture.deleted)
+        
+    def test_upstream_push(self):
+        ''' Test force delete and force pull.
+        '''
+        self.hgxlink.RESET()
+        self.ipc_fixture.RESET()
+        
+        obj = self.make_dummy_object(self.use_cls)
+        notifier = threading.Event()
+        
+        new_state = bytes([random.randint(0, 255) for i in range(0, 25)])
+        
+        # Define a callback to use. This is already threadsafe and loopsafe,
+        # so no wrapping is necessary.
+        async def test_callback(obj):
+            notifier.set()
+            
+        # Set the callback
+        obj._hgx_callback = test_callback
+        
+        await_coroutine_threadsafe(
+            coro = obj._hgx_force_pull(state=new_state),
+            loop = self.hgxlink._loop
+        )
+        self.assertTrue(notifier.wait(timeout=1))
+        self.assertEqual(obj._hgx_state, new_state)
+        notifier.clear()
+        
+        await_coroutine_threadsafe(
+            coro = obj._hgx_force_delete(),
+            loop = self.hgxlink._loop
+        )
+        self.assertTrue(notifier.wait(timeout=1))
+        self.assertFalse(obj._hgx_isalive)
+        notifier.clear()
 
 
 class CoreTest(GenericObjTest, unittest.TestCase):
