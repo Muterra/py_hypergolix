@@ -194,22 +194,48 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
             self.start()
         
     @__init__.fixture
-    def __init__(self, whoami=None, *args, **kwargs):
+    def __init__(self, whoami=None, ipc_manager=None, *args, **kwargs):
         ''' Fixture all the things!
         '''
+        super(type(self), self).__init__(
+            threaded = True,
+            reusable_loop = False,
+            name = 'hgxlink',
+            debug = True,
+            *args,
+            **kwargs
+        )
+        
+        self._ipc_manager = ipc_manager
+        self._ipc_protocol = None
+        
         self.state_lookup = {}
         self.share_lookup = {}
         self.api_lookup = {}
         self.deleted = set()
         self._whoami = whoami
+        self.obj_lookup = {}
+        
+    @fixture_api
+    def RESET(self):
+        ''' Pass-through to init.
+        '''
+        self.__init__(self._whoami)
             
     def start(self, *args, **kwargs):
         ''' Await a connection if we're running threaded-ly.
         '''
-        super().start(*args, **kwargs)
+        # Explicit is needed because of the fixture
+        super(type(self), self).start(*args, **kwargs)
         
         if self._ipc_protocol is not None and self.threaded:
             self._ipc_manager.await_connection_threadsafe()
+            
+    @fixture_api
+    def prep_obj(self, obj):
+        ''' Stages an object for a get() call.
+        '''
+        self.obj_lookup[obj._hgx_ghid] = obj
         
     @property
     def whoami(self):
@@ -285,6 +311,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         '''
         await self._ipc_manager.deregister_startup_obj()
         
+    @public_api
     @triplicated
     async def get(self, cls, ghid, obj_def=None):
         ''' Pass to connection manager. Also, turn the object into the
@@ -349,6 +376,37 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         self._objs_by_ghid[obj._hgx_ghid] = obj
         
         return obj
+        
+    @get.fixture
+    async def get(self, cls, ghid, obj_def=None):
+        ''' Fixture get behavior.
+        '''
+        if obj_def is None:
+            old_obj = self.obj_lookup[ghid]
+            # ehhhh just ignore the class on this one
+            return old_obj
+            
+        else:
+            (address,
+             author,
+             state,
+             is_link,
+             api_id,
+             private,
+             dynamic,
+             _legroom) = obj_def
+            new_obj = cls(
+                hgxlink = self,
+                ipc_manager = self._ipc_manager,
+                state = state,
+                api_id = api_id,
+                dynamic = dynamic,
+                private = private,
+                ghid = address,
+                binder = author,
+                _legroom = _legroom,
+            )
+            return new_obj
         
     @triplicated
     async def new(self, cls, state, api_id=None, dynamic=True, private=False,

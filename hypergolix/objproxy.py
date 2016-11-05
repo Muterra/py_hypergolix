@@ -109,6 +109,8 @@ class ObjCore(metaclass=TriplicateAPI):
         # our persistence declaration
         self.__hgxlink = weakref.ref(hgxlink)
         self.__hgx_ipc = weakref.ref(ipc_manager)
+        # TODO: think about this
+        self.__isalive = True
         
         # All others can be set via their properties
         self._hgx_state = state
@@ -118,8 +120,6 @@ class ObjCore(metaclass=TriplicateAPI):
         self._hgx_api_id = api_id
         self._hgx_private = private
         self._hgx_dynamic = dynamic
-        # TODO: think about this
-        self.__isalive = True
         # TODO: think about this
         self._hgx_legroom = _legroom
         
@@ -148,11 +148,11 @@ class ObjCore(metaclass=TriplicateAPI):
         '''
         try:
             # We can talk about equality until the cows come home.
-            equality = (self.__ghid == other._ObjCore_ghid)
+            equality = (self.__ghid == other._hgx_ghid)
             # What is equality?
-            equality &= (self.hgx_binder == other._ObjCore_binder)
+            equality &= (self.__binder == other._hgx_binder)
             # What is home?
-            equality &= (self.hgx_state == other._ObjCore_state)
+            equality &= (self.__state == other._hgx_state)
             # What are cows?
             
         except AttributeError as exc:
@@ -163,6 +163,12 @@ class ObjCore(metaclass=TriplicateAPI):
             ) from exc
             
         return equality
+        
+    @property
+    def _loop(self):
+        ''' Use the hgxlink's loop.
+        '''
+        return self._hgxlink._loop
         
     @property
     def _hgxlink(self):
@@ -213,7 +219,10 @@ class ObjCore(metaclass=TriplicateAPI):
         applied to the state; however, push() must still be explicitly
         called.
         '''
-        return self.__state
+        if not self.__isalive:
+            raise DeadObject()
+        else:
+            return self.__state
         
     @_hgx_state.setter
     def _hgx_state(self, value):
@@ -221,7 +230,10 @@ class ObjCore(metaclass=TriplicateAPI):
         ensure serializability, nor does it push upstream.
         '''
         # TODO: support nesting object states, resulting in a linked object.
-        self.__state = value
+        if not self.__isalive:
+            raise DeadObject()
+        else:
+            self.__state = value
         
     @property
     def _hgx_ghid(self):
@@ -361,6 +373,11 @@ class ObjCore(metaclass=TriplicateAPI):
         '''
         raise NotImplementedError()
         
+    def _hgx_set_raw_callback(self, callback):
+        ''' Registers a callback without wrapping.
+        '''
+        self.__callback = callback
+        
     @property
     def _hgx_callback(self):
         ''' Get the callback.
@@ -445,8 +462,9 @@ class ObjCore(metaclass=TriplicateAPI):
             )
         )
         # Copy over the existing callback. This will change when we move the
-        # callback wrapping into reap_anonymous_task
-        recast._ObjCore_callback = self.__callback
+        # callback wrapping into reap_anonymous_task. We have to access the
+        # mangled attribute, because otherwise we will re-wrap the callback.
+        recast._hgx_set_raw_callback(self.__callback)
         # Now render self (the old object) inoperable
         self.__render_inop()
         
@@ -625,7 +643,6 @@ class ObjCore(metaclass=TriplicateAPI):
         delete or discard.
         '''
         self.__isalive = False
-        self.__state = None
         
         
 class Obj(ObjCore, metaclass=Triplicate):
@@ -658,7 +675,7 @@ class Obj(ObjCore, metaclass=Triplicate):
     delete = ObjCore._hgx_delete
             
     def __repr__(self):
-        return ''.join(
+        return ''.join((
             '<',
             type(self).__name__,
             ' with state ',
@@ -666,7 +683,7 @@ class Obj(ObjCore, metaclass=Triplicate):
             ' at ',
             str(self._hgx_ghid),
             '>'
-        )
+        ))
 
 
 class Proxy(ObjCore, metaclass=Triplicate):
@@ -735,7 +752,7 @@ class Proxy(ObjCore, metaclass=Triplicate):
         super().__init__(state, *args, **kwargs)
             
     def __repr__(self):
-        return ''.join(
+        return ''.join((
             '<',
             type(self).__name__,
             ' to ',
@@ -743,7 +760,7 @@ class Proxy(ObjCore, metaclass=Triplicate):
             ' at ',
             str(self._hgx_ghid),
             '>'
-        )
+        ))
             
     def __setattr__(self, name, value):
         ''' Redirect all setting of currently missing attributes to the
