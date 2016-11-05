@@ -218,9 +218,13 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         
     @fixture_api
     def RESET(self):
-        ''' Pass-through to init.
+        ''' Do this manually, because otherwise we create problems.
         '''
-        self.__init__(self._whoami)
+        self.state_lookup = {}
+        self.share_lookup = {}
+        self.api_lookup = {}
+        self.deleted = set()
+        self.obj_lookup = {}
             
     def start(self, *args, **kwargs):
         ''' Await a connection if we're running threaded-ly.

@@ -1293,6 +1293,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
     async def freeze_ghid(self, ghid):
         # Moar fixture.
         self.frozen.add(ghid)
+        return ghid
         
     @public_api
     @request(b'#O')

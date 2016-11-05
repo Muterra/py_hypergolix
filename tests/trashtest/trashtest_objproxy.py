@@ -142,7 +142,7 @@ class GenericObjTest:
         self.assertEqual(reredobj._hgx_state, state)
         self.assertEqual(reredobj._hgx_ghid, redobj._hgx_ghid)
         
-    def test_basic(self):
+    def test_state(self):
         # Test basic object creation.
         obj = self.make_dummy_object(self.use_cls, b'hello world')
         self.assertEqual(obj._hgx_state, b'hello world')
@@ -150,6 +150,152 @@ class GenericObjTest:
         state_str = self.name_prefix + 'state'
         state = getattr(obj, state_str)
         self.assertEqual(state, b'hello world')
+        
+    def test_ghid(self):
+        ''' Test getting ghid from the type-specific property.
+        '''
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'ghid'
+        test_val = getattr(obj, test_str)
+        self.assertEqual(test_val, obj._hgx_ghid)
+        
+    def test_api(self):
+        ''' Test getting ghid from the type-specific property.
+        '''
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'api_id'
+        test_val = getattr(obj, test_str)
+        self.assertEqual(test_val, obj._hgx_api_id)
+        
+    def test_private(self):
+        ''' Test getting ghid from the type-specific property.
+        '''
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'private'
+        test_val = getattr(obj, test_str)
+        self.assertEqual(test_val, obj._hgx_private)
+        
+    def test_dynamic(self):
+        ''' Test getting ghid from the type-specific property.
+        '''
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'dynamic'
+        test_val = getattr(obj, test_str)
+        self.assertEqual(test_val, obj._hgx_dynamic)
+        
+    def test_binder(self):
+        ''' Test getting ghid from the type-specific property.
+        '''
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'binder'
+        test_val = getattr(obj, test_str)
+        self.assertEqual(test_val, obj._hgx_binder)
+        
+    def test_isalive(self):
+        ''' Test getting ghid from the type-specific property.
+        '''
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'isalive'
+        test_val = getattr(obj, test_str)
+        self.assertEqual(test_val, obj._hgx_isalive)
+        
+    def test_callback(self):
+        ''' Test getting ghid from the type-specific property.
+        '''
+        async def test_coro(*args, **kwargs):
+            pass
+            
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'callback'
+        setattr(obj, test_str, test_coro)
+        test_val = getattr(obj, test_str)
+        self.assertEqual(test_val, obj._hgx_callback)
+        
+    def test_push(self):
+        ''' Test getting ghid from the type-specific property.
+        '''
+        self.ipc_fixture.RESET()
+        
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'push_threadsafe'
+        test_meth = getattr(obj, test_str)
+        state = obj._hgx_state
+        test_meth()
+        update = self.ipc_fixture.updates[0]
+        self.assertIn(obj._hgx_ghid, update)
+        self.assertEqual(update[obj._hgx_ghid][0], state)
+        
+    def test_sync(self):
+        ''' Yep, test the sync.
+        '''
+        self.ipc_fixture.RESET()
+        
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'sync_threadsafe'
+        test_meth = getattr(obj, test_str)
+        test_meth()
+        self.assertIn(obj._hgx_ghid, self.ipc_fixture.syncs)
+        
+    def test_share(self):
+        ''' Test the share.
+        '''
+        self.ipc_fixture.RESET()
+        
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'share_threadsafe'
+        test_meth = getattr(obj, test_str)
+        recipient = make_random_ghid()
+        test_meth(recipient)
+        self.assertTrue(
+            self.ipc_fixture.shares.contains_within(obj._hgx_ghid, recipient)
+        )
+        
+    def test_freeze(self):
+        ''' Test freezing.
+        '''
+        self.hgxlink.RESET()
+        self.ipc_fixture.RESET()
+        
+        obj = self.make_dummy_object(self.use_cls)
+        self.hgxlink.prep_obj(obj)
+        
+        test_str = self.name_prefix + 'freeze_threadsafe'
+        test_meth = getattr(obj, test_str)
+        test_meth()
+        self.assertIn(obj._hgx_ghid, self.ipc_fixture.frozen)
+        
+    def test_hold(self):
+        ''' Test holding.
+        '''
+        self.ipc_fixture.RESET()
+        
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'hold_threadsafe'
+        test_meth = getattr(obj, test_str)
+        test_meth()
+        self.assertIn(obj._hgx_ghid, self.ipc_fixture.held)
+        
+    def test_discard(self):
+        ''' Test discarding.
+        '''
+        self.ipc_fixture.RESET()
+        
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'discard_threadsafe'
+        test_meth = getattr(obj, test_str)
+        test_meth()
+        self.assertIn(obj._hgx_ghid, self.ipc_fixture.discarded)
+        
+    def test_delete(self):
+        ''' Test deletion.
+        '''
+        self.ipc_fixture.RESET()
+        
+        obj = self.make_dummy_object(self.use_cls)
+        test_str = self.name_prefix + 'delete_threadsafe'
+        test_meth = getattr(obj, test_str)
+        test_meth()
+        self.assertIn(obj._hgx_ghid, self.ipc_fixture.deleted)
 
 
 class CoreTest(GenericObjTest, unittest.TestCase):
@@ -163,7 +309,7 @@ class CoreTest(GenericObjTest, unittest.TestCase):
         
         
 class ObjTest(GenericObjTest, unittest.TestCase):
-    ''' Tests a standard obj.
+    ''' Additional tests for a standard obj.
     '''
     
     def __init__(self, *args, **kwargs):
@@ -172,7 +318,7 @@ class ObjTest(GenericObjTest, unittest.TestCase):
         
         
 class ProxyTest(GenericObjTest, unittest.TestCase):
-    ''' Tests a proxy obj.
+    ''' Additional tests for a proxy obj.
     '''
     
     def __init__(self, *args, **kwargs):

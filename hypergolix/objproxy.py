@@ -398,7 +398,7 @@ class ObjCore(metaclass=TriplicateAPI):
         # loopsafe decorators, and attempts to directly set functions.
         if callback is None:
             return
-        elif not inspect.isawaitable(callback):
+        elif not inspect.iscoroutinefunction(callback):
             raise TypeError('Callback must be defined with "async def".')
         
         # Any handlers passed to us this way can already be called natively
@@ -566,7 +566,7 @@ class ObjCore(metaclass=TriplicateAPI):
             raise DeadObject()
         else:
             await self._hgx_ipc.discard_ghid(self.__ghid)
-            self.___render_inop()
+            self.__render_inop()
 
     @triplicated
     async def _hgx_delete(self):
