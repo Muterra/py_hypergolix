@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -939,6 +939,89 @@ def _reap_wrapped_task(task):
     executed autonomously using ensure_future.
     '''
     task.result()
+
+
+class _WeakProperty(property):
+    ''' A weakly-referenced property.
+    '''
+    
+    def __get__(self, obj, objtype=None):
+        ''' Extend get to resolve the weakref.
+        '''
+        value_weakref = super().__get__(obj, objtype)
+        value = value_weakref()
+        if value is None:
+            raise AttributeError('Attribute unavailable: weakref expired.')
+        else:
+            return value
+        
+    def __set__(self, obj, value):
+        ''' Extend set to create the weakref.
+        '''
+        value_weakref = weakref.ref(value)
+        return super().__set__(obj, value_weakref)
+        
+        
+def weak_property(name):
+    ''' Make a weakly-referenced property using name.
+    '''
+    @_WeakProperty
+    def prop(self, name=name):
+        return getattr(self, name)
+        
+    @prop.setter
+    def prop(self, value, name=name):
+        return setattr(self, name, value)
+        
+    return prop
+        
+    
+def readonly_property(name):
+    ''' Make a read-only property for the name.
+    '''
+    @property
+    def prop(self, name=name):
+        return getattr(self, name)
+    return prop
+    
+    
+def immutable_property(name):
+    ''' Create a property that cannot be changed (nor deleted) once
+    it has been defined.
+    '''
+    @property
+    def prop(self, name=name):
+        return getattr(self, name)
+        
+    @prop.setter
+    def prop(self, value, name=name):
+        try:
+            existing = getattr(self, name)
+        
+        except AttributeError:
+            existing = None
+            
+        if existing is not None:
+            raise AttributeError('Cannot alter immutable property.')
+        
+        else:
+            return setattr(self, name, value)
+        
+    return prop
+    
+    
+def immortal_property(name):
+    ''' Create a property that cannot be deleted.
+    '''
+    @property
+    def prop(self, name=name):
+        return getattr(self, name)
+        
+    @prop.setter
+    def prop(self, value, name=name):
+        return setattr(self, name, value)
+        
+    return prop
 
 
 # ###############################################

@@ -50,8 +50,8 @@ from cryptography.hazmat.primitives.kdf import hkdf
 from cryptography.hazmat.backends import default_backend
 
 # Intra-package dependencies
-from .core import _GAO
-from .core import _GAODict
+from .gao import _GAO
+from .gao import _GAODict
 
 from .utils import TraceLogger
 from .utils import LooperTrooper

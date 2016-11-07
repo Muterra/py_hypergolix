@@ -48,7 +48,7 @@ from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
 
-from .core import _GAO
+from .gao import _GAO
 
 from .utils import WeakSetMap
 from .utils import call_coroutine_threadsafe

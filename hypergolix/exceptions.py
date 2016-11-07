@@ -61,7 +61,7 @@ __all__ = [
     'DispatchWarning',
     # These are IPC/embed errors
     'IPCError',
-    'DeadObject',
+    'DeadObject',   # Also a local persistence error
     # These are comms errors
     'CommsError',
     'RequestError',
@@ -241,7 +241,7 @@ class IPCError(HypergolixException, RuntimeError):
     pass
     
     
-class DeadObject(IPCError, TypeError):
+class DeadObject(IPCError, PersistenceError, TypeError):
     ''' Raised when operations are attempted on a local object that is
     already dead.
     '''

@@ -48,10 +48,11 @@ from golix import FirstParty
 from .core import GolixCore
 from .core import Oracle
 from .core import GhidProxier
-from .core import _GAO
-from .core import _GAOSet
-from .core import _GAODict
-from .core import _GAOSetMap
+
+from .gao import _GAO
+from .gao import _GAOSet
+from .gao import _GAODict
+from .gao import _GAOSetMap
 
 from .persistence import PersistenceCore
 from .persistence import Doorman
