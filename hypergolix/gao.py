@@ -67,6 +67,7 @@ from .exceptions import RatchetStateError
 from .persistence import _GobdLite
 from .persistence import _GdxxLite
 from .persistence import _GobsLite
+from .persistence import _GeocLite
 
 # from .objproxy import ObjBase
 # from .objproxy import ObjCore
@@ -173,10 +174,10 @@ class GAOMixin(metaclass=API):
         self._bookie = bookie
         self._librarian = librarian
         
-        # Ghid may be explicitly None
+        # Dynamic and author be explicitly None; ghid should always be defined
         self.ghid = ghid
-        self.dynamic = bool(dynamic)
-        self.author = author
+        self._dynamic = dynamic
+        self._author = author
         
         # Note that this also initializes frame_history and target_history
         self.legroom = legroom
@@ -258,6 +259,47 @@ class GAOMixin(metaclass=API):
                     if obj.author == self._golcore.whoami:
                         debinding = self._golcore.make_debinding(obj.ghid)
                         self._percore.ingest_gdxx(debinding)
+            
+    def _get_new_secret(self):
+        ''' Gets a new secret for self.
+        '''
+        # If we're getting a new secret and we already have a ghid, then we
+        # MUST be a dynamic object.
+        if self.ghid:
+            current_target = self._ghidproxy.resolve(self.ghid)
+            
+            # We need a secret.
+            try:
+                secret = self._privateer.ratchet_chain(self.ghid)
+                
+            # Note that, if we previously loaded this object, but didn't create
+            # it through this particular contiguous hypergolix session, we will
+            # be missing a chain for it.
+            except RatchetChainError:
+                logger.info(''.join((
+                    'GAO ',
+                    str(self.ghid),
+                    ' PUSH: new ratchet established.',
+                )))
+                self._privateer.make_chain(self.ghid, current_target)
+                secret = self._privateer.ratchet_chain(self.ghid)
+                
+            except RatchetStateError:
+                logger.error(''.join((
+                    'GAO ',
+                    str(self.ghid),
+                    ' PUSH: ratchet FAILED with ratchet already in progress. ',
+                    'Resetting chain to most recent target w/ traceback:\n',
+                    *traceback.format_exc()
+                )))
+                self._privateer.reset_chain(self.ghid, current_target)
+                secret = self._privateer.ratchet_chain(self.ghid)
+        
+        # This is a new object, and we therefore don't have a secret.
+        else:
+            secret = self._privateer.new_secret()
+            
+        return secret
                         
     async def push(self):
         ''' Pushes the state upstream. Must be called explicitly. Unless
@@ -285,7 +327,8 @@ class GAOMixin(metaclass=API):
                         traceback.format_exc()
                     )))
                     # We had a problem, so we're going to forcibly restore the
-                    # object to the last known good state.
+                    # object to the last known good state. Use _pull to avoid
+                    # the lock, as well as any extra baggage in "normal" pull
                     await self._pull()
                     raise
             
@@ -295,53 +338,57 @@ class GAOMixin(metaclass=API):
     async def _push(self):
         ''' The actual "meat and bones" for pushing.
         '''
-        current_target = self._ghidproxy.resolve(self.ghid)
-        
-        # We need a secret.
-        try:
-            secret = self._privateer.ratchet_chain(self.ghid)
-            
-        # Note that, if we previously loaded this object, but didn't create
-        # it through this particular contiguous hypergolix session, we will
-        # be missing a chain for it.
-        except RatchetChainError:
-            logger.info(''.join((
-                'GAO ',
-                str(self.ghid),
-                ' PUSH: new ratchet established.',
-            )))
-            self._privateer.make_chain(self.ghid, current_target)
-            secret = self._privateer.ratchet_chain(self.ghid)
-            
-        except RatchetStateError:
-            logger.error(''.join((
-                'GAO ',
-                str(self.ghid),
-                ' PUSH: ratchet FAILED with ratchet already in progress. ',
-                'Resetting chain to most recent target w/ traceback:\n',
-                *traceback.format_exc()
-            )))
-            self._privateer.reset_chain(self.ghid, current_target)
-            secret = self._privateer.ratchet_chain(self.ghid)
+        secret = self._get_new_secret()
         
         # We have a secret. Now we need a container and a binding frame.
         try:
             container = self._golcore.make_container(self.pack_gao(), secret)
-            binding = self._golcore.make_binding_dyn(
-                target = container.ghid,
-                ghid = self.ghid,
-                history = self._history
-            )
             self._privateer.stage(container.ghid, secret)
-            # And now, as everything was successful, update the ratchet
-            self._privateer.update_chain(self.ghid, container.ghid)
             
-            # Publish to persister
-            self._percore.ingest_gobd(binding)
+            if self.dynamic:
+                binding = self._golcore.make_binding_dyn(
+                    target = container.ghid,
+                    ghid = self.ghid,
+                    history = self._history
+                )
+                # Update ghid if it was not defined (new object)
+                self._conditional_init(
+                    binding.ghid_dynamic,
+                    True,
+                    self._golcore.whoami
+                )
+                
+                # And now, as everything was successful, update the ratchet
+                try:
+                    self._privateer.update_chain(self.ghid, container.ghid)
+                # This means there was no existing chain, so create one.
+                except RatchetChainError:
+                    self._privateer.make_chain(self.ghid, container.ghid)
+                
+                # Publish to persister
+                self._percore.ingest_gobd(binding)
+            
+            # Static object.
+            else:
+                binding = self._golcore.make_binding_stat(
+                    target = container.ghid
+                )
+                # Update ghid if it was not defined (new object)
+                self._conditional_init(
+                    container.ghid,
+                    False,
+                    self._golcore.whoami
+                )
+                self._percore.ingest_gobs(binding)
+                
+            # Finally, ingest the object itself.
             self._percore.ingest_geoc(container)
         
         # Necessary for else clause (grumble grumble)
         except:
+            # Anything that got here means that the container hasn't been
+            # ingested (that was the last thing above), so abandon its secret.
+            self._privateer.abandon(container.ghid, quiet=True)
             raise
             
         # We created a container and binding frame, and then we successfully
@@ -351,6 +398,8 @@ class GAOMixin(metaclass=API):
             self._privateer.commit(container.ghid)
             # NOTE THE DISCREPANCY between the Golix dynamic binding version
             # of ghid and ours! This is recording the frame ghid.
+            # I mean, for static stuff this isn't (strictly speaking) relevant,
+            # but it also doesn't really hurt anything, sooo...
             self.frame_history.appendleft(binding.ghid)
             self.target_history.appendleft(container.ghid)
         
@@ -409,38 +458,56 @@ class GAOMixin(metaclass=API):
         applications.
         '''
         # Forcibly restoring state will not pass a binding.
-        if binding is None:
-            pass
-        # First make sure that's actually a binding
-        elif not isinstance(binding, _GobdLite):
-            raise TypeError('Update failed pull; mismatched Golix primitive.')
-        # Also make sure it's the same dynamic address.
-        elif binding.ghid != self.ghid:
+        # First make sure that, IFF the binding was passed, that it matches our
+        # existing ghid. This is sufficient type checking to proceed, since we
+        # just immediately discard the binding anyways.
+        if binding is not None and binding.ghid != self.ghid:
             raise ValueError('Update failed pull; mismatched binding ghid.')
         
-        # Now discard the binding and get a new one from librarian, just to be
+        # Now discard any binding and get a new one from librarian, just to be
         # sure we've got the newest (combining updates if necessary).
         binding = self.librarian.summarize(self.ghid)
         
-        # Also don't forget to update history. Do this first, because it will
-        # create a canonical update, regardless of success in unpacking.
-        try:
-            # This will only update history. It will not add our current frame
-            # to the history. So, we preserve the maximum depth to heal the
-            # ratchet at this point.
-            self._advance_history(binding)
-            self._privateer.heal_chain(gao=self, binding=binding)
-        
-        # Now, we need to be sure our local history doesn't forget about our
-        # current-most-recent frame when making an update.
-        finally:
-            # Finally, appendleft the newest frame and the newest target.
-            self.frame_history.appendleft(binding.frame_ghid)
-            self.target_history.appendleft(binding.target)
-        
-        # Okay, now let's actually do the thing with the new copy.
-        secret = self._privateer.get(binding.target)
-        packed = self._librarian.retrieve(binding.target)
+        # Okay, if this is calling _pull from oracle._get_object, we may be
+        # going for either a dynamic binding or a static object (container).
+        if isinstance(binding, _GobdLite):
+            # Also don't forget to update history. Do this first, because it
+            # will create a canonical update, regardless of success in
+            # unpacking.
+            try:
+                # This will only update history. It will not add our current
+                # frame to the history. So, we preserve the maximum depth to
+                # heal the ratchet at this point.
+                self._advance_history(binding)
+                self._privateer.heal_chain(gao=self, binding=binding)
+            
+            # Now, we need to be sure our local history doesn't forget about
+            # our current-most-recent frame when making an update.
+            finally:
+                # Finally, appendleft the newest frame and the newest target.
+                self.frame_history.appendleft(binding.frame_ghid)
+                self.target_history.appendleft(binding.target)
+                
+            # Okay, now let's actually do the thing with the new copy.
+            secret = self._privateer.get(binding.target)
+            packed = self._librarian.retrieve(binding.target)
+            
+            # If this was just pulled for the first time, init the dynamic and
+            # author attributes.
+            self._conditional_init(dynamic=True, author=binding.author)
+                    
+        # Static object, so this is the actual container (and not the binding).
+        elif isinstance(binding, _GeocLite):
+            secret = self._privateer.get(binding.ghid)
+            packed = self._librarian.retrieve(binding.ghid)
+            
+            # If this was just pulled for the first time, init the dynamic and
+            # author attributes.
+            self._conditional_init(dynamic=False, author=binding.author)
+            
+        # None of the above. TypeError.
+        else:
+            raise TypeError('Update failed pull; mismatched Golix primitive.')
         
         # TODO: fix this leaky abstraction.
         unpacked = self._golcore._identity.unpack_container(packed)
@@ -492,6 +559,17 @@ class GAOMixin(metaclass=API):
         for ii in range(offset - 1, -1, -1):
             self.frame_history.appendleft(new_history[ii])
             self.target_history.appendleft(None)
+            
+    def _conditional_init(self, ghid, dynamic, author):
+        ''' If dynamic had not been set, set both it and the author. If
+        ghid has not been set, set it.
+        '''
+        if self._dynamic is None:
+            self._dynamic = dynamic
+            self._author = author
+            
+        if self.ghid is None:
+            self.ghid = ghid
 
 
 class GAO(type):
@@ -665,6 +743,60 @@ class _GAO(_GAOBase):
         self._update_greenlight.set()
         
         return self
+        
+    def __new(self):
+        ''' Creates a new Golix object for self using self._state, 
+        self._dynamic, etc.
+        '''
+        secret = self._privateer.new_secret()
+        container = self._golcore.make_container(
+            self._pack(self.extract_state()), 
+            secret
+        )
+        self._privateer.stage(container.ghid, secret)
+        # Wait until successful publishing to commit the secret.
+        
+        try:
+            if self.dynamic:
+                binding = self._golcore.make_binding_dyn(target=container.ghid)
+                # NOTE THAT THIS IS A GOLIX PRIMITIVE! And that therefore 
+                # there's a discrepancy between ghid_dynamic and ghid.
+                self.ghid = binding.ghid_dynamic
+                self.author = self._golcore.whoami
+                # Silence the frame address (see above) and add it to historian
+                self.silence(binding.ghid)
+                self._history.appendleft(binding.ghid)
+                self._history_targets.appendleft(container.ghid)
+                # Now assign this dynamic address as a chain owner.
+                self._privateer.make_chain(self.ghid, container.ghid)
+                # Finally, publish the binding and subscribe to it
+                self._percore.ingest_gobd(binding)
+                
+            else:
+                binding = self._golcore.make_binding_stat(
+                    target = container.ghid
+                )
+                self.ghid = container.ghid
+                self.author = self._golcore.whoami
+                self._percore.ingest_gobs(binding)
+                
+            # Finally, publish the container itself.
+            self._percore.ingest_geoc(container)
+            
+        except Exception:
+            logger.error(
+                'Error while creating new golix object: \n' +
+                ''.join(traceback.format_exc())
+            )
+            # Conservatively call unstage instead of abandon
+            self._privateer.unstage(container.ghid)
+            raise
+            
+        else:
+            self._privateer.commit(container.ghid)
+        
+        # Successful creation. Clear us for updates.
+        self._update_greenlight.set()
             
     def freeze(self):
         ''' Creates a static binding for the most current state of a 
@@ -1010,60 +1142,6 @@ class _GAO(_GAOBase):
                     'subscription ' + str(subscription) + ' at notification ' +
                     str(notification)
                 )
-        
-    def __new(self):
-        ''' Creates a new Golix object for self using self._state, 
-        self._dynamic, etc.
-        '''
-        secret = self._privateer.new_secret()
-        container = self._golcore.make_container(
-            self._pack(self.extract_state()), 
-            secret
-        )
-        self._privateer.stage(container.ghid, secret)
-        # Wait until successful publishing to commit the secret.
-        
-        try:
-            if self.dynamic:
-                binding = self._golcore.make_binding_dyn(target=container.ghid)
-                # NOTE THAT THIS IS A GOLIX PRIMITIVE! And that therefore 
-                # there's a discrepancy between ghid_dynamic and ghid.
-                self.ghid = binding.ghid_dynamic
-                self.author = self._golcore.whoami
-                # Silence the frame address (see above) and add it to historian
-                self.silence(binding.ghid)
-                self._history.appendleft(binding.ghid)
-                self._history_targets.appendleft(container.ghid)
-                # Now assign this dynamic address as a chain owner.
-                self._privateer.make_chain(self.ghid, container.ghid)
-                # Finally, publish the binding and subscribe to it
-                self._percore.ingest_gobd(binding)
-                
-            else:
-                binding = self._golcore.make_binding_stat(
-                    target = container.ghid
-                )
-                self.ghid = container.ghid
-                self.author = self._golcore.whoami
-                self._percore.ingest_gobs(binding)
-                
-            # Finally, publish the container itself.
-            self._percore.ingest_geoc(container)
-            
-        except Exception:
-            logger.error(
-                'Error while creating new golix object: \n' +
-                ''.join(traceback.format_exc())
-            )
-            # Conservatively call unstage instead of abandon
-            self._privateer.unstage(container.ghid)
-            raise
-            
-        else:
-            self._privateer.commit(container.ghid)
-        
-        # Successful creation. Clear us for updates.
-        self._update_greenlight.set()
         
     def __update(self):
         ''' Updates an existing golix object. Must already have checked

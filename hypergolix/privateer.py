@@ -59,6 +59,8 @@ from .utils import call_coroutine_threadsafe
 
 from .exceptions import PrivateerError
 from .exceptions import RatchetError
+from .exceptions import RatchetChainError
+from .exceptions import RatchetStateError
 from .exceptions import ConflictingSecrets
 from .exceptions import SecretUnknown
 

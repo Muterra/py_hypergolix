@@ -898,32 +898,31 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         ''' Tells the Salmonator to listen upstream for any updates
         while the gao is retained in memory.
         '''
-        with self._opslock:
+        if gao.dynamic:
             self._registered[gao.ghid] = gao
-        
-            if gao.dynamic:
-                for remote in self._upstream_remotes:
-                    try:
-                        remote.subscribe(gao.ghid, self._remote_callback)
-                    except Exception:
-                        logger.warning(
-                            'Exception while subscribing to upstream updates '
-                            'for GAO at ' + str(gao.ghid) + '\n' +
-                            ''.join(traceback.format_exc())
-                        )
-                    else:
-                        logger.debug(
-                            'Successfully subscribed to upstream updates for '
-                            'GAO at ' + str(gao.ghid)
-                        )
-                        
-            # Add deregister as a finalizer, but don't call it atexit.
-            finalizer = weakref.finalize(gao, self.deregister, gao.ghid)
-            finalizer.atexit = False
-            
-        # This should also catch any upstream deletes.
-        if not skip_refresh:
-            self.attempt_pull(gao.ghid, quiet=True)
+    
+            for remote in self._upstream_remotes:
+                try:
+                    remote.subscribe(gao.ghid, self._remote_callback)
+                except Exception:
+                    logger.warning(
+                        'Exception while subscribing to upstream updates '
+                        'for GAO at ' + str(gao.ghid) + '\n' +
+                        ''.join(traceback.format_exc())
+                    )
+                else:
+                    logger.debug(
+                        'Successfully subscribed to upstream updates for '
+                        'GAO at ' + str(gao.ghid)
+                    )
+                    
+                # Add deregister as a finalizer, but don't call it atexit.
+                finalizer = weakref.finalize(gao, self.deregister, gao.ghid)
+                finalizer.atexit = False
+                
+            # This should also catch any upstream deletes.
+            if not skip_refresh:
+                self.attempt_pull(gao.ghid, quiet=True)
     
     @register.fixture
     def register(self, *args, **kwargs):

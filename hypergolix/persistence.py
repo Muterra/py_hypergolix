@@ -739,7 +739,7 @@ class _GobdLite(_BaseLite):
     def __eq__(self, other):
         try:
             return (
-                super().__eq__(other) and 
+                super().__eq__(other) and
                 self.author == other.author and
                 self.target == other.target and
                 self.frame_ghid == other.frame_ghid

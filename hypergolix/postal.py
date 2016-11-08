@@ -269,18 +269,6 @@ class MrPostman(_PostmanBase):
         self._rolodex = weakref.proxy(rolodex)
         self._oracle = weakref.proxy(oracle)
         self._salmonator = weakref.proxy(salmonator)
-        
-    def register(self, gao):
-        ''' Registers a GAO with the postman, so that it will receive
-        any updates from upstream/downstream remotes. By using the handy
-        WeakSetMap and gao._weak_touch, we can ensure that python GCing
-        the GAO will also result in removal of the listener.
-        
-        Theoretically, we should only ever have one registered GAO for
-        a given ghid at the same time, so maybe in the future there's
-        some optimization to be had there.
-        '''
-        self._listeners.add(gao.ghid, gao._weak_touch)
             
     async def _deliver(self, subscription, notification):
         ''' Do the actual subscription update.

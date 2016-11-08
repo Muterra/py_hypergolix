@@ -387,73 +387,99 @@ class Oracle(metaclass=API):
         self._lookup[ghid] = obj
             
     @public_api
-    def get_object(self, gaoclass, ghid, **kwargs):
-        try:
+    async def get_object(self, gaoclass, ghid, *args, **kwargs):
+        ''' Get an object.
+        '''
+        if ghid in self._lookup:
             obj = self._lookup[ghid]
+            logger.debug(''.join((
+                'GAO ',
+                str(ghid),
+                ' already exists in Oracle memory.'
+            )))
+            
             if not isinstance(obj, gaoclass):
                 raise TypeError(
                     'Object has already been resolved, and is not the '
                     'correct GAO class.'
                 )
+        
+        else:
+            logger.info(''.join((
+                'GAO ',
+                str(ghid),
+                ' not currently in Oracle memory. Attempting load.'
+            )))
+            
+            # Only pull if it's not in librarian, since registration will
+            # automatically refresh the object if necessary.
+            if ghid not in self._librarian:
+                self._salmonator.attempt_pull(ghid, quiet=True)
                 
-        except KeyError:
-            logger.debug(
-                str(ghid) + ' missing locally. Attempting upstream pull.'
+            obj = gaoclass(
+                ghid,
+                None,   # dynamic
+                None,   # author
+                7,      # legroom (will be overwritten by pull)
+                *args,
+                golcore = self._golcore,
+                ghidproxy = self._ghidproxy,
+                privateer = self._privateer,
+                percore = self._percore,
+                bookie = self._bookie,
+                librarian = self._librarian,
+                **kwargs
             )
             
-            with self._opslock:
-                if ghid not in self._librarian:
-                    self._salmonator.attempt_pull(ghid, quiet=True)
-                
-                obj = gaoclass.from_ghid(
-                    ghid = ghid,
-                    golix_core = self._golcore,
-                    ghidproxy = self._ghidproxy,
-                    privateer = self._privateer,
-                    persistence_core = self._percore,
-                    bookie = self._bookie,
-                    librarian = self._librarian,
-                    **kwargs
-                )
-                self._lookup[ghid] = obj
-                
-                if obj.dynamic:
-                    self._postman.register(obj)
-                    self._salmonator.register(obj)
+            # Now actually fetch the object. This may KeyError if the ghid is
+            # still unknown.
+            await obj._pull()
+            
+            # Always do this to make sure we have the most recent version
+            self._lookup[ghid] = obj
+            
+            # Salmonator handles modal switching for dynamic/static. It will
+            # also (by default, with skip_refresh=False) pull in any updates
+            # that have accumulated in the meantime.
+            self._salmonator.register(obj)
             
         return obj
         
     @get_object.fixture
-    def get_object(self, gaoclass, ghid, **kwargs):
+    async def get_object(self, gaoclass, ghid, **kwargs):
         ''' Do the easy thing and just pull it out of lookup.
         '''
         return self._lookup[ghid]
         
     @public_api
-    def new_object(self, gaoclass, state, **kwargs):
+    async def new_object(self, gaoclass, dynamic, legroom, *args, **kwargs):
         ''' Creates a new object and returns it. Passes all *kwargs to
         the declared gao_class. Requires a zeroth state, and calls push
         internally.
         '''
-        with self._opslock:
-            obj = gaoclass(
-                golix_core = self._golcore,
-                ghidproxy = self._ghidproxy,
-                privateer = self._privateer,
-                persistence_core = self._percore,
-                bookie = self._bookie,
-                librarian = self._librarian,
-                **kwargs
-            )
-            obj.apply_state(state)
-            obj.push()
-            self._lookup[obj.ghid] = obj
-            self._postman.register(obj)
-            self._salmonator.register(obj, skip_refresh=True)
-            return obj
+        obj = gaoclass(
+            None,                   # ghid
+            dynamic,
+            self._golcore.whoami,   # author
+            legroom,
+            *args,
+            **kwargs,
+            golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
+            privateer = self._privateer,
+            percore = self._percore,
+            bookie = self._bookie,
+            librarian = self._librarian
+        )
+        await obj._push()
+        
+        self._lookup[obj.ghid] = obj
+        # Don't pull down the object from upstream, since we just created it
+        self._salmonator.register(obj, skip_refresh=True)
+        return obj
             
     @new_object.fixture
-    def new_object(self, *args, **kwargs):
+    async def new_object(self, *args, **kwargs):
         ''' Relies upon add_object, but otherwise just pops something
         from the lookup.
         '''
