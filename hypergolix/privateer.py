@@ -101,6 +101,7 @@ class Privateer:
     mechanism and which ones use the new one, once that change is
     started.
     '''
+    
     def __init__(self):
         # NOTE: I'm not particularly happy about the RLock (vs plain locks),
         # but the process of updating the internal lookups is highly reentrant.
@@ -519,10 +520,10 @@ class Privateer:
         '''
         with self._modlock:
             if proxy in self._chains:
-                raise ValueError('Proxy has already been chained.')
+                raise RatchetChainError('Proxy has already been chained.')
                 
             if container not in self._secrets:
-                raise ValueError(
+                raise SecretUnknown(
                     'Cannot chain unless the container secret is known.'
                 )
         
@@ -532,11 +533,12 @@ class Privateer:
         ''' Gets a new secret for the proxy. Returns the secret, and
         flags the ratchet as in-progress.
         '''
-        if proxy in self._ratchet_in_progress:
-            raise ValueError('Must update chain prior to re-ratcheting.')
-            
         if proxy not in self._chains:
-            raise ValueError('No chain for that proxy.')
+            raise RatchetChainError('No chain for that proxy.')
+        elif proxy in self._ratchet_in_progress:
+            raise RatchetStateError(
+                'Must update chain prior to re-ratcheting.'
+            )
             
         if self._credential.is_primary(proxy):
             ratcheted = self._ratchet_bootstrap(proxy)
@@ -553,18 +555,17 @@ class Privateer:
         with self._modlock:
             # TODO: make sure this is not a race condition.
             binding = self._oracle.get_object(gaoclass=_GAO, ghid=proxy)
-            last_target = binding._history_targets[0]
-            last_frame = binding._history[0]
+            last_target = binding.target_history[0]
             
             try:
                 existing_secret = self._secrets[last_target]
             except KeyError as exc:
-                raise RatchetError('No secret for existing target?') from exc
+                raise SecretUnknown('No secret for existing target.') from exc
             
             return self._ratchet(
                 secret = existing_secret,
                 proxy = proxy,
-                salt_ghid = last_frame
+                salt_ghid = last_target
             )
             
     def _ratchet_bootstrap(self, proxy):
@@ -600,10 +601,10 @@ class Privateer:
         update_chain, protected by either modlock or bootlock.
         '''
         if proxy not in self._chains:
-            raise ValueError('No chain for proxy.')
+            raise RatchetChainError('No chain for proxy.')
             
-        if proxy not in self._ratchet_in_progress:
-            raise ValueError('No ratchet in progress for proxy.')
+        elif proxy not in self._ratchet_in_progress:
+            raise RatchetStateError('No ratchet in progress for proxy.')
             
         secret = self._ratchet_in_progress.pop(proxy)
         self._chains[proxy] = container
@@ -618,10 +619,12 @@ class Privateer:
         '''
         with self._modlock:
             if proxy not in self._chains:
-                raise ValueError('Proxy has no existing chain.')
+                raise RatchetChainError('Proxy has no existing chain.')
                 
-            if container not in self._secrets:
-                raise ValueError('Container secret is unknown; cannot reset.')
+            elif container not in self._secrets:
+                raise UnknownSecret(
+                    'Container secret is unknown; cannot reset.'
+                )
                 
             try:
                 del self._ratchet_in_progress[proxy]
@@ -653,7 +656,7 @@ class Privateer:
                 else:
                     self._heal_standard(gao, binding)
                     
-            except Exception:
+            except RatchetError:
                 logger.warning(
                     'Error while staging new secret for attempted ratchet. '
                     'The ratchet is very likely broken.\n' +
@@ -670,42 +673,39 @@ class Privateer:
     def _heal_standard(self, gao, binding):
         ''' Heals a chain used in a non-bootstrapping container.
         '''
-        # Get a local copy of _history_targets, since it's not currently tsafe
-        # TODO: make gao tsafe; fix this leaky abstraction; make sure not race
-        gao_targets = gao._history_targets.copy()
-        gao_history = gao._history.copy()
-        
-        with self._modlock:
-            # This finds the first target for which we have a secret.
-            for offset in range(len(gao_targets)):
-                if gao_targets[offset] in self._secrets:
-                    known_secret = self._secrets[gao_targets[offset]]
-                    break
-                else:
-                    continue
-                    
-            # If we did not find a target, the ratchet is broken.
-            else:
-                raise RatchetError(
-                    'No available secrets for any of the object\'s known past '
-                    'targets. Re-establish the ratchet.'
-                )
+        targets = [binding.target, *gao.target_history]
+        # Find the first target for which we have a secret.
+        to_heal = collections.deque()
+        for target in targets:
+            try:
+                known_secret = self._secrets[target]
             
-        # Count backwards in index (and therefore forward in time) from the
-        # first new frame to zero (and therefore the current frame).
-        # Note that we're using the previous frame's ghid as salt.
-        for ii in range(offset, -1, -1):
+            except KeyError:
+                to_heal.append(target)
+                
+            else:
+                break
+                
+        # If we did not find a target, the ratchet is broken.
+        else:
+            raise RatchetError(
+                'No available secrets for any of the object\'s known past '
+                'targets. Re-establish the ratchet.'
+            )
+            
+        # Iterate forwards from the past until we get to the current target.
+        # Note that we're using the previous frame's TARGET as salt, and that
+        # we still have known_secret from above available.
+        previous_target = target
+        for this_target in reversed(to_heal):
             known_secret = self._ratchet(
                 secret = known_secret,
                 proxy = gao.ghid,
-                salt_ghid = gao_history[ii]
+                salt_ghid = previous_target
             )
-            
-        # DON'T take _modlock here or we will be reentrant = deadlock
-        # Do the try/catch for this in the outside method, so that we can
-        # else it.
-        self.quarantine(binding.target, known_secret)
-        # Note that opening the container itself will commit the secret.
+            # Note that opening the container itself will commit the secret.
+            self.quarantine(this_target, known_secret)
+            previous_target = this_target
         
     def _heal_bootstrap(self, gao, binding):
         ''' Heals a chain used in a bootstrapping container.

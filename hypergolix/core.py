@@ -120,6 +120,7 @@ class GolixCore(metaclass=API):
         self._identity = None
         # Added during assembly
         self._librarian = None
+        self._privateer = None
         
     @__init__.fixture
     def __init__(self, test_agent):
@@ -127,9 +128,10 @@ class GolixCore(metaclass=API):
         '''
         self._identity = test_agent
         
-    def assemble(self, librarian):
+    def assemble(self, librarian, privateer):
         # Chicken, meet egg.
         self._librarian = weakref.proxy(librarian)
+        self._privateer = weakref.proxy(privateer)
         
     def prep_bootstrap(self, identity):
         # Temporarily set our identity to a generic firstparty for loading.
@@ -187,12 +189,23 @@ class GolixCore(metaclass=API):
         author = SecondParty.from_packed(
             self._librarian.retrieve(container.author)
         )
+        
         with self._opslock:
-            return self._identity.receive_container(
-                author = author,
-                secret = secret,
-                container = container
-            )
+            try:
+                state = self._identity.receive_container(
+                    author = author,
+                    secret = secret,
+                    container = container
+                )
+        
+            except SecurityError:
+                self._privateer.abandon(container.ghid)
+                raise
+                
+            else:
+                self._privateer.commit(container.ghid)
+        
+        return state
         
     def make_container(self, data, secret):
         # Simple wrapper around golix.FirstParty.make_container

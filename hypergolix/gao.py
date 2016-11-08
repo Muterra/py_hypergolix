@@ -60,6 +60,9 @@ from .utils import immutable_property
 
 from .exceptions import HGXLinkError
 from .exceptions import DeadObject
+from .exceptions import RatchetError
+from .exceptions import RatchetChainError
+from .exceptions import RatchetStateError
 
 from .persistence import _GobdLite
 from .persistence import _GdxxLite
@@ -183,13 +186,20 @@ class GAOMixin(metaclass=API):
         # fine to do without an explicit loop.
         self._update_lock = asyncio.Lock()
         
-    async def apply_delete(self):
-        ''' Executes an external delete.
+    async def apply_delete(self, debinding):
+        ''' Executes an external delete, caused by the debinding at the
+        passed address. By default, just makes sure the debinding target
+        is valid.
+        
+        Debinding is a _GdxxLite.
         
         Note that this gets used by Dispatchable to dispatch deletion to
         applications.
         '''
-        pass
+        if debinding.target != self.ghid:
+            raise ValueError(
+                'Debinding target does not match GAO applying delete.'
+            )
         
     async def pack_gao(self):
         ''' Packs self into a bytes object. May be overwritten in subs
@@ -223,6 +233,12 @@ class GAOMixin(metaclass=API):
         self._percore.ingest_gobs(binding)
         
         return container_ghid
+        
+    async def hold(self):
+        ''' Make a static binding for the gao.
+        '''
+        binding = self._golcore.make_binding_stat(self.ghid)
+        self._percore.ingest_gobs(binding)
         
     async def delete(self):
         ''' Permanently removes the object. This method is only called
@@ -261,16 +277,82 @@ class GAOMixin(metaclass=API):
                 
                 # TODO: narrow which exceptions can cause this.
                 except Exception:
+                    logger.error(''.join((
+                        'GAO ',
+                        str(self.ghid),
+                        ' PUSH: failed to update object; forcibly restoring ',
+                        'state w/ traceback:\n',
+                        traceback.format_exc()
+                    )))
                     # We had a problem, so we're going to forcibly restore the
                     # object to the last known good state.
                     await self._pull()
+                    raise
             
         else:
             raise TypeError('Static objects cannot be updated.')
             
     async def _push(self):
-        ''' The actual "meat and bones" for pushing
+        ''' The actual "meat and bones" for pushing.
         '''
+        current_target = self._ghidproxy.resolve(self.ghid)
+        
+        # We need a secret.
+        try:
+            secret = self._privateer.ratchet_chain(self.ghid)
+            
+        # Note that, if we previously loaded this object, but didn't create
+        # it through this particular contiguous hypergolix session, we will
+        # be missing a chain for it.
+        except RatchetChainError:
+            logger.info(''.join((
+                'GAO ',
+                str(self.ghid),
+                ' PUSH: new ratchet established.',
+            )))
+            self._privateer.make_chain(self.ghid, current_target)
+            secret = self._privateer.ratchet_chain(self.ghid)
+            
+        except RatchetStateError:
+            logger.error(''.join((
+                'GAO ',
+                str(self.ghid),
+                ' PUSH: ratchet FAILED with ratchet already in progress. ',
+                'Resetting chain to most recent target w/ traceback:\n',
+                *traceback.format_exc()
+            )))
+            self._privateer.reset_chain(self.ghid, current_target)
+            secret = self._privateer.ratchet_chain(self.ghid)
+        
+        # We have a secret. Now we need a container and a binding frame.
+        try:
+            container = self._golcore.make_container(self.pack_gao(), secret)
+            binding = self._golcore.make_binding_dyn(
+                target = container.ghid,
+                ghid = self.ghid,
+                history = self._history
+            )
+            self._privateer.stage(container.ghid, secret)
+            # And now, as everything was successful, update the ratchet
+            self._privateer.update_chain(self.ghid, container.ghid)
+            
+            # Publish to persister
+            self._percore.ingest_gobd(binding)
+            self._percore.ingest_geoc(container)
+        
+        # Necessary for else clause (grumble grumble)
+        except:
+            raise
+            
+        # We created a container and binding frame, and then we successfully
+        # uploaded them. Update our frame and target history accordingly and
+        # commit the container secret.
+        else:
+            self._privateer.commit(container.ghid)
+            # NOTE THE DISCREPANCY between the Golix dynamic binding version
+            # of ghid and ours! This is recording the frame ghid.
+            self.frame_history.appendleft(binding.ghid)
+            self.target_history.appendleft(container.ghid)
         
     async def pull(self, notification):
         ''' Pulls state from upstream and applies it. Does not check for
@@ -287,24 +369,129 @@ class GAOMixin(metaclass=API):
             # bugs, this path should never get triggered. But, just in case...
             if notification in self.frame_history:
                 logger.debug(''.join((
-                    'GAO UPDATE for',
+                    'GAO at',
                     str(self.ghid),
-                    ' IGNORED w/ notification ',
+                    ' PULL IGNORED w/ notification ',
                     str(notification)
                 )))
             
-            # This frame is not known to us. Pull it.
+            # This notification is not known to us. It could either be a frame
+            # for an update, or it could be a deletion notice.
             else:
-                async with self._update_lock:
-                    await self._pull()
+                summary = self._librarian.summarize(notification)
+                # We've been deleted.
+                if isinstance(summary, _GdxxLite):
+                    async with self._update_lock:
+                        await self.apply_delete(summary)
+                        logger.info(''.join((
+                            'GAO at ',
+                            str(self.ghid),
+                            ' PULL COMPLETED; deleted.'
+                        )))
+                    
+                # We're being updated.
+                else:
+                    async with self._update_lock:
+                        await self._pull(summary)
+                        logger.info(''.join((
+                            'GAO at ',
+                            str(self.ghid),
+                            ' PULL COMPLETED with updates.'
+                        )))
             
         else:
             raise TypeError('Static objects cannot be pulled.')
         
-    async def _pull(self):
+    async def _pull(self, binding=None):
         ''' The actual "meat and bones" for pulling.
+        
+        This is what you'll extend in Dispatchable to update
+        applications.
         '''
-        # This is what you'll extend in Dispatchable to update applications.
+        # Forcibly restoring state will not pass a binding.
+        if binding is None:
+            pass
+        # First make sure that's actually a binding
+        elif not isinstance(binding, _GobdLite):
+            raise TypeError('Update failed pull; mismatched Golix primitive.')
+        # Also make sure it's the same dynamic address.
+        elif binding.ghid != self.ghid:
+            raise ValueError('Update failed pull; mismatched binding ghid.')
+        
+        # Now discard the binding and get a new one from librarian, just to be
+        # sure we've got the newest (combining updates if necessary).
+        binding = self.librarian.summarize(self.ghid)
+        
+        # Also don't forget to update history. Do this first, because it will
+        # create a canonical update, regardless of success in unpacking.
+        try:
+            # This will only update history. It will not add our current frame
+            # to the history. So, we preserve the maximum depth to heal the
+            # ratchet at this point.
+            self._advance_history(binding)
+            self._privateer.heal_chain(gao=self, binding=binding)
+        
+        # Now, we need to be sure our local history doesn't forget about our
+        # current-most-recent frame when making an update.
+        finally:
+            # Finally, appendleft the newest frame and the newest target.
+            self.frame_history.appendleft(binding.frame_ghid)
+            self.target_history.appendleft(binding.target)
+        
+        # Okay, now let's actually do the thing with the new copy.
+        secret = self._privateer.get(binding.target)
+        packed = self._librarian.retrieve(binding.target)
+        
+        # TODO: fix this leaky abstraction.
+        unpacked = self._golcore._identity.unpack_container(packed)
+        
+        packed_state = self._golcore.open_container(unpacked, secret)
+        self.unpack_gao(packed_state)
+        
+    def _advance_history(self, new_obj):
+        ''' Updates our history to match the new one.
+        '''
+        old_history = self.frame_history
+        new_history = new_obj.history
+        new_legroom = len(new_history)
+        
+        # Find how far offset the new_history is from the old_history.
+        for offset in range(new_legroom):
+            # Align the histories by checking the ii'th new element against an
+            # offset ii'th old element.
+            for ii in range(new_legroom - offset):
+                # The new element matches the offset old element, so don't
+                # change the offset.
+                if new_history[offset + ii] == old_history[ii]:
+                    continue
+                
+                # It didn't match, so we need to up the offset by one. Short
+                # circuit the inner loop via break.
+                else:
+                    break
+                
+            # We found a match. Short-circuit parent loop.
+            else:
+                break
+    
+        # We never found a match. Offset should be made into the length of the
+        # entire thing.
+        else:
+            offset += 1
+                    
+        # Now we need to make sure that our legroom matches the new object's.
+        # Do this after advancing the history so that we don't accidentally
+        # infer offsets between frames that are so far gone that we don't know
+        # their history. Note that this can only happen when there's a race
+        # between the persistence ingestion updating the object, and the update
+        # being applied to the actual GAO.
+        self.legroom = new_legroom
+        
+        # Now, appendleft the new frame (and an empty target) until we get to
+        # the most recent one.
+        for ii in range(offset - 1, -1, -1):
+            self.frame_history.appendleft(new_history[ii])
+            self.target_history.appendleft(None)
 
 
 class GAO(type):

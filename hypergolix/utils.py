@@ -30,6 +30,7 @@ hypergolix: A python Golix client.
 ------------------------------------------------------
 '''
 
+import logging
 import collections
 import threading
 import abc
@@ -51,19 +52,19 @@ from golix import Ghid
 # yet exist)
 from .exceptions import HandshakeError
 
-# Control * imports.
-__all__ = [
-    # 'StaticObject',
-]
-
 
 # ###############################################
 # Logging boilerplate
 # ###############################################
 
 
-import logging
 logger = logging.getLogger(__name__)
+
+
+# Control * imports.
+__all__ = [
+    # 'StaticObject',
+]
 
 
 # ###############################################
@@ -932,13 +933,6 @@ class NoContext:
         
     def __exit__(*args, **kwargs):
         pass
-        
-            
-def _reap_wrapped_task(task):
-    ''' Reap a task that was wrapped to never raise and then
-    executed autonomously using ensure_future.
-    '''
-    task.result()
 
 
 class _WeakProperty(property):
@@ -1027,6 +1021,13 @@ def immortal_property(name):
 # ###############################################
 # Older lib
 # ###############################################
+        
+            
+def _reap_wrapped_task(task):
+    ''' Reap a task that was wrapped to never raise and then
+    executed autonomously using ensure_future.
+    '''
+    task.result()
     
     
 class _WeldedSet:

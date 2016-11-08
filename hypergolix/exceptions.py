@@ -71,6 +71,8 @@ __all__ = [
     # These are privateer errors
     'PrivateerError',
     'RatchetError',
+    'RatchetStateError',
+    'RatchetChainError',
     # These are configuration errors
     'ConfigError',
     # These are HGXLink errors
@@ -304,6 +306,20 @@ class PrivateerError(HypergolixException, RuntimeError):
 class RatchetError(PrivateerError):
     ''' This PrivateerError is raised when ratcheting a secret could not
     be completed successfully.
+    '''
+    pass
+    
+    
+class RatchetStateError(RatchetError, ValueError):
+    ''' This PrivateerError is raised when ratcheting a secret could not
+    be completed successfully because a ratchet is already in progress.
+    '''
+    pass
+    
+    
+class RatchetChainError(RatchetError, ValueError):
+    ''' This PrivateerError is raised when ratcheting a secret could not
+    be completed successfully because it is not currently chained.
     '''
     pass
     

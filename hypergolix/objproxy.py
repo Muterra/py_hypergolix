@@ -408,7 +408,7 @@ class ObjCore(metaclass=TriplicateAPI):
             try:
                 await callback(*args, **kwargs)
                 
-            except:
+            except Exception:
                 logger.error(
                     'Error while running update callback. Traceback: \n' +
                     ''.join(traceback.format_exc())

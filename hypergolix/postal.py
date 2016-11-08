@@ -52,6 +52,8 @@ from .persistence import _GarqLite
 from .utils import SetMap
 from .utils import WeakSetMap
 
+from .gao import _GAO
+
 
 # ###############################################
 # Boilerplate
@@ -257,16 +259,16 @@ class MrPostman(_PostmanBase):
         super().__init__()
         self._rolodex = None
         self._golcore = None
+        self._oracle = None
+        self._salmonator = None
         
-        # self._listeners = SetMap()
-        # NOTE! This means that the listeners CANNOT be methods, as methods
-        # will be DOA.
-        self._listeners = WeakSetMap()
-        
-    def assemble(self, golix_core, librarian, bookie, rolodex):
+    def assemble(self, golcore, oracle, librarian, bookie, rolodex,
+                 salmonator):
         super().assemble(librarian, bookie)
-        self._golcore = weakref.proxy(golix_core)
+        self._golcore = weakref.proxy(golcore)
         self._rolodex = weakref.proxy(rolodex)
+        self._oracle = weakref.proxy(oracle)
+        self._salmonator = weakref.proxy(salmonator)
         
     def register(self, gao):
         ''' Registers a GAO with the postman, so that it will receive
@@ -283,17 +285,35 @@ class MrPostman(_PostmanBase):
     async def _deliver(self, subscription, notification):
         ''' Do the actual subscription update.
         '''
+        # We just got a garq for our identity. Rolodex handles these.
         if subscription == self._golcore.whoami:
             self._rolodex.notification_handler(subscription, notification)
-        else:
-            callbacks = self._listeners.get_any(subscription)
-            logger.debug(
-                'MrPostman starting delivery for ' + str(len(callbacks)) +
-                ' updates on sub ' + str(subscription) + ' with notif ' +
+        
+        # Anything else is an object subscription. Handle those by directly,
+        # but only if we have them in memory.
+        elif subscription in self._oracle:
+            # The ingestion pipeline will already have applied any new updates
+            # to the ghidproxy.
+            obj = self._oracle.get_object(subscription)
+            logger.debug(''.join((
+                'SUBSCRIPTION ',
+                str(subscription),
+                ' delivery STARTING. Notification: ',
                 str(notification)
-            )
-            for callback in callbacks:
-                callback(subscription, notification)
+                
+            )))
+            await obj.pull(notification)
+                
+        # We don't have the sub in memory, so we need to remove it.
+        else:
+            logger.debug(''.join((
+                'SUBSCRIPTION ',
+                str(subscription),
+                ' delivery IGNORED: not in memory. Notification: ',
+                str(notification)
+                
+            )))
+            self._salmonator.deregister(subscription)
         
         
 class PostOffice(_PostmanBase):
