@@ -191,19 +191,11 @@ class GolixCore(metaclass=API):
         )
         
         with self._opslock:
-            try:
-                state = self._identity.receive_container(
-                    author = author,
-                    secret = secret,
-                    container = container
-                )
-        
-            except SecurityError:
-                self._privateer.abandon(container.ghid)
-                raise
-                
-            else:
-                self._privateer.commit(container.ghid)
+            state = self._identity.receive_container(
+                author = author,
+                secret = secret,
+                container = container
+            )
         
         return state
         
@@ -257,6 +249,7 @@ class GhidProxier:
     
     Threadsafe.
     '''
+    
     def __init__(self):
         # Note that we can't really cache aliases, because their proxies will
         # not update when we change things unless the proxy is also removed 
@@ -446,7 +439,7 @@ class Oracle(metaclass=API):
         return obj
         
     @get_object.fixture
-    async def get_object(self, gaoclass, ghid, **kwargs):
+    async def get_object(self, gaoclass, ghid, *args, **kwargs):
         ''' Do the easy thing and just pull it out of lookup.
         '''
         return self._lookup[ghid]

@@ -52,7 +52,7 @@ from .persistence import _GarqLite
 from .utils import SetMap
 from .utils import WeakSetMap
 
-from .gao import _GAO
+from .gao import GAO
 
 
 # ###############################################
@@ -282,7 +282,7 @@ class MrPostman(_PostmanBase):
         elif subscription in self._oracle:
             # The ingestion pipeline will already have applied any new updates
             # to the ghidproxy.
-            obj = self._oracle.get_object(subscription)
+            obj = await self._oracle.get_object(GAO, subscription)
             logger.debug(''.join((
                 'SUBSCRIPTION ',
                 str(subscription),

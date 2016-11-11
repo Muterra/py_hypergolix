@@ -70,9 +70,9 @@ __all__ = [
     'ConnectionClosed',
     # These are privateer errors
     'PrivateerError',
+    'ConflictingSecrets',
+    'UnknownSecret',
     'RatchetError',
-    'RatchetStateError',
-    'RatchetChainError',
     # These are configuration errors
     'ConfigError',
     # These are HGXLink errors
@@ -310,20 +310,6 @@ class RatchetError(PrivateerError):
     pass
     
     
-class RatchetStateError(RatchetError, ValueError):
-    ''' This PrivateerError is raised when ratcheting a secret could not
-    be completed successfully because a ratchet is already in progress.
-    '''
-    pass
-    
-    
-class RatchetChainError(RatchetError, ValueError):
-    ''' This PrivateerError is raised when ratcheting a secret could not
-    be completed successfully because it is not currently chained.
-    '''
-    pass
-    
-    
 class ConflictingSecrets(PrivateerError):
     ''' This PrivateerError is raised when an existing secret does not
     match a new secret.
@@ -331,7 +317,7 @@ class ConflictingSecrets(PrivateerError):
     pass
     
     
-class SecretUnknown(PrivateerError, KeyError):
+class UnknownSecret(PrivateerError, KeyError):
     ''' This PrivateerError is raised when a request is made for an
     unknown secret.
     '''

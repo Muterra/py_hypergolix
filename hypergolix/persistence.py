@@ -1366,12 +1366,13 @@ class Bookie:
             self._gc_execute(illegal_binding)
             
             
-class _LibrarianCore(metaclass=abc.ABCMeta):
+class LibrarianCore(metaclass=abc.ABCMeta):
     ''' Base class for caching systems common to non-volatile librarians
     such as DiskLibrarian, S3Librarian, etc.
     
     TODO: make ghid vs frame ghid usage more consistent across things.
     '''
+    
     def __init__(self):
         # Link to core, which will be assigned after __init__
         self._percore = None
@@ -1665,32 +1666,32 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
                 return None
         return True
             
-    @abc.abstractmethod
+    # @abc.abstractmethod
     def add_to_cache(self, ghid, data):
         ''' Adds the passed raw data to the cache.
         '''
         pass
         
-    @abc.abstractmethod
+    # @abc.abstractmethod
     def remove_from_cache(self, ghid):
         ''' Removes the data associated with the passed ghid from the 
         cache.
         '''
         pass
         
-    @abc.abstractmethod
+    # @abc.abstractmethod
     def get_from_cache(self, ghid):
         ''' Returns the raw data associated with the ghid.
         '''
         pass
         
-    @abc.abstractmethod
+    # @abc.abstractmethod
     def check_in_cache(self, ghid):
         ''' Check to see if the ghid is contained in the cache.
         '''
         pass
         
-    @abc.abstractmethod
+    # @abc.abstractmethod
     def walk_cache(self):
         ''' Iterator to go through the entire cache, returning possible
         candidates for loading. Loading will handle malformed primitives
@@ -1699,7 +1700,7 @@ class _LibrarianCore(metaclass=abc.ABCMeta):
         pass
     
     
-class DiskLibrarian(_LibrarianCore):
+class DiskLibrarian(LibrarianCore):
     ''' Librarian that caches stuff to disk.
     '''
     def __init__(self, cache_dir):
@@ -1770,7 +1771,7 @@ class DiskLibrarian(_LibrarianCore):
         return fpath.exists()
         
         
-class MemoryLibrarian(_LibrarianCore):
+class MemoryLibrarian(LibrarianCore):
     def __init__(self):
         self._shelf = {}
         super().__init__()
@@ -1788,7 +1789,7 @@ class MemoryLibrarian(_LibrarianCore):
         self._shelf[ghid] = data
         
     def remove_from_cache(self, ghid):
-        ''' Removes the data associated with the passed ghid from the 
+        ''' Removes the data associated with the passed ghid from the
         cache.
         '''
         del self._shelf[ghid]

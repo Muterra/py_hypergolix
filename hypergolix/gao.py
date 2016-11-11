@@ -34,15 +34,15 @@ hypergolix: A python Golix client.
 # Global dependencies
 import logging
 import asyncio
-import weakref
 import traceback
 import collections
+import functools
+import weakref
 
 from golix import Ghid
 from loopa.utils import await_coroutine_threadsafe
 from loopa.utils import await_coroutine_loopsafe
-from loopa.utils import Triplicate
-from loopa.utils import triplicated
+from loopa.utils import make_background_future
 
 # Local dependencies
 from .hypothetical import API
@@ -92,7 +92,72 @@ __all__ = [
 # ###############################################
 
 
-class GAOMixin(metaclass=API):
+class Deferrable(type):
+    ''' Use this to construct GAOs that use deferred-action methods that
+    can store deltas before flushing.
+    
+    TODO: support this. Currently, it's just one big race condition
+    waiting for contention problems.
+    '''
+    
+
+def deferred(func):
+    ''' Decorator to make a deferred-action method.
+    '''
+    try:
+        func.__deferred__ = True
+    
+    except AttributeError:
+        @functools.wraps(func)
+        def func(*args, _func=func, **kwargs):
+            _func(*args, **kwargs)
+        
+        func.__deferred__ = True
+    
+    return func
+    
+    
+class DefermentTracker:
+    ''' Tracks all deferred objects, and allows for a single flush()
+    call to push all changes.
+    '''
+    
+    def __init__(self):
+        # Create a set of all tracked objects.
+        self.tracked = weakref.WeakSet()
+        
+    def add(self, gao):
+        ''' Track a gao.
+        '''
+        self.tracked.add(gao)
+        
+    def remove(self, gao):
+        ''' Remove a gao.
+        '''
+        self.tracked.remove(gao)
+        
+    async def flush(self):
+        ''' Push all of the tracked GAOs. Currently dumb (in that it
+        does not check for modifications, and simply always pushes.)
+        '''
+        tasks = set()
+        for gao in self.tracked:
+            tasks.add(make_background_future(gao.push()))
+            
+        # And wait for them all to complete. Note that make_background_future
+        # handles their exception and result handling.
+        await asyncio.wait(
+            fs = tasks,
+            return_when = asyncio.ALL_COMPLETED
+        )
+
+
+# ###############################################
+# Lib
+# ###############################################
+
+
+class GAOCore(metaclass=API):
     ''' Adds functions to a GAO.
     
     Notes:
@@ -131,6 +196,7 @@ class GAOMixin(metaclass=API):
     author = readonly_property('_author')
     # This is immutable, so that it may be set just after initting.
     ghid = immutable_property('_ghid')
+    _master_secret = readonly_property('__msec')
     
     # Also, an un-deletable property for history (even if unused), etc
     isalive = immortal_property('_isalive')
@@ -160,12 +226,24 @@ class GAOMixin(metaclass=API):
                                                    maxlen=legroom)
             self.target_history = collections.deque(self.target_history,
                                                     maxlen=legroom)
+            
+    @property
+    def _local_secret(self):
+        ''' This determines if the secret will be committed locally only
+        (for master_secreted objects), or if it will be stored
+        persistently for the account.
+        '''
+        return bool(self._master_secret)
     
-    def __init__(self, ghid, dynamic, author, legroom, *args, golcore,
-                 ghidproxy, privateer, percore, bookie, librarian):
+    def __init__(self, ghid, dynamic, author, legroom, *, golcore, ghidproxy,
+                 privateer, percore, bookie, librarian, master_secret=None):
         ''' Init should be used only to create a representation of an
         EXISTING (or about to be existing) object. If any fields are
         unknown, they must be explicitly passed None.
+        
+        If master_secret is None, ratcheting will be iterative.
+        If master_secret is a Secret, ratcheting will use the primary
+            bootstrap ratcheting mechanism.
         '''
         self._golcore = golcore
         self._ghidproxy = ghidproxy
@@ -182,6 +260,10 @@ class GAOMixin(metaclass=API):
         # Note that this also initializes frame_history and target_history
         self.legroom = legroom
         self.isalive = True
+        
+        # This determines our ratcheting behavior. Set it with setattr to
+        # bypass both name mangling AND the readonly property.
+        setattr(self, '__msec', master_secret)
         
         # We will only ever be created from within an event loop, so this is
         # fine to do without an explicit loop.
@@ -266,36 +348,16 @@ class GAOMixin(metaclass=API):
         # If we're getting a new secret and we already have a ghid, then we
         # MUST be a dynamic object.
         if self.ghid:
-            current_target = self._ghidproxy.resolve(self.ghid)
-            
-            # We need a secret.
-            try:
-                secret = self._privateer.ratchet_chain(self.ghid)
-                
-            # Note that, if we previously loaded this object, but didn't create
-            # it through this particular contiguous hypergolix session, we will
-            # be missing a chain for it.
-            except RatchetChainError:
-                logger.info(''.join((
-                    'GAO ',
-                    str(self.ghid),
-                    ' PUSH: new ratchet established.',
-                )))
-                self._privateer.make_chain(self.ghid, current_target)
-                secret = self._privateer.ratchet_chain(self.ghid)
-                
-            except RatchetStateError:
-                logger.error(''.join((
-                    'GAO ',
-                    str(self.ghid),
-                    ' PUSH: ratchet FAILED with ratchet already in progress. ',
-                    'Resetting chain to most recent target w/ traceback:\n',
-                    *traceback.format_exc()
-                )))
-                self._privateer.reset_chain(self.ghid, current_target)
-                secret = self._privateer.ratchet_chain(self.ghid)
+            current_target = self.target_history[0]
+            secret = self._privateer.ratchet_chain(
+                self.ghid,
+                current_target,
+                self._master_secret
+            )
         
-        # This is a new object, and we therefore don't have a secret.
+        # This is a new object, and we therefore don't have a secret. Note that
+        # the first secret for a bootstrapped chain will always be discarded,
+        # because the salt process needs to start somewhere.
         else:
             secret = self._privateer.new_secret()
             
@@ -342,7 +404,8 @@ class GAOMixin(metaclass=API):
         
         # We have a secret. Now we need a container and a binding frame.
         try:
-            container = self._golcore.make_container(self.pack_gao(), secret)
+            packed = await self.pack_gao()
+            container = self._golcore.make_container(packed, secret)
             self._privateer.stage(container.ghid, secret)
             
             if self.dynamic:
@@ -357,13 +420,6 @@ class GAOMixin(metaclass=API):
                     True,
                     self._golcore.whoami
                 )
-                
-                # And now, as everything was successful, update the ratchet
-                try:
-                    self._privateer.update_chain(self.ghid, container.ghid)
-                # This means there was no existing chain, so create one.
-                except RatchetChainError:
-                    self._privateer.make_chain(self.ghid, container.ghid)
                 
                 # Publish to persister
                 self._percore.ingest_gobd(binding)
@@ -395,7 +451,7 @@ class GAOMixin(metaclass=API):
         # uploaded them. Update our frame and target history accordingly and
         # commit the container secret.
         else:
-            self._privateer.commit(container.ghid)
+            self._privateer.commit(container.ghid, localize=self._local_secret)
             # NOTE THE DISCREPANCY between the Golix dynamic binding version
             # of ghid and ours! This is recording the frame ghid.
             # I mean, for static stuff this isn't (strictly speaking) relevant,
@@ -437,9 +493,9 @@ class GAOMixin(metaclass=API):
                             str(self.ghid),
                             ' PULL COMPLETED; deleted.'
                         )))
-                    
+                        
                 # We're being updated.
-                else:
+                elif summary.ghid == self.ghid:
                     async with self._update_lock:
                         await self._pull(summary)
                         logger.info(''.join((
@@ -447,25 +503,26 @@ class GAOMixin(metaclass=API):
                             str(self.ghid),
                             ' PULL COMPLETED with updates.'
                         )))
+                
+                # The update did not match us. This is sufficient to verify
+                # both that the update was a dynamic binding, and that there's
+                # no upstream bug for us.
+                else:
+                    raise ValueError(
+                        'Update failed pull; mismatched binding ghid.'
+                    )
             
         else:
             raise TypeError('Static objects cannot be pulled.')
         
-    async def _pull(self, binding=None):
+    async def _pull(self):
         ''' The actual "meat and bones" for pulling.
         
         This is what you'll extend in Dispatchable to update
         applications.
         '''
-        # Forcibly restoring state will not pass a binding.
-        # First make sure that, IFF the binding was passed, that it matches our
-        # existing ghid. This is sufficient type checking to proceed, since we
-        # just immediately discard the binding anyways.
-        if binding is not None and binding.ghid != self.ghid:
-            raise ValueError('Update failed pull; mismatched binding ghid.')
-        
-        # Now discard any binding and get a new one from librarian, just to be
-        # sure we've got the newest (combining updates if necessary).
+        # Make sure we have the most recent binding, regardless of what was
+        # recently passed.
         binding = self.librarian.summarize(self.ghid)
         
         # Okay, if this is calling _pull from oracle._get_object, we may be
@@ -489,31 +546,40 @@ class GAOMixin(metaclass=API):
                 self.target_history.appendleft(binding.target)
                 
             # Okay, now let's actually do the thing with the new copy.
-            secret = self._privateer.get(binding.target)
-            packed = self._librarian.retrieve(binding.target)
-            
-            # If this was just pulled for the first time, init the dynamic and
-            # author attributes.
-            self._conditional_init(dynamic=True, author=binding.author)
+            container_ghid = binding.target
+            dynamic = True
                     
         # Static object, so this is the actual container (and not the binding).
         elif isinstance(binding, _GeocLite):
-            secret = self._privateer.get(binding.ghid)
-            packed = self._librarian.retrieve(binding.ghid)
-            
-            # If this was just pulled for the first time, init the dynamic and
-            # author attributes.
-            self._conditional_init(dynamic=False, author=binding.author)
+            container_ghid = binding.ghid
+            dynamic = False
             
         # None of the above. TypeError.
         else:
             raise TypeError('Update failed pull; mismatched Golix primitive.')
         
-        # TODO: fix this leaky abstraction.
-        unpacked = self._golcore._identity.unpack_container(packed)
+        secret = self._privateer.get(container_ghid)
+        packed = self._librarian.retrieve(container_ghid)
         
-        packed_state = self._golcore.open_container(unpacked, secret)
-        self.unpack_gao(packed_state)
+        # If this was just pulled for the first time, init the dynamic and
+        # author attributes.
+        self._conditional_init(dynamic=dynamic, author=binding.author)
+        
+        try:
+            # TODO: fix the leaky abstraction of jumping into the _identity
+            unpacked = self._golcore._identity.unpack_container(packed)
+            packed_state = self._golcore.open_container(unpacked, secret)
+        
+        except SecurityError:
+            self._privateer.abandon(container_ghid)
+            raise
+            
+        else:
+            self._privateer.commit(container_ghid, localize=self._local_secret)
+        
+        # Finally, with all of the administrative stuff handled, unpack the
+        # actual payload.
+        await self.unpack_gao(packed_state)
         
     def _advance_history(self, new_obj):
         ''' Updates our history to match the new one.
@@ -570,42 +636,39 @@ class GAOMixin(metaclass=API):
             
         if self.ghid is None:
             self.ghid = ghid
-
-
-class GAO(type):
-    ''' Metaclass for golix-aware objects. Doesn't use API, because
-    that's handled within the GAOMixin.
+            
+            
+class GAO(GAOCore):
+    ''' A bare-bones GAO that performs trivial serialization (the
+    serialization of the state is the state itself).
     '''
-
-
-# ###############################################
-# Lib
-# ###############################################
+    
+    def __init__(self, *args, state, **kwargs):
+        self.state = state
+        super().__init__(*args, **kwargs)
         
+    async def pack_gao(self):
+        ''' Packs self into a bytes object. May be overwritten in subs
+        to pack more complex objects. Should always be a staticmethod or
+        classmethod.
         
-class _GAOBase:
-    ''' Defines the interface for _GAOs. Mostly here for documentation
-    (and, eventually, maybe testing) purposes.
-    '''
-        
-    # DEPRECATED! DELETE ME! I'M USELESS!
-    @classmethod
-    def from_ghid(cls, core, ghid, **kwargs):
-        ''' Construct the GAO from a passed (existing) ghid.
-        
-        This isn't necessary. All objects created from a ghid are pulled
-        through the oracle. Just do that directly.
+        May be used to implement, for example, packing self into a
+        DispatchableState, etc etc.
         '''
-        pass
-            
-            
-_GAOBootstrap = collections.namedtuple(
-    typename = '_GAOBootstrap',
-    field_names = ('bootstrap_name', 'bootstrap_secret', 'bootstrap_state'),
-)
+        return self.state
+        
+    async def unpack_gao(self, packed):
+        ''' Unpacks state from a bytes object and applies state to self.
+        May be overwritten in subs to unpack more complex objects.
+        
+        May be used to implement, for example, dicts performing a
+        clear() operation before an update() instead of just reassigning
+        the object.
+        '''
+        self.state = packed
         
     
-class _GAO(_GAOBase):
+class _GAO:
     ''' Base class for Golix-Aware Objects (Golix Accountability
     Objects?). Anyways, used by core to handle plaintexts and things.
     
