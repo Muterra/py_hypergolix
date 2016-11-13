@@ -203,7 +203,7 @@ class API(type):
             # See Python docs on super() with zero args: "the compiler fills in
             # the necessary details to correctly retrieve the class being
             # defined". Therefore, this is necessary when using fixture_bases:
-            # super(type(self), self).__init__(*args, **kwargs)
+            # super(Class, self).__init__(*args, **kwargs)
             
             # Now add in the types for both the fixture and the interface.
             # Reuse same bases for both, but use the REAL metaclass for it.

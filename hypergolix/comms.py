@@ -472,6 +472,8 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
     def __init__(self, connection_cls, msg_handler, *args, **kwargs):
         ''' We need to assign our connection class.
         '''
+        super().__init__(*args, **kwargs)
+        
         self.connection_cls = connection_cls
         self.protocol_def = msg_handler
         self._connection = None
@@ -490,8 +492,6 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
                 return (await self.perform_request(_method, args, kwargs))
             
             setattr(self, name, wrap_request)
-        
-        super().__init__(*args, **kwargs)
         
     async def connection_init(self, connection, protocol):
         ''' Run any desired setup for the connection.

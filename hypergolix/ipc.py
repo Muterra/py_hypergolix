@@ -283,7 +283,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         self._salmonator = None
         
     @__init__.fixture
-    def __init__(self, whoami):
+    def __init__(self, whoami, *args, **kwargs):
+        super(IPCServerProtocol.__fixture__, self).__init__(*args, **kwargs)
         self._whoami = whoami
         
     def assemble(self, golix_core, oracle, dispatch, rolodex, salmonator):
@@ -786,7 +787,18 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
     def RESET(self):
         ''' Nothing beyond just re-running __init__, reusing whoami.
         '''
-        self.__init__(self.whoami)
+        self.apis = set()
+        self.token = None
+        self.startup = None
+        self.pending_obj = None
+        self.pending_ghid = None
+        self.discarded = set()
+        self.updates = []
+        self.syncs = []
+        self.shares = SetMap()
+        self.frozen = set()
+        self.held = set()
+        self.deleted = set()
         
     @fixture_api
     def prep_obj(self, obj):

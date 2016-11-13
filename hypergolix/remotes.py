@@ -417,6 +417,8 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
     def __init__(self, *args, **kwargs):
         ''' Yarp.
         '''
+        super().__init__(*args, **kwargs)
+        
         self._percore = None
         self._golcore = None
         self._postman = None
@@ -431,14 +433,6 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         
         # Lookup for <registered ghid>
         self._registered = set()
-        
-        super().__init__(*args, **kwargs)
-        
-    @__init__.fixture
-    def __init__(self, *args, **kwargs):
-        ''' Do nothing.
-        '''
-        pass
         
     def assemble(self, golix_core, persistence_core, doorman, postman,
                  librarian):

@@ -91,7 +91,9 @@ class Rolodex(metaclass=API):
     '''
     
     @public_api
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
         self._opslock = threading.Lock()
         
         self._golcore = None
@@ -109,9 +111,11 @@ class Rolodex(metaclass=API):
         self._outstanding_shares = None
         
     @__init__.fixture
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         ''' Init the fixture.
         '''
+        super(Rolodex.__fixture__, self).__init__(*args, **kwargs)
+        
         self.shared = {}
         self._pending_requests = {}
         self._outstanding_shares = {}
@@ -120,7 +124,9 @@ class Rolodex(metaclass=API):
     def RESET(self):
         ''' Super simple reset alias to __init__.
         '''
-        self.__init__()
+        self.shared.clear()
+        self._pending_requests.clear()
+        self._outstanding_shares.clear()
         
     def bootstrap(self, pending_requests, outstanding_shares):
         ''' Initialize distributed state.

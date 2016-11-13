@@ -173,6 +173,8 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
     def __init__(self, *args, **kwargs):
         ''' Create a dispatch fixture.
         '''
+        super(Dispatcher.__fixture__, self).__init__(*args, **kwargs)
+        
         self._all_known_tokens = set()
         # Lookup (dict-like) for <app token>: <startup ghid>
         self._startup_by_token = {}
@@ -193,7 +195,18 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
     def RESET(self):
         ''' Reset the fixture to a pristine state.
         '''
-        self.__init__()
+        self._all_known_tokens.clear()
+        # Lookup (dict-like) for <app token>: <startup ghid>
+        self._startup_by_token.clear()
+        # Lookup (dict-like) for <obj ghid>: <private owner>
+        self._private_by_ghid.clear()
+        # Lookup <api ID>: set(<connection/session/endpoint>)
+        self._endpoints_from_api.clear_all()
+        
+        # Lookup <app token>: <connection/session/endpoint>
+        self._endpoint_from_token.clear()
+        # Reverse lookup <connection/session/endpoint>: <app token>
+        self._token_from_endpoint.clear()
         
     def assemble(self, ipc_protocol_server):
         # Set up a weakref to the ipc system

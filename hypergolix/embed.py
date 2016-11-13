@@ -98,6 +98,7 @@ class IPCManager(ConnectionManager):
     '''
     
     def __init__(self, hgxlink, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.__hgxlink = weakref.ref(hgxlink)
         
     @property

@@ -107,7 +107,7 @@ class GolixCore(metaclass=API):
     DEFAULT_LEGROOM = 7
     
     @public_api
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         
@@ -115,6 +115,7 @@ class GolixCore(metaclass=API):
         dispatcher isinstance DispatcherBase
         _identity isinstance golix.FirstParty
         '''
+        super().__init__(*args, **kwargs)
         self._opslock = threading.Lock()
         
         # Added during bootstrap
@@ -123,9 +124,10 @@ class GolixCore(metaclass=API):
         self._librarian = None
         
     @__init__.fixture
-    def __init__(self, test_agent):
+    def __init__(self, test_agent, *args, **kwargs):
         ''' Just, yknow, throw in the towel. Err, agent. Whatever.
         '''
+        super(GolixCore.__fixture__, self).__init__(*args, **kwargs)
         self._identity = test_agent
         
     def assemble(self, librarian):
@@ -333,9 +335,11 @@ class Oracle(metaclass=API):
     _salmonator = weak_property('__salmonator')
     
     @public_api
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         ''' Sets up internal tracking.
         '''
+        super().__init__(*args, **kwargs)
+        
         self._opslock = threading.Lock()
         self._lookup = {}
         
@@ -349,9 +353,11 @@ class Oracle(metaclass=API):
         self._salmonator = None
         
     @__init__.fixture
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         ''' Fixture init.
         '''
+        super(Oracle.__fixture__, self).__init__(*args, **kwargs)
+        
         self._lookup = {}
         self._opslock = NoContext()
         
@@ -359,7 +365,7 @@ class Oracle(metaclass=API):
     def RESET(self):
         ''' Simply re-call init.
         '''
-        self.__init__()
+        self._lookup.clear()
         
     def assemble(self, golcore, ghidproxy, privateer, percore, bookie,
                  librarian, postman, salmonator):
