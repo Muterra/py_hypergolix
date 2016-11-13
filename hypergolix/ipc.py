@@ -64,12 +64,9 @@ IPC Apps should not have access to objects that are not _Dispatchable.
 # External dependencies
 import weakref
 import collections
-import concurrent
-import asyncio
 import traceback
 # These are just used for fixturing.
 import random
-import loopa
 
 from golix import Ghid
 
@@ -754,8 +751,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
 
 
 class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
-                        error_codes=ERROR_CODES, default_version=b'\x00\x00',
-                        fixture_bases=(loopa.TaskLooper,)):
+                        error_codes=ERROR_CODES, default_version=b'\x00\x00'):
     ''' Defines the protocol for IPC, with handlers specific to clients.
     '''
     
@@ -771,7 +767,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         ''' Create the fixture internals.
         '''
         # This is necessary because of the fixture_bases bit.
-        super(type(self), self).__init__(*args, **kwargs)
+        super(IPCClientProtocol.__fixture__, self).__init__(*args, **kwargs)
         self.whoami = whoami
         self.apis = set()
         self.token = None
@@ -807,12 +803,6 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             obj._hgx_dynamic,
             obj._hgx_legroom
         )
-        
-    @fixture_api
-    async def loop_run(self, *args, **kwargs):
-        ''' Just busy loop forever for the fixture.
-        '''
-        await asyncio.sleep(.1)
         
     def assemble(self, hgxlink):
         # Chicken, egg, etc.

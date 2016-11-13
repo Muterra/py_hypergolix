@@ -175,7 +175,7 @@ class WSIPCTest(unittest.TestCase):
             reusable_loop=False,
             threaded = True,
             debug = True,
-            name = 'server'
+            thread_kwargs = {'name': 'server'}
         )
         cls.server_protocol = IPCServerProtocol()
         cls.server = BasicServer(connection_cls=WSConnection)
@@ -199,7 +199,7 @@ class WSIPCTest(unittest.TestCase):
             reusable_loop = False,
             threaded = True,
             debug = True,
-            name = 'client'
+            thread_kwargs = {'name': 'client1'}
         )
         cls.client1_protocol = IPCClientProtocol()
         cls.client1 = ConnectionManager(
@@ -220,7 +220,7 @@ class WSIPCTest(unittest.TestCase):
             reusable_loop = False,
             threaded = True,
             debug = True,
-            name = 'client'
+            thread_kwargs = {'name': 'client2'}
         )
         cls.client2_protocol = IPCClientProtocol()
         cls.client2 = ConnectionManager(
@@ -587,7 +587,10 @@ class WSIPCTest(unittest.TestCase):
             coro = self.client1.freeze_ghid(obj.ghid),
             loop = self.client1_commander._loop
         )
-        frozen = self.oracle.get_object(None, frozen_ghid)
+        frozen = await_coroutine_threadsafe(
+            coro = self.oracle.get_object(None, frozen_ghid),
+            loop = self.client1_commander._loop
+        )
         self.assertEqual(frozen.state[1], seed_state)
         
     def test_obj_hold(self):

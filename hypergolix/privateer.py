@@ -36,11 +36,11 @@ Some notes:
 
 # External dependencies
 import logging
-import threading
 import collections
 import weakref
 import traceback
 import asyncio
+import loopa
 
 from golix import Ghid
 
@@ -50,17 +50,10 @@ from cryptography.hazmat.primitives.kdf import hkdf
 from cryptography.hazmat.backends import default_backend
 
 # Intra-package dependencies
-from .gao import _GAO
-from .gao import _GAODict
-
-from .utils import TraceLogger
-from .utils import LooperTrooper
-from .utils import call_coroutine_threadsafe
+from .utils import weak_property
 
 from .exceptions import PrivateerError
 from .exceptions import RatchetError
-from .exceptions import RatchetChainError
-from .exceptions import RatchetStateError
 from .exceptions import ConflictingSecrets
 from .exceptions import UnknownSecret
 
@@ -94,30 +87,13 @@ class _GaoDictBootstrap(dict):
 
 
 class Privateer:
-    ''' Lookup system to get secret from ghid. Threadsafe?
-    
-    Note: a lot of the ratcheting state preservation could POTENTIALLY
-    be eliminated (and restored via oracle). But, that should probably
-    wait for Golix v2.0, which will change secret ratcheting anyways.
-    This will also help us track which secrets use the old ratcheting
-    mechanism and which ones use the new one, once that change is
-    started.
+    ''' Lookup system to get secret from ghid. Loopsafe, but NOT
+    threadsafe.
     '''
+    _golcore = weak_property('__golcore')
+    _ghidproxy = weak_property('__ghidproxy')
     
     def __init__(self):
-        # NOTE: I'm not particularly happy about the RLock (vs plain locks),
-        # but the process of updating the internal lookups is highly reentrant.
-        
-        # Modification lock for standard objects
-        self._modlock = threading.RLock()
-        # Modification lock for bootstrapping objects
-        self._bootlock = threading.Lock()
-        
-        # These must be linked during assemble.
-        self._golcore = None
-        self._ghidproxy = None
-        self._oracle = None
-        
         # These must be bootstrapped.
         self._secrets_persistent = None
         self._secrets_quarantine = None
@@ -140,13 +116,11 @@ class Privateer:
         '''
         return ghid in self._secrets
         
-    def assemble(self, golix_core, ghidproxy, oracle):
+    def assemble(self, golcore, ghidproxy):
         # Chicken, meet egg.
-        self._golcore = weakref.proxy(golix_core)
-        # We need the ghidproxy for bootstrapping, and ratcheting thereof.
-        self._ghidproxy = weakref.proxy(ghidproxy)
-        # We need an oracle for ratcheting.
-        self._oracle = weakref.proxy(oracle)
+        self._golcore = golcore
+        # We need the ghidproxy for checking containership
+        self._ghidproxy = ghidproxy
         
     def prep_bootstrap(self):
         ''' Creates temporary objects for tracking secrets.
@@ -515,7 +489,7 @@ class Privateer:
         )
         
         
-class Charon(LooperTrooper):
+class Charon(loopa.TaskLooper):
     ''' Handles the removal of secrets when their targets are removed,
     deleted, or otherwise made inaccessible. Charon instances are
     notified of object removal by the undertaker, and then handle
@@ -524,6 +498,10 @@ class Charon(LooperTrooper):
     
     It's pretty wasteful to use an entire event loop and thread for this
     but that's sorta the situation at hand currently.
+    
+    NOTE: this is soon to be superceded by caching abandon hits in the
+    privateer, which then just get rolled into the next push() call.
+    TODO: that.
     '''
     
     def __init__(self, *args, **kwargs):
@@ -551,15 +529,12 @@ class Charon(LooperTrooper):
             raise RuntimeError(
                 'Cannot schedule secret removal until after loop init.'
             )
-        call_coroutine_threadsafe(
-            coro = self._death_q.put(obj.ghid),
-            loop = self._loop
-        )
+        
+        # For now, avoid doing this as a coro by using put_nowait
+        self._death_q.put_nowait(obj.ghid)
             
     async def loop_run(self, *args, **kwargs):
-        ''' Very simply await stuff in the queue, pause for a hot sec,
-        and then remove it.
+        ''' Very simply await stuff in the queue and then remove it.
         '''
         dead_ghid = await self._death_q.get()
-        await asyncio.sleep(.1)
         self._privateer.abandon(dead_ghid)

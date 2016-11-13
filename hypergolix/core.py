@@ -62,6 +62,7 @@ from .hypothetical import fixture_api
 from .utils import _generate_threadnames
 from .utils import SetMap
 from .utils import NoContext
+from .utils import weak_property
 
 from .exceptions import RemoteNak
 from .exceptions import HandshakeError
@@ -120,7 +121,6 @@ class GolixCore(metaclass=API):
         self._identity = None
         # Added during assembly
         self._librarian = None
-        self._privateer = None
         
     @__init__.fixture
     def __init__(self, test_agent):
@@ -128,10 +128,9 @@ class GolixCore(metaclass=API):
         '''
         self._identity = test_agent
         
-    def assemble(self, librarian, privateer):
+    def assemble(self, librarian):
         # Chicken, meet egg.
         self._librarian = weakref.proxy(librarian)
-        self._privateer = weakref.proxy(privateer)
         
     def prep_bootstrap(self, identity):
         # Temporarily set our identity to a generic firstparty for loading.
@@ -140,13 +139,6 @@ class GolixCore(metaclass=API):
     def bootstrap(self, credential):
         # This must be done ASAGDFP. Must be absolute first thing to bootstrap.
         self._identity = weakref.proxy(credential.identity)
-        
-    @property
-    def _legroom(self):
-        ''' Get the legroom from our bootstrap. If it hasn't been
-        created yet (aka within __init__), return the class default.
-        '''
-        return self.DEFAULT_LEGROOM
         
     @property
     @public_api
@@ -252,7 +244,7 @@ class GhidProxier:
     
     def __init__(self):
         # Note that we can't really cache aliases, because their proxies will
-        # not update when we change things unless the proxy is also removed 
+        # not update when we change things unless the proxy is also removed
         # from the cache. Since the objects may (or may not) exist locally in
         # memory anyways, we should just take advantage of that, and allow our
         # inquisitor to more easily manage memory consumption as well.
@@ -331,6 +323,14 @@ class Oracle(metaclass=API):
     state. Might eventually be used by AgentBase. Just a quick way to
     store and retrieve any objects based on an associated ghid.
     '''
+    _golcore = weak_property('__golcore')
+    _ghidproxy = weak_property('__ghidproxy')
+    _privateer = weak_property('__privateer')
+    _percore = weak_property('__percore')
+    _bookie = weak_property('__bookie')
+    _librarian = weak_property('__librarian')
+    _postman = weak_property('__postman')
+    _salmonator = weak_property('__salmonator')
     
     @public_api
     def __init__(self):
@@ -361,17 +361,17 @@ class Oracle(metaclass=API):
         '''
         self.__init__()
         
-    def assemble(self, golix_core, ghidproxy, privateer, persistence_core,
-                 bookie, librarian, postman, salmonator):
+    def assemble(self, golcore, ghidproxy, privateer, percore, bookie,
+                 librarian, postman, salmonator):
         # Chicken, meet egg.
-        self._golcore = weakref.proxy(golix_core)
-        self._ghidproxy = weakref.proxy(ghidproxy)
-        self._privateer = weakref.proxy(privateer)
-        self._percore = weakref.proxy(persistence_core)
-        self._bookie = weakref.proxy(bookie)
-        self._librarian = weakref.proxy(librarian)
-        self._postman = weakref.proxy(postman)
-        self._salmonator = weakref.proxy(salmonator)
+        self._golcore = golcore
+        self._ghidproxy = ghidproxy
+        self._privateer = privateer
+        self._percore = percore
+        self._bookie = bookie
+        self._librarian = librarian
+        self._postman = postman
+        self._salmonator = salmonator
         
     @fixture_api
     def add_object(self, ghid, obj):
@@ -404,11 +404,9 @@ class Oracle(metaclass=API):
                 ' not currently in Oracle memory. Attempting load.'
             )))
             
-            # Only pull if it's not in librarian, since registration will
-            # automatically refresh the object if necessary.
-            if ghid not in self._librarian:
-                self._salmonator.attempt_pull(ghid, quiet=True)
-                
+            # First create the actual GAO. We do not need to have the ghid
+            # downloaded to do this -- object creation is just making a Python
+            # object locally.
             obj = gaoclass(
                 ghid,
                 None,   # dynamic
@@ -424,17 +422,23 @@ class Oracle(metaclass=API):
                 **kwargs
             )
             
+            # Now immediately subscribe to the object upstream, so that there
+            # is no race condition getting updates
+            await self._salmonator.register(obj)
+            # Explicitly pull the object from salmonator to ensure we have the
+            # newest version, and that it is available locally in librarian if
+            # also available anywhere else. Note that salmonator handles modal
+            # switching for dynamic/static. It will also (by default, with
+            # skip_refresh=False) pull in any updates that have accumulated in
+            # the meantime.
+            self._salmonator.attempt_pull(ghid, quiet=True)
+            
             # Now actually fetch the object. This may KeyError if the ghid is
             # still unknown.
             await obj._pull()
             
             # Always do this to make sure we have the most recent version
             self._lookup[ghid] = obj
-            
-            # Salmonator handles modal switching for dynamic/static. It will
-            # also (by default, with skip_refresh=False) pull in any updates
-            # that have accumulated in the meantime.
-            self._salmonator.register(obj)
             
         return obj
         
@@ -466,9 +470,12 @@ class Oracle(metaclass=API):
         )
         await obj._push()
         
+        # Do this before registering with salmonator, in case the latter errors
         self._lookup[obj.ghid] = obj
-        # Don't pull down the object from upstream, since we just created it
-        self._salmonator.register(obj, skip_refresh=True)
+        
+        # Finally, register to receive any concurrent updates from other
+        # simultaneous sessions, and then return the object
+        await self._salmonator.register(obj)
         return obj
             
     @new_object.fixture

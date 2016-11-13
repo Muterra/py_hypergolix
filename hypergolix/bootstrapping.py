@@ -70,7 +70,7 @@ from .dispatch import Dispatcher
 from .dispatch import _Dispatchable
 
 from .remotes import Salmonator
-from .ipc import IPCCore
+from .ipc import IPCServerProtocol as IPCCore
 from .privateer import Privateer
 from .privateer import Charon
 from .rolodex import Rolodex

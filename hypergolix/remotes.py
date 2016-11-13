@@ -417,23 +417,20 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
     def __init__(self, *args, **kwargs):
         ''' Yarp.
         '''
-        self._opslock = threading.Lock()
-        
         self._percore = None
         self._golcore = None
         self._postman = None
         self._librarian = None
         self._doorman = None
         
-        self._pull_q = None
-        self._push_q = None
+        self._clear_q = None
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
         
         self._upstream_remotes = set()
         self._downstream_remotes = set()
         
-        # WVD lookup for <registered ghid>: GAO.
-        self._registered = weakref.WeakValueDictionary()
+        # Lookup for <registered ghid>
+        self._registered = set()
         
         super().__init__(*args, **kwargs)
         
@@ -454,6 +451,8 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
     def add_upstream_remote(self, persister):
         ''' Adds an upstream persister.
         
+        TODO: move most of this into the connection init for the remote.
+        
         PersistenceCore will attempt to have a constantly consistent
         state with upstream persisters. That means that any local
         resources will either be subscribed to upstream, or checked for
@@ -467,23 +466,22 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
             if not persister.query(self._golcore.whoami):
                 persister.publish(self._golcore._identity.second_party.packed)
             
-            with self._opslock:
-                self._upstream_remotes.add(persister)
-                # Subscribe to our identity, assuming we actually have a golix core
-                try:
-                    persister.subscribe(
-                        self._golcore.whoami,
-                        self._remote_callback
-                    )
-                except AttributeError:
-                    logger.error(
-                        'Missing golcore while attempting to add upstream ' +
-                        'remote!'
-                    )
-                    
-                # Subscribe to every active GAO's ghid
-                for registrant in self._registered:
-                    persister.subscribe(registrant, self._remote_callback)
+            self._upstream_remotes.add(persister)
+            # Subscribe to our identity, assuming we actually have a golix core
+            try:
+                persister.subscribe(
+                    self._golcore.whoami,
+                    self._remote_callback
+                )
+            except AttributeError:
+                logger.error(
+                    'Missing golcore while attempting to add upstream ' +
+                    'remote!'
+                )
+                
+            # Subscribe to every active GAO's ghid
+            for registrant in self._registered:
+                persister.subscribe(registrant, self._remote_callback)
         
         except Exception:
             logger.error(
@@ -501,13 +499,12 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
     def remove_upstream_remote(self, persister):
         ''' Inverse of above.
         '''
-        with self._opslock:
-            self._upstream_remotes.remove(persister)
-            # Remove all subscriptions
-            persister.disconnect()
+        self._upstream_remotes.remove(persister)
+        # Remove all subscriptions
+        persister.disconnect()
         
     @remove_upstream_remote.fixture
-    def remove_upstream_remote(self, *args, **kwargs):
+    async def remove_upstream_remote(self, *args, **kwargs):
         ''' Do nothing.
         '''
         pass
@@ -543,8 +540,9 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         ''' On top of the usual stuff, set up our queues.
         '''
         await super().loop_init(*args, **kwargs)
-        self._pull_q = asyncio.Queue(loop=self._loop)
-        self._push_q = asyncio.Queue(loop=self._loop)
+        # This "must" be unbounded, because we don't have any control over
+        # finalization of objects.
+        self._clear_q = asyncio.Queue(loop=self._loop)
         
     async def loop_stop(self, *args, **kwargs):
         ''' On top of the usual stuff, clear our queues.
@@ -554,64 +552,27 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         #     await self._stop_persister(remote)
         
         await super().loop_stop(*args, **kwargs)
-        self._pull_q = None
-        self._push_q = None
+        self._clear_q = None
+        
+        disconnections = set()
+        for remote in self._upstream_remotes:
+            disconnections.add(
+                loopa.utils.make_background_future(remote.disconnect())
+            )
+            
+        await asyncio.wait(
+            fs = disconnections,
+            return_when = asyncio.ALL_COMPLETED
+        )
         
     async def loop_run(self, *args, **kwargs):
-        ''' Launch two tasks: one manages the push queue, and the other
-        the pull queue.
+        ''' Wait for object finalizers, and then immediately unsub the
+        remotes when the objects are removed from memory.
         '''
-        to_pull = asyncio.ensure_future(self._pull_q.get())
-        to_push = asyncio.ensure_future(self._push_q.get())
-        
-        finished, pending = await asyncio.wait(
-            fs = [to_pull, to_push],
-            return_when = asyncio.FIRST_COMPLETED
-        )
-        
-        # Avoid race conditions by immediately cancelling the unfinished task.
-        # Note that it's not guaranteed that we'll only get a single task.
-        for task in pending:
-            task.cancel()
-        
-        if to_pull in finished:
-            await self.pull(to_pull.result())
-        
-        if to_push in finished:
-            await self.push(to_push.result())
-        
-    @public_api
-    def schedule_pull(self, ghid):
-        ''' Tells the salmonator to pull the ghid at the earliest
-        opportunity and returns. Call from a different thread.
-        '''
-        call_coroutine_threadsafe(
-            coro = self._pull_q.put(ghid),
-            loop = self._loop
-        )
-        
-    @schedule_pull.fixture
-    def schedule_pull(self, *args, **kwargs):
-        ''' Do nothing.
-        '''
-        pass
+        to_clear = await self._clear_q.get()
+        await self.deregister(to_clear)
     
     @public_api
-    def schedule_push(self, ghid):
-        ''' Grabs the ghid from librarian and sends it to all applicable
-        remotes.
-        '''
-        call_coroutine_threadsafe(
-            coro = self._push_q.put(ghid),
-            loop = self._loop
-        )
-        
-    @schedule_push.fixture
-    def schedule_push(self, *args, **kwargs):
-        ''' Do nothing.
-        '''
-        pass
-        
     async def push(self, ghid):
         ''' Push a single ghid to all remotes.
         '''
@@ -652,7 +613,14 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                         ''.join(traceback.format_tb(exc.__traceback__)) +
                         repr(exc)
                     )
-                
+                    
+    @push.fixture
+    async def push(self, ghid):
+        ''' Noop for push.
+        '''
+        pass
+    
+    @public_api
     async def pull(self, ghid):
         ''' Gets a ghid from upstream. Returns on the first result. Note
         that this is not meant to be called on a dynamic address, as a
@@ -663,12 +631,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         tasks_available = set()
         for remote in self._upstream_remotes:
             this_pull = asyncio.ensure_future(
-                self._loop.run_in_executor(
-                    self._executor,
-                    self._attempt_pull_single,
-                    ghid,
-                    remote
-                )
+                self._attempt_pull_single(ghid, remote)
             )
             tasks_available.add(this_pull)
             
@@ -732,6 +695,12 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
             
         # Now handle the result.
         await self._handle_successful_pull(pull_complete)
+        
+    @pull.fixture
+    async def pull(self, ghid):
+        ''' Do nothing.
+        '''
+        pass
             
     async def _handle_successful_pull(self, maybe_obj):
         ''' Dispatches the object in the successful pull.
@@ -790,12 +759,12 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         '''
         pass
         
-    def _attempt_pull_single(self, ghid, remote):
+    async def _attempt_pull_single(self, ghid, remote):
         ''' Attempt to fetch a single object from a single remote. If
         successful, put it into the ingestion pipeline.
         '''
         # This may error, but any errors here will be caught by the parent.
-        data = remote.get(ghid)
+        data = await remote.get(ghid)
         
         # This may or may not be an update we already have.
         try:
@@ -894,12 +863,12 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
             raise TypeError('Invalid object type while verifying object.')
     
     @public_api
-    def register(self, gao, skip_refresh=False):
+    async def register(self, gao):
         ''' Tells the Salmonator to listen upstream for any updates
         while the gao is retained in memory.
         '''
         if gao.dynamic:
-            self._registered[gao.ghid] = gao
+            self._registered.add(gao.ghid)
     
             for remote in self._upstream_remotes:
                 try:
@@ -916,52 +885,45 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                         'GAO at ' + str(gao.ghid)
                     )
                     
-                # Add deregister as a finalizer, but don't call it atexit.
-                finalizer = weakref.finalize(gao, self.deregister, gao.ghid)
-                finalizer.atexit = False
-                
-            # This should also catch any upstream deletes.
-            if not skip_refresh:
-                self.attempt_pull(gao.ghid, quiet=True)
+            # Add deregister as a finalizer, but don't call it atexit.
+            finalizer = weakref.finalize(gao, self.deregister, gao.ghid)
+            finalizer.atexit = False
     
     @register.fixture
-    def register(self, *args, **kwargs):
+    async def register(self, *args, **kwargs):
         ''' Do nothing.
         '''
         pass
         
-    @public_api
-    def deregister(self, ghid):
-        ''' Tells the salmonator to stop listening for upstream
-        object updates. Primarily intended for use as a finalizer
-        for GAO objects.
+    def _deregister(self, ghid):
+        ''' Finalizer for GAO objects that executes async deregister()
+        from within the event loop. Must be called from within our own
+        thread, which it should be (finalizers are called from object
+        thread, and all gao must be created within event loop's thread).
         '''
-        with self._opslock:
+        # This needs to be a function, not a coro, so use nowait.
+        self._clear_q.put_nowait(ghid)
+    
+    @public_api
+    async def deregister(self, ghid):
+        ''' Tells the salmonator to stop listening for upstream
+        object updates.
+        '''
+        # This should maybe use remove instead of discard?
+        self._registered.discard(ghid)
+        
+        for remote in self._upstream_remotes:
             try:
-                # We shouldn't really actually need to do this, but let's
-                # explicitly do it anyways, to ensure there is no race
-                # condition between object removal and someone else sending an
-                # update. The weak-value-ness of the _registered lookup can be
-                # used as a fallback.
-                del self._registered[ghid]
-            except KeyError:
-                logger.debug(
-                    str(ghid) + ' missing in deregistration w/ traceback:\n' +
+                await remote.unsubscribe(ghid, self._remote_callback)
+            except Exception:
+                logger.warning(
+                    'Exception while unsubscribing from upstream updates '
+                    'during GAO cleanup for ' + str(ghid) + '\n' +
                     ''.join(traceback.format_exc())
                 )
-            
-            for remote in self._upstream_remotes:
-                try:
-                    remote.unsubscribe(ghid, self._remote_callback)
-                except Exception:
-                    logger.warning(
-                        'Exception while unsubscribing from upstream updates '
-                        'during GAO cleanup for ' + str(ghid) + '\n' +
-                        ''.join(traceback.format_exc())
-                    )
                 
     @deregister.fixture
-    def deregister(self, *args, **kwargs):
+    async def deregister(self, *args, **kwargs):
         ''' Do nothing.
         '''
         pass

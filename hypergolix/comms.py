@@ -588,8 +588,9 @@ class RequestResponseProtocol(type):
     ''' Metaclass for defining a simple request/response protocol.
     '''
     
-    def __new__(mcls, name, bases, namespace, success_code=b'AK',
-                failure_code=b'NK', error_codes=tuple(), default_version=b''):
+    def __new__(mcls, clsname, bases, namespace, *args, success_code=b'AK',
+                failure_code=b'NK', error_codes=tuple(), default_version=b'',
+                **kwargs):
         ''' Modify the existing namespace to include success codes,
         failure codes, the responders, etc. Ensure every request code
         has both a requestor and a request handler.
@@ -597,8 +598,16 @@ class RequestResponseProtocol(type):
     
         # Insert the mixin into the base classes, so that the user-defined
         # class can override stuff, but so that all of our handling stuff is
-        # still defined.
-        bases = (_ReqResMixin, *bases)
+        # still defined. BUT, make sure bases doesn't already have it, in
+        # either the defined bases or their parents.
+        for base in bases:
+            if base == _ReqResMixin:
+                break
+            elif issubclass(base, _ReqResMixin):
+                break
+        
+        else:
+            bases = (_ReqResMixin, *bases)
         
         # Check all of the request definitions for handlers and gather their
         # names
@@ -644,7 +653,7 @@ class RequestResponseProtocol(type):
         )
         
         # Create the class
-        cls = super().__new__(mcls, name, bases, namespace)
+        cls = super().__new__(mcls, clsname, bases, namespace, *args, **kwargs)
         
         # Add a version identifier (or whatever else it could be)
         cls._VERSION_STR = default_version
@@ -665,10 +674,11 @@ class RequestResponseProtocol(type):
         # Now do anything else we need to modify the thingajobber
         return cls
         
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, success_code=b'AK', failure_code=b'NK',
+                 error_codes=tuple(), default_version=b'', **kwargs):
         # Since we're doing everything in __new__, at least right now, don't
         # even bother with this.
-        super().__init__(*args)
+        super().__init__(*args, **kwargs)
         
         
 class RequestResponseAPI(API, RequestResponseProtocol):

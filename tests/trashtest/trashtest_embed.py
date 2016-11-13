@@ -57,6 +57,16 @@ from hypergolix.ipc import IPCClientProtocol
 from _fixtures.ghidutils import make_random_ghid
 
 
+class IPCFixture(TaskLooper, IPCClientProtocol.__fixture__):
+    ''' Adds an event loop to the IPC fixture to use for testing.
+    '''
+    
+    async def loop_run(self, *args, **kwargs):
+        ''' Just busy loop forever for the fixture.
+        '''
+        await asyncio.sleep(.1)
+
+
 # ###############################################
 # Testing
 # ###############################################
@@ -72,7 +82,7 @@ class HGXLinkTrashtest(unittest.TestCase):
     def setUpClass(cls):
         # Set up the IPC fixture
         whoami = make_random_ghid()
-        cls.ipc_fixture = IPCClientProtocol.__fixture__(whoami)
+        cls.ipc_fixture = IPCFixture(whoami)
         # Set up HGXLink (and, because of autostart, start its event loop)
         cls.hgxlink = HGXLink(
             debug = True,

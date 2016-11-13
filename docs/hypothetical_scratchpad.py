@@ -38,6 +38,7 @@ process control question, not a coding problem.
 from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
+from .hypothetical import noop_fixture
 
 
 class ComponentWithFixturableAPI(metaclass=API):
@@ -67,6 +68,12 @@ class ComponentWithFixturableAPI(metaclass=API):
     
     @public_api
     def no_fixture_method_here(self, *args, **kwargs):
+        ''' This is a normal method that needs no fixture.
+        '''
+    
+    @noop_fixture
+    @public_api
+    def noop_fixture_here(self, *args, **kwargs):
         ''' This is a normal method that needs no fixture.
         '''
     

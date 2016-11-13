@@ -141,7 +141,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
             reusable_loop = False,
             threaded = threaded,
             debug = debug,
-            name = 'hgxlink',
+            thread_kwargs = {'name': 'hgxlink'},
             *args,
             **kwargs
         )
@@ -197,11 +197,10 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
     def __init__(self, whoami=None, ipc_manager=None, *args, **kwargs):
         ''' Fixture all the things!
         '''
-        super(type(self), self).__init__(
+        super(HGXLink.__fixture__, self).__init__(
             threaded = True,
-            reusable_loop = False,
-            name = 'hgxlink',
             debug = True,
+            autostart = False,
             *args,
             **kwargs
         )
@@ -230,7 +229,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         ''' Await a connection if we're running threaded-ly.
         '''
         # Explicit is needed because of the fixture
-        super(type(self), self).start(*args, **kwargs)
+        super().start(*args, **kwargs)
         
         if self._ipc_protocol is not None and self.threaded:
             self._ipc_manager.await_connection_threadsafe()
