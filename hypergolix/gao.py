@@ -207,6 +207,10 @@ class GAOCore(metaclass=API):
     # Most recent TARGET ghids
     target_history = immortal_property('_target_history')
     
+    # Async stuff
+    _executor = readonly_property('__executor')
+    _loop = readonly_property('__loop')
+    
     @property
     def legroom(self):
         ''' Do the thing with the thing.
@@ -238,7 +242,7 @@ class GAOCore(metaclass=API):
         return bool(self._master_secret)
     
     def __init__(self, ghid, dynamic, author, legroom, *args, golcore,
-                 ghidproxy, privateer, percore, bookie, librarian,
+                 ghidproxy, privateer, percore, bookie, librarian, executor,
                  master_secret=None, **kwargs):
         ''' Init should be used only to create a representation of an
         EXISTING (or about to be existing) object. If any fields are
@@ -257,6 +261,7 @@ class GAOCore(metaclass=API):
         self._bookie = bookie
         self._librarian = librarian
         
+        
         # Dynamic and author be explicitly None; ghid should always be defined
         self.ghid = ghid
         self._dynamic = dynamic
@@ -270,6 +275,9 @@ class GAOCore(metaclass=API):
         # bypass both name mangling AND the readonly property.
         setattr(self, '__msec', master_secret)
         
+        # Async-specific stuff
+        setattr(self, '__executor', executor)
+        setattr(self, '__loop', asyncio.get_event_loop())
         # We will only ever be created from within an event loop, so this is
         # fine to do without an explicit loop.
         self._update_lock = asyncio.Lock()
@@ -301,8 +309,12 @@ class GAOCore(metaclass=API):
             raise TypeError('Cannot freeze a static GAO.')
             
         container_ghid = self._ghidproxy.resolve(self.ghid)
-        binding = self._golcore.make_binding_stat(container_ghid)
-        self._percore.ingest_gobs(binding)
+        binding = await self._loop.run_in_executor(
+            self._executor,
+            self._golcore.make_binding_stat,
+            container_ghid
+        )
+        await self._percore.ingest_gobs(binding)
         
         return container_ghid
         
@@ -311,7 +323,11 @@ class GAOCore(metaclass=API):
     async def hold(self):
         ''' Make a static binding for the gao.
         '''
-        binding = self._golcore.make_binding_stat(self.ghid)
+        binding = await self._loop.run_in_executor(
+            self._executor,
+            self._golcore.make_binding_stat,
+            self.ghid
+        )
         self._percore.ingest_gobs(binding)
         
     @fixture_noop
@@ -321,7 +337,11 @@ class GAOCore(metaclass=API):
         locally; upstream deletes should call self.apply_delete.
         '''
         if self.dynamic:
-            debinding = self._golcore.make_debinding(self.ghid)
+            debinding = await self._loop.run_in_executor(
+                self._executor,
+                self._golcore.make_debinding,
+                self.ghid
+            )
             self._percore.ingest_gdxx(debinding)
             
         else:
@@ -332,7 +352,11 @@ class GAOCore(metaclass=API):
                 obj = self._librarian.summarize(binding)
                 if isinstance(obj, _GobsLite):
                     if obj.author == self._golcore.whoami:
-                        debinding = self._golcore.make_debinding(obj.ghid)
+                        debinding = await self._loop.run_in_executor(
+                            self._executor,
+                            self._golcore.make_debinding,
+                            obj.ghid
+                        )
                         self._percore.ingest_gdxx(debinding)
             
     def _get_new_secret(self):
@@ -400,7 +424,12 @@ class GAOCore(metaclass=API):
         # We have a secret. Now we need a container and a binding frame.
         try:
             packed = await self.pack_gao()
-            container = self._golcore.make_container(packed, secret)
+            container = await self._loop.run_in_executor(
+                self._executor,
+                self._golcore.make_container,
+                packed,
+                secret
+            )
             self._privateer.stage(container.ghid, secret)
             
             if self.dynamic:
@@ -421,8 +450,11 @@ class GAOCore(metaclass=API):
             
             # Static object.
             else:
-                binding = self._golcore.make_binding_stat(
-                    target = container.ghid
+                binding = await self._loop.run_in_executor(
+                    self._executor,
+                    self._golcore.make_binding_stat,
+                    container.ghid  # target
+                
                 )
                 # Update ghid if it was not defined (new object)
                 self._conditional_init(
@@ -579,7 +611,12 @@ class GAOCore(metaclass=API):
         try:
             # TODO: fix the leaky abstraction of jumping into the _identity
             unpacked = self._golcore._identity.unpack_container(packed)
-            packed_state = self._golcore.open_container(unpacked, secret)
+            packed_state = await self._loop.run_in_executor(
+                self._executor,
+                self._golcore.open_container,
+                unpacked,
+                secret
+            )
         
         except SecurityError:
             self._privateer.abandon(container_ghid)

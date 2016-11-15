@@ -67,6 +67,7 @@ from _fixtures.identities import TEST_AGENT2
 # ###############################################
 
         
+@unittest.skip('Unfinished.')
 class GAOTest(unittest.TestCase):
     def setUp(self):
         # These are directly required by the GAO

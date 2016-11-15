@@ -275,7 +275,10 @@ class MrPostman(_PostmanBase):
         '''
         # We just got a garq for our identity. Rolodex handles these.
         if subscription == self._golcore.whoami:
-            self._rolodex.notification_handler(subscription, notification)
+            await self._rolodex.notification_handler(
+                subscription,
+                notification
+            )
         
         # Anything else is an object subscription. Handle those by directly,
         # but only if we have them in memory.

@@ -33,51 +33,26 @@ Some notes:
 
 '''
 
-# Global dependencies
+# External deps
 import logging
-import collections
-# import collections.abc
 import weakref
 import threading
-import abc
 import traceback
-import pickle
-# import atexit
 
 from golix import SecondParty
 from golix import Ghid
 
-from golix._getlow import GEOC
-from golix._getlow import GOBD
-from golix._getlow import GARQ
-from golix._getlow import GDXX
-
-# Intra-package dependencies
+# Internal deps
 from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
 from .hypothetical import fixture_noop
 
-from .utils import _generate_threadnames
-from .utils import SetMap
 from .utils import NoContext
 from .utils import weak_property
+from .utils import readonly_property
 
-from .exceptions import RemoteNak
-from .exceptions import HandshakeError
-from .exceptions import HandshakeWarning
-from .exceptions import UnknownParty
-from .exceptions import DoesNotExist
-
-from .persistence import _GobdLite
 from .persistence import _GeocLite
-from .persistence import _GdxxLite
-from .persistence import _GobsLite
-
-# from .persisters import _PersisterBase
-
-# from .ipc import _IPCBase
-# from .ipc import _EndpointBase
 
 
 # ###############################################
@@ -209,7 +184,7 @@ class GolixCore(metaclass=API):
         
     def make_binding_dyn(self, target, ghid=None, history=None):
         ''' Make a new dynamic binding frame.
-        If supplied, ghid is the dynamic address, and history is an 
+        If supplied, ghid is the dynamic address, and history is an
         ordered iterable of the previous frame ghids.
         '''
         # Make a new binding!
@@ -336,27 +311,36 @@ class Oracle(metaclass=API):
     state. Might eventually be used by AgentBase. Just a quick way to
     store and retrieve any objects based on an associated ghid.
     '''
+    # These are actually used by the oracle itself
+    _salmonator = weak_property('__salmonator')
+    
+    # These are only here to pass along to GAOs
     _golcore = weak_property('__golcore')
     _ghidproxy = weak_property('__ghidproxy')
     _privateer = weak_property('__privateer')
     _percore = weak_property('__percore')
     _bookie = weak_property('__bookie')
     _librarian = weak_property('__librarian')
-    _salmonator = weak_property('__salmonator')
+    _executor = readonly_property('__executor')
     
     @public_api
-    def __init__(self, *args, **kwargs):
+    def __init__(self, executor, *args, **kwargs):
         ''' Sets up internal tracking.
         '''
         super().__init__(*args, **kwargs)
         
+        setattr(self, '__executor', executor)
         self._lookup = {}
         
     @__init__.fixture
     def __init__(self, *args, **kwargs):
         ''' Fixture init.
         '''
-        super(Oracle.__fixture__, self).__init__(*args, **kwargs)
+        super(Oracle.__fixture__, self).__init__(
+            *args,
+            executor = None,
+            **kwargs
+        )
         
         self._lookup = {}
         self._opslock = NoContext()
@@ -424,6 +408,7 @@ class Oracle(metaclass=API):
                 percore = self._percore,
                 bookie = self._bookie,
                 librarian = self._librarian,
+                executor = self._executor,
                 **kwargs
             )
             
@@ -471,7 +456,8 @@ class Oracle(metaclass=API):
             privateer = self._privateer,
             percore = self._percore,
             bookie = self._bookie,
-            librarian = self._librarian
+            librarian = self._librarian,
+            executor = self._executor
         )
         await obj._push()
         
@@ -498,11 +484,10 @@ class Oracle(metaclass=API):
         
         Indempotent; will not raise KeyError if called more than once.
         '''
-        with self._opslock:
-            try:
-                del self._lookup[ghid]
-            except KeyError:
-                logger.debug(str(ghid) + ' unknown to oracle.')
+        try:
+            del self._lookup[ghid]
+        except KeyError:
+            logger.debug(str(ghid) + ' unknown to oracle.')
             
     def __contains__(self, ghid):
         ''' Checks for the ghid in cache (but does not check for global

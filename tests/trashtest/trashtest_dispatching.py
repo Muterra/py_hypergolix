@@ -9,7 +9,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -23,10 +23,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -56,8 +56,6 @@ from hypergolix.utils import SetMap
 from hypergolix.dispatch import Dispatcher
 from hypergolix.dispatch import _Dispatchable
 from hypergolix.dispatch import _AppDef
-
-from hypergolix.ipc import IPCCore
 
 from hypergolix.remotes import SalmonatorNoop
 
@@ -115,7 +113,7 @@ class MockRolodex:
         self.shared_objects[ghid] = recipient, requesting_token
         
         
-class MockIPCCore(LooperTrooper):
+class MockIPCCore:
     def __init__(self, *args, **kwargs):
         self.endpoints = frozenset(random.sample(range(10000000), 10))
         self.callsheet_buffer = collections.deque()
@@ -158,6 +156,7 @@ class MockIPCCore(LooperTrooper):
 # ###############################################
         
         
+@unittest.skip('Deprecated.')
 class TestDispatcher(unittest.TestCase):
     def __init__(self, *args, **kwargs):
         self.token_iters = 500
@@ -248,7 +247,7 @@ class TestDispatcher(unittest.TestCase):
         
         self.assertEqual(self.dispatch.get_parent_token(ghid), token)
         self.assertEqual(
-            self.dispatch.get_parent_token(make_random_ghid()), 
+            self.dispatch.get_parent_token(make_random_ghid()),
             None
         )
         
@@ -260,6 +259,7 @@ class TestDispatcher(unittest.TestCase):
             self.dispatch.make_public(make_random_ghid())
         
         
+@unittest.skip('Deprecated.')
 class TestDispatchable(unittest.TestCase):
     @unittest.expectedFailure
     def test_dispatchable(self):

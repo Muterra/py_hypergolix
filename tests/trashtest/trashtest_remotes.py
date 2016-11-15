@@ -9,7 +9,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -23,10 +23,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -42,16 +42,9 @@ import logging
 import pathlib
 
 # These are normal imports
-from hypergolix.remotes import PersisterBridgeServer
-from hypergolix.remotes import PersisterBridgeClient
-
 from hypergolix.service import RemotePersistenceServer
 
 from hypergolix.utils import Aengel
-
-from hypergolix.comms import Autocomms
-from hypergolix.comms import WSBasicServer
-from hypergolix.comms import WSBasicClient
 
 from hypergolix.exceptions import RemoteNak
 from hypergolix.exceptions import StillBoundWarning
@@ -385,6 +378,7 @@ class _GenericPersisterTest:
 # ###############################################
         
     
+@unittest.skip('Deprecated.')
 class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
     @classmethod
     def setUpClass(cls):

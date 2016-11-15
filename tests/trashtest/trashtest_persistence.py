@@ -9,7 +9,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -23,10 +23,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -44,13 +44,14 @@ import pathlib
 # These are normal imports
 from hypergolix.persistence import PersistenceCore
 from hypergolix.persistence import Doorman
-from hypergolix.persistence import MrPostman
 from hypergolix.persistence import Undertaker
 from hypergolix.persistence import Lawyer
 from hypergolix.persistence import Enforcer
 from hypergolix.persistence import Bookie
 from hypergolix.persistence import DiskLibrarian
 from hypergolix.persistence import MemoryLibrarian
+
+from hypergolix.postal import MrPostman
 
 from hypergolix.remotes import SalmonatorNoop
 
@@ -123,7 +124,7 @@ class GaoMock:
 # Unified persistence testing (bad division of concerns)
 # ###############################################
     
-    
+
 class _GenericPersistenceTest:
     def dummy_callback(self, subs_ghid, notify_ghid):
         # Note that we can't necessarily simply look for notify_ghid in the
@@ -408,7 +409,8 @@ class _GenericPersistenceTest:
 # Testing
 # ###############################################
 
-    
+
+@unittest.skip('Deprecated.')
 class MemoryLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
     def setUp(self):
         self.percore = PersistenceCore()
@@ -439,6 +441,7 @@ class MemoryLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
                                 self.postman, self.librarian)
 
     
+@unittest.skip('Deprecated.')
 class DiskLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
     def setUp(self):
         # Do this on a per-test basis so we have a clean ghidcache for the 

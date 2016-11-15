@@ -34,7 +34,7 @@ hypergolix: A python Golix client.
 '''
 
 import unittest
-import time
+import concurrent.futures
 
 from loopa import NoopLoop
 from loopa.utils import await_coroutine_threadsafe
@@ -229,6 +229,7 @@ class OracleTest(unittest.TestCase):
     
     @classmethod
     def setUpClass(cls):
+        cls.executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
         cls.nooploop = NoopLoop(
             debug = True,
             threaded = True
@@ -242,7 +243,7 @@ class OracleTest(unittest.TestCase):
     
     def setUp(self):
         # This is what we're testing!
-        self.oracle = Oracle()
+        self.oracle = Oracle(self.executor)
         
         # These are directly required by the oracle
         self.golcore = GolixCore.__fixture__(TEST_AGENT1)

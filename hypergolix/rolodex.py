@@ -54,8 +54,8 @@ from .exceptions import UnknownParty
 from .persistence import _GarqLite
 from .persistence import _GdxxLite
 
-from .utils import call_coroutine_threadsafe
 from .utils import weak_property
+from .utils import readonly_property
 
 
 # ###############################################
@@ -99,8 +99,12 @@ class Rolodex(metaclass=API):
     _salmonator = weak_property('__salmonator')
     _dispatch = weak_property('__dispatch')
     
+    # Async stuff
+    _executor = readonly_property('__executor')
+    _loop = readonly_property('__loop')
+    
     @public_api
-    def __init__(self, *args, **kwargs):
+    def __init__(self, executor, loop, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
         # Persistent dict-like lookup for
@@ -109,11 +113,20 @@ class Rolodex(metaclass=API):
         # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
         self._outstanding_shares = None
         
+        # Async-specific stuff
+        setattr(self, '__executor', executor)
+        setattr(self, '__loop', loop)
+        
     @__init__.fixture
     def __init__(self, *args, **kwargs):
         ''' Init the fixture.
         '''
-        super(Rolodex.__fixture__, self).__init__(*args, **kwargs)
+        super(Rolodex.__fixture__, self).__init__(
+            executor = None,
+            loop = None,
+            *args,
+            **kwargs
+        )
         
         self.shared = {}
         self._pending_requests = {}
@@ -218,7 +231,7 @@ class Rolodex(metaclass=API):
         # successfully post.
         self._percore.ingest_garq(request)
         
-    def notification_handler(self, subscription, notification):
+    async def notification_handler(self, subscription, notification):
         ''' Callback to handle any requests.
         '''
         if notification not in self._librarian:
@@ -228,10 +241,10 @@ class Rolodex(metaclass=API):
         request_or_debind = self._librarian.summarize(notification)
         
         if isinstance(request_or_debind, _GarqLite):
-            self._handle_request(notification)
+            await self._handle_request(notification)
             
         elif isinstance(request_or_debind, _GdxxLite):
-            # This case should only be relevant if we have multiple agents 
+            # This case should only be relevant if we have multiple agents
             # logged in at separate locations at the same time, processing the
             # same GARQs.
             self._handle_debinding(request_or_debind)
@@ -241,12 +254,16 @@ class Rolodex(metaclass=API):
                 'Unexpected Golix primitive while listening for requests.'
             )
             
-    def _handle_request(self, notification):
+    async def _handle_request(self, notification):
         ''' The notification is an asymmetric request. Deal with it.
         '''
         try:
             packed = self._librarian.retrieve(notification)
-            unpacked = self._golcore.unpack_request(packed)
+            unpacked = await self._loop.run_in_executor(
+                self._executor,
+                self._golcore.unpack_request,
+                packed
+            )
         
             # TODO: have this filter based on contacts.
             if unpacked.author not in self._librarian:
@@ -257,12 +274,20 @@ class Rolodex(metaclass=API):
                         'Request author unknown: ' + str(unpacked.author)
                     ) from exc
         
-            payload = self._golcore.open_request(unpacked)
+            payload = await self._loop.run_in_executor(
+                self._executor,
+                self._golcore.open_request,
+                unpacked
+            )
             self._dispatch_payload(payload, notification)
 
         # Don't forget to (always) debind.
         finally:
-            debinding = self._golcore.make_debinding(notification)
+            debinding = await self._loop.run_in_executor(
+                self._executor,
+                self._golcore.make_debinding,
+                notification
+            )
             self._percore.ingest_gdxx(debinding)
         
     def _handle_debinding(self, debinding):

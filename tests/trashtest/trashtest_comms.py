@@ -184,7 +184,7 @@ class WSBasicTrashTest(unittest.TestCase):
             # independently
             threaded = True,
             debug = True,
-            name = 'server'
+            thread_kwargs = {'name': 'server'}
         )
         self.server_protocol = TestParrot()
         self.server = BasicServer(connection_cls=WSConnection)
@@ -202,7 +202,7 @@ class WSBasicTrashTest(unittest.TestCase):
             # independently
             threaded = True,
             debug = True,
-            name = 'client1'
+            thread_kwargs = {'name': 'client1'}
         )
         self.client1_protocol = TestParrot()
         self.client1 = ConnectionManager(
@@ -222,7 +222,7 @@ class WSBasicTrashTest(unittest.TestCase):
             # independently
             threaded = True,
             debug = True,
-            name = 'client2'
+            thread_kwargs = {'name': 'client2'}
         )
         self.client2_protocol = TestParrot()
         self.client2 = ConnectionManager(
