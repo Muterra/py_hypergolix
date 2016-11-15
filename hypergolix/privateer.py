@@ -147,6 +147,8 @@ class Privateer(metaclass=API):
         
     def prep_bootstrap(self):
         ''' Creates temporary objects for tracking secrets.
+        
+        TODO: merge into bootstrap, just use different args.
         '''
         self._secrets_persistent = _GaoDictBootstrap()
         self._secrets_staging = {}
@@ -157,6 +159,10 @@ class Privateer(metaclass=API):
             self._secrets_local,
             self._secrets_staging,
             self._secrets_quarantine,
+        )
+        self._secrets_committed = collections.ChainMap(
+            self._secrets_persistent,
+            self._secrets_local
         )
         
     def bootstrap(self, persistent, quarantine):
@@ -449,17 +455,22 @@ class Privateer(metaclass=API):
         NOTE that the binding is the LITEWEIGHT version from the
         librarian already, so its ghid is already the dynamic one.
         '''
-        max_index = len(target_history - 1)
+        max_index = len(target_history) - 1
         broken = (not bool(master_secret)) and \
                  (target_history[max_index] not in self._secrets)
         if broken:
             raise RatchetError('Broken ratchet.')
         
-        # Go from the oldest to the newest
-        for ii, target in reversed(enumerate(target_history)):
+        # Go from the oldest to the newest, but start after the first one,
+        # because we verified that above.
+        # We can't use reversed(enumerate(target_history)) without re-casting
+        # target_history into a dedicated sequence. We'd like to keep the
+        # original iterator, so do it manually.
+        for ii in range(max_index - 1, -1, -1):
+            target = target_history[ii]
             # Skip the first one (deques don't support slicing)
             # Skip if we already have a secret
-            if ii == max_index or target in self._secrets:
+            if target in self._secrets:
                 continue
             
             # Only do something if we don't know the secret

@@ -291,7 +291,7 @@ class TestDispatchable(unittest.TestCase):
 
 if __name__ == "__main__":
     from hypergolix import logutils
-    logutils.autoconfig()
+    logutils.autoconfig(loglevel='debug')
     
     # from hypergolix.utils import TraceLogger
     # with TraceLogger(interval=10):

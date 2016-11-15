@@ -247,6 +247,13 @@ class GhidProxier(metaclass=API):
     # memory anyways, we should just take advantage of that, and allow our
     # inquisitor to more easily manage memory consumption as well.
     _librarian = weak_property('__librarian')
+    
+    @fixture_api
+    def __init__(self, *args, **kwargs):
+        ''' Add in a dict to store resolutions.
+        '''
+        super(GhidProxier.__fixture__, self).__init__(*args, **kwargs)
+        self.lookup = {}
         
     def assemble(self, librarian):
         # Chicken, meet egg.
@@ -310,6 +317,16 @@ class GhidProxier(metaclass=API):
                 result = self._resolve(obj.target)
                 
         return result
+        
+    @resolve.fixture
+    def resolve(self, ghid):
+        ''' Ehhhh, okay. So we're going to fixture this, mostly for
+        privateer, in a way that just returns the ghid immediately.
+        '''
+        if ghid in self.lookup:
+            return self.lookup[ghid]
+        else:
+            return ghid
         
         
 class Oracle(metaclass=API):

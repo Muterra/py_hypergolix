@@ -192,3 +192,13 @@ class GAOTest(unittest.TestCase):
         
         obj_dyn.pull()
         self.assertEqual(obj_dyn.extract_state(), pt2)
+        
+
+if __name__ == "__main__":
+    from hypergolix import logutils
+    logutils.autoconfig(loglevel='debug')
+    
+    # from hypergolix.utils import TraceLogger
+    # with TraceLogger(interval=10):
+    #     unittest.main()
+    unittest.main()
