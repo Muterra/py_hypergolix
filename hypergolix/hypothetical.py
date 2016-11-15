@@ -55,13 +55,14 @@ logger = logging.getLogger(__name__)
 # ###############################################
 
 
-def noop_fixture(func):
+def fixture_noop(func):
     ''' Create a no-op version of the function to use as its fixture.
     Should be used as a decorator above @public_api.
     '''
     signature = inspect.Signature.from_callable(func)
     
     if inspect.iscoroutinefunction(func):
+        @func.fixture
         @functools.wraps(func)
         async def noop_fixture(*args, _signature=signature, **kwargs):
             # Make sure the passed args, kwargs are correct, but otherwise,
@@ -69,14 +70,14 @@ def noop_fixture(func):
             _signature.bind(*args, **kwargs)
     
     else:
+        @func.fixture
         @functools.wraps(func)
         def noop_fixture(*args, _signature=signature, **kwargs):
             # Make sure the passed args, kwargs are correct, but otherwise,
             # do nothing.
             _signature.bind(*args, **kwargs)
         
-    func.fixture = noop_fixture
-    return func
+    return noop_fixture
         
         
 def public_api(func):

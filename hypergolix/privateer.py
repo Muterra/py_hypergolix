@@ -52,6 +52,11 @@ from cryptography.hazmat.backends import default_backend
 # Intra-package dependencies
 from .utils import weak_property
 
+from .hypothetical import API
+from .hypothetical import public_api
+from .hypothetical import fixture_noop
+from .hypothetical import fixture_api
+
 from .exceptions import PrivateerError
 from .exceptions import RatchetError
 from .exceptions import ConflictingSecrets
@@ -86,14 +91,20 @@ class _GaoDictBootstrap(dict):
     ghid = Ghid.from_bytes(b'\x01' + bytes(64))
 
 
-class Privateer:
+class Privateer(metaclass=API):
     ''' Lookup system to get secret from ghid. Loopsafe, but NOT
     threadsafe.
     '''
     _golcore = weak_property('__golcore')
     _ghidproxy = weak_property('__ghidproxy')
     
-    def __init__(self):
+    @public_api
+    def __init__(self, *args, **kwargs):
+        ''' Temporarily invalidate (but init) the various secrets
+        lookups.
+        '''
+        super().__init__(*args, **kwargs)
+        
         # These must be bootstrapped.
         self._secrets_persistent = None
         self._secrets_quarantine = None
@@ -102,14 +113,26 @@ class Privateer:
         self._secrets_staging = None
         self._secrets_local = None
         
-        # Keep track of chains. Note that chains need NOT be distributed, as it
-        # can always be bootstrapped from the combination of persistent secrets
-        # and the dynamic history of the object.
-        # Lookup <proxy ghid>: <container ghid>
-        self._chains = {}
-        # Keep track of chain progress. This does not need to be distributed.
-        # Lookup <proxy ghid> -> proxy secret
-        self._ratchet_in_progress = {}
+    @__init__.fixture
+    def __init__(self, identity, ghidproxy, *args, **kwargs):
+        ''' Directly inject a local identity, and then add a ghidproxy.
+        '''
+        super(Privateer.__fixture__, self).__init__(*args, **kwargs)
+        
+        self._identity = identity
+        self._ghidproxy = ghidproxy
+        self.bootstrap(
+            persistent = {},
+            quarantine = {}
+        )
+        
+    @fixture_api
+    def RESET(self):
+        # Clear errything internal.
+        self._secrets_persistent.clear()
+        self._secrets_staging.clear()
+        self._secrets_local.clear()
+        self._secrets_quarantine.clear()
             
     def __contains__(self, ghid):
         ''' Check if we think we know a secret for the ghid.
@@ -136,16 +159,10 @@ class Privateer:
             self._secrets_quarantine,
         )
         
-    def bootstrap(self, persistent, quarantine, credential):
+    def bootstrap(self, persistent, quarantine):
         ''' Initializes the privateer into a distributed state.
         persistent is a GaoDict
-        staged is a GaoDict
-        chains is a GaoDict
-        credential is a bootstrapping credential.
         '''
-        # TODO: should this be weakref?
-        self._credential = credential
-        
         # We very obviously need to be able to look up what secrets we have.
         # Lookups: <container ghid>: <container secret>
         self._secrets_persistent = persistent
@@ -168,9 +185,15 @@ class Privateer:
         # re-create them. But, we can use a fake container address for two of
         # them, since they use a different secrets tracking mechanism.
         
+    @public_api
     def new_secret(self):
         # Straight pass-through to the golix new_secret bit.
         return self._golcore._identity.new_secret()
+        
+    @new_secret.fixture
+    def new_secret(self):
+        # We have a direct identity for the fixture.
+        return self._identity.new_secret()
         
     def get(self, ghid):
         ''' Get a secret for a ghid, regardless of status.

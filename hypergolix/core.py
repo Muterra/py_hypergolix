@@ -46,8 +46,6 @@ import pickle
 
 from golix import SecondParty
 from golix import Ghid
-from golix import Secret
-from golix import SecurityError
 
 from golix._getlow import GEOC
 from golix._getlow import GOBD
@@ -58,6 +56,7 @@ from golix._getlow import GDXX
 from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
+from .hypothetical import fixture_noop
 
 from .utils import _generate_threadnames
 from .utils import SetMap
@@ -71,6 +70,7 @@ from .exceptions import UnknownParty
 from .exceptions import DoesNotExist
 
 from .persistence import _GobdLite
+from .persistence import _GeocLite
 from .persistence import _GdxxLite
 from .persistence import _GobsLite
 
@@ -237,30 +237,20 @@ class GolixCore(metaclass=API):
             return self._identity.make_debind(target)
 
 
-class GhidProxier:
+class GhidProxier(metaclass=API):
     ''' Resolve the base container GHID from any associated ghid. Uses
     all weak references, so should not interfere with GCing objects.
-    
-    Threadsafe.
     '''
-    
-    def __init__(self):
-        # Note that we can't really cache aliases, because their proxies will
-        # not update when we change things unless the proxy is also removed
-        # from the cache. Since the objects may (or may not) exist locally in
-        # memory anyways, we should just take advantage of that, and allow our
-        # inquisitor to more easily manage memory consumption as well.
-        # self._refs = {}
+    # Note that we can't really cache aliases, because their proxies will
+    # not update when we change things unless the proxy is also removed
+    # from the cache. Since the objects may (or may not) exist locally in
+    # memory anyways, we should just take advantage of that, and allow our
+    # inquisitor to more easily manage memory consumption as well.
+    _librarian = weak_property('__librarian')
         
-        self._modlock = threading.Lock()
-        
-        self._librarian = None
-        self._salmonator = None
-        
-    def assemble(self, librarian, salmonator):
+    def assemble(self, librarian):
         # Chicken, meet egg.
-        self._librarian = weakref.proxy(librarian)
-        self._salmonator = weakref.proxy(salmonator)
+        self._librarian = librarian
         
     def __mklink(self, proxy, target):
         ''' Set, or update, a ghid proxy.
@@ -278,12 +268,13 @@ class GhidProxier:
         
         with self._modlock:
             self._refs[proxy] = target
-            
+    
+    @public_api
     def resolve(self, ghid):
         ''' Protect the entry point with a global lock, but don't leave
         the recursive bit alone.
         
-        TODO: make this guarantee, through using the persister's 
+        TODO: make this guarantee, through using the persister's
         librarian, that the resolved ghid IS, in fact, a container.
         
         TODO: consider adding a depth limit to resolution.
@@ -291,31 +282,34 @@ class GhidProxier:
         if not isinstance(ghid, Ghid):
             raise TypeError('Can only resolve a ghid.')
             
-        with self._modlock:
-            return self._resolve(ghid)
+        return self._resolve(ghid)
         
     def _resolve(self, ghid):
-        ''' Recursively resolves the container ghid for a proxy (or a 
+        ''' Recursively resolves the container ghid for a proxy (or a
         container).
         '''
-        if ghid not in self._librarian:
-            self._salmonator.attempt_pull(ghid, quiet=True)
-        
         try:
             obj = self._librarian.summarize(ghid)
+        
+        # TODO: make this an error?
         except KeyError:
-            logger.warning(
-                'Librarian missing resource record; could not verify full '
-                'resolution of ' + str(ghid) + '\n' + 
-                ''.join(traceback.format_exc()))
-            return ghid
+            logger.warning(''.join((
+                'GAO ',
+                str(ghid),
+                ' address resolver failed to verify: missing at librarian.\n',
+                traceback.format_exc()
+            )))
+            
+            result = ghid
         
         else:
-            if isinstance(obj, _GobdLite):
-                return self._resolve(obj.target)
+            if isinstance(obj, _GeocLite):
+                result = ghid
                 
             else:
-                return ghid
+                result = self._resolve(obj.target)
+                
+        return result
         
         
 class Oracle(metaclass=API):
@@ -331,7 +325,6 @@ class Oracle(metaclass=API):
     _percore = weak_property('__percore')
     _bookie = weak_property('__bookie')
     _librarian = weak_property('__librarian')
-    _postman = weak_property('__postman')
     _salmonator = weak_property('__salmonator')
     
     @public_api
@@ -340,17 +333,7 @@ class Oracle(metaclass=API):
         '''
         super().__init__(*args, **kwargs)
         
-        self._opslock = threading.Lock()
         self._lookup = {}
-        
-        self._golcore = None
-        self._ghidproxy = None
-        self._privateer = None
-        self._percore = None
-        self._bookie = None
-        self._librarian = None
-        self._postman = None
-        self._salmonator = None
         
     @__init__.fixture
     def __init__(self, *args, **kwargs):
@@ -368,7 +351,7 @@ class Oracle(metaclass=API):
         self._lookup.clear()
         
     def assemble(self, golcore, ghidproxy, privateer, percore, bookie,
-                 librarian, postman, salmonator):
+                 librarian, salmonator):
         # Chicken, meet egg.
         self._golcore = golcore
         self._ghidproxy = ghidproxy
@@ -376,7 +359,6 @@ class Oracle(metaclass=API):
         self._percore = percore
         self._bookie = bookie
         self._librarian = librarian
-        self._postman = postman
         self._salmonator = salmonator
         
     @fixture_api
@@ -437,7 +419,7 @@ class Oracle(metaclass=API):
             # switching for dynamic/static. It will also (by default, with
             # skip_refresh=False) pull in any updates that have accumulated in
             # the meantime.
-            self._salmonator.attempt_pull(ghid, quiet=True)
+            await self._salmonator.attempt_pull(ghid, quiet=True)
             
             # Now actually fetch the object. This may KeyError if the ghid is
             # still unknown.

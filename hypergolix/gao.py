@@ -38,8 +38,11 @@ import traceback
 import collections
 import functools
 import weakref
+# Used to make random ghids for fixturing gao
+import random
 
 from golix import Ghid
+from golix import SecurityError
 from loopa.utils import await_coroutine_threadsafe
 from loopa.utils import await_coroutine_loopsafe
 from loopa.utils import make_background_future
@@ -48,6 +51,7 @@ from loopa.utils import make_background_future
 from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
+from .hypothetical import fixture_noop
 
 from .utils import SetMap
 from .utils import WeakSetMap
@@ -233,8 +237,9 @@ class GAOCore(metaclass=API):
         '''
         return bool(self._master_secret)
     
-    def __init__(self, ghid, dynamic, author, legroom, *, golcore, ghidproxy,
-                 privateer, percore, bookie, librarian, master_secret=None):
+    def __init__(self, ghid, dynamic, author, legroom, *args, golcore,
+                 ghidproxy, privateer, percore, bookie, librarian,
+                 master_secret=None, **kwargs):
         ''' Init should be used only to create a representation of an
         EXISTING (or about to be existing) object. If any fields are
         unknown, they must be explicitly passed None.
@@ -243,6 +248,8 @@ class GAOCore(metaclass=API):
         If master_secret is a Secret, ratcheting will use the primary
             bootstrap ratcheting mechanism.
         '''
+        super().__init__(*args, **kwargs)
+        
         self._golcore = golcore
         self._ghidproxy = ghidproxy
         self._privateer = privateer
@@ -267,6 +274,8 @@ class GAOCore(metaclass=API):
         # fine to do without an explicit loop.
         self._update_lock = asyncio.Lock()
         
+    @fixture_noop
+    @public_api
     async def apply_delete(self, debinding):
         ''' Executes an external delete, caused by the debinding at the
         passed address. By default, just makes sure the debinding target
@@ -281,27 +290,9 @@ class GAOCore(metaclass=API):
             raise ValueError(
                 'Debinding target does not match GAO applying delete.'
             )
-        
-    async def pack_gao(self):
-        ''' Packs self into a bytes object. May be overwritten in subs
-        to pack more complex objects. Should always be a staticmethod or
-        classmethod.
-        
-        May be used to implement, for example, packing self into a
-        DispatchableState, etc etc.
-        '''
-        pass
-        
-    async def unpack_gao(self, packed):
-        ''' Unpacks state from a bytes object and applies state to self.
-        May be overwritten in subs to unpack more complex objects.
-        
-        May be used to implement, for example, dicts performing a
-        clear() operation before an update() instead of just reassigning
-        the object.
-        '''
-        pass
             
+    @fixture_noop
+    @public_api
     async def freeze(self):
         ''' Creates a static binding for the most current state of a
         dynamic binding. Returns the frozen ghid.
@@ -315,12 +306,16 @@ class GAOCore(metaclass=API):
         
         return container_ghid
         
+    @fixture_noop
+    @public_api
     async def hold(self):
         ''' Make a static binding for the gao.
         '''
         binding = self._golcore.make_binding_stat(self.ghid)
         self._percore.ingest_gobs(binding)
         
+    @fixture_noop
+    @public_api
     async def delete(self):
         ''' Permanently removes the object. This method is only called
         locally; upstream deletes should call self.apply_delete.
@@ -360,7 +355,8 @@ class GAOCore(metaclass=API):
             secret = self._privateer.new_secret()
             
         return secret
-                        
+    
+    @public_api
     async def push(self):
         ''' Pushes the state upstream. Must be called explicitly. Unless
         push() is invoked, the state will not be synchronized.
@@ -394,7 +390,8 @@ class GAOCore(metaclass=API):
             
         else:
             raise TypeError('Static objects cannot be updated.')
-            
+    
+    @public_api
     async def _push(self):
         ''' The actual "meat and bones" for pushing.
         '''
@@ -456,7 +453,22 @@ class GAOCore(metaclass=API):
             # but it also doesn't really hurt anything, sooo...
             self.frame_history.appendleft(binding.ghid)
             self.target_history.appendleft(container.ghid)
-        
+            
+    @_push.fixture
+    async def _push(self):
+        ''' Do a conditional init if we haven't had stuff fully defined.
+        '''
+        self._conditional_init(
+            ghid = Ghid.from_bytes(
+                b'\x01' + bytes([random.randint(0, 255) for i in range(0, 64)])
+            ),
+            author = Ghid.from_bytes(
+                b'\x01' + bytes([random.randint(0, 255) for i in range(0, 64)])
+            ),
+            dynamic = None
+        )
+    
+    @public_api
     async def pull(self, notification):
         ''' Pulls state from upstream and applies it. Does not check for
         recency.
@@ -512,7 +524,8 @@ class GAOCore(metaclass=API):
             
         else:
             raise TypeError('Static objects cannot be pulled.')
-        
+    
+    @public_api
     async def _pull(self):
         ''' The actual "meat and bones" for pulling.
         
@@ -578,6 +591,20 @@ class GAOCore(metaclass=API):
         # Finally, with all of the administrative stuff handled, unpack the
         # actual payload.
         await self.unpack_gao(packed_state)
+            
+    @_pull.fixture
+    async def _pull(self):
+        ''' Do a conditional init if we haven't had stuff fully defined.
+        '''
+        self._conditional_init(
+            ghid = Ghid.from_bytes(
+                b'\x01' + bytes([random.randint(0, 255) for i in range(0, 64)])
+            ),
+            author = Ghid.from_bytes(
+                b'\x01' + bytes([random.randint(0, 255) for i in range(0, 64)])
+            ),
+            dynamic = bool(random.randint(0, 1))
+        )
         
     def _advance_history(self, new_obj):
         ''' Updates our history to match the new one.
@@ -634,6 +661,26 @@ class GAOCore(metaclass=API):
             
         if self.ghid is None:
             self.ghid = ghid
+        
+    async def pack_gao(self):
+        ''' Packs self into a bytes object. May be overwritten in subs
+        to pack more complex objects. Should always be a staticmethod or
+        classmethod.
+        
+        May be used to implement, for example, packing self into a
+        DispatchableState, etc etc.
+        '''
+        pass
+        
+    async def unpack_gao(self, packed):
+        ''' Unpacks state from a bytes object and applies state to self.
+        May be overwritten in subs to unpack more complex objects.
+        
+        May be used to implement, for example, dicts performing a
+        clear() operation before an update() instead of just reassigning
+        the object.
+        '''
+        pass
             
             
 class GAO(GAOCore):

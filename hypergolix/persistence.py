@@ -65,6 +65,11 @@ from golix._getlow import GDXX
 from golix._getlow import GARQ
 
 # Local dependencies
+from .hypothetical import API
+from .hypothetical import public_api
+from .hypothetical import fixture_api
+from .hypothetical import fixture_noop
+
 from .exceptions import HypergolixException
 from .exceptions import RemoteNak
 from .exceptions import MalformedGolixPrimitive
@@ -81,15 +86,11 @@ from .exceptions import IllegalDynamicFrame
 from .exceptions import IntegrityError
 from .exceptions import UnavailableUpstream
 
-from .utils import _DeepDeleteChainMap
-from .utils import _WeldedSetDeepChainMap
-from .utils import _JitSetDict
+from .utils import weak_property
 from .utils import TruthyLock
 from .utils import SetMap
 from .utils import WeakSetMap
 from .utils import _generate_threadnames
-from .utils import LooperTrooper
-from .utils import call_coroutine_threadsafe
 
 
 # ###############################################
@@ -111,7 +112,7 @@ __all__ = [
 # ###############################################
                 
         
-class PersistenceCore:
+class PersistenceCore(metaclass=API):
     ''' Provides the core functions for storing Golix objects. Required
     for the hypergolix service to start.
     
@@ -124,7 +125,10 @@ class PersistenceCore:
     object we already have an identical copy to silently exits.
     '''
     
-    def __init__(self):
+    @public_api
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
         # REALLY not crazy about this being an RLock, but lazy loading in
         # librarian is causing problems with anything else.
         self._opslock = threading.RLock()
@@ -138,6 +142,13 @@ class PersistenceCore:
         self.undertaker = None
         self.librarian = None
         self.salmonator = None
+        
+    @__init__.fixture
+    def __init__(self, *args, **kwargs):
+        ''' Right now, well, this is basically a noop. Anticipating
+        substantial changes!
+        '''
+        super(PersistenceCore.__fixture__, self).__init__(*args, **kwargs)
         
     def assemble(self, doorman, enforcer, lawyer, bookie, librarian, postman,
                  undertaker, salmonator):
@@ -426,13 +437,15 @@ class Doorman:
     (aka locally-created) objects. Only called from within the typeless
     PersisterCore.ingest() method.
     '''
-    def __init__(self):
-        self._librarian = None
+    _librarian = weak_property('__librarian')
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self._golix = ThirdParty()
         
     def assemble(self, librarian):
         # Called to link to the librarian.
-        self._librarian = weakref.proxy(librarian)
+        self._librarian = librarian
         
     def load_gidc(self, packed):
         try:
@@ -575,7 +588,8 @@ class Doorman:
 class Enlitener:
     ''' Handles conversion from heavyweight Golix objects to lightweight
     Hypergolix representations.
-    ''' 
+    '''
+    
     @staticmethod
     def _convert_gidc(gidc):
         ''' Converts a Golix object into a Hypergolix description.
@@ -815,12 +829,11 @@ class _GarqLite(_BaseLite):
 class Enforcer:
     ''' Enforces valid target selections.
     '''
-    def __init__(self):
-        self._librarian = None
+    _librarian = weak_property('__librarian')
         
     def assemble(self, librarian):
         # Call before using.
-        self._librarian = weakref.proxy(librarian)
+        self._librarian = librarian
         
     def validate_gidc(self, obj):
         ''' GIDC need no target verification.
@@ -960,15 +973,11 @@ class Lawyer:
     
     Threadsafe.
     '''
-    def __init__(self):
-        # Lookup for all known identity ghids
-        # This must remain valid at all persister instances regardless of the
-        # python runtime state
-        self._librarian = None
+    _librarian = weak_property('__librarian')
         
     def assemble(self, librarian):
         # Call before using.
-        self._librarian = weakref.proxy(librarian)
+        self._librarian = librarian
         
     def _validate_author(self, obj):
         try:
@@ -1098,19 +1107,16 @@ class Lawyer:
         return True
             
             
-class Bookie:
+class Bookie(metaclass=API):
     ''' Tracks state relationships between objects using **only weak
     references** to them. ONLY CONCERNED WITH LIFETIMES! Does not check
     (for example) consistent authorship.
-    
-    (Not currently) threadsafe.
     '''
+    _lawyer = weak_property('__lawyer')
+    _librarian = weak_property('__librarian')
+    _undertaker = weak_property('__undertaker')
+    
     def __init__(self):
-        self._opslock = threading.Lock()
-        self._undertaker = None
-        self._librarian = None
-        self._lawyer = None
-        
         # Lookup for debindings flagged as illegal. So long as the local state
         # is successfully propagated upstream, this can be a local-only object.
         self._illegal_debindings = set()
@@ -1123,8 +1129,8 @@ class Bookie:
         # Lookup <debound ghid>: <debinding ghid>
         # This must remain valid at all persister instances regardless of the
         # python runtime state
-        # Note that any particular object can have exactly zero or one VALID 
-        # debinds, but that a malicious actor could find a race condition and 
+        # Note that any particular object can have exactly zero or one VALID
+        # debinds, but that a malicious actor could find a race condition and
         # debind something FOR SOMEONE ELSE before the bookie knows about the
         # original object authorship.
         self._debound_by_ghid = SetMap()
@@ -1137,11 +1143,11 @@ class Bookie:
         
     def assemble(self, librarian, lawyer, undertaker):
         # Call before using.
-        self._librarian = weakref.proxy(librarian)
-        self._lawyer = weakref.proxy(lawyer)
-        # We need to be able to initiate GC on illegal debindings detected 
+        self._lawyer = lawyer
+        self._librarian = librarian
+        # We need to be able to initiate GC on illegal debindings detected
         # after the fact.
-        self._undertaker = weakref.proxy(undertaker)
+        self._undertaker = undertaker
         
     def recipient_status(self, ghid):
         ''' Return a frozenset of ghids assigned to the passed ghid as
@@ -1366,16 +1372,17 @@ class Bookie:
             self._gc_execute(illegal_binding)
             
             
-class LibrarianCore(metaclass=abc.ABCMeta):
+class LibrarianCore(metaclass=API):
     ''' Base class for caching systems common to non-volatile librarians
     such as DiskLibrarian, S3Librarian, etc.
     
     TODO: make ghid vs frame ghid usage more consistent across things.
     '''
+    _percore = weak_property('__percore')
     
-    def __init__(self):
-        # Link to core, which will be assigned after __init__
-        self._percore = None
+    @public_api
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
         # Operations and restoration lock
         self._restoring = TruthyLock()
@@ -1389,10 +1396,16 @@ class LibrarianCore(metaclass=abc.ABCMeta):
         self._catalog = {}
         self._opslock = threading.Lock()
         
-    def assemble(self, persistence_core):
-        # Creates a weakref proxy to core.
-        # This is needed for lazy loading and restoring.
-        self._percore = weakref.proxy(persistence_core)
+    @__init__.fixture
+    def __init__(self, *args, **kwargs):
+        ''' Construct an in-memory-only version of librarian.
+        '''
+        super(LibrarianCore.__fixture__, self).__init__(*args, **kwargs)
+        self._shelf = {}
+        
+    def assemble(self, percore):
+        # Hmmm
+        self._percore = percore
         
     def force_gc(self, obj):
         ''' Forces erasure of an object. Does not notify the undertaker.
@@ -1665,33 +1678,66 @@ class LibrarianCore(metaclass=abc.ABCMeta):
             if obj.ghid in self:
                 return None
         return True
-            
-    # @abc.abstractmethod
+    
+    @public_api
     def add_to_cache(self, ghid, data):
         ''' Adds the passed raw data to the cache.
         '''
         pass
+            
+    @add_to_cache.fixture
+    def add_to_cache(self, ghid, data):
+        ''' Adds the passed raw data to the cache.
+        '''
+        self._shelf[ghid] = data
         
-    # @abc.abstractmethod
+    @public_api
     def remove_from_cache(self, ghid):
-        ''' Removes the data associated with the passed ghid from the 
+        ''' Removes the data associated with the passed ghid from the
         cache.
         '''
         pass
         
-    # @abc.abstractmethod
+    @remove_from_cache.fixture
+    def remove_from_cache(self, ghid):
+        ''' Removes the data associated with the passed ghid from the
+        cache.
+        '''
+        del self._shelf[ghid]
+        
+    @public_api
     def get_from_cache(self, ghid):
         ''' Returns the raw data associated with the ghid.
         '''
         pass
         
-    # @abc.abstractmethod
+    @get_from_cache.fixture
+    def get_from_cache(self, ghid):
+        ''' Returns the raw data associated with the ghid.
+        '''
+        return self._shelf[ghid]
+        
+    @public_api
     def check_in_cache(self, ghid):
         ''' Check to see if the ghid is contained in the cache.
         '''
         pass
         
-    # @abc.abstractmethod
+    @check_in_cache.fixture
+    def check_in_cache(self, ghid):
+        ''' Check to see if the ghid is contained in the cache.
+        '''
+        return ghid in self._shelf
+        
+    @public_api
+    def walk_cache(self):
+        ''' Iterator to go through the entire cache, returning possible
+        candidates for loading. Loading will handle malformed primitives
+        without error.
+        '''
+        pass
+        
+    @walk_cache.fixture
     def walk_cache(self):
         ''' Iterator to go through the entire cache, returning possible
         candidates for loading. Loading will handle malformed primitives
@@ -1703,9 +1749,12 @@ class LibrarianCore(metaclass=abc.ABCMeta):
 class DiskLibrarian(LibrarianCore):
     ''' Librarian that caches stuff to disk.
     '''
-    def __init__(self, cache_dir):
+    
+    def __init__(self, cache_dir, *args, **kwargs):
         ''' cache_dir should be relative to current.
         '''
+        super().__init__(*args, **kwargs)
+        
         cache_dir = pathlib.Path(cache_dir)
         if not cache_dir.exists():
             raise ValueError(
@@ -1717,7 +1766,6 @@ class DiskLibrarian(LibrarianCore):
             )
         
         self._cachedir = cache_dir
-        super().__init__()
         
     def _make_path(self, ghid):
         ''' Converts the ghid to a file path.
@@ -1742,7 +1790,7 @@ class DiskLibrarian(LibrarianCore):
         fpath.write_bytes(data)
         
     def remove_from_cache(self, ghid):
-        ''' Removes the data associated with the passed ghid from the 
+        ''' Removes the data associated with the passed ghid from the
         cache.
         '''
         fpath = self._make_path(ghid)
@@ -1772,6 +1820,9 @@ class DiskLibrarian(LibrarianCore):
         
         
 class MemoryLibrarian(LibrarianCore):
+    ''' DEPRECATED. Use LibrarianCore.__fixture__ instead.
+    '''
+    
     def __init__(self):
         self._shelf = {}
         super().__init__()
@@ -1982,23 +2033,3 @@ class Undertaker:
         ''' GARQ do not affect GC.
         '''
         return True
-        
-        
-class UnderReaper(Undertaker):
-    ''' An undertaker that also propagates garbage collection of 
-    container objects into abandonment of their secrets, by way of the
-    inquisition.
-    '''
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._privateer = None
-    
-    def assemble(self, librarian, bookie, postman, privateer, *args, **kwargs):
-        super().assemble(librarian, bookie, postman, *args, **kwargs)
-        self._privateer = weakref.proxy(privateer)
-        
-    def _gc_execute(self, obj):
-        super()._gc_execute(obj)
-        # To the reaper!
-        if obj.ghid in self._privateer:
-            self._privateer.abandon(obj.ghid)

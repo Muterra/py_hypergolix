@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,10 +21,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -47,6 +47,7 @@ from golix.utils import AsymNak
 from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
+from .hypothetical import fixture_noop
 
 from .exceptions import UnknownParty
 
@@ -54,6 +55,7 @@ from .persistence import _GarqLite
 from .persistence import _GdxxLite
 
 from .utils import call_coroutine_threadsafe
+from .utils import weak_property
 
 
 # ###############################################
@@ -89,20 +91,17 @@ class Rolodex(metaclass=API):
     pipelines, negotiated through handshakes, to perform sharing
     symmetrically between contacts.
     '''
+    _golcore = weak_property('__golcore')
+    _ghidproxy = weak_property('__ghidproxy')
+    _privateer = weak_property('__privateer')
+    _percore = weak_property('__percore')
+    _librarian = weak_property('__librarian')
+    _salmonator = weak_property('__salmonator')
+    _dispatch = weak_property('__dispatch')
     
     @public_api
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
-        self._opslock = threading.Lock()
-        
-        self._golcore = None
-        self._privateer = None
-        self._percore = None
-        self._librarian = None
-        self._ghidproxy = None
-        self._ipccore = None
-        self._salmonator = None
         
         # Persistent dict-like lookup for
         # request_ghid -> (request_target, request recipient)
@@ -139,17 +138,16 @@ class Rolodex(metaclass=API):
         # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
         self._outstanding_shares = outstanding_shares
         
-    def assemble(self, golix_core, privateer, dispatch, persistence_core,
-                 librarian, salmonator, ghidproxy, ipc_core):
+    def assemble(self, golcore, ghidproxy, privateer, percore, librarian,
+                 salmonator, dispatch):
         # Chicken, meet egg.
-        self._golcore = weakref.proxy(golix_core)
-        self._privateer = weakref.proxy(privateer)
-        self._dispatch = weakref.proxy(dispatch)
-        self._librarian = weakref.proxy(librarian)
-        self._salmonator = weakref.proxy(salmonator)
-        self._percore = weakref.proxy(persistence_core)
-        self._ghidproxy = weakref.proxy(ghidproxy)
-        self._ipccore = weakref.proxy(ipc_core)
+        self._golcore = golcore
+        self._ghidproxy = ghidproxy
+        self._privateer = privateer
+        self._percore = percore
+        self._librarian = librarian
+        self._salmonator = salmonator
+        self._dispatch = dispatch
         
     @public_api
     async def share_object(self, target, recipient, requesting_token):
@@ -360,47 +358,44 @@ class Rolodex(metaclass=API):
         else:
             self.receipt_nak_handler(target, recipient)
     
-    def share_handler(self, target, sender):
-        ''' Incoming share targets (well, their ghids anyways) are 
+    @fixture_noop
+    @public_api
+    async def share_handler(self, target, sender):
+        ''' Incoming share targets (well, their ghids anyways) are
         forwarded to the _ipccore.
         
         Only separate from _handle_handshake right now because in the
-        future, object sharing will be at least partly handled within 
+        future, object sharing will be at least partly handled within
         its own dedicated rolodex pipeline.
         '''
-        call_coroutine_threadsafe(
-            coro = self._ipccore.process_share(target, sender),
-            loop = self._ipccore._loop
-        )
+        await self._dispatch.schedule_share_distribution(target, sender)
     
-    def receipt_ack_handler(self, target, recipient):
-        ''' Receives a share ack from the rolodex and passes it on to 
+    @fixture_noop
+    @public_api
+    async def receipt_ack_handler(self, target, recipient):
+        ''' Receives a share ack from the rolodex and passes it on to
         the application that requested the share.
         '''
         sharepair = _SharePair(target, recipient)
         tokens = self._outstanding_shares.pop_any(sharepair)
         
-        call_coroutine_threadsafe(
-            coro = self._ipccore.process_share_success(
-                target, 
-                recipient, 
-                tokens
-            ),
-            loop = self._ipccore._loop
+        await self._dispatch.schedule_sharesuccess_distribution(
+            target,
+            recipient,
+            tokens
         )
     
-    def receipt_nak_handler(self, target, recipient):
-        ''' Receives a share nak from the rolodex and passes it on to 
+    @fixture_noop
+    @public_api
+    async def receipt_nak_handler(self, target, recipient):
+        ''' Receives a share nak from the rolodex and passes it on to
         the application that requested the share.
         '''
         sharepair = _SharePair(target, recipient)
         tokens = self._outstanding_shares.pop_any(sharepair)
         
-        call_coroutine_threadsafe(
-            coro = self._ipccore.process_share_failure(
-                target,
-                recipient,
-                tokens
-            ),
-            loop = self._ipccore._loop
+        await self._dispatch.schedule_sharefailure_distribution(
+            target,
+            recipient,
+            tokens
         )

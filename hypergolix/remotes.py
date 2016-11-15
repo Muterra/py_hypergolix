@@ -63,6 +63,7 @@ from golix.utils import generate_ghidlist_parser
 from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
+from .hypothetical import fixture_noop
 
 from .persistence import _GidcLite
 from .persistence import _GeocLite
@@ -441,6 +442,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         self._postman = weakref.proxy(postman)
         self._librarian = weakref.proxy(librarian)
     
+    @fixture_noop
     @public_api
     def add_upstream_remote(self, persister):
         ''' Adds an upstream persister.
@@ -482,13 +484,8 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                 'Failed to add upstream remote w/ traceback:\n' +
                 ''.join(traceback.format_exc())
             )
-        
-    @add_upstream_remote.fixture
-    def add_upstream_remote(self, *args, **kwargs):
-        ''' Do nothing.
-        '''
-        pass
-        
+    
+    @fixture_noop
     @public_api
     def remove_upstream_remote(self, persister):
         ''' Inverse of above.
@@ -496,12 +493,6 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         self._upstream_remotes.remove(persister)
         # Remove all subscriptions
         persister.disconnect()
-        
-    @remove_upstream_remote.fixture
-    async def remove_upstream_remote(self, *args, **kwargs):
-        ''' Do nothing.
-        '''
-        pass
         
     def add_downstream_remote(self, persister):
         ''' Adds a downstream persister.
@@ -566,6 +557,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         to_clear = await self._clear_q.get()
         await self.deregister(to_clear)
     
+    @fixture_noop
     @public_api
     async def push(self, ghid):
         ''' Push a single ghid to all remotes.
@@ -607,13 +599,8 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                         ''.join(traceback.format_tb(exc.__traceback__)) +
                         repr(exc)
                     )
-                    
-    @push.fixture
-    async def push(self, ghid):
-        ''' Noop for push.
-        '''
-        pass
     
+    @fixture_noop
     @public_api
     async def pull(self, ghid):
         ''' Gets a ghid from upstream. Returns on the first result. Note
@@ -689,12 +676,6 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
             
         # Now handle the result.
         await self._handle_successful_pull(pull_complete)
-        
-    @pull.fixture
-    async def pull(self, ghid):
-        ''' Do nothing.
-        '''
-        pass
             
     async def _handle_successful_pull(self, maybe_obj):
         ''' Dispatches the object in the successful pull.
@@ -726,7 +707,8 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         )
         
         logger.debug('Successful pull handled.')
-        
+    
+    @fixture_noop
     @public_api
     async def attempt_pull(self, ghid, quiet=False):
         ''' Grabs the ghid from remotes, if available, and puts it into
@@ -746,12 +728,6 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                     'Object was unavailable or unacceptable upstream, but '
                     'pull was called quietly: ' + str(ghid)
                 )
-        
-    @attempt_pull.fixture
-    async def attempt_pull(self, *args, **kwargs):
-        ''' Do nothing.
-        '''
-        pass
         
     async def _attempt_pull_single(self, ghid, remote):
         ''' Attempt to fetch a single object from a single remote. If
@@ -856,6 +832,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         else:
             raise TypeError('Invalid object type while verifying object.')
     
+    @fixture_noop
     @public_api
     async def register(self, gao):
         ''' Tells the Salmonator to listen upstream for any updates
@@ -880,14 +857,8 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                     )
                     
             # Add deregister as a finalizer, but don't call it atexit.
-            finalizer = weakref.finalize(gao, self.deregister, gao.ghid)
+            finalizer = weakref.finalize(gao, self._deregister, gao.ghid)
             finalizer.atexit = False
-    
-    @register.fixture
-    async def register(self, *args, **kwargs):
-        ''' Do nothing.
-        '''
-        pass
         
     def _deregister(self, ghid):
         ''' Finalizer for GAO objects that executes async deregister()
@@ -898,6 +869,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         # This needs to be a function, not a coro, so use nowait.
         self._clear_q.put_nowait(ghid)
     
+    @fixture_noop
     @public_api
     async def deregister(self, ghid):
         ''' Tells the salmonator to stop listening for upstream
@@ -915,12 +887,6 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                     'during GAO cleanup for ' + str(ghid) + '\n' +
                     ''.join(traceback.format_exc())
                 )
-                
-    @deregister.fixture
-    async def deregister(self, *args, **kwargs):
-        ''' Do nothing.
-        '''
-        pass
         
                 
 class SalmonatorNoop:

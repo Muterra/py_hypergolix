@@ -40,6 +40,7 @@ import random
 import threading
 
 from loopa.utils import await_coroutine_threadsafe
+from loopa import NoopLoop as DummyLoop
 
 from hypergolix.utils import ApiID
 from hypergolix.embed import HGXLink
@@ -67,14 +68,6 @@ class MockProgrammerObject:
     ''' Simulate an arbitrary programmer's object.
     '''
     pass
-
-
-class DummyLoop(loopa.TaskLooper):
-    ''' Make a dummy event loop for manipulation of stuff.
-    '''
-    
-    async def loop_run(self):
-        await asyncio.sleep(.1)
 
 
 # ###############################################
