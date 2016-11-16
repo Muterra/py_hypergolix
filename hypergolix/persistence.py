@@ -87,6 +87,7 @@ from .exceptions import IntegrityError
 from .exceptions import UnavailableUpstream
 
 from .utils import weak_property
+from .utils import readonly_property
 from .utils import TruthyLock
 from .utils import SetMap
 from .utils import WeakSetMap
@@ -110,545 +111,6 @@ __all__ = [
 # ###############################################
 # Lib
 # ###############################################
-                
-        
-class PersistenceCore(metaclass=API):
-    ''' Provides the core functions for storing Golix objects. Required
-    for the hypergolix service to start.
-    
-    Can coordinate with both "upstream" and "downstream" persisters.
-    Other persisters should pass through the "ingestive tract". Local
-    objects can be published directly through calling the ingest_<type>
-    methods.
-    
-    TODO: add librarian validation, so that attempting to update an
-    object we already have an identical copy to silently exits.
-    '''
-    
-    @public_api
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-        # REALLY not crazy about this being an RLock, but lazy loading in
-        # librarian is causing problems with anything else.
-        self._opslock = threading.RLock()
-        
-        self.doorman = None
-        self.enlitener = None
-        self.enforcer = None
-        self.lawyer = None
-        self.bookie = None
-        self.postman = None
-        self.undertaker = None
-        self.librarian = None
-        self.salmonator = None
-        
-    @__init__.fixture
-    def __init__(self, *args, **kwargs):
-        ''' Right now, well, this is basically a noop. Anticipating
-        substantial changes!
-        '''
-        super(PersistenceCore.__fixture__, self).__init__(*args, **kwargs)
-        
-    def assemble(self, doorman, enforcer, lawyer, bookie, librarian, postman,
-                 undertaker, salmonator):
-        self.doorman = weakref.proxy(doorman)
-        self.enlitener = Enlitener
-        self.enforcer = weakref.proxy(enforcer)
-        self.lawyer = weakref.proxy(lawyer)
-        self.bookie = weakref.proxy(bookie)
-        self.postman = weakref.proxy(postman)
-        # This breaks all context managers, unfortunately
-        # self.undertaker = weakref.proxy(undertaker)
-        self.undertaker = undertaker
-        self.librarian = weakref.proxy(librarian)
-        self.salmonator = weakref.proxy(salmonator)
-        
-    def ingest(self, packed, remotable=True):
-        ''' Called on an untrusted and unknown object. May be bypassed
-        by locally-created, trusted objects (by calling the individual
-        ingest methods directly). Parses, validates, and stores the
-        object, and returns True; or, raises an error.
-        '''
-        for loader, ingester in ((self.doorman.load_gidc, self.ingest_gidc),
-                                 (self.doorman.load_geoc, self.ingest_geoc),
-                                 (self.doorman.load_gobs, self.ingest_gobs),
-                                 (self.doorman.load_gobd, self.ingest_gobd),
-                                 (self.doorman.load_gdxx, self.ingest_gdxx),
-                                 (self.doorman.load_garq, self.ingest_garq)):
-            # Attempt this loader
-            try:
-                golix_obj = loader(packed)
-            # This loader failed. Continue to the next.
-            except MalformedGolixPrimitive:
-                continue
-            # This loader succeeded. Break out of the loop.
-            else:
-                break
-        # Running into the else means we could not find a loader.
-        else:
-            raise MalformedGolixPrimitive(
-                '0x0001: Packed bytes do not appear to be a Golix primitive.'
-            )
-        
-        # Ingest the object. Because we broke out, both golix_obj and ingester
-        # will still be valid.
-        obj = ingester(golix_obj, remotable)
-        # If the object is identical to what we already have, the ingester will
-        # return None, so don't schedule that.
-        if obj is not None:
-            # Note that individual ingest methods are only called directly for
-            # locally-built objects, which do not need a mail run.
-            self.postman.schedule(obj)
-        else:
-            logger.debug('Object unchanged; postman scheduling not required.')
-        
-            # Note: this is not the place for salmonator pushing! Locally
-            # created/updated objects call the individual ingest methods
-            # directly, so they have to be the ones that actually deal with
-        
-        return obj
-        
-    def ingest_gidc(self, obj, remotable=True):
-        raw = obj.packed
-        obj = self.enlitener._convert_gidc(obj)
-        
-        # Take the lock first, since this will mutate state
-        with self._opslock:
-            # Validate to make sure that we don't already have an identical
-            # object. If so, short-circuit immediately.
-            if not self.librarian.validate_gidc(obj):
-                return None
-                
-            # First need to enforce target selection
-            self.enforcer.validate_gidc(obj)
-            # Now make sure authorship requirements are satisfied
-            self.lawyer.validate_gidc(obj)
-            
-            # Add GC pass in case of illegal existing debindings.
-            with self.undertaker:
-                # Finally make sure persistence rules are followed
-                self.bookie.validate_gidc(obj)
-        
-            # Force GC pass after every mutation
-            with self.undertaker:
-                # And now prep the undertaker for any necessary GC
-                self.undertaker.prep_gidc(obj)
-                # Everything is validated. Place with the bookie first, so that
-                # it has access to the old librarian state
-                self.bookie.place_gidc(obj)
-                # And finally add it to the librarian
-                self.librarian.store(obj, raw)
-        
-        # TODO: push this to a delayed callback within an event loop...
-        if remotable:
-            self.salmonator.schedule_push(obj.ghid)
-        
-        return obj
-        
-    def ingest_geoc(self, obj, remotable=True):
-        raw = obj.packed
-        obj = self.enlitener._convert_geoc(obj)
-        
-        # Take the lock first, since this will mutate state
-        with self._opslock:
-            # Validate to make sure that we don't already have an identical
-            # object. If so, short-circuit immediately.
-            if not self.librarian.validate_geoc(obj):
-                return None
-                
-            # First need to enforce target selection
-            self.enforcer.validate_geoc(obj)
-            # Now make sure authorship requirements are satisfied
-            self.lawyer.validate_geoc(obj)
-            
-            # Add GC pass in case of illegal existing debindings.
-            with self.undertaker:
-                # Finally make sure persistence rules are followed
-                self.bookie.validate_geoc(obj)
-        
-            # Force GC pass after every mutation
-            with self.undertaker:
-                # And now prep the undertaker for any necessary GC
-                self.undertaker.prep_geoc(obj)
-                # Everything is validated. Place with the bookie first, so that 
-                # it has access to the old librarian state
-                self.bookie.place_geoc(obj)
-                # And finally add it to the librarian
-                self.librarian.store(obj, raw)
-        
-        # TODO: push this to a delayed callback within an event loop...
-        if remotable:
-            self.salmonator.schedule_push(obj.ghid)
-        
-        return obj
-        
-    def ingest_gobs(self, obj, remotable=True):
-        raw = obj.packed
-        obj = self.enlitener._convert_gobs(obj)
-        
-        # Take the lock first, since this will mutate state
-        with self._opslock:
-            # Validate to make sure that we don't already have an identical
-            # object. If so, short-circuit immediately.
-            if not self.librarian.validate_gobs(obj):
-                return None
-                
-            # First need to enforce target selection
-            self.enforcer.validate_gobs(obj)
-            # Now make sure authorship requirements are satisfied
-            self.lawyer.validate_gobs(obj)
-            
-            # Add GC pass in case of illegal existing debindings.
-            with self.undertaker:
-                # Finally make sure persistence rules are followed
-                self.bookie.validate_gobs(obj)
-        
-            # Force GC pass after every mutation
-            with self.undertaker:
-                # And now prep the undertaker for any necessary GC
-                self.undertaker.prep_gobs(obj)
-                # Everything is validated. Place with the bookie first, so that 
-                # it has access to the old librarian state
-                self.bookie.place_gobs(obj)
-                # And finally add it to the librarian
-                self.librarian.store(obj, raw)
-        
-        # TODO: push this to a delayed callback within an event loop...
-        if remotable:
-            self.salmonator.schedule_push(obj.ghid)
-        
-        return obj
-        
-    def ingest_gobd(self, obj, remotable=True):
-        raw = obj.packed
-        obj = self.enlitener._convert_gobd(obj)
-        
-        # Take the lock first, since this will mutate state
-        with self._opslock:
-            # Validate to make sure that we don't already have an identical
-            # object. If so, short-circuit immediately.
-            if not self.librarian.validate_gobd(obj):
-                return None
-                
-            # First need to enforce target selection
-            self.enforcer.validate_gobd(obj)
-            # Now make sure authorship requirements are satisfied
-            self.lawyer.validate_gobd(obj)
-            
-            # Add GC pass in case of illegal existing debindings.
-            with self.undertaker:
-                # Finally make sure persistence rules are followed
-                self.bookie.validate_gobd(obj)
-        
-            # Force GC pass after every mutation
-            with self.undertaker:
-                # And now prep the undertaker for any necessary GC
-                self.undertaker.prep_gobd(obj)
-                # Everything is validated. Place with the bookie first, so that 
-                # it has access to the old librarian state
-                self.bookie.place_gobd(obj)
-                # And finally add it to the librarian
-                self.librarian.store(obj, raw)
-        
-        # TODO: push this to a delayed callback within an event loop...
-        if remotable:
-            self.salmonator.schedule_push(obj.ghid)
-        
-        return obj
-        
-    def ingest_gdxx(self, obj, remotable=True):
-        raw = obj.packed
-        obj = self.enlitener._convert_gdxx(obj)
-        
-        # Take the lock first, since this will mutate state
-        with self._opslock:
-            # Validate to make sure that we don't already have an identical
-            # object. If so, short-circuit immediately.
-            if not self.librarian.validate_gdxx(obj):
-                return None
-                
-            # First need to enforce target selection
-            self.enforcer.validate_gdxx(obj)
-            # Now make sure authorship requirements are satisfied
-            self.lawyer.validate_gdxx(obj)
-            
-            # Add GC pass in case of illegal existing debindings.
-            with self.undertaker:
-                # Finally make sure persistence rules are followed
-                self.bookie.validate_gdxx(obj)
-        
-            # Force GC pass after every mutation
-            with self.undertaker:
-                # And now prep the undertaker for any necessary GC
-                self.undertaker.prep_gdxx(obj)
-                # Everything is validated. Place with the bookie first, so that 
-                # it has access to the old librarian state
-                self.bookie.place_gdxx(obj)
-                # And finally add it to the librarian
-                self.librarian.store(obj, raw)
-        
-        # TODO: push this to a delayed callback within an event loop...
-        if remotable:
-            self.salmonator.schedule_push(obj.ghid)
-        
-        return obj
-        
-    def ingest_garq(self, obj, remotable=True):
-        raw = obj.packed
-        obj = self.enlitener._convert_garq(obj)
-        
-        # Take the lock first, since this will mutate state
-        with self._opslock:
-            # Validate to make sure that we don't already have an identical
-            # object. If so, short-circuit immediately.
-            if not self.librarian.validate_garq(obj):
-                return None
-                
-            # First need to enforce target selection
-            self.enforcer.validate_garq(obj)
-            # Now make sure authorship requirements are satisfied
-            self.lawyer.validate_garq(obj)
-            
-            # Add GC pass in case of illegal existing debindings.
-            with self.undertaker:
-                # Finally make sure persistence rules are followed
-                self.bookie.validate_garq(obj)
-        
-            # Force GC pass after every mutation
-            with self.undertaker:
-                # And now prep the undertaker for any necessary GC
-                self.undertaker.prep_garq(obj)
-                # Everything is validated. Place with the bookie first, so that 
-                # it has access to the old librarian state
-                self.bookie.place_garq(obj)
-                # And finally add it to the librarian
-                self.librarian.store(obj, raw)
-        
-        # TODO: push this to a delayed callback within an event loop...
-        if remotable:
-            self.salmonator.schedule_push(obj.ghid)
-        
-        return obj
-        
-        
-class Doorman:
-    ''' Parses files and enforces crypto. Can be bypassed for trusted
-    (aka locally-created) objects. Only called from within the typeless
-    PersisterCore.ingest() method.
-    '''
-    _librarian = weak_property('__librarian')
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._golix = ThirdParty()
-        
-    def assemble(self, librarian):
-        # Called to link to the librarian.
-        self._librarian = librarian
-        
-    def load_gidc(self, packed):
-        try:
-            obj = GIDC.unpack(packed)
-        except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GIDC object.'
-            ) from exc
-            
-        # No further verification required.
-            
-        return obj
-        
-    def load_geoc(self, packed):
-        try:
-            obj = GEOC.unpack(packed)
-        except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GEOC object.'
-            ) from exc
-            
-        # Okay, now we need to verify the object
-        try:
-            author = self._librarian.summarize(obj.author)
-        except KeyError as exc:
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.author)
-            ) from exc
-            
-        try:
-            self._golix.verify_object(
-                second_party = author.identity,
-                obj = obj,
-            )
-        except SecurityError as exc:
-            raise VerificationFailure(
-                '0x0002: Failed to verify object.'
-            ) from exc
-            
-        return obj
-        
-    def load_gobs(self, packed):
-        try:
-            obj = GOBS.unpack(packed)
-        except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GOBS object.'
-            ) from exc
-            
-        # Okay, now we need to verify the object
-        try:
-            author = self._librarian.summarize(obj.binder)
-        except KeyError as exc:
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.binder)
-            ) from exc
-            
-        try:
-            self._golix.verify_object(
-                second_party = author.identity,
-                obj = obj,
-            )
-        except SecurityError as exc:
-            raise VerificationFailure(
-                '0x0002: Failed to verify object.'
-            ) from exc
-            
-        return obj
-        
-    def load_gobd(self, packed):
-        try:
-            obj = GOBD.unpack(packed)
-        except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GOBD object.'
-            ) from exc
-            
-        # Okay, now we need to verify the object
-        try:
-            author = self._librarian.summarize(obj.binder)
-        except KeyError as exc:
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.binder)
-            ) from exc
-            
-        try:
-            self._golix.verify_object(
-                second_party = author.identity,
-                obj = obj,
-            )
-        except SecurityError as exc:
-            raise VerificationFailure(
-                '0x0002: Failed to verify object.'
-            ) from exc
-            
-        return obj
-        
-    def load_gdxx(self, packed):
-        try:
-            obj = GDXX.unpack(packed)
-        except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GDXX object.'
-            ) from exc
-            
-        # Okay, now we need to verify the object
-        try:
-            author = self._librarian.summarize(obj.debinder)
-        except KeyError as exc:
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + 
-                str(obj.debinder)
-            ) from exc
-            
-        try:
-            self._golix.verify_object(
-                second_party = author.identity,
-                obj = obj,
-            )
-        except SecurityError as exc:
-            raise VerificationFailure(
-                '0x0002: Failed to verify object.'
-            ) from exc
-            
-        return obj
-        
-    def load_garq(self, packed):
-        try:
-            obj = GARQ.unpack(packed)
-        except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GARQ object.'
-            ) from exc
-            
-        # Persisters cannot further verify the object.
-            
-        return obj
-        
-        
-class Enlitener:
-    ''' Handles conversion from heavyweight Golix objects to lightweight
-    Hypergolix representations.
-    '''
-    
-    @staticmethod
-    def _convert_gidc(gidc):
-        ''' Converts a Golix object into a Hypergolix description.
-        '''
-        identity = SecondParty.from_identity(gidc)
-        return _GidcLite(
-            ghid = gidc.ghid,
-            identity = identity,
-        )
-        
-    @staticmethod
-    def _convert_geoc(geoc):
-        ''' Converts a Golix object into a Hypergolix description.
-        '''
-        return _GeocLite(
-            ghid = geoc.ghid,
-            author = geoc.author,
-        )
-        
-    @staticmethod
-    def _convert_gobs(gobs):
-        ''' Converts a Golix object into a Hypergolix description.
-        '''
-        return _GobsLite(
-            ghid = gobs.ghid,
-            author = gobs.binder,
-            target = gobs.target,
-        )
-        
-    @staticmethod
-    def _convert_gobd(gobd):
-        ''' Converts a Golix object into a Hypergolix description.
-        '''
-        return _GobdLite(
-            ghid = gobd.ghid_dynamic,
-            author = gobd.binder,
-            target = gobd.target,
-            frame_ghid = gobd.ghid,
-            history = gobd.history,
-        )
-        
-    @staticmethod
-    def _convert_gdxx(gdxx):
-        ''' Converts a Golix object into a Hypergolix description.
-        '''
-        return _GdxxLite(
-            ghid = gdxx.ghid,
-            author = gdxx.debinder, 
-            target = gdxx.target,
-        )
-        
-    @staticmethod
-    def _convert_garq(garq):
-        ''' Converts a Golix object into a Hypergolix description.
-        '''
-        return _GarqLite(
-            ghid = garq.ghid,
-            recipient = garq.recipient,
-        )
         
         
 class _BaseLite:
@@ -678,6 +140,16 @@ class _GidcLite(_BaseLite):
         self.ghid = ghid
         self.identity = identity
         
+    @classmethod
+    def from_golix(cls, golix_obj):
+        ''' Convert the golix object to a lightweight representation.
+        '''
+        identity = SecondParty.from_identity(golix_obj)
+        return cls(
+            ghid = golix_obj.ghid,
+            identity = identity,
+        )
+        
         
 class _GeocLite(_BaseLite):
     ''' Lightweight description of a GEOC.
@@ -702,6 +174,15 @@ class _GeocLite(_BaseLite):
         # compare it anyways just in case.
         except AttributeError as exc:
             return False
+        
+    @classmethod
+    def from_golix(cls, golix_obj):
+        ''' Convert the golix object to a lightweight representation.
+        '''
+        return cls(
+            ghid = golix_obj.ghid,
+            author = golix_obj.author,
+        )
         
         
 class _GobsLite(_BaseLite):
@@ -731,6 +212,16 @@ class _GobsLite(_BaseLite):
         # compare it anyways just in case.
         except AttributeError as exc:
             return False
+        
+    @classmethod
+    def from_golix(cls, golix_obj):
+        ''' Convert the golix object to a lightweight representation.
+        '''
+        return cls(
+            ghid = golix_obj.ghid,
+            author = golix_obj.binder,
+            target = golix_obj.target,
+        )
     
         
 class _GobdLite(_BaseLite):
@@ -767,6 +258,18 @@ class _GobdLite(_BaseLite):
         # compare it anyways just in case.
         except AttributeError as exc:
             return False
+        
+    @classmethod
+    def from_golix(cls, golix_obj):
+        ''' Convert the golix object to a lightweight representation.
+        '''
+        return cls(
+            ghid = golix_obj.ghid_dynamic,
+            author = golix_obj.binder,
+            target = golix_obj.target,
+            frame_ghid = golix_obj.ghid,
+            history = golix_obj.history,
+        )
     
         
 class _GdxxLite(_BaseLite):
@@ -787,7 +290,7 @@ class _GdxxLite(_BaseLite):
     def __eq__(self, other):
         try:
             return (
-                super().__eq__(other) and 
+                super().__eq__(other) and
                 self.author == other.author and
                 self._debinding == other._debinding
             )
@@ -798,6 +301,16 @@ class _GdxxLite(_BaseLite):
         # compare it anyways just in case.
         except AttributeError as exc:
             return False
+        
+    @classmethod
+    def from_golix(cls, golix_obj):
+        ''' Convert the golix object to a lightweight representation.
+        '''
+        return cls(
+            ghid = golix_obj.ghid,
+            author = golix_obj.debinder,
+            target = golix_obj.target,
+        )
         
         
 class _GarqLite(_BaseLite):
@@ -814,7 +327,7 @@ class _GarqLite(_BaseLite):
     def __eq__(self, other):
         try:
             return (
-                super().__eq__(other) and 
+                super().__eq__(other) and
                 self.recipient == other.recipient
             )
             
@@ -824,6 +337,400 @@ class _GarqLite(_BaseLite):
         # compare it anyways just in case.
         except AttributeError as exc:
             return False
+        
+    @classmethod
+    def from_golix(cls, golix_obj):
+        ''' Convert the golix object to a lightweight representation.
+        '''
+        return cls(
+            ghid = golix_obj.ghid,
+            recipient = golix_obj.recipient,
+        )
+        
+        
+class Doorman:
+    ''' Parses files and enforces crypto. Can be bypassed for trusted
+    (aka locally-created) objects. Only called from within the typeless
+    PersisterCore.ingest() method.
+    '''
+    _librarian = weak_property('__librarian')
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._golix = ThirdParty()
+        self._parselock_gidc = threading.Lock()
+        self._parselock_geoc = threading.Lock()
+        self._parselock_gobs = threading.Lock()
+        self._parselock_gobd = threading.Lock()
+        self._parselock_gdxx = threading.Lock()
+        self._parselock_garq = threading.Lock()
+        
+    def assemble(self, librarian):
+        # Called to link to the librarian.
+        self._librarian = librarian
+        
+    def load_gidc(self, packed):
+        try:
+            with self._parselock_gidc:
+                obj = GIDC.unpack(packed)
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GIDC object.'
+            ) from exc
+            
+        # No further verification required.
+            
+        return obj
+        
+    def load_geoc(self, packed):
+        try:
+            with self._parselock_geoc:
+                obj = GEOC.unpack(packed)
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GEOC object.'
+            ) from exc
+            
+        # Okay, now we need to verify the object
+        try:
+            author = self._librarian.summarize(obj.author)
+        except KeyError as exc:
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient: ' + str(obj.author)
+            ) from exc
+            
+        try:
+            self._golix.verify_object(
+                second_party = author.identity,
+                obj = obj,
+            )
+        except SecurityError as exc:
+            raise VerificationFailure(
+                '0x0002: Failed to verify object.'
+            ) from exc
+            
+        return obj
+        
+    def load_gobs(self, packed):
+        try:
+            with self._parselock_gobs:
+                obj = GOBS.unpack(packed)
+        
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GOBS object.'
+            ) from exc
+            
+        # Okay, now we need to verify the object
+        try:
+            author = self._librarian.summarize(obj.binder)
+        except KeyError as exc:
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient: ' + str(obj.binder)
+            ) from exc
+            
+        try:
+            self._golix.verify_object(
+                second_party = author.identity,
+                obj = obj,
+            )
+        except SecurityError as exc:
+            raise VerificationFailure(
+                '0x0002: Failed to verify object.'
+            ) from exc
+            
+        return obj
+        
+    def load_gobd(self, packed):
+        try:
+            with self._parselock_gobd:
+                obj = GOBD.unpack(packed)
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GOBD object.'
+            ) from exc
+            
+        # Okay, now we need to verify the object
+        try:
+            author = self._librarian.summarize(obj.binder)
+        except KeyError as exc:
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient: ' + str(obj.binder)
+            ) from exc
+            
+        try:
+            self._golix.verify_object(
+                second_party = author.identity,
+                obj = obj,
+            )
+        except SecurityError as exc:
+            raise VerificationFailure(
+                '0x0002: Failed to verify object.'
+            ) from exc
+            
+        return obj
+        
+    def load_gdxx(self, packed):
+        try:
+            with self._parselock_gdxx:
+                obj = GDXX.unpack(packed)
+            
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GDXX object.'
+            ) from exc
+            
+        # Okay, now we need to verify the object
+        try:
+            author = self._librarian.summarize(obj.debinder)
+        except KeyError as exc:
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient: ' + str(obj.debinder)
+            ) from exc
+            
+        try:
+            self._golix.verify_object(
+                second_party = author.identity,
+                obj = obj,
+            )
+        except SecurityError as exc:
+            raise VerificationFailure(
+                '0x0002: Failed to verify object.'
+            ) from exc
+            
+        return obj
+        
+    def load_garq(self, packed):
+        try:
+            with self._parselock_garq:
+                obj = GARQ.unpack(packed)
+        
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GARQ object.'
+            ) from exc
+            
+        # Persisters cannot further verify the object.
+            
+        return obj
+                
+        
+class PersistenceCore(metaclass=API):
+    ''' Provides the core functions for storing Golix objects. Required
+    for the hypergolix service to start.
+    
+    Can coordinate with both "upstream" and "downstream" persisters.
+    Other persisters should pass through the "ingestive tract". Local
+    objects can be published directly through calling the ingest_<type>
+    methods.
+    
+    TODO: add librarian validation, so that attempting to update an
+    object we already have an identical copy to silently exits.
+    '''
+    _doorman = weak_property('__doorman')
+    _enforcer = weak_property('__enforcer')
+    _lawyer = weak_property('__lawyer')
+    _bookie = weak_property('__bookie')
+    _postman = weak_property('__postman')
+    _undertaker = weak_property('__undertaker')
+    _librarian = weak_property('__librarian')
+    _salmonator = weak_property('__salmonator')
+    
+    # Async stuff
+    _executor = readonly_property('__executor')
+    _loop = readonly_property('__loop')
+    
+    # This is a messy way of getting the suffix for validation and stuff but
+    # it's getting the job done.
+    _ATTR_LOOKUP = {
+        _GidcLite: 'gidc',
+        _GeocLite: 'geoc',
+        _GobsLite: 'gobs',
+        _GobdLite: 'gobd',
+        _GdxxLite: 'gdxx',
+        _GarqLite: 'garq'
+    }
+    _LITE_LOOKUP = {
+        GIDC: _GidcLite,
+        GEOC: _GeocLite,
+        GOBS: _GobsLite,
+        GOBD: _GobdLite,
+        GDXX: _GdxxLite,
+        GARQ: _GarqLite
+    }
+    
+    @public_api
+    def __init__(self, executor, loop, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        # Async-specific stuff
+        setattr(self, '__executor', executor)
+        setattr(self, '__loop', loop)
+        
+    @__init__.fixture
+    def __init__(self, *args, **kwargs):
+        ''' Right now, well, this is basically a noop. Anticipating
+        substantial changes!
+        '''
+        super(PersistenceCore.__fixture__, self).__init__(
+            executor = None,
+            loop = None,
+            *args,
+            **kwargs
+        )
+        
+    def assemble(self, doorman, enforcer, lawyer, bookie, librarian, postman,
+                 undertaker, salmonator):
+        self._doorman = doorman
+        self._enforcer = enforcer
+        self._lawyer = lawyer
+        self._bookie = bookie
+        self._postman = postman
+        self._undertaker = undertaker
+        self._librarian = librarian
+        self._salmonator = salmonator
+        
+    def _validators(self, obj):
+        ''' Late-binding access to the things that validate objects. If
+        not late, would hold strong references to stuff, which is bad.
+        '''
+        # Calculate "validate_gidc", etc
+        method = 'validate_' + self._ATTR_LOOKUP[type(obj)]
+        
+        # This determines the order, and who checks.
+        # Check for redundant items.
+        yield getattr(self._librarian, method)
+        # Enforce target selection
+        yield getattr(self._enforcer, method)
+        # Now make sure authorship requirements are satisfied
+        yield getattr(self._lawyer, method)
+        # Finally make sure persistence rules are followed
+        yield getattr(self._bookie, method)
+            
+    def _preppers(self, obj):
+        ''' Late-binding access to the things that intake validated
+        objects. Same note as above re: strong references vs memoize.
+        '''
+        # Calculate "validate_gidc", etc
+        suffix = self._ATTR_LOOKUP[type(obj)]
+        
+        # And now prep the undertaker for any necessary GC
+        yield getattr(self._undertaker, 'prep_' + suffix)
+        # Everything is validated. Place with the bookie before librarian, so
+        # that it has access to the old librarian state
+        yield getattr(self._bookie, 'place_' + suffix)
+        
+    async def direct_ingest(self, obj, packed, remotable):
+        ''' Standard ingestion flow for stuff. To be called from ingest
+        above, or directly (for objects created "in-house").
+        '''
+        # Validate the object. A return of None indicates a redundant object,
+        # which results in immediate short-circuit. If any of the validators
+        # find an invalid object, they will raise.
+        for validate in self._validators(obj):
+            if not validate(obj):
+                return None
+        
+        for prep in self._preppers(obj):
+            prep(obj)
+            
+        self._librarian.store(obj, packed)
+        
+        if remotable:
+            self._salmonator.schedule_push(obj.ghid)
+            
+        return obj
+        
+    async def _attempt_load(self, packed):
+        ''' Attempt to load a packed golix object.
+        '''
+        tasks = set()
+        
+        # First run through all of the loaders and see if anything catches.
+        for loader in (self._doorman.load_gidc, self._doorman.load_geoc,
+                       self._doorman.load_gobs, self._doorman.load_gobd,
+                       self._doorman.load_gdxx, self._doorman.load_garq):
+            # Attempt this loader and record which ingester it is
+            tasks.add(asyncio.ensure_future(
+                # But run the actual loader in the executor
+                self._loop.run_in_executor(
+                    self._executor,
+                    loader,
+                    packed
+                )
+            ))
+            
+        # Do all of the ingesters. This could be smarter (short-circuit as soon
+        # as a successful loader completes) but for now this is good enough.
+        finished, pending = await asyncio.wait(
+            fs = tasks,
+            return_when = asyncio.ALL_COMPLETED
+        )
+        
+        # Don't bother with pending tasks because THEORETICALLY we can't have
+        # any.
+        result = None
+        for task in finished:
+            exc = task.exception()
+            
+            # No exception means we successfully loaded. Ingest it! But don't
+            # immediately exit the loop, because we need to collect the rest of
+            # the exceptions first.
+            if exc is None:
+                result = task.result()
+            
+            # This loader task failed, so try the next.
+            elif isinstance(task, MalformedGolixPrimitive):
+                continue
+            
+            # Raise the first exception that we encounter that isn't from it
+            # being an incorrect primitive.
+            else:
+                raise exc
+                
+        # We might return None here, but let the parent function raise in that
+        # case.
+        return result
+        
+    async def ingest(self, packed, remotable=True):
+        ''' Called on an untrusted and unknown object. May be bypassed
+        by locally-created, trusted objects (by calling the individual
+        ingest methods directly). Parses, validates, and stores the
+        object, and returns True; or, raises an error.
+        '''
+        # This may return None, but that will be caught by the KeyError below.
+        golix_obj = self._attempt_load(packed)
+        
+        try:
+            litecls = self._LITE_LOOKUP[type(golix_obj)]
+        
+        # We did not find a successful loader (or something went funky with the
+        # type lookup)
+        except KeyError:
+            raise MalformedGolixPrimitive(
+                'Packed bytes do not appear to be a Golix primitive.'
+            ) from None
+        
+        obj_lite = litecls.from_golix(golix_obj)
+        ingested = await self.direct_ingest(obj_lite, packed, remotable)
+        
+        # Note that individual ingest methods are only called directly for
+        # locally-built objects, which do not need a mail run.
+        # If the object is identical to what we already have, the ingester
+        # will return None.
+        if ingested:
+            await self._postman.schedule(ingested)
+            
+        else:
+            logger.debug(
+                str(obj_lite.ghid) + ' scheduling aborted on unchanged object.'
+            )
+        
+        # Note: this is not the place for salmonator pushing! Locally
+        # created/updated objects call the individual ingest methods
+        # directly, so they have to be the ones that actually deal with it.
+        
+        return ingested
         
         
 class Enforcer:
@@ -1314,11 +1221,11 @@ class Bookie(metaclass=API):
             return True
         
     def place_gdxx(self, obj):
-        ''' Just record the fact that there is a debinding. Let GCing 
+        ''' Just record the fact that there is a debinding. Let GCing
         worry about removing other records.
         '''
         # Note that the undertaker will worry about removing stuff from local
-        # state. 
+        # state.
         if obj.target in self._librarian:
             self._debound_by_ghid.add(obj.target, obj.ghid)
         else:
@@ -1342,7 +1249,7 @@ class Bookie(metaclass=API):
         ''' Forces erasure of an object.
         '''
         is_binding = (isinstance(obj, _GobsLite) or
-            isinstance(obj, _GobdLite))
+                      isinstance(obj, _GobdLite))
         is_debinding = isinstance(obj, _GdxxLite)
         is_request = isinstance(obj, _GarqLite)
             
@@ -1355,7 +1262,7 @@ class Bookie(metaclass=API):
                 
     def __check_illegal_binding(self, ghid):
         ''' Deprecated-ish and unused. Former method to retroactively
-        clear bindings that were initially (and illegally) accepted 
+        clear bindings that were initially (and illegally) accepted
         because their (illegal) target was unknown at the time.
         
         Checks for an existing binding for ghid. If it exists,

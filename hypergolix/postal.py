@@ -51,6 +51,7 @@ from .persistence import _GarqLite
 
 from .utils import SetMap
 from .utils import WeakSetMap
+from .utils import weak_property
 
 from .gao import GAO
 
@@ -89,16 +90,26 @@ class _PostmanBase(loopa.TaskLooper):
     Question: should the distributed state management of GARQ recipients
     be managed here, or in the bookie (where it currently is)?
     '''
+    _bookie = weak_property('__bookie')
+    _librarian = weak_property('__librarian')
     
-    def __init__(self):
-        self._bookie = None
-        self._librarian = None
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
-        # The scheduling queue
+        # The scheduling queue is created at loop init.
         self._scheduled = None
-        
         # The delayed lookup. <awaiting ghid>: set(<subscribed ghids>)
         self._deferred = SetMap()
+        
+        # Resolve primitives into their schedulers.
+        self._scheduler_lookup = {
+            _GidcLite: self._schedule_gidc,
+            _GeocLite: self._schedule_geoc,
+            _GobsLite: self._schedule_gobs,
+            _GobdLite: self._schedule_gobd,
+            _GdxxLite: self._schedule_gdxx,
+            _GarqLite: self._schedule_garq
+        }
         
     def assemble(self, librarian, bookie):
         # Links the librarian and bookie.
@@ -151,20 +162,22 @@ class _PostmanBase(loopa.TaskLooper):
     async def schedule(self, obj, removed=False):
         ''' Schedules update delivery for the passed object.
         '''
+        # It's possible we're being told to schedule nothing, so catch that
+        # here.
         for deferred in self._has_deferred(obj):
             await self._scheduled.put(deferred)
-            
-        for primitive, scheduler in ((_GidcLite, self._schedule_gidc),
-                                     (_GeocLite, self._schedule_geoc),
-                                     (_GobsLite, self._schedule_gobs),
-                                     (_GobdLite, self._schedule_gobd),
-                                     (_GdxxLite, self._schedule_gdxx),
-                                     (_GarqLite, self._schedule_garq)):
-            if isinstance(obj, primitive):
-                await scheduler(obj, removed)
-                break
+        
+        try:
+            scheduler = self._scheduler_lookup(type(obj))
+        
+        except KeyError:
+            raise TypeError(
+                'Could not schedule: does not appear to be a Golix ' +
+                'primitive.'
+            ) from None
+        
         else:
-            raise TypeError('Could not schedule: wrong obj type.')
+            await scheduler(obj, removed)
             
         return True
         

@@ -178,7 +178,7 @@ class Rolodex(metaclass=API):
         sharepair = _SharePair(target, recipient)
             
         # For now, this is just doing a handshake with some typechecking.
-        self._hand_object(*sharepair)
+        await self._hand_object(*sharepair)
         
         if requesting_token is not None:
             self._outstanding_shares.add(sharepair, requesting_token)
@@ -191,7 +191,7 @@ class Rolodex(metaclass=API):
         # testing this.
         self.shared[target] = recipient
         
-    def _hand_object(self, target, recipient):
+    async def _hand_object(self, target, recipient):
         ''' Initiates a handshake request with the recipient.
         '''
         if recipient not in self._librarian:
@@ -229,7 +229,10 @@ class Rolodex(metaclass=API):
         # Note the potential race condition here. Should catch errors with the
         # persister in case we need to resolve pending requests that didn't
         # successfully post.
-        self._percore.ingest_garq(request)
+        await self._percore.direct_ingest(
+            obj = _GarqLite.from_golix(request),
+            packed = request.packed
+        )
         
     async def notification_handler(self, subscription, notification):
         ''' Callback to handle any requests.
@@ -279,7 +282,7 @@ class Rolodex(metaclass=API):
                 self._golcore.open_request,
                 unpacked
             )
-            self._dispatch_payload(payload, notification)
+            await self._dispatch_payload(payload, notification)
 
         # Don't forget to (always) debind.
         finally:
@@ -288,7 +291,10 @@ class Rolodex(metaclass=API):
                 self._golcore.make_debinding,
                 notification
             )
-            self._percore.ingest_gdxx(debinding)
+            await self._percore.direct_ingest(
+                obj = _GdxxLite.from_golix(debinding),
+                packed = debinding.packed
+            )
         
     def _handle_debinding(self, debinding):
         ''' The notification is a debinding. Deal with it.
@@ -303,11 +309,11 @@ class Rolodex(metaclass=API):
                 ''.join(traceback.format_exc())
             )
         
-    def _dispatch_payload(self, payload, source_ghid):
+    async def _dispatch_payload(self, payload, source_ghid):
         ''' Appropriately handles a request payload.
         '''
         if isinstance(payload, AsymHandshake):
-            self._handle_handshake(payload, source_ghid)
+            await self._handle_handshake(payload, source_ghid)
             
         elif isinstance(payload, AsymAck):
             self._handle_ack(payload)
@@ -318,7 +324,7 @@ class Rolodex(metaclass=API):
         else:
             raise RuntimeError('Encountered an unknown request type.')
             
-    def _handle_handshake(self, request, source_ghid):
+    async def _handle_handshake(self, request, source_ghid):
         ''' Handles a handshake request after reception.
         '''
         try:
@@ -353,7 +359,10 @@ class Rolodex(metaclass=API):
             )
         
         response = self._golcore.make_request(request.author, response_obj)
-        self._percore.ingest_garq(response)
+        await self._percore.direct_ingest(
+            obj = _GarqLite.from_golix(response),
+            packed = response.packed
+        )
             
         self.share_handler(request.target, request.author)
             

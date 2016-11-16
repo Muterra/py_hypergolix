@@ -314,7 +314,10 @@ class GAOCore(metaclass=API):
             self._golcore.make_binding_stat,
             container_ghid
         )
-        await self._percore.ingest_gobs(binding)
+        await self._percore.direct_ingest(
+            obj = _GobsLite.from_golix(binding),
+            packed = binding.packed
+        )
         
         return container_ghid
         
@@ -328,7 +331,10 @@ class GAOCore(metaclass=API):
             self._golcore.make_binding_stat,
             self.ghid
         )
-        self._percore.ingest_gobs(binding)
+        await self._percore.direct_ingest(
+            obj = _GobsLite.from_golix(binding),
+            packed = binding.packed
+        )
         
     @fixture_noop
     @public_api
@@ -342,7 +348,10 @@ class GAOCore(metaclass=API):
                 self._golcore.make_debinding,
                 self.ghid
             )
-            self._percore.ingest_gdxx(debinding)
+            await self._percore.direct_ingest(
+                obj = _GdxxLite.from_golix(debinding),
+                packed = debinding.packed
+            )
             
         else:
             # Get frozenset of binding ghids
@@ -357,7 +366,10 @@ class GAOCore(metaclass=API):
                             self._golcore.make_debinding,
                             obj.ghid
                         )
-                        self._percore.ingest_gdxx(debinding)
+                        await self._percore.direct_ingest(
+                            obj = _GdxxLite.from_golix(debinding),
+                            packed = debinding.packed
+                        )
             
     def _get_new_secret(self):
         ''' Gets a new secret for self.
@@ -446,7 +458,10 @@ class GAOCore(metaclass=API):
                 )
                 
                 # Publish to persister
-                self._percore.ingest_gobd(binding)
+                await self._percore.direct_ingest(
+                    obj = _GobdLite.from_golix(binding),
+                    packed = binding.packed
+                )
             
             # Static object.
             else:
@@ -462,10 +477,16 @@ class GAOCore(metaclass=API):
                     False,
                     self._golcore.whoami
                 )
-                self._percore.ingest_gobs(binding)
+                await self._percore.direct_ingest(
+                    obj = _GobsLite.from_golix(binding),
+                    packed = binding.packed
+                )
                 
             # Finally, ingest the object itself.
-            self._percore.ingest_geoc(container)
+            await self._percore.direct_ingest(
+                obj = _GeocLite.from_golix(container),
+                packed = container.packed
+            )
         
         # Necessary for else clause (grumble grumble)
         except:

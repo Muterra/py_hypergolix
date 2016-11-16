@@ -56,7 +56,6 @@ from .gao import _GAOSetMap
 
 from .persistence import PersistenceCore
 from .persistence import Doorman
-from .persistence import Enlitener
 from .persistence import Enforcer
 from .persistence import Lawyer
 from .persistence import Bookie
