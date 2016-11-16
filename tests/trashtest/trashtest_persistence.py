@@ -44,8 +44,8 @@ import pathlib
 # These are normal imports
 from hypergolix.persistence import PersistenceCore
 from hypergolix.persistence import Doorman
-from hypergolix.persistence import Lawyer
 from hypergolix.persistence import Enforcer
+from hypergolix.lawyer import LawyerCore
 from hypergolix.undertaker import UndertakerCore
 from hypergolix.bookie import BookieCore
 from hypergolix.librarian import DiskLibrarian
@@ -419,7 +419,7 @@ class MemoryLibrarianTrashtest(unittest.TestCase, IntegrationTest):
         self.percore = PersistenceCore()
         self.doorman = Doorman()
         self.enforcer = Enforcer()
-        self.lawyer = Lawyer()
+        self.lawyer = LawyerCore()
         self.bookie = BookieCore()
         self.librarian = MemoryLibrarian()
         self.postman = MrPostman()
@@ -454,7 +454,7 @@ class DiskLibrarianTrashtest(unittest.TestCase, IntegrationTest):
         self.percore = PersistenceCore()
         self.doorman = Doorman()
         self.enforcer = Enforcer()
-        self.lawyer = Lawyer()
+        self.lawyer = LawyerCore()
         self.bookie = BookieCore()
         self.librarian = DiskLibrarian(cache_dir='/ghidcache_test')
         self.postman = MrPostman()
@@ -484,7 +484,7 @@ class DiskLibrarianTrashtest(unittest.TestCase, IntegrationTest):
         percore = PersistenceCore()
         doorman = Doorman()
         enforcer = Enforcer()
-        lawyer = Lawyer()
+        lawyer = LawyerCore()
         bookie = Bookie()
         librarian = DiskLibrarian(cache_dir='/ghidcache_test')
         postman = MrPostman()

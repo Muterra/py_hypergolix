@@ -62,7 +62,7 @@ from hypergolix.remotes import SalmonatorNoop
 
 from hypergolix.persistence import PersistenceCore
 from hypergolix.persistence import Doorman
-from hypergolix.persistence import Lawyer
+from hypergolix.lawyer import LawyerCore
 from hypergolix.persistence import Enforcer
 
 from hypergolix.undertaker import UndertakerCore
@@ -195,7 +195,7 @@ class RemotePersistenceServer:
         self.percore = PersistenceCore()
         self.doorman = Doorman()
         self.enforcer = Enforcer()
-        self.lawyer = Lawyer()
+        self.lawyer = LawyerCore()
         self.bookie = BookieCore()
         
         if cache_dir is None:

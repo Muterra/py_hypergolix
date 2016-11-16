@@ -49,6 +49,7 @@ from . import exceptions
 from . import hypothetical
 from . import inquisition
 from . import ipc
+from . import lawyer
 from . import librarian
 from . import logutils
 from . import objproxy

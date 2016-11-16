@@ -57,7 +57,7 @@ from .gao import _GAOSetMap
 from .persistence import PersistenceCore
 from .persistence import Doorman
 from .persistence import Enforcer
-from .persistence import Lawyer
+from .lawyer import LawyerCore
 from .bookie import BookieCore
 from .librarian import DiskLibrarian
 from .librarian import MemoryLibrarian
@@ -135,7 +135,7 @@ class AgentBootstrap:
         self.percore = PersistenceCore()
         self.doorman = Doorman()
         self.enforcer = Enforcer()
-        self.lawyer = Lawyer()
+        self.lawyer = LawyerCore()
         self.bookie = BookieCore()
         self.librarian = DiskLibrarian(cache_dir=cache_dir)
         self.postman = MrPostman()
