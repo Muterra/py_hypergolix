@@ -47,9 +47,9 @@ from hypergolix.persistence import Doorman
 from hypergolix.persistence import Undertaker
 from hypergolix.persistence import Lawyer
 from hypergolix.persistence import Enforcer
-from hypergolix.persistence import Bookie
-from hypergolix.persistence import DiskLibrarian
-from hypergolix.persistence import MemoryLibrarian
+from hypergolix.bookie import BookieCore
+from hypergolix.librarian import DiskLibrarian
+from hypergolix.librarian import MemoryLibrarian
 
 from hypergolix.postal import MrPostman
 
@@ -125,7 +125,10 @@ class GaoMock:
 # ###############################################
     
 
-class _GenericPersistenceTest:
+class IntegrationTest:
+    ''' Test integration of all cores.
+    '''
+    
     def dummy_callback(self, subs_ghid, notify_ghid):
         # Note that we can't necessarily simply look for notify_ghid in the
         # vault, because for dynamic objects, the notify_ghid is the frame_ghid
@@ -411,13 +414,13 @@ class _GenericPersistenceTest:
 
 
 @unittest.skip('Deprecated.')
-class MemoryLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
+class MemoryLibrarianTrashtest(unittest.TestCase, IntegrationTest):
     def setUp(self):
         self.percore = PersistenceCore()
         self.doorman = Doorman()
         self.enforcer = Enforcer()
         self.lawyer = Lawyer()
-        self.bookie = Bookie()
+        self.bookie = BookieCore()
         self.librarian = MemoryLibrarian()
         self.postman = MrPostman()
         self.undertaker = Undertaker()
@@ -442,7 +445,7 @@ class MemoryLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
 
     
 @unittest.skip('Deprecated.')
-class DiskLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
+class DiskLibrarianTrashtest(unittest.TestCase, IntegrationTest):
     def setUp(self):
         # Do this on a per-test basis so we have a clean ghidcache for the 
         # restoration test
@@ -452,7 +455,7 @@ class DiskLibrarianTrashtest(unittest.TestCase, _GenericPersistenceTest):
         self.doorman = Doorman()
         self.enforcer = Enforcer()
         self.lawyer = Lawyer()
-        self.bookie = Bookie()
+        self.bookie = BookieCore()
         self.librarian = DiskLibrarian(cache_dir='/ghidcache_test')
         self.postman = MrPostman()
         self.undertaker = Undertaker()

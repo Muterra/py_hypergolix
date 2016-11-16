@@ -47,8 +47,8 @@ from hypergolix.gao import GAOCore
 from hypergolix.privateer import Privateer
 from hypergolix.remotes import Salmonator
 from hypergolix.persistence import PersistenceCore
-from hypergolix.persistence import Bookie
-from hypergolix.persistence import LibrarianCore
+from hypergolix.bookie import BookieCore
+from hypergolix.librarian import LibrarianCore
 from hypergolix.persistence import _GidcLite
 from hypergolix.persistence import _GeocLite
 from hypergolix.persistence import _GobdLite
@@ -250,7 +250,7 @@ class OracleTest(unittest.TestCase):
         self.ghidproxy = GhidProxier()
         self.privateer = Privateer.__fixture__(TEST_AGENT1, self.ghidproxy)
         self.percore = PersistenceCore.__fixture__()
-        self.bookie = Bookie.__fixture__()
+        self.bookie = BookieCore.__fixture__()
         self.librarian = LibrarianCore.__fixture__()
         self.salmonator = Salmonator.__fixture__()
         

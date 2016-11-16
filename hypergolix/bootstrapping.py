@@ -58,9 +58,9 @@ from .persistence import PersistenceCore
 from .persistence import Doorman
 from .persistence import Enforcer
 from .persistence import Lawyer
-from .persistence import Bookie
-from .persistence import DiskLibrarian
-from .persistence import MemoryLibrarian
+from .bookie import BookieCore
+from .librarian import DiskLibrarian
+from .librarian import MemoryLibrarian
 from .persistence import Undertaker
 
 from .postal import MrPostman
@@ -136,7 +136,7 @@ class AgentBootstrap:
         self.doorman = Doorman()
         self.enforcer = Enforcer()
         self.lawyer = Lawyer()
-        self.bookie = Bookie()
+        self.bookie = BookieCore()
         self.librarian = DiskLibrarian(cache_dir=cache_dir)
         self.postman = MrPostman()
         self.undertaker = Undertaker()

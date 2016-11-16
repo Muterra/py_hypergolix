@@ -48,8 +48,8 @@ from hypergolix.persistence import PersistenceCore
 from hypergolix.core import GolixCore
 from hypergolix.core import GhidProxier
 from hypergolix.privateer import Privateer
-from hypergolix.persistence import Bookie
-from hypergolix.persistence import LibrarianCore
+from hypergolix.bookie import BookieCore
+from hypergolix.librarian import LibrarianCore
 
 
 # ###############################################
@@ -75,7 +75,7 @@ class GAOTest(unittest.TestCase):
         self.ghidproxy = GhidProxier.__fixture__()
         self.privateer = Privateer.__fixture__()
         self.percore = PersistenceCore.__fixture__()
-        self.bookie = Bookie.__fixture__()
+        self.bookie = BookieCore.__fixture__()
         self.librarian = LibrarianCore.__fixture__()
         
         # These are a mix of "necessary" and "unnecessary if well-fixtured"
