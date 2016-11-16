@@ -62,10 +62,10 @@ from hypergolix.remotes import SalmonatorNoop
 
 from hypergolix.persistence import PersistenceCore
 from hypergolix.persistence import Doorman
-from hypergolix.persistence import Undertaker
 from hypergolix.persistence import Lawyer
 from hypergolix.persistence import Enforcer
 
+from hypergolix.undertaker import UndertakerCore
 from hypergolix.bookie import BookieCore
 
 from hypergolix.librarian import DiskLibrarian
@@ -204,7 +204,7 @@ class RemotePersistenceServer:
             self.librarian = DiskLibrarian(cache_dir)
             
         self.postman = PostOffice()
-        self.undertaker = Undertaker()
+        self.undertaker = UndertakerCore()
         # I mean, this won't be used unless we set up peering, but it saves us
         # needing to do a modal switch for remote persistence servers
         self.salmonator = SalmonatorNoop()

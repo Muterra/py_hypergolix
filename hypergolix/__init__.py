@@ -59,6 +59,7 @@ from . import remotes
 from . import rolodex
 from . import service
 from . import utils
+from . import undertaker
 
 # Add in toplevel stuff
 from golix import Ghid
