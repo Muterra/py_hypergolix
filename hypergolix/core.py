@@ -360,7 +360,7 @@ class GhidProxier(metaclass=API):
             self._refs[proxy] = target
     
     @public_api
-    def resolve(self, ghid):
+    async def resolve(self, ghid):
         ''' Protect the entry point with a global lock, but don't leave
         the recursive bit alone.
         
@@ -372,7 +372,7 @@ class GhidProxier(metaclass=API):
         if not isinstance(ghid, Ghid):
             raise TypeError('Can only resolve a ghid.')
             
-        return self._resolve(ghid)
+        return (await self._resolve(ghid))
         
     async def _resolve(self, ghid):
         ''' Recursively resolves the container ghid for a proxy (or a

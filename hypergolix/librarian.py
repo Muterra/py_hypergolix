@@ -400,6 +400,7 @@ class LibrarianCore(metaclass=API):
                 
             # Now we have a clean slate and need to update things accordingly.
             self._bound_by_ghid.add(obj.target, obj.ghid)
+            self._dyn_resolver[obj.ghid] = obj.frame_ghid
                 
         elif isinstance(obj, _GdxxLite):
             reference_ghid = obj.ghid
