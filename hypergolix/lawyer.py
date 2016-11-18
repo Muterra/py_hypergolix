@@ -71,6 +71,7 @@ from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
 from .hypothetical import fixture_noop
+from .hypothetical import fixture_return
 
 from .exceptions import HypergolixException
 from .exceptions import RemoteNak
@@ -115,7 +116,7 @@ __all__ = [
 # ###############################################
         
         
-class LawyerCore:
+class LawyerCore(metaclass=API):
     ''' Enforces authorship requirements, including both having a known
     entity as author/recipient and consistency for eg. bindings and
     debindings.
@@ -123,11 +124,18 @@ class LawyerCore:
     Threadsafe.
     '''
     _librarian = weak_property('__librarian')
+    
+    @fixture_api
+    def __init__(self, librarian, *args, **kwargs):
+        super(LawyerCore.__fixture__, self).__init__(*args, **kwargs)
+        self._librarian = librarian
         
     def assemble(self, librarian):
         # Call before using.
         self._librarian = librarian
-        
+    
+    @fixture_return(True)
+    @public_api
     async def _validate_author(self, obj):
         try:
             author = await self._librarian.summarize(obj.author)

@@ -44,6 +44,8 @@ from loopa.utils import await_coroutine_threadsafe
 
 from golix._getlow import GIDC
 
+from hypergolix.persistence import Enforcer
+from hypergolix.persistence import PersistenceCore
 from hypergolix.lawyer import LawyerCore
 from hypergolix.librarian import LibrarianCore
 
@@ -101,9 +103,9 @@ from _fixtures.remote_exchanges import handshake3_1     # Unknown recipient
 # ###############################################
 
 
-class GenericLawyerTest:
-    ''' Test any kind of lawyer by subclassing this and defining a
-    setUp method that includes a self.librarian.
+class GenericLibrarianTest:
+    ''' Test any kind of librarian by subclassing this and defining a
+    setUp method that defines the librarian.
     '''
     
     @classmethod
@@ -118,81 +120,145 @@ class GenericLawyerTest:
     def tearDownClass(cls):
         # Kill the running loop.
         cls.nooploop.stop_threadsafe_nowait()
-        
-    def test_gidc(self):
-        ''' Test gidc operations.
-        '''
-        await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(gidclite1, gidc1),
-            loop = self.nooploop._loop
-        )
-        
-        self.assertTrue(
-            await_coroutine_threadsafe(
-                coro = self.lawyer.validate_gidc(gidclite1),
-                loop = self.nooploop._loop
-            )
-        )
-        self.assertTrue(
-            await_coroutine_threadsafe(
-                coro = self.lawyer.validate_gidc(gidclite2),
-                loop = self.nooploop._loop
-            )
-        )
-        
-    def test_geoc(self):
-        ''' Test geoc operations.
-        '''
-        await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(gidclite1, gidc1),
-            loop = self.nooploop._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(gidclite2, gidc2),
-            loop = self.nooploop._loop
-        )
-        
-        obj1 = _GeocLite.from_golix(cont1_1)
-        obj2 = _GeocLite.from_golix(cont3_1)
-        
-        self.assertTrue(
-            await_coroutine_threadsafe(
-                coro = self.lawyer.validate_geoc(obj1),
-                loop = self.nooploop._loop
-            )
-        )
-        with self.assertRaises(InvalidIdentity):
-            await_coroutine_threadsafe(
-                coro = self.lawyer.validate_geoc(obj2),
-                loop = self.nooploop._loop
-            )
-        
-    def test_gobs(self):
-        ''' Test gobs operations.
-        '''
-        
-    def test_gobd(self):
-        ''' Test gobd operations.
-        '''
-        
-    def test_gdxx(self):
-        ''' Test gdxx operations.
-        '''
-        
-    def test_garq(self):
-        ''' Test garq operations.
-        '''
 
 
-class LawyerCoreTest(GenericLawyerTest, unittest.TestCase):
-    ''' Test the core lawyer-ness.
+class LibrarianCoreTest(GenericLibrarianTest, unittest.TestCase):
+    ''' Test the core librarian-ness. Also, test the various (universal)
+    librarian public_api bits (that don't get tested in the above).
     '''
         
     def setUp(self):
+        # Do actually use the fixture, because we need to test the in-memory
+        # version (plus otherwise, we simply cannot test LibrarianCore).
         self.librarian = LibrarianCore.__fixture__()
         
-        self.lawyer = LawyerCore()
-        self.lawyer.assemble(self.librarian)
+        self.enforcer = Enforcer.__fixture__(self.librarian)
+        self.lawyer = LawyerCore.__fixture__(self.librarian)
+        self.percore = PersistenceCore.__fixture__()
+        
+        # And assemble the librarian
+        self.librarian.assemble(self.enforcer, self.lawyer, self.percore)
+        
+    def test_bound(self):
+        ''' Test librarian.is_bound(obj).
+        '''
+        obj = _GeocLite(ghid=make_random_ghid(), author=make_random_ghid())
+        self.assertFalse(
+            await_coroutine_threadsafe(
+                coro = self.librarian.is_bound(obj),
+                loop = self.nooploop._loop
+            )
+        )
+        
+        self.librarian._bound_by_ghid.add(obj.ghid, make_random_ghid())
+        self.assertTrue(
+            await_coroutine_threadsafe(
+                coro = self.librarian.is_bound(obj),
+                loop = self.nooploop._loop
+            )
+        )
+        
+    def test_debound(self):
+        ''' Test librarian.is_debound(obj).
+        '''
+        obj = _GeocLite(ghid=make_random_ghid(), author=make_random_ghid())
+        binding = _GobsLite(
+            ghid = make_random_ghid(),
+            target = make_random_ghid(),
+            author = obj.author
+        )
+        self.librarian._catalog[binding.ghid] = binding
+        debinding = _GdxxLite(
+            ghid = make_random_ghid(),
+            author = binding.author,
+            target = binding.ghid
+        )
+        
+        # This doesn't need the debinding "uploaded"...
+        self.assertFalse(
+            await_coroutine_threadsafe(
+                coro = self.librarian.is_debound(binding),
+                loop = self.nooploop._loop
+            )
+        )
+        
+        # ...but this does.
+        self.librarian._debound_by_ghid.add(binding.ghid, debinding.ghid)
+        self.librarian._catalog[debinding.ghid] = debinding
+        self.assertTrue(
+            await_coroutine_threadsafe(
+                coro = self.librarian.is_debound(binding),
+                loop = self.nooploop._loop
+            )
+        )
+        
+        # Now let's do the same with an invalid debinding and make sure it gets
+        # removed during the check
+        self.librarian.RESET()
+        self.librarian._catalog[binding.ghid] = binding
+        illegal_author = _GdxxLite(
+            ghid = make_random_ghid(),
+            author = make_random_ghid(),
+            target = binding.ghid
+        )
+        self.librarian._debound_by_ghid.add(binding.ghid, illegal_author.ghid)
+        self.librarian._catalog[illegal_author.ghid] = illegal_author
+        
+        self.assertFalse(
+            await_coroutine_threadsafe(
+                coro = self.librarian.is_debound(binding),
+                loop = self.nooploop._loop
+            )
+        )
+        # Make sure it was also removed.
+        self.assertFalse(
+            self.librarian._debound_by_ghid.contains_within(
+                binding.ghid,
+                illegal_author.ghid
+            )
+        )
+        
+        # Now let's do the same with an invalid target and make sure it gets
+        # removed during the check
+        self.librarian.RESET()
+        self.librarian._catalog[obj.ghid] = obj
+        illegal_target = _GdxxLite(
+            ghid = make_random_ghid(),
+            author = obj.author,
+            target = obj.ghid
+        )
+        self.librarian._debound_by_ghid.add(obj.ghid, illegal_target.ghid)
+        self.librarian._catalog[illegal_target.ghid] = illegal_target
+        
+        self.assertFalse(
+            await_coroutine_threadsafe(
+                coro = self.librarian.is_debound(obj),
+                loop = self.nooploop._loop
+            )
+        )
+        # Make sure it was also removed.
+        self.assertFalse(
+            self.librarian._debound_by_ghid.contains_within(
+                obj.ghid,
+                illegal_target.ghid
+            )
+        )
+        
+    def test_store(self):
+        ''' Test librarian.store(obj, data).
+        '''
+        
+    def test_retrieve(self):
+        ''' Test librarian.retrieve(ghid).
+        '''
+        
+    def test_summarize(self):
+        ''' Test librarian.summarize(ghid).
+        '''
+        
+    def test_abandon(self):
+        ''' Test librarian.abandon(ghid).
+        '''
 
 
 if __name__ == "__main__":

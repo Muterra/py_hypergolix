@@ -165,6 +165,16 @@ class LibrarianCore(metaclass=API):
         # Lookup <recipient>: set(<request ghid>)
         self._requests_for_recipient = SetMap()
         
+    @fixture_api
+    def RESET(self):
+        ''' Reset all of the librarian.
+        '''
+        self._shelf.clear()
+        self._dyn_resolver.clear()
+        self._bound_by_ghid.clear_all()
+        self._debound_by_ghid.clear_all()
+        self._requests_for_recipient.clear_all()
+        
     def assemble(self, enforcer, lawyer, percore):
         ''' Assign stuff hereto avoid circuitous problems.
         '''
@@ -190,17 +200,17 @@ class LibrarianCore(metaclass=API):
         invalidated = 0
         for debinding_ghid in debindings:
             # Get the existing debinding object
-            debinding = await self._librarian.summarize(debinding_ghid)
+            debinding = await self.summarize(debinding_ghid)
             
             # Validate existing binding against newly-known target
             try:
-                self._enforcer.validate_gdxx(debinding, target_obj=obj)
-                self._lawyer.validate_gdxx(debinding, target_obj=obj)
+                await self._enforcer.validate_gdxx(debinding, target_obj=obj)
+                await self._lawyer.validate_gdxx(debinding, target_obj=obj)
                 
             # Validation failed. Remove illegal debinding.
             except (InvalidTarget, InconsistentAuthor):
                 logger.warning(''.join((
-                    'Removed invalid existing binding.\n',
+                    'Removed invalid existing debinding.\n',
                     '    Debinding author:     ', str(debinding.author), '\n',
                     '    Valid object author:  ', str(obj.author), '\n',
                     '    Debinding target:     ', str(debinding.target), '\n',
@@ -209,7 +219,7 @@ class LibrarianCore(metaclass=API):
                 # There's no need to do anything with the undertaker, because
                 # debindings don't get subscribed to, and we (the librarian)
                 # are the sole source of truth.
-                await self.force_gc(debinding)
+                await self.abandon(debinding)
                 
                 # Record that this was invalidated
                 invalidated += 1
@@ -287,17 +297,6 @@ class LibrarianCore(metaclass=API):
             
         return obj
         
-    @summarize.fixture
-    async def summarize(self, ghid):
-        ''' Skip lazy loading in the fixture.
-        '''
-        try:
-            ghid = await self.resolve_frame(ghid)
-        except KeyError:
-            pass
-        
-        return self._catalog[ghid]
-        
     @public_api
     async def abandon(self, obj):
         ''' Forces erasure of an object without notifying anyone else.
@@ -311,8 +310,10 @@ class LibrarianCore(metaclass=API):
         await self.remove_from_cache(ghid)
         
         # Delete it from the catalog (if it exists there)
-        self._catalog[ghid].pop(ghid, None)
+        self._catalog.pop(ghid, None)
     
+    # Subclasses MAY define this, but are not required to do so.
+    @fixture_api
     async def restore(self):
         ''' For LibrarianCore, do nothing. This is just here as an
         endpoint for restore calls. If subclasses want/need to support
@@ -360,10 +361,7 @@ class LibrarianCore(metaclass=API):
         # debinds, but that a malicious actor could find a race condition and
         # debind something FOR SOMEONE ELSE before the bookie knows about the
         # original object authorship.
-        total = set()
-        total.update(self._debound_by_ghid.get_any(ghid))
-        total.update(self._debound_by_ghid_staged.get_any(ghid))
-        return total
+        return self._debound_by_ghid.get_any(ghid)
     
     # Subclasses MUST define this to work!
     # @abc.abstractmethod
@@ -428,15 +426,16 @@ class LibrarianCore(metaclass=API):
         
         if isinstance(obj, _GobsLite):
             reference_ghid = obj.ghid
-            self._debound_by_ghid.discard(obj.target, obj.ghid)
+            self._bound_by_ghid.discard(obj.target, obj.ghid)
             
         elif isinstance(obj, _GobdLite):
             reference_ghid = obj.frame_ghid
-            self._debound_by_ghid.discard(obj.target, obj.ghid)
             self._dyn_resolver.pop(obj.ghid, None)
+            self._bound_by_ghid.discard(obj.target, obj.ghid)
             
         elif isinstance(obj, _GdxxLite):
             reference_ghid = obj.ghid
+            self._debound_by_ghid.discard(obj.target, obj.ghid)
             
         elif isinstance(obj, _GarqLite):
             reference_ghid = obj.ghid

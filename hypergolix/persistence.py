@@ -443,7 +443,8 @@ class PersistenceCore(metaclass=API):
                 await self._salmonator.schedule_push(obj.ghid)
         
             return obj
-        
+    
+    @public_api
     async def attempt_load(self, packed):
         ''' Attempt to load a packed golix object.
         '''
@@ -486,6 +487,16 @@ class PersistenceCore(metaclass=API):
                 
         # We might return None here, but let the parent function raise in that
         # case.
+        return result
+        
+    @attempt_load.fixture
+    async def attempt_load(self, packed):
+        ''' Create an ad-hoc doorman fixture.
+        '''
+        self._doorman = Doorman.__fixture__()
+        result = \
+            await super(PersistenceCore.__fixture__, self).attempt_load(packed)
+        del self._doorman
         return result
         
     async def ingest(self, packed, remotable=True):
@@ -576,6 +587,7 @@ class Doorman(metaclass=API):
                 '0x0002: Failed to verify object.'
             ) from exc
         
+    @public_api
     async def load_gidc(self, packed):
         # Run the actual loader in the executor
         obj = await self._loop.run_in_executor(
@@ -586,6 +598,12 @@ class Doorman(metaclass=API):
             
         # No further verification required.
         return _GidcLite.from_golix(obj)
+        
+    @load_gidc.fixture
+    async def load_gidc(self, packed):
+        ''' Bypass the executor.
+        '''
+        return _GidcLite.from_golix(self._load_gidc(packed))
         
     def _load_gidc(self, packed):
         ''' Performs the actual loading.
@@ -598,7 +616,8 @@ class Doorman(metaclass=API):
             raise MalformedGolixPrimitive(
                 '0x0001: Invalid formatting for GIDC object.'
             ) from exc
-        
+    
+    @public_api
     async def load_geoc(self, packed):
         # Run the actual loader in the executor
         obj = await self._loop.run_in_executor(
@@ -626,6 +645,12 @@ class Doorman(metaclass=API):
             
         return _GeocLite.from_golix(obj)
         
+    @load_geoc.fixture
+    async def load_geoc(self, packed):
+        ''' Bypass the executor.
+        '''
+        return _GeocLite.from_golix(self._load_geoc(packed))
+        
     def _load_geoc(self, packed):
         ''' Performs the actual loading.
         '''
@@ -637,7 +662,8 @@ class Doorman(metaclass=API):
             raise MalformedGolixPrimitive(
                 '0x0001: Invalid formatting for GIDC object.'
             ) from exc
-        
+    
+    @public_api
     async def load_gobs(self, packed):
         # Run the actual loader in the executor
         obj = await self._loop.run_in_executor(
@@ -664,6 +690,12 @@ class Doorman(metaclass=API):
             
         return _GobsLite.from_golix(obj)
         
+    @load_gobs.fixture
+    async def load_gobs(self, packed):
+        ''' Bypass the executor.
+        '''
+        return _GobsLite.from_golix(self._load_gobs(packed))
+        
     def _load_gobs(self, packed):
         ''' Performs the actual loading.
         '''
@@ -675,7 +707,8 @@ class Doorman(metaclass=API):
             raise MalformedGolixPrimitive(
                 '0x0001: Invalid formatting for GIDC object.'
             ) from exc
-        
+    
+    @public_api
     async def load_gobd(self, packed):
         # Run the actual loader in the executor
         obj = await self._loop.run_in_executor(
@@ -702,6 +735,12 @@ class Doorman(metaclass=API):
             
         return _GobdLite.from_golix(obj)
         
+    @load_gobd.fixture
+    async def load_gobd(self, packed):
+        ''' Bypass the executor.
+        '''
+        return _GobdLite.from_golix(self._load_gobd(packed))
+        
     def _load_gobd(self, packed):
         ''' Performs the actual loading.
         '''
@@ -713,7 +752,8 @@ class Doorman(metaclass=API):
             raise MalformedGolixPrimitive(
                 '0x0001: Invalid formatting for GIDC object.'
             ) from exc
-        
+    
+    @public_api
     async def load_gdxx(self, packed):
         # Run the actual loader in the executor
         obj = await self._loop.run_in_executor(
@@ -740,6 +780,12 @@ class Doorman(metaclass=API):
             
         return _GdxxLite.from_golix(obj)
         
+    @load_gdxx.fixture
+    async def load_gdxx(self, packed):
+        ''' Bypass the executor.
+        '''
+        return _GdxxLite.from_golix(self._load_gdxx(packed))
+        
     def _load_gdxx(self, packed):
         ''' Performs the actual loading.
         '''
@@ -751,7 +797,8 @@ class Doorman(metaclass=API):
             raise MalformedGolixPrimitive(
                 '0x0001: Invalid formatting for GIDC object.'
             ) from exc
-        
+    
+    @public_api
     async def load_garq(self, packed):
         # Run the actual loader in the executor
         obj = await self._loop.run_in_executor(
@@ -762,6 +809,12 @@ class Doorman(metaclass=API):
             
         # Persisters cannot further verify the object.
         return _GarqLite.from_golix(obj)
+        
+    @load_garq.fixture
+    async def load_garq(self, packed):
+        ''' Bypass the executor.
+        '''
+        return _GarqLite.from_golix(self._load_garq(packed))
         
     def _load_garq(self, packed):
         ''' Performs the actual loading.
@@ -774,12 +827,17 @@ class Doorman(metaclass=API):
             raise MalformedGolixPrimitive(
                 '0x0001: Invalid formatting for GIDC object.'
             ) from exc
-        
-        
-class Enforcer:
+
+
+class Enforcer(metaclass=API):
     ''' Enforces valid target selections.
     '''
     _librarian = weak_property('__librarian')
+    
+    @fixture_api
+    def __init__(self, librarian, *args, **kwargs):
+        super(Enforcer.__fixture__, self).__init__(*args, **kwargs)
+        self._librarian = librarian
         
     def assemble(self, librarian):
         # Call before using.
