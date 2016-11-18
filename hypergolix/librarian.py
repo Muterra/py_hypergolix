@@ -414,6 +414,7 @@ class LibrarianCore(metaclass=API):
             reference_ghid = obj.ghid
             
         self._shelf[reference_ghid] = data
+        self._catalog[reference_ghid] = obj
         
     # Subclasses MUST define this to work!
     # @abc.abstractmethod
