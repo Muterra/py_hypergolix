@@ -228,7 +228,7 @@ class UndertakerCore:
     def _gc_gdxx(self, obj):
         # Note that removing a debinding cannot result in a downstream target
         # being GCd, because it wouldn't exist.
-        if self._bookie.is_debound(obj) or self._bookie.is_illegal(obj):
+        if self._bookie.is_debound(obj):
             self._gc_execute(obj)
             
     def _gc_garq(self, obj):
@@ -236,8 +236,6 @@ class UndertakerCore:
             self._gc_execute(obj)
         
     def _gc_execute(self, obj):
-        # Call GC at bookie first so that librarian is still in the know.
-        self._bookie.force_gc(obj)
         # Next, goodbye object.
         self._librarian.force_gc(obj)
         # Now notify the postman, and tell her it's a removal.

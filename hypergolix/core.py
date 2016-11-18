@@ -54,6 +54,8 @@ from .utils import readonly_property
 
 from .persistence import _GeocLite
 
+from .exceptions import UnknownParty
+
 
 # ###############################################
 # Boilerplate
@@ -79,10 +81,15 @@ class GolixCore(metaclass=API):
     ''' Wrapper around Golix library that automates much of the state
     management, holds the Agent's identity, etc etc.
     '''
+    _librarian = weak_property('__librarian')
     DEFAULT_LEGROOM = 7
     
+    # Async stuff
+    _executor = readonly_property('__executor')
+    _loop = readonly_property('__loop')
+    
     @public_api
-    def __init__(self, *args, **kwargs):
+    def __init__(self, executor, loop, *args, **kwargs):
         ''' Create a new agent. Persister should subclass _PersisterBase
         (eventually this requirement may be changed).
         
@@ -91,23 +98,34 @@ class GolixCore(metaclass=API):
         _identity isinstance golix.FirstParty
         '''
         super().__init__(*args, **kwargs)
-        self._opslock = threading.Lock()
+        self._mutex_request = threading.Lock()
+        self._mutex_container = threading.Lock()
+        self._mutex_sbinding = threading.Lock()
+        self._mutex_dbinding = threading.Lock()
+        self._mutex_xbinding = threading.Lock()
         
         # Added during bootstrap
         self._identity = None
-        # Added during assembly
-        self._librarian = None
+        
+        # Async-specific stuff
+        setattr(self, '__executor', executor)
+        setattr(self, '__loop', loop)
         
     @__init__.fixture
     def __init__(self, test_agent, *args, **kwargs):
         ''' Just, yknow, throw in the towel. Err, agent. Whatever.
         '''
-        super(GolixCore.__fixture__, self).__init__(*args, **kwargs)
+        super(GolixCore.__fixture__, self).__init__(
+            executor = None,
+            loop = None,
+            *args,
+            **kwargs
+        )
         self._identity = test_agent
         
     def assemble(self, librarian):
         # Chicken, meet egg.
-        self._librarian = weakref.proxy(librarian)
+        self._librarian = librarian
         
     def prep_bootstrap(self, identity):
         # Temporarily set our identity to a generic firstparty for loading.
@@ -124,91 +142,181 @@ class GolixCore(metaclass=API):
         '''
         return self._identity.ghid
         
-    def unpack_request(self, request):
+    async def unpack_request(self, request):
         ''' Just like it says on the label...
         Note that the request is PACKED, not unpacked.
         '''
-        with self._opslock:
+        # Run the actual function in the executor
+        return (await self._loop.run_in_executor(
+            self._executor,
+            self._unpack_request,
+            request
+        ))
+        
+    def _unpack_request(self, request):
+        ''' Just like it says on the label...
+        Note that the request is PACKED, not unpacked.
+        '''
+        with self._mutex_request:
             unpacked = self._identity.unpack_request(request)
         return unpacked
         
-    def open_request(self, unpacked):
+    async def open_request(self, unpacked):
         ''' Just like it says on the label...
         Note that the request is UNPACKED, not packed.
         '''
-        requestor = SecondParty.from_packed(
-            self._librarian.retrieve(unpacked.author)
-        )
-        payload = self._identity.receive_request(requestor, unpacked)
-        return payload
+        try:
+            requestor = SecondParty.from_packed(
+                await self._librarian.retrieve(unpacked.author)
+            )
+            
+        except KeyError as exc:
+            raise UnknownParty(
+                'Request author unknown: ' + str(unpacked.author)
+            ) from exc
         
-    def make_request(self, recipient, payload):
+        # Run the actual function in the executor
+        return (await self._loop.run_in_executor(
+            self._executor,
+            self._open_request,
+            unpacked,
+            requestor
+        ))
+        
+    def _open_request(self, unpacked, requestor):
+        ''' Just like it says on the label...
+        Note that the request is UNPACKED, not packed.
+        '''
+        return self._identity.receive_request(requestor, unpacked)
+        
+    async def make_request(self, recipient, payload):
         # Just like it says on the label...
-        recipient = SecondParty.from_packed(
-            self._librarian.retrieve(recipient)
-        )
-        with self._opslock:
+        try:
+            recipient = SecondParty.from_packed(
+                await self._librarian.retrieve(recipient)
+            )
+        except KeyError as exc:
+            raise UnknownParty(
+                'Request author unknown: ' + str(recipient)
+            ) from exc
+        
+        # Run the actual function in the executor
+        return (await self._loop.run_in_executor(
+            self._executor,
+            self._make_request,
+            recipient,
+            payload
+        ))
+        
+    def _make_request(self, recipient, payload):
+        # Just like it says on the label...
+        with self._mutex_request:
             return self._identity.make_request(
                 recipient = recipient,
                 request = payload,
             )
         
-    def open_container(self, container, secret):
-        # Wrapper around golix.FirstParty.receive_container.
+    async def open_container(self, container, secret):
         author = SecondParty.from_packed(
-            self._librarian.retrieve(container.author)
+            await self._librarian.retrieve(container.author)
         )
         
-        with self._opslock:
-            state = self._identity.receive_container(
+        # Wrapper around golix.FirstParty.receive_container.
+        # Run the actual function in the executor
+        return (await self._loop.run_in_executor(
+            self._executor,
+            self._open_container,
+            container,
+            secret,
+            author
+        ))
+        
+    def _open_container(self, container, secret, author):
+        # Wrapper around golix.FirstParty.receive_container.
+        with self._mutex_container:
+            return self._identity.receive_container(
                 author = author,
                 secret = secret,
                 container = container
             )
         
-        return state
-        
-    def make_container(self, data, secret):
+    async def make_container(self, data, secret):
         # Simple wrapper around golix.FirstParty.make_container
-        with self._opslock:
+        # Run the actual function in the executor
+        return (await self._loop.run_in_executor(
+            self._executor,
+            self._make_container,
+            data,
+            secret
+        ))
+        
+    def _make_container(self, data, secret):
+        # Simple wrapper around golix.FirstParty.make_container
+        with self._mutex_container:
             return self._identity.make_container(
                 secret = secret,
                 plaintext = data
             )
 
-    def make_binding_stat(self, target):
+    async def make_binding_stat(self, target):
         # Note that this requires no open() method, as bindings are verified by
         # the local persister.
-        with self._opslock:
+        # Run the actual function in the executor
+        return (await self._loop.run_in_executor(
+            self._executor,
+            self._make_binding_stat,
+            target
+        ))
+
+    def _make_binding_stat(self, target):
+        # Note that this requires no open() method, as bindings are verified by
+        # the local persister.
+        with self._mutex_sbinding:
             return self._identity.make_bind_static(target)
         
-    def make_binding_dyn(self, target, ghid=None, history=None):
+    async def make_binding_dyn(self, target, ghid=None, history=None):
         ''' Make a new dynamic binding frame.
         If supplied, ghid is the dynamic address, and history is an
         ordered iterable of the previous frame ghids.
         '''
-        # Make a new binding!
-        if (ghid is None and history is None):
-            pass
-            
-        # Update an existing binding!
-        elif (ghid is not None and history is not None):
-            pass
-            
-        # Error!
-        else:
+        # Either ghid AND history must be defined, XOR ghid AND history must be
+        # undefined.
+        if bool(ghid) ^ bool(history):
             raise ValueError('Mixed def of ghid/history while dyn binding.')
             
-        with self._opslock:
+        # Run the actual function in the executor
+        return (await self._loop.run_in_executor(
+            self._executor,
+            self._make_binding_dyn,
+            target,
+            ghid,
+            history
+        ))
+        
+    def _make_binding_dyn(self, target, ghid, history):
+        ''' Make a new dynamic binding frame.
+        If supplied, ghid is the dynamic address, and history is an
+        ordered iterable of the previous frame ghids.
+        '''
+        with self._mutex_dbinding:
             return self._identity.make_bind_dynamic(
                 target = target,
                 ghid_dynamic = ghid,
                 history = history
             )
         
-    def make_debinding(self, target):
+    async def make_debinding(self, target):
         # Simple wrapper around golix.FirstParty.make_debind
-        with self._opslock:
+        # Run the actual function in the executor
+        return (await self._loop.run_in_executor(
+            self._executor,
+            self._make_debinding,
+            target
+        ))
+        
+    def _make_debinding(self, target):
+        # Simple wrapper around golix.FirstParty.make_debind
+        with self._mutex_xbinding:
             return self._identity.make_debind(target)
 
 
@@ -266,12 +374,12 @@ class GhidProxier(metaclass=API):
             
         return self._resolve(ghid)
         
-    def _resolve(self, ghid):
+    async def _resolve(self, ghid):
         ''' Recursively resolves the container ghid for a proxy (or a
         container).
         '''
         try:
-            obj = self._librarian.summarize(ghid)
+            obj = await self._librarian.summarize(ghid)
         
         # TODO: make this an error?
         except KeyError:
@@ -289,12 +397,12 @@ class GhidProxier(metaclass=API):
                 result = ghid
                 
             else:
-                result = self._resolve(obj.target)
+                result = await self._resolve(obj.target)
                 
         return result
         
     @resolve.fixture
-    def resolve(self, ghid):
+    async def resolve(self, ghid):
         ''' Ehhhh, okay. So we're going to fixture this, mostly for
         privateer, in a way that just returns the ghid immediately.
         '''
@@ -321,29 +429,12 @@ class Oracle(metaclass=API):
     _percore = weak_property('__percore')
     _bookie = weak_property('__bookie')
     _librarian = weak_property('__librarian')
-    _executor = readonly_property('__executor')
     
-    @public_api
-    def __init__(self, executor, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         ''' Sets up internal tracking.
         '''
         super().__init__(*args, **kwargs)
-        
-        setattr(self, '__executor', executor)
         self._lookup = {}
-        
-    @__init__.fixture
-    def __init__(self, *args, **kwargs):
-        ''' Fixture init.
-        '''
-        super(Oracle.__fixture__, self).__init__(
-            *args,
-            executor = None,
-            **kwargs
-        )
-        
-        self._lookup = {}
-        self._opslock = NoContext()
         
     @fixture_api
     def RESET(self):
@@ -408,7 +499,6 @@ class Oracle(metaclass=API):
                 percore = self._percore,
                 bookie = self._bookie,
                 librarian = self._librarian,
-                executor = self._executor,
                 **kwargs
             )
             
@@ -450,14 +540,13 @@ class Oracle(metaclass=API):
             self._golcore.whoami,   # author
             legroom,
             *args,
-            **kwargs,
             golcore = self._golcore,
             ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             bookie = self._bookie,
             librarian = self._librarian,
-            executor = self._executor
+            **kwargs
         )
         await obj._push()
         

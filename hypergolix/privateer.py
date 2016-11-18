@@ -96,7 +96,6 @@ class Privateer(metaclass=API):
     threadsafe.
     '''
     _golcore = weak_property('__golcore')
-    _ghidproxy = weak_property('__ghidproxy')
     
     @public_api
     def __init__(self, *args, **kwargs):
@@ -114,13 +113,12 @@ class Privateer(metaclass=API):
         self._secrets_local = None
         
     @__init__.fixture
-    def __init__(self, identity, ghidproxy, *args, **kwargs):
+    def __init__(self, identity, *args, **kwargs):
         ''' Directly inject a local identity, and then add a ghidproxy.
         '''
         super(Privateer.__fixture__, self).__init__(*args, **kwargs)
         
         self._identity = identity
-        self._ghidproxy = ghidproxy
         self.bootstrap(
             persistent = {},
             quarantine = {}
@@ -139,11 +137,9 @@ class Privateer(metaclass=API):
         '''
         return ghid in self._secrets
         
-    def assemble(self, golcore, ghidproxy):
+    def assemble(self, golcore):
         # Chicken, meet egg.
         self._golcore = golcore
-        # We need the ghidproxy for checking containership
-        self._ghidproxy = ghidproxy
         
     def prep_bootstrap(self):
         ''' Creates temporary objects for tracking secrets.
@@ -224,17 +220,6 @@ class Privateer(metaclass=API):
             ' secret staging.'
         )))
         self._stage(ghid, secret, self._secrets_staging)
-            
-    def _ensure_container(self, ghid):
-        ''' Make sure the ghid does, in fact, resolve to a container.
-        Dependent upon ghidproxy having a clear resolution.
-        '''
-        # Enforce container-only.
-        target = self._ghidproxy.resolve(ghid)
-        if ghid != target:
-            raise ValueError(
-                'Staged ghids must be containers, not proxies: ' + str(ghid)
-            )
                 
     def _stage(self, ghid, secret, lookup):
         ''' Raw staging, bypassing modlock. Only accessed directly
@@ -254,9 +239,6 @@ class Privateer(metaclass=API):
         the primary secret store. Used only for incoming secrets in
         shares that have not yet been opened.
         '''
-        # With quarantine, we can verify it's a container first, since we
-        # will only see this when pulling from upstream anyways.
-        self._ensure_container(ghid)
         logger.debug(''.join((
             'GAO ',
             str(ghid),
@@ -300,9 +282,6 @@ class Privateer(metaclass=API):
         committing.
         
         '''
-        # Go ahead and make sure it's a container.
-        self._ensure_container(ghid)
-        
         # Catch anything with an unknown secret
         if ghid not in self._secrets:
             raise UnknownSecret(

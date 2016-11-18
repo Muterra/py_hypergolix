@@ -194,33 +194,23 @@ class Rolodex(metaclass=API):
     async def _hand_object(self, target, recipient):
         ''' Initiates a handshake request with the recipient.
         '''
-        if recipient not in self._librarian:
-            try:
-                self._salmonator.attempt_pull(recipient)
-            except Exception as exc:
-                raise UnknownParty(
-                    'Recipient unknown: ' + str(recipient)
-                ) from exc
-            
-        contact = SecondParty.from_packed(
-            self._librarian.retrieve(recipient)
-        )
+        if not (await self._librarian.contains(recipient)):
+            await self._salmonator.attempt_pull(recipient, quiet=True)
         
         # This is guaranteed to resolve the container fully.
-        container_ghid = self._ghidproxy.resolve(target)
+        container_ghid = await self._ghidproxy.resolve(target)
         
-        with self._opslock:
-            # TODO: fix Golix library so this isn't such a shitshow re:
-            # breaking abstraction barriers.
-            handshake = self._golcore._identity.make_handshake(
-                target = target,
-                secret = self._privateer.get(container_ghid)
-            )
-            
-            request = self._golcore._identity.make_request(
-                recipient = contact,
-                request = handshake
-            )
+        # TODO: fix Golix library so this isn't such a shitshow re:
+        # breaking abstraction barriers.
+        handshake = self._golcore._identity.make_handshake(
+            target = target,
+            secret = self._privateer.get(container_ghid)
+        )
+        
+        request = self._golcore._identity.make_request(
+            recipient = recipient,
+            request = handshake
+        )
         
         # Note that this must be called before publishing to the persister, or
         # there's a race condition between them.
@@ -237,11 +227,11 @@ class Rolodex(metaclass=API):
     async def notification_handler(self, subscription, notification):
         ''' Callback to handle any requests.
         '''
-        if notification not in self._librarian:
-            self._salmonator.attempt_pull(notification, quiet=True)
+        if not (await self._librarian.contains(notification)):
+            await self._salmonator.attempt_pull(notification, quiet=True)
         
         # Note that the notification could also be a GDXX.
-        request_or_debind = self._librarian.summarize(notification)
+        request_or_debind = await self._librarian.summarize(notification)
         
         if isinstance(request_or_debind, _GarqLite):
             await self._handle_request(notification)
@@ -261,7 +251,7 @@ class Rolodex(metaclass=API):
         ''' The notification is an asymmetric request. Deal with it.
         '''
         try:
-            packed = self._librarian.retrieve(notification)
+            packed = await self._librarian.retrieve(notification)
             unpacked = await self._loop.run_in_executor(
                 self._executor,
                 self._golcore.unpack_request,
@@ -269,13 +259,8 @@ class Rolodex(metaclass=API):
             )
         
             # TODO: have this filter based on contacts.
-            if unpacked.author not in self._librarian:
-                try:
-                    self._salmonator.attempt_pull(unpacked.author)
-                except Exception as exc:
-                    raise UnknownParty(
-                        'Request author unknown: ' + str(unpacked.author)
-                    ) from exc
+            if not (await self._librarian.contains(unpacked.author)):
+                self._salmonator.attempt_pull(unpacked.author, quiet=True)
         
             payload = await self._loop.run_in_executor(
                 self._executor,
@@ -330,7 +315,7 @@ class Rolodex(metaclass=API):
         try:
             # First, we need to figure out what the actual container object's
             # address is, and then stage the secret for it.
-            container_ghid = self._ghidproxy.resolve(request.target)
+            container_ghid = await self._ghidproxy.resolve(request.target)
             self._privateer.quarantine(
                 ghid = container_ghid,
                 secret = request.secret

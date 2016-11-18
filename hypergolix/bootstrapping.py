@@ -57,8 +57,8 @@ from .gao import _GAOSetMap
 from .persistence import PersistenceCore
 from .persistence import Doorman
 from .persistence import Enforcer
+from .persistence import Bookie
 from .lawyer import LawyerCore
-from .bookie import BookieCore
 from .librarian import DiskLibrarian
 from .librarian import MemoryLibrarian
 from .undertaker import UndertakerCore
@@ -136,7 +136,7 @@ class AgentBootstrap:
         self.doorman = Doorman()
         self.enforcer = Enforcer()
         self.lawyer = LawyerCore()
-        self.bookie = BookieCore()
+        self.bookie = Bookie()
         self.librarian = DiskLibrarian(cache_dir=cache_dir)
         self.postman = MrPostman()
         self.undertaker = UndertakerCore()
@@ -653,21 +653,21 @@ class Credential:
         return self
         
     @classmethod
-    def _inject_secret(cls, librarian, privateer, proxy, master_secret):
+    async def _inject_secret(cls, librarian, privateer, proxy, master_secret):
         ''' Injects a container secret into the temporary storage at the
         privateer. Calculates it through the proxy and master.
         '''
-        binding = librarian.summarize(proxy)
+        binding = await librarian.summarize(proxy)
         previous_frame = binding.history[0]
         container_secret = privateer._ratchet(
-            secret = master_secret, 
+            secret = master_secret,
             proxy = proxy,
             salt_ghid = previous_frame
         )
         privateer.stage(binding.target, container_secret)
     
     @classmethod
-    def load(cls, librarian, oracle, privateer, user_id, password,
+    async def load(cls, librarian, oracle, privateer, user_id, password,
             _scrypt_hardness=None):
         ''' Loads a credential container from the <librarian>, with a
         ghid of <user_id>, encrypted with scrypted <password>.
@@ -693,7 +693,7 @@ class Credential:
             'Recovering the primary manifest from the persistence subsystem.'
         )
         
-        primary_manifest = librarian.summarize(user_id)
+        primary_manifest = await librarian.summarize(user_id)
         fingerprint = primary_manifest.author
         logger.info('Expanding password using scrypt. Please be patient.')
         primary_master = cls._password_expansion(

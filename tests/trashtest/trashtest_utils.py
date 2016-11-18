@@ -36,12 +36,14 @@ hypergolix: A python Golix client.
 import unittest
 import weakref
 import gc
+import random
 
 # These imports fall within the scope of testing.
 from hypergolix.utils import _WeakSet
 # from hypergolix.utils import _WeakerSet
 from hypergolix.utils import SetMap
 from hypergolix.utils import WeakSetMap
+from hypergolix.utils import FiniteDict
 
 
 # ###############################################
@@ -57,6 +59,44 @@ class Refferee:
 # ###############################################
 # Testing
 # ###############################################
+
+
+class FiniteDictTest(unittest.TestCase):
+    ''' Test a FiniteDict.
+    '''
+    
+    def test_finitude(self):
+        ''' Ensure the length stays correct.
+        '''
+        maxlen = 10
+        maxiter = 20
+        article = FiniteDict(maxlen=maxlen)
+        
+        for ii in range(maxiter):
+            with self.subTest(ii):
+                article[ii] = ii
+                self.assertTrue(len(article) <= maxlen)
+        
+        certified_freshest = article.popitem(last=False)
+        self.assertEqual(certified_freshest, (maxiter - 1, maxiter - 1))
+        
+    def test_reordering(self):
+        ''' Make sure accessing the item changes the order.
+        '''
+        maxlen = 20
+        indices = list(range(15))
+        random.shuffle(indices)
+        
+        article = FiniteDict(maxlen=maxlen)
+        
+        for ii in range(maxlen):
+            article[ii] = ii
+            
+        for ii in indices:
+            with self.subTest(ii):
+                article[ii]
+                certified_freshest = article.popitem(last=False)
+                self.assertEqual(certified_freshest, (ii, ii))
 
 
 class WeakSetTest(unittest.TestCase):

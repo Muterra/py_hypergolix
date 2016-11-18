@@ -62,11 +62,12 @@ from hypergolix.remotes import SalmonatorNoop
 
 from hypergolix.persistence import PersistenceCore
 from hypergolix.persistence import Doorman
-from hypergolix.lawyer import LawyerCore
 from hypergolix.persistence import Enforcer
+from hypergolix.persistence import Bookie
+
+from hypergolix.lawyer import LawyerCore
 
 from hypergolix.undertaker import UndertakerCore
-from hypergolix.bookie import BookieCore
 
 from hypergolix.librarian import DiskLibrarian
 from hypergolix.librarian import MemoryLibrarian
@@ -196,7 +197,7 @@ class RemotePersistenceServer:
         self.doorman = Doorman()
         self.enforcer = Enforcer()
         self.lawyer = LawyerCore()
-        self.bookie = BookieCore()
+        self.bookie = Bookie()
         
         if cache_dir is None:
             self.librarian = MemoryLibrarian()

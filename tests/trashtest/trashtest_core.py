@@ -47,7 +47,7 @@ from hypergolix.gao import GAOCore
 from hypergolix.privateer import Privateer
 from hypergolix.remotes import Salmonator
 from hypergolix.persistence import PersistenceCore
-from hypergolix.bookie import BookieCore
+from hypergolix.persistence import Bookie
 from hypergolix.librarian import LibrarianCore
 from hypergolix.persistence import _GidcLite
 from hypergolix.persistence import _GeocLite
@@ -94,21 +94,46 @@ class MockCredential:
 
 
 class GolcoreTest(unittest.TestCase):
+    ''' Test operations with GolixCore.
+    '''
+    
+    @classmethod
+    def setUpClass(cls):
+        cls.executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+        cls.nooploop = NoopLoop(
+            debug = True,
+            threaded = True
+        )
+        cls.nooploop.start()
+        
+    @classmethod
+    def tearDownClass(cls):
+        # Kill the running loop.
+        cls.nooploop.stop_threadsafe_nowait()
+    
     def setUp(self):
         self.librarian = LibrarianCore.__fixture__()
         
-        self.golcore = GolixCore()
+        self.golcore = GolixCore(self.executor, self.nooploop._loop)
         self.golcore.assemble(self.librarian)
         self.golcore.bootstrap(MockCredential(None, TEST_AGENT1))
         
         # Our librarian fixturing is a little inadequate, so for now just
         # manually add this stuff.
-        self.librarian.store(
-            _GidcLite(TEST_AGENT1.ghid, TEST_AGENT1.second_party),
-            TEST_AGENT1.second_party.packed)
-        self.librarian.store(
-            _GidcLite(TEST_AGENT2.ghid, TEST_AGENT2.second_party),
-            TEST_AGENT2.second_party.packed)
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(
+                _GidcLite(TEST_AGENT1.ghid, TEST_AGENT1.second_party),
+                TEST_AGENT1.second_party.packed
+            ),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(
+                _GidcLite(TEST_AGENT2.ghid, TEST_AGENT2.second_party),
+                TEST_AGENT2.second_party.packed
+            ),
+            loop = self.nooploop._loop
+        )
         
     def test_trash(self):
         from _fixtures.remote_exchanges import handshake2_1
@@ -123,30 +148,82 @@ class GolcoreTest(unittest.TestCase):
         payload = TEST_AGENT1.make_handshake(
             target = cont2_1.ghid,
             secret = secret2_1)
-        self.golcore.open_request(
-            self.golcore.unpack_request(
-                handshake2_1.packed
-            )
-        )
-        self.golcore.make_request(
-            recipient = TEST_AGENT2.ghid,
-            payload = payload)
-        self.golcore.open_container(
-            container = cont2_1,
-            secret = secret2_1)
-        self.golcore.make_container(
-            data = b'Hello world',
-            secret = TEST_AGENT1.new_secret())
-        self.golcore.make_binding_stat(target=cont2_1.ghid)
-        dynamic1 = self.golcore.make_binding_dyn(target=cont2_1.ghid)
-        dynamic2 = self.golcore.make_binding_dyn(
-            target = cont2_1.ghid,
-            ghid = dynamic1.ghid_dynamic,
-            history = [dynamic1.ghid])
-        self.golcore.make_debinding(target=dynamic2.ghid_dynamic)
         
+        unpacked = await_coroutine_threadsafe(
+            coro = self.golcore.unpack_request(handshake2_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.golcore.open_request(unpacked),
+            loop = self.nooploop._loop
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.golcore.make_request(
+                recipient = TEST_AGENT2.ghid,
+                payload = payload
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.golcore.open_container(
+                container = cont2_1,
+                secret = secret2_1
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.golcore.make_container(
+                data = b'Hello world',
+                secret = TEST_AGENT1.new_secret()
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.golcore.make_binding_stat(target=cont2_1.ghid),
+            loop = self.nooploop._loop
+        )
+        
+        dynamic1 = await_coroutine_threadsafe(
+            coro = self.golcore.make_binding_dyn(target=cont2_1.ghid),
+            loop = self.nooploop._loop
+        )
+        
+        dynamic2 = await_coroutine_threadsafe(
+            coro = self.golcore.make_binding_dyn(
+                target = cont2_1.ghid,
+                ghid = dynamic1.ghid_dynamic,
+                history = [dynamic1.ghid]
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.golcore.make_debinding(target=dynamic2.ghid_dynamic),
+            loop = self.nooploop._loop
+        )
+
         
 class GhidproxyTest(unittest.TestCase):
+    ''' Test ghidproxier resolving, etc
+    '''
+    
+    @classmethod
+    def setUpClass(cls):
+        cls.nooploop = NoopLoop(
+            debug = True,
+            threaded = True
+        )
+        cls.nooploop.start()
+        
+    @classmethod
+    def tearDownClass(cls):
+        # Kill the running loop.
+        cls.nooploop.stop_threadsafe_nowait()
+        
     def setUp(self):
         self.librarian = LibrarianCore.__fixture__()
         
@@ -175,19 +252,39 @@ class GhidproxyTest(unittest.TestCase):
             dyn1_1b.history)
         
         # Hold on to your butts!
-        self.librarian.store(geoc1_1, cont1_1.packed)
-        self.librarian.store(geoc1_2, cont1_2.packed)
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(geoc1_1, cont1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(geoc1_2, cont1_2.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(gobd1_a, dyn1_1a.packed),
+            loop = self.nooploop._loop
+        )
         
-        self.librarian.store(gobd1_a, dyn1_1a.packed)
         self.assertEqual(
-            self.ghidproxy.resolve(dyn1_1a.ghid_dynamic),
-            cont1_1.ghid)
+            await_coroutine_threadsafe(
+                coro = self.ghidproxy.resolve(dyn1_1a.ghid_dynamic),
+                loop = self.nooploop._loop
+            ),
+            cont1_1.ghid
+        )
         
-        self.librarian.store(gobd1_b, dyn1_1b.packed)
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(gobd1_b, dyn1_1b.packed),
+            loop = self.nooploop._loop
+        )
         # Intentionally reuse old dynamic ghid, even though it's the same
         self.assertEqual(
-            self.ghidproxy.resolve(dyn1_1a.ghid_dynamic),
-            cont1_2.ghid)
+            await_coroutine_threadsafe(
+                coro = self.ghidproxy.resolve(dyn1_1a.ghid_dynamic),
+                loop = self.nooploop._loop
+            ),
+            cont1_2.ghid
+        )
         
         # Test round #2...
         from _fixtures.remote_exchanges import cont2_1
@@ -210,26 +307,45 @@ class GhidproxyTest(unittest.TestCase):
             dyn2_1b.history)
         
         # Hold on to your butts!
-        self.librarian.store(geoc2_1, cont2_1.packed)
-        self.librarian.store(geoc2_2, cont2_2.packed)
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(geoc2_1, cont2_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(geoc2_2, cont2_2.packed),
+            loop = self.nooploop._loop
+        )
         
-        self.librarian.store(gobd2_a, dyn2_1a.packed)
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(gobd2_a, dyn2_1a.packed),
+            loop = self.nooploop._loop
+        )
         self.assertEqual(
-            self.ghidproxy.resolve(dyn2_1a.ghid_dynamic),
-            cont2_1.ghid)
+            await_coroutine_threadsafe(
+                coro = self.ghidproxy.resolve(dyn2_1a.ghid_dynamic),
+                loop = self.nooploop._loop
+            ),
+            cont2_1.ghid
+        )
         
-        self.librarian.store(gobd2_b, dyn2_1b.packed)
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(gobd2_b, dyn2_1b.packed),
+            loop = self.nooploop._loop
+        )
         # Intentionally reuse old dynamic ghid, even though it's the same
         self.assertEqual(
-            self.ghidproxy.resolve(dyn2_1a.ghid_dynamic),
-            cont2_2.ghid)
+            await_coroutine_threadsafe(
+                coro = self.ghidproxy.resolve(dyn2_1a.ghid_dynamic),
+                loop = self.nooploop._loop
+            ),
+            cont2_2.ghid
+        )
 
         
 class OracleTest(unittest.TestCase):
     
     @classmethod
     def setUpClass(cls):
-        cls.executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
         cls.nooploop = NoopLoop(
             debug = True,
             threaded = True
@@ -243,14 +359,14 @@ class OracleTest(unittest.TestCase):
     
     def setUp(self):
         # This is what we're testing!
-        self.oracle = Oracle(self.executor)
+        self.oracle = Oracle()
         
         # These are directly required by the oracle
         self.golcore = GolixCore.__fixture__(TEST_AGENT1)
         self.ghidproxy = GhidProxier()
-        self.privateer = Privateer.__fixture__(TEST_AGENT1, self.ghidproxy)
+        self.privateer = Privateer.__fixture__(TEST_AGENT1)
         self.percore = PersistenceCore.__fixture__()
-        self.bookie = BookieCore.__fixture__()
+        self.bookie = Bookie.__fixture__()
         self.librarian = LibrarianCore.__fixture__()
         self.salmonator = Salmonator.__fixture__()
         

@@ -76,7 +76,7 @@ class PrivateerTest(unittest.TestCase):
         
         # This is obviously necessary for testing.
         self.privateer = Privateer()
-        self.privateer.assemble(self.golcore, self.ghidproxy)
+        self.privateer.assemble(self.golcore)
         self.privateer.prep_bootstrap()
         # Note that we don't actually need to bootstrap, because prep_bootstrap
         # creates a fully-functional privateer (just without using GAOs)

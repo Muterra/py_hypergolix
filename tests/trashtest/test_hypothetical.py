@@ -40,6 +40,7 @@ from hypergolix.hypothetical import API
 from hypergolix.hypothetical import public_api
 from hypergolix.hypothetical import fixture_api
 from hypergolix.hypothetical import fixture_noop
+from hypergolix.hypothetical import fixture_return
 
 
 # ###############################################
@@ -86,6 +87,11 @@ class APITest(unittest.TestCase):
             @public_api
             def fuzzle(self, counter):
                 self.counter = counter
+                
+            @fixture_return(False)
+            @public_api
+            def wuzzle(self):
+                return True
         
         self.apied = Fixtured
     
@@ -107,6 +113,8 @@ class APITest(unittest.TestCase):
         public.fuzzle(9009)
         self.assertEqual(public.counter, 9009)
         
+        self.assertTrue(public.wuzzle())
+        
     def test_fixture(self):
         ''' Test the fixture API.
         '''
@@ -122,6 +130,8 @@ class APITest(unittest.TestCase):
         
         fixture.fuzzle(9009)
         self.assertNotEqual(fixture.counter, 9009)
+        
+        self.assertFalse(fixture.wuzzle())
 
 
 # ###############################################

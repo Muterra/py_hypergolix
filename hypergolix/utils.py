@@ -125,6 +125,123 @@ class ApiID(Ghid):
         self._address = address
         
         
+class FiniteDict:
+    ''' A dict-like bounded cache. Beyond max_size, object inserts will
+    remove older elements. Element "freshness" is reset upon any and all
+    operations specifically concerning that key:
+    __getitem__
+    __setitem__
+    get (IFF the key existed)
+    setdefault (IFF the key existed)
+    '''
+    
+    def __init__(self, items=None, *args, maxlen, **kwargs):
+        ''' Set us up with an internal data store and a max length.
+        Don't directly subclass ordereddict, because there appear to be
+        some inconsistencies re: documentation and implementation that
+        are resulting in reentrancy-driven errors.
+        '''
+        super().__init__(*args, **kwargs)
+        
+        if items is None:
+            self._data = collections.OrderedDict()
+        else:
+            self._data = collections.OrderedDict(items)
+        
+        self._maxlen = maxlen
+        
+    def _truncate(self):
+        ''' Shrink the dict to, at most, they correct size.
+        '''
+        while len(self._data) > self._maxlen:
+            self._data.popitem(last=True)
+        
+    def __getitem__(self, key):
+        # Get the item, or raise KeyError if missing
+        item = self._data[key]
+        
+        # Success! Bring the key to the front.
+        self._data.move_to_end(key, last=False)
+        
+        # Now return the item.
+        return item
+        
+    def __setitem__(self, key, value):
+        # Set the item (or raise whatever if impossible)
+        self._data[key] = value
+        
+        # Success! Bring the key to the front.
+        self._data.move_to_end(key, last=False)
+        
+        # Truncate to the correct length.
+        self._truncate()
+        
+    def __delitem__(self, key):
+        del self._data[key]
+        
+    def get(self, key, default=None):
+        # Only refresh if the key actually exists in self.
+        try:
+            item = self._data[key]
+            
+        except KeyError:
+            item = default
+            
+        else:
+            self._data.move_to_end(key, last=False)
+            
+        return item
+        
+    def setdefault(self, key, default=None):
+        try:
+            item = self._data[key]
+            
+        except KeyError:
+            item = default
+            self[key] = default
+            # Let setting take care of truncation
+            
+        else:
+            self._data.move_to_end(key, last=False)
+            
+        return item
+        
+    def update(self, *args, **kwargs):
+        # Update with truncation.
+        self._data.update(*args, **kwargs)
+        self._truncate()
+            
+    def __len__(self):
+        return len(self._data)
+        
+    def __contains__(self, key):
+        return key in self._data
+        
+    def __iter__(self):
+        return iter(self._data)
+        
+    def __reversed__(self):
+        return reversed(self._data)
+        
+    def clear(self):
+        return self._data.clear()
+        
+    def items(self):
+        return self._data.items()
+        
+    def keys(self):
+        return self._data.keys()
+        
+    def values(self):
+        return self._data.values()
+        
+    def pop(self, *args, **kwargs):
+        return self._data.pop(*args, **kwargs)
+        
+    def popitem(self, *args, **kwargs):
+        return self._data.popitem(*args, **kwargs)
+        
+        
 class _WeakSet(set):
     ''' Re-write WeakSet to remove references ASAP, instead of lazily
     removing references upon access.

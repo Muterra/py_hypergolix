@@ -128,14 +128,16 @@ class LawyerCore:
         # Call before using.
         self._librarian = librarian
         
-    def _validate_author(self, obj):
+    async def _validate_author(self, obj):
         try:
-            author = self._librarian.summarize(obj.author)
+            author = await self._librarian.summarize(obj.author)
+        
         except KeyError as exc:
             logger.info('0x0003: Unknown author / recipient.')
             raise InvalidIdentity(
                 '0x0003: Unknown author / recipient: ' + str(obj.author)
             ) from exc
+        
         else:
             if not isinstance(author, _GidcLite):
                 logger.info('0x0003: Invalid author / recipient.')
@@ -145,33 +147,36 @@ class LawyerCore:
                 
         return True
         
-    def validate_gidc(self, obj):
+    async def validate_gidc(self, obj):
         ''' GIDC need no validation.
         '''
         return True
         
-    def validate_geoc(self, obj):
+    async def validate_geoc(self, obj):
         ''' Ensure author is known and valid.
         '''
-        return self._validate_author(obj)
+        return (await self._validate_author(obj))
         
-    def validate_gobs(self, obj):
+    async def validate_gobs(self, obj):
         ''' Ensure author is known and valid.
         '''
-        return self._validate_author(obj)
+        return (await self._validate_author(obj))
         
-    def validate_gobd(self, obj):
+    async def validate_gobd(self, obj):
         ''' Ensure author is known and valid, and consistent with the
         previous author for the binding (if it already exists).
         '''
-        self._validate_author(obj)
+        await self._validate_author(obj)
+        
         try:
-            existing = self._librarian.summarize(obj.ghid)
+            existing = await self._librarian.summarize(obj.ghid)
+        
         except KeyError:
             logger.debug(
                 str(obj.ghid) + ' missing from librarian w/ traceback:\n' +
                 ''.join(traceback.format_exc())
             )
+        
         else:
             if existing.author != obj.author:
                 logger.info(
@@ -184,19 +189,21 @@ class LawyerCore:
                     '    Existing author:  ' + str(existing.author) +
                     '\n    Attempted author: ' + str(obj.author)
                 )
+        
         return True
         
-    def validate_gdxx(self, obj, target_obj=None):
+    async def validate_gdxx(self, obj, target_obj=None):
         ''' Ensure author is known and valid, and consistent with the
         previous author for the binding.
         
         If other is not None, specifically checks it against that object
         instead of obtaining it from librarian.
         '''
-        self._validate_author(obj)
+        await self._validate_author(obj)
+        
         try:
             if target_obj is None:
-                existing = self._librarian.summarize(obj.target)
+                existing = await self._librarian.summarize(obj.target)
             else:
                 existing = target_obj
                 
@@ -234,11 +241,12 @@ class LawyerCore:
                     )
         return True
         
-    def validate_garq(self, obj):
+    async def validate_garq(self, obj):
         ''' Validate recipient.
         '''
         try:
-            recipient = self._librarian.summarize(obj.recipient)
+            recipient = await self._librarian.summarize(obj.recipient)
+        
         except KeyError as exc:
             logger.info(
                 '0x0003: Unknown author / recipient: ' + str(obj.recipient)
@@ -246,6 +254,7 @@ class LawyerCore:
             raise InvalidIdentity(
                 '0x0003: Unknown author / recipient: ' + str(obj.recipient)
             ) from exc
+        
         else:
             if not isinstance(recipient, _GidcLite):
                 logger.info('0x0003: Invalid author / recipient.')

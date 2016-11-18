@@ -39,7 +39,6 @@ hypergolix: A python Golix client.
 # Submodules
 from . import accounting
 from . import app
-from . import bookie
 from . import bootstrapping
 from . import comms
 from . import core

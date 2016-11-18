@@ -211,7 +211,7 @@ class _PostmanBase(loopa.TaskLooper):
                 )
         else:
             notifier = _MrPostcard(obj.ghid, obj.frame_ghid)
-            if obj.target not in self._librarian:
+            if not (await self._librarian.contains(obj.target)):
                 self._defer_update(
                     awaiting_ghid = obj.target,
                     postcard = notifier,
@@ -347,6 +347,11 @@ class PostOffice(_PostmanBase):
         # Now manually reinstate any desired notifications for garq requests
         # that have yet to be handled
         for existing_mail in self._bookie.recipient_status(ghid):
+            
+            # HEY LOOK AT ME THIS IS AN ERROR! This is a call to a coro, but
+            # it's within a function. But Postal needs a total workover anyways
+            # so punt on it for now
+            
             obj = self._librarian.summarize(existing_mail)
             self.schedule(obj)
             

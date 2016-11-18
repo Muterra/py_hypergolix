@@ -55,6 +55,38 @@ logger = logging.getLogger(__name__)
 # ###############################################
 
 
+def fixture_return(val):
+    ''' Use as a decorator to make a fixture that returns a constant
+    value.
+    '''
+    # Make the actual closure
+    def decorator_closure(func):
+        signature = inspect.Signature.from_callable(func)
+        
+        if inspect.iscoroutinefunction(func):
+            @func.fixture
+            @functools.wraps(func)
+            async def fixt(*args, __signature=signature, __rval=val, **kwargs):
+                # Make sure the passed args, kwargs are correct, but otherwise,
+                # do nothing.
+                __signature.bind(*args, **kwargs)
+                return __rval
+        
+        else:
+            @func.fixture
+            @functools.wraps(func)
+            def fixt(*args, __signature=signature, __rval=val, **kwargs):
+                # Make sure the passed args, kwargs are correct, but otherwise,
+                # do nothing.
+                __signature.bind(*args, **kwargs)
+                return __rval
+            
+        return fixt
+    
+    # Send it back into the decorator
+    return decorator_closure
+
+
 def fixture_noop(func):
     ''' Create a no-op version of the function to use as its fixture.
     Should be used as a decorator above @public_api.
@@ -64,18 +96,18 @@ def fixture_noop(func):
     if inspect.iscoroutinefunction(func):
         @func.fixture
         @functools.wraps(func)
-        async def noop_fixture(*args, _signature=signature, **kwargs):
+        async def noop_fixture(*args, __signature=signature, **kwargs):
             # Make sure the passed args, kwargs are correct, but otherwise,
             # do nothing.
-            _signature.bind(*args, **kwargs)
+            __signature.bind(*args, **kwargs)
     
     else:
         @func.fixture
         @functools.wraps(func)
-        def noop_fixture(*args, _signature=signature, **kwargs):
+        def noop_fixture(*args, __signature=signature, **kwargs):
             # Make sure the passed args, kwargs are correct, but otherwise,
             # do nothing.
-            _signature.bind(*args, **kwargs)
+            __signature.bind(*args, **kwargs)
         
     return noop_fixture
         

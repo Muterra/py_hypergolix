@@ -346,173 +346,6 @@ class _GarqLite(_BaseLite):
             ghid = golix_obj.ghid,
             recipient = golix_obj.recipient,
         )
-        
-        
-class Doorman:
-    ''' Parses files and enforces crypto. Can be bypassed for trusted
-    (aka locally-created) objects. Only called from within the typeless
-    PersisterCore.ingest() method.
-    '''
-    _librarian = weak_property('__librarian')
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._golix = ThirdParty()
-        self._parselock_gidc = threading.Lock()
-        self._parselock_geoc = threading.Lock()
-        self._parselock_gobs = threading.Lock()
-        self._parselock_gobd = threading.Lock()
-        self._parselock_gdxx = threading.Lock()
-        self._parselock_garq = threading.Lock()
-        
-    def assemble(self, librarian):
-        # Called to link to the librarian.
-        self._librarian = librarian
-        
-    def load_gidc(self, packed):
-        try:
-            with self._parselock_gidc:
-                obj = GIDC.unpack(packed)
-        except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GIDC object.'
-            ) from exc
-            
-        # No further verification required.
-            
-        return obj
-        
-    def load_geoc(self, packed):
-        try:
-            with self._parselock_geoc:
-                obj = GEOC.unpack(packed)
-        except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GEOC object.'
-            ) from exc
-            
-        # Okay, now we need to verify the object
-        try:
-            author = self._librarian.summarize(obj.author)
-        except KeyError as exc:
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.author)
-            ) from exc
-            
-        try:
-            self._golix.verify_object(
-                second_party = author.identity,
-                obj = obj,
-            )
-        except SecurityError as exc:
-            raise VerificationFailure(
-                '0x0002: Failed to verify object.'
-            ) from exc
-            
-        return obj
-        
-    def load_gobs(self, packed):
-        try:
-            with self._parselock_gobs:
-                obj = GOBS.unpack(packed)
-        
-        except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GOBS object.'
-            ) from exc
-            
-        # Okay, now we need to verify the object
-        try:
-            author = self._librarian.summarize(obj.binder)
-        except KeyError as exc:
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.binder)
-            ) from exc
-            
-        try:
-            self._golix.verify_object(
-                second_party = author.identity,
-                obj = obj,
-            )
-        except SecurityError as exc:
-            raise VerificationFailure(
-                '0x0002: Failed to verify object.'
-            ) from exc
-            
-        return obj
-        
-    def load_gobd(self, packed):
-        try:
-            with self._parselock_gobd:
-                obj = GOBD.unpack(packed)
-        except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GOBD object.'
-            ) from exc
-            
-        # Okay, now we need to verify the object
-        try:
-            author = self._librarian.summarize(obj.binder)
-        except KeyError as exc:
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.binder)
-            ) from exc
-            
-        try:
-            self._golix.verify_object(
-                second_party = author.identity,
-                obj = obj,
-            )
-        except SecurityError as exc:
-            raise VerificationFailure(
-                '0x0002: Failed to verify object.'
-            ) from exc
-            
-        return obj
-        
-    def load_gdxx(self, packed):
-        try:
-            with self._parselock_gdxx:
-                obj = GDXX.unpack(packed)
-            
-        except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GDXX object.'
-            ) from exc
-            
-        # Okay, now we need to verify the object
-        try:
-            author = self._librarian.summarize(obj.debinder)
-        except KeyError as exc:
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.debinder)
-            ) from exc
-            
-        try:
-            self._golix.verify_object(
-                second_party = author.identity,
-                obj = obj,
-            )
-        except SecurityError as exc:
-            raise VerificationFailure(
-                '0x0002: Failed to verify object.'
-            ) from exc
-            
-        return obj
-        
-    def load_garq(self, packed):
-        try:
-            with self._parselock_garq:
-                obj = GARQ.unpack(packed)
-        
-        except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GARQ object.'
-            ) from exc
-            
-        # Persisters cannot further verify the object.
-            
-        return obj
                 
         
 class PersistenceCore(metaclass=API):
@@ -536,10 +369,6 @@ class PersistenceCore(metaclass=API):
     _librarian = weak_property('__librarian')
     _salmonator = weak_property('__salmonator')
     
-    # Async stuff
-    _executor = readonly_property('__executor')
-    _loop = readonly_property('__loop')
-    
     # This is a messy way of getting the suffix for validation and stuff but
     # it's getting the job done.
     _ATTR_LOOKUP = {
@@ -550,31 +379,13 @@ class PersistenceCore(metaclass=API):
         _GdxxLite: 'gdxx',
         _GarqLite: 'garq'
     }
-    _LITE_LOOKUP = {
-        GIDC: _GidcLite,
-        GEOC: _GeocLite,
-        GOBS: _GobsLite,
-        GOBD: _GobdLite,
-        GDXX: _GdxxLite,
-        GARQ: _GarqLite
-    }
-    
-    @public_api
-    def __init__(self, executor, loop, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         
-        # Async-specific stuff
-        setattr(self, '__executor', executor)
-        setattr(self, '__loop', loop)
-        
-    @__init__.fixture
+    @fixture_api
     def __init__(self, *args, **kwargs):
         ''' Right now, well, this is basically a noop. Anticipating
         substantial changes!
         '''
         super(PersistenceCore.__fixture__, self).__init__(
-            executor = None,
-            loop = None,
             *args,
             **kwargs
         )
@@ -590,58 +401,50 @@ class PersistenceCore(metaclass=API):
         self._librarian = librarian
         self._salmonator = salmonator
         
-    def _validators(self, obj):
-        ''' Late-binding access to the things that validate objects. If
-        not late, would hold strong references to stuff, which is bad.
-        '''
-        # Calculate "validate_gidc", etc
-        method = 'validate_' + self._ATTR_LOOKUP[type(obj)]
-        
-        # This determines the order, and who checks.
-        # Check for redundant items.
-        yield getattr(self._librarian, method)
-        # Enforce target selection
-        yield getattr(self._enforcer, method)
-        # Now make sure authorship requirements are satisfied
-        yield getattr(self._lawyer, method)
-        # Finally make sure persistence rules are followed
-        yield getattr(self._bookie, method)
-            
-    def _preppers(self, obj):
-        ''' Late-binding access to the things that intake validated
-        objects. Same note as above re: strong references vs memoize.
-        '''
-        # Calculate "validate_gidc", etc
-        suffix = self._ATTR_LOOKUP[type(obj)]
-        
-        # And now prep the undertaker for any necessary GC
-        yield getattr(self._undertaker, 'prep_' + suffix)
-        # Everything is validated. Place with the bookie before librarian, so
-        # that it has access to the old librarian state
-        yield getattr(self._bookie, 'place_' + suffix)
-        
     async def direct_ingest(self, obj, packed, remotable):
         ''' Standard ingestion flow for stuff. To be called from ingest
         above, or directly (for objects created "in-house").
         '''
-        # Validate the object. A return of None indicates a redundant object,
-        # which results in immediate short-circuit. If any of the validators
-        # find an invalid object, they will raise.
-        for validate in self._validators(obj):
-            if not validate(obj):
-                return None
+        # Check for a redundant object, which will immediately short-circuit.
+        if isinstance(obj, _GobdLite):
+            check_ghid = obj.frame_ghid
+        else:
+            check_ghid = obj.ghid
         
-        for prep in self._preppers(obj):
-            prep(obj)
+        if (await self._librarian.contains(check_ghid)):
+            return None
+        
+        else:
+            # Calculate "gidc", etc
+            suffix = self._ATTR_LOOKUP[type(obj)]
+            validation_method = 'validate_' + suffix
             
-        self._librarian.store(obj, packed)
-        
-        if remotable:
-            self._salmonator.schedule_push(obj.ghid)
+            # Validate the object...
+            # If any of the validators find an invalid object, they will raise.
+            # ########################
+            # Enforce target selection
+            await getattr(self._enforcer, validation_method)(obj)
+            # Now make sure authorship requirements are satisfied
+            await getattr(self._lawyer, validation_method)(obj)
+            # Finally make sure persistence rules are followed
+            await getattr(self._bookie, validation_method)(obj)
             
-        return obj
+            # This is a valid object; let's start to ingest it.
+            # ########################
+            # Prep the undertaker for any necessary GC
+            await getattr(self._undertaker, 'prep_' + suffix)(obj)
+            # Everything is validated. Place with the bookie before librarian,
+            # so that it has access to the old librarian state
+            await getattr(self._bookie, 'place_' + suffix)(obj)
+            # Finally, add it to the librarian.
+            await self._librarian.store(obj, packed)
+            
+            if remotable:
+                await self._salmonator.schedule_push(obj.ghid)
         
-    async def _attempt_load(self, packed):
+            return obj
+        
+    async def attempt_load(self, packed):
         ''' Attempt to load a packed golix object.
         '''
         tasks = set()
@@ -650,15 +453,8 @@ class PersistenceCore(metaclass=API):
         for loader in (self._doorman.load_gidc, self._doorman.load_geoc,
                        self._doorman.load_gobs, self._doorman.load_gobd,
                        self._doorman.load_gdxx, self._doorman.load_garq):
-            # Attempt this loader and record which ingester it is
-            tasks.add(asyncio.ensure_future(
-                # But run the actual loader in the executor
-                self._loop.run_in_executor(
-                    self._executor,
-                    loader,
-                    packed
-                )
-            ))
+            # Attempt this loader
+            tasks.add(asyncio.ensure_future(loader(packed)))
             
         # Do all of the ingesters. This could be smarter (short-circuit as soon
         # as a successful loader completes) but for now this is good enough.
@@ -699,20 +495,13 @@ class PersistenceCore(metaclass=API):
         object, and returns True; or, raises an error.
         '''
         # This may return None, but that will be caught by the KeyError below.
-        golix_obj = self._attempt_load(packed)
-        
-        try:
-            litecls = self._LITE_LOOKUP[type(golix_obj)]
-        
-        # We did not find a successful loader (or something went funky with the
-        # type lookup)
-        except KeyError:
+        obj = await self.attempt_load(packed)
+        if obj is None:
             raise MalformedGolixPrimitive(
                 'Packed bytes do not appear to be a Golix primitive.'
-            ) from None
+            )
         
-        obj_lite = litecls.from_golix(golix_obj)
-        ingested = await self.direct_ingest(obj_lite, packed, remotable)
+        ingested = await self.direct_ingest(obj, packed, remotable)
         
         # Note that individual ingest methods are only called directly for
         # locally-built objects, which do not need a mail run.
@@ -723,7 +512,7 @@ class PersistenceCore(metaclass=API):
             
         else:
             logger.debug(
-                str(obj_lite.ghid) + ' scheduling aborted on unchanged object.'
+                str(obj.ghid) + ' scheduling aborted on unchanged object.'
             )
         
         # Note: this is not the place for salmonator pushing! Locally
@@ -731,6 +520,260 @@ class PersistenceCore(metaclass=API):
         # directly, so they have to be the ones that actually deal with it.
         
         return ingested
+        
+        
+class Doorman(metaclass=API):
+    ''' Parses files and enforces crypto. Can be bypassed for trusted
+    (aka locally-created) objects. Only called from within the typeless
+    PersisterCore.ingest() method.
+    '''
+    _librarian = weak_property('__librarian')
+    
+    # Async stuff
+    _executor = readonly_property('__executor')
+    _loop = readonly_property('__loop')
+    
+    @public_api
+    def __init__(self, executor, loop, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._golix = ThirdParty()
+        
+        # These coordinate the threads in the executor to bolt-on thread safety
+        # to the un-thread-safe smartyparse stuff.
+        self._parselock_gidc = threading.Lock()
+        self._parselock_geoc = threading.Lock()
+        self._parselock_gobs = threading.Lock()
+        self._parselock_gobd = threading.Lock()
+        self._parselock_gdxx = threading.Lock()
+        self._parselock_garq = threading.Lock()
+        
+        # Async-specific stuff
+        setattr(self, '__executor', executor)
+        setattr(self, '__loop', loop)
+        
+    @__init__.fixture
+    def __init__(self, *args, **kwargs):
+        super(Doorman.__fixture__, self).__init__(
+            executor = None,
+            loop = None
+        )
+        
+    def assemble(self, librarian):
+        # Called to link to the librarian.
+        self._librarian = librarian
+            
+    def _verify_golix(self, obj, author):
+        ''' Performs golix verification of the object. Meant to be
+        called from within the executor.
+        '''
+        try:
+            self._golix.verify_object(
+                second_party = author.identity,
+                obj = obj,
+            )
+        except SecurityError as exc:
+            raise VerificationFailure(
+                '0x0002: Failed to verify object.'
+            ) from exc
+        
+    async def load_gidc(self, packed):
+        # Run the actual loader in the executor
+        obj = await self._loop.run_in_executor(
+            self._executor,
+            self._load_gidc,
+            packed
+        )
+            
+        # No further verification required.
+        return _GidcLite.from_golix(obj)
+        
+    def _load_gidc(self, packed):
+        ''' Performs the actual loading.
+        '''
+        try:
+            with self._parselock_gidc:
+                return GIDC.unpack(packed)
+        
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GIDC object.'
+            ) from exc
+        
+    async def load_geoc(self, packed):
+        # Run the actual loader in the executor
+        obj = await self._loop.run_in_executor(
+            self._executor,
+            self._load_geoc,
+            packed
+        )
+            
+        # Okay, now we need to verify the object
+        try:
+            author = await self._librarian.summarize(obj.author)
+        
+        except KeyError as exc:
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient: ' + str(obj.author)
+            ) from exc
+        
+        # Finally, verify the Golix signature
+        await self._loop.run_in_executor(
+            self._executor,
+            self._verify_golix,
+            obj,
+            author
+        )
+            
+        return _GeocLite.from_golix(obj)
+        
+    def _load_geoc(self, packed):
+        ''' Performs the actual loading.
+        '''
+        try:
+            with self._parselock_geoc:
+                return GEOC.unpack(packed)
+        
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GIDC object.'
+            ) from exc
+        
+    async def load_gobs(self, packed):
+        # Run the actual loader in the executor
+        obj = await self._loop.run_in_executor(
+            self._executor,
+            self._load_gobs,
+            packed
+        )
+            
+        # Okay, now we need to verify the object
+        try:
+            author = await self._librarian.summarize(obj.binder)
+        except KeyError as exc:
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient: ' + str(obj.binder)
+            ) from exc
+        
+        # Finally, verify the Golix signature
+        await self._loop.run_in_executor(
+            self._executor,
+            self._verify_golix,
+            obj,
+            author
+        )
+            
+        return _GobsLite.from_golix(obj)
+        
+    def _load_gobs(self, packed):
+        ''' Performs the actual loading.
+        '''
+        try:
+            with self._parselock_gobs:
+                return GOBS.unpack(packed)
+        
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GIDC object.'
+            ) from exc
+        
+    async def load_gobd(self, packed):
+        # Run the actual loader in the executor
+        obj = await self._loop.run_in_executor(
+            self._executor,
+            self._load_gobd,
+            packed
+        )
+            
+        # Okay, now we need to verify the object
+        try:
+            author = await self._librarian.summarize(obj.binder)
+        except KeyError as exc:
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient: ' + str(obj.binder)
+            ) from exc
+        
+        # Finally, verify the Golix signature
+        await self._loop.run_in_executor(
+            self._executor,
+            self._verify_golix,
+            obj,
+            author
+        )
+            
+        return _GobdLite.from_golix(obj)
+        
+    def _load_gobd(self, packed):
+        ''' Performs the actual loading.
+        '''
+        try:
+            with self._parselock_gobd:
+                return GOBD.unpack(packed)
+        
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GIDC object.'
+            ) from exc
+        
+    async def load_gdxx(self, packed):
+        # Run the actual loader in the executor
+        obj = await self._loop.run_in_executor(
+            self._executor,
+            self._load_gdxx,
+            packed
+        )
+            
+        # Okay, now we need to verify the object
+        try:
+            author = await self._librarian.summarize(obj.debinder)
+        except KeyError as exc:
+            raise InvalidIdentity(
+                '0x0003: Unknown author / recipient: ' + str(obj.debinder)
+            ) from exc
+        
+        # Finally, verify the Golix signature
+        await self._loop.run_in_executor(
+            self._executor,
+            self._verify_golix,
+            obj,
+            author
+        )
+            
+        return _GdxxLite.from_golix(obj)
+        
+    def _load_gdxx(self, packed):
+        ''' Performs the actual loading.
+        '''
+        try:
+            with self._parselock_gdxx:
+                return GDXX.unpack(packed)
+        
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GIDC object.'
+            ) from exc
+        
+    async def load_garq(self, packed):
+        # Run the actual loader in the executor
+        obj = await self._loop.run_in_executor(
+            self._executor,
+            self._load_garq,
+            packed
+        )
+            
+        # Persisters cannot further verify the object.
+        return _GarqLite.from_golix(obj)
+        
+    def _load_garq(self, packed):
+        ''' Performs the actual loading.
+        '''
+        try:
+            with self._parselock_garq:
+                return GARQ.unpack(packed)
+        
+        except Exception as exc:
+            raise MalformedGolixPrimitive(
+                '0x0001: Invalid formatting for GIDC object.'
+            ) from exc
         
         
 class Enforcer:
@@ -742,21 +785,21 @@ class Enforcer:
         # Call before using.
         self._librarian = librarian
         
-    def validate_gidc(self, obj):
+    async def validate_gidc(self, obj):
         ''' GIDC need no target verification.
         '''
         return True
         
-    def validate_geoc(self, obj):
+    async def validate_geoc(self, obj):
         ''' GEOC need no target validation.
         '''
         return True
         
-    def validate_gobs(self, obj):
+    async def validate_gobs(self, obj):
         ''' Check if target is known, and if it is, validate it.
         '''
         try:
-            target = self._librarian.summarize(obj.target)
+            target = await self._librarian.summarize(obj.target)
         # TODO: think more about this, and whether everything has been updated
         # appropriately to raise a DoesNotExist instead of a KeyError.
         # This could be more specific and say DoesNotExist
@@ -774,13 +817,13 @@ class Enforcer:
                     )
         return True
         
-    def validate_gobd(self, obj):
+    async def validate_gobd(self, obj):
         ''' Check if target is known, and if it is, validate it.
         
         Also do a state check on the dynamic binding.
         '''
         try:
-            target = self._librarian.summarize(obj.target)
+            target = await self._librarian.summarize(obj.target)
         except KeyError:
             logger.debug(
                 str(obj.target) + ' missing from librarian w/ traceback:\n' +
@@ -794,16 +837,16 @@ class Enforcer:
                         '0x0006: Invalid dynamic binding target.'
                     )
                     
-        self._validate_dynamic_history(obj)
+        await self._validate_dynamic_history(obj)
                     
         return True
         
-    def validate_gdxx(self, obj, target_obj=None):
+    async def validate_gdxx(self, obj, target_obj=None):
         ''' Check if target is known, and if it is, validate it.
         '''
         try:
             if target_obj is None:
-                target = self._librarian.summarize(obj.target)
+                target = await self._librarian.summarize(obj.target)
             else:
                 target = target_obj
         except KeyError:
@@ -832,12 +875,12 @@ class Enforcer:
                     )
         return True
         
-    def validate_garq(self, obj):
+    async def validate_garq(self, obj):
         ''' No additional validation needed.
         '''
         return True
         
-    def _validate_dynamic_history(self, obj):
+    async def _validate_dynamic_history(self, obj):
         ''' Enforces state flow / progression for dynamic objects. In
         other words, prevents zeroth bindings with history, makes sure
         future bindings contain previous ones in history, etc.
@@ -849,7 +892,7 @@ class Enforcer:
         '''
         # Try getting an existing binding.
         try:
-            existing = self._librarian.summarize(obj.ghid)
+            existing = await self._librarian.summarize(obj.ghid)
             
         except KeyError:
             # if obj.history:
@@ -871,3 +914,69 @@ class Enforcer:
                     '0x0009: Illegal frame. Frame history did not contain the '
                     'most recent frame.'
                 )
+            
+            
+class Bookie(metaclass=API):
+    ''' Tracks state relationships between objects using **only weak
+    references** to them. ONLY CONCERNED WITH LIFETIMES! Does not check
+    (for example) consistent authorship.
+    '''
+    _librarian = weak_property('__librarian')
+        
+    def assemble(self, librarian):
+        # Call before using.
+        self._librarian = librarian
+        
+    async def validate_gidc(self, obj):
+        ''' GIDC need no state verification.
+        '''
+        return True
+        
+    async def validate_geoc(self, obj):
+        ''' GEOC must verify that they are bound.
+        '''
+        if not (await self._librarian.is_bound(obj)):
+            raise UnboundContainer(
+                '0x0004: Attempt to upload unbound GEOC; object immediately '
+                'garbage collected.'
+            )
+        
+        return True
+        
+    async def validate_gobs(self, obj):
+        if (await self._librarian.is_debound(obj)):
+            raise AlreadyDebound(
+                '0x0005: Attempt to upload a binding for which a debinding '
+                'already exists. Remove the debinding first.'
+            )
+            
+        return True
+        
+    async def validate_gobd(self, obj):
+        # A deliberate binding can override a debinding for GOBD.
+        if (await self._librarian.is_debound(obj)):
+            if not (await self._librarian.is_bound(obj)):
+                raise AlreadyDebound(
+                    '0x0005: Attempt to upload a binding for which a ' +
+                    'debinding already exists. Remove the debinding first.'
+                )
+                
+        return True
+        
+    async def validate_gdxx(self, obj):
+        if (await self._librarian.is_debound(obj)):
+            raise AlreadyDebound(
+                '0x0005: Attempt to upload a binding for which a debinding '
+                'already exists. Remove the debinding first.'
+            )
+            
+        return True
+        
+    async def validate_garq(self, obj):
+        if (await self._librarian.is_debound(obj)):
+            raise AlreadyDebound(
+                '0x0005: Attempt to upload a binding for which a debinding '
+                'already exists. Remove the debinding first.'
+            )
+            
+        return True

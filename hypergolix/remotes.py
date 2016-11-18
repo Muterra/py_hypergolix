@@ -235,7 +235,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
         '''
         ghid = Ghid.from_bytes(body)
         # TODO: librarian should be async calls.
-        return self._librarian.retrieve(ghid)
+        return (await self._librarian.retrieve(ghid))
         
     @request(b'+S')
     async def subscribe(self, connection, ghid):
@@ -379,7 +379,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
         ''' Handle existence queries.
         '''
         ghid = Ghid.from_bytes(body)
-        if ghid in self._librarian:
+        if (await self._librarian.contains(ghid)):
             return b'\x01'
         else:
             return b'\x00'
@@ -563,7 +563,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         ''' Push a single ghid to all remotes.
         '''
         try:
-            data = self._librarian.retrieve(ghid)
+            data = await self._librarian.retrieve(ghid)
         
         except Exception as exc:
             logger.error(
@@ -685,7 +685,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         '''
         # If we got a gobd, make sure its target is in the librarian
         if isinstance(maybe_obj, _GobdLite):
-            if maybe_obj.target not in self._librarian:
+            if not (await self._librarian.contains(maybe_obj.target)):
                 # Catch unavailableupstream and log a warning.
                 # TODO: add logic to retry a few times and then discard
                 try:
@@ -760,7 +760,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
             else:
                 return obj
         
-    def _inspect(self, ghid):
+    async def _inspect(self, ghid):
         ''' Checks librarian for an existing ghid. If it has it, checks
         the object's integrity by re-parsing it. If it is dynamic, also
         queries upstream remotes for newer versions.
@@ -771,10 +771,12 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         ~~(returns False if dynamic and local copy is out of date)~~
             Note: this is unimplemented currently, blocking on several
             upstream changes.
+            
+        DEPRECATED / UNUSED
         '''
         # Load the object locally
         try:
-            obj = self._librarian.summarize(ghid)
+            obj = await self._librarian.summarize(ghid)
         
         # Librarian has no copy.
         except KeyError:
@@ -786,7 +788,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         # if isinstance(obj, _GobdLite):
         #     self._check_for_updates(obj)
         
-        self._verify_existing(obj)
+        await self._verify_existing(obj)
         return True
             
     def _check_for_updates(self, obj):
@@ -803,12 +805,14 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         # dynamic bindings.
         raise NotImplementedError()
             
-    def _verify_existing(self, obj):
+    async def _verify_existing(self, obj):
         ''' Re-loads an object to make sure it's still good.
         Obj should be a lightweight hypergolix representation, not the
         packed Golix object, unpacked Golix object, nor the GAO.
+        
+        DEPRECATED / UNUSED
         '''
-        packed = self._librarian.retrieve(obj.ghid)
+        packed = await self._librarian.retrieve(obj.ghid)
         
         for primitive, loader in ((_GidcLite, self._doorman.load_gidc),
                                   (_GeocLite, self._doorman.load_geoc),
