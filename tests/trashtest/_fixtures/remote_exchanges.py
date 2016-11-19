@@ -111,54 +111,6 @@ bind3_2 = TEST_AGENT3.make_bind_static(
     target = cont3_2.ghid
 )
 
-# Make some debindings
-debind1_1 = TEST_AGENT1.make_debind(
-    target = bind1_1.ghid
-)
-debind1_2 = TEST_AGENT1.make_debind(
-    target = bind1_2.ghid
-)
-
-# Make some debindings
-debind2_1 = TEST_AGENT2.make_debind(
-    target = bind2_1.ghid
-)
-debind2_2 = TEST_AGENT2.make_debind(
-    target = bind2_2.ghid
-)
-
-# Make some debindings from an unknown author
-debind3_1 = TEST_AGENT3.make_debind(
-    target = bind3_1.ghid
-)
-debind3_2 = TEST_AGENT3.make_debind(
-    target = bind3_2.ghid
-)
-
-# And make some author-inconsistent debindings
-debind2_1_bad = TEST_AGENT1.make_debind(
-    target = bind2_1.ghid
-)
-debind2_2_bad = TEST_AGENT1.make_debind(
-    target = bind2_2.ghid
-)
-
-# And then make some debindings for the debindings
-dedebind2_1 = TEST_AGENT2.make_debind(
-    target = debind2_1.ghid
-)
-dedebind2_2 = TEST_AGENT2.make_debind(
-    target = debind2_2.ghid
-)
-
-# And then make some debindings for the debindings for the...
-dededebind2_1 = TEST_AGENT2.make_debind(
-    target = dedebind2_1.ghid
-)
-dededebind2_2 = TEST_AGENT2.make_debind(
-    target = dedebind2_2.ghid
-)
-
 # Make requests between known IDs
 handshake1_1 = TEST_AGENT1.make_request(
     recipient = TEST_READER2,
@@ -212,13 +164,13 @@ dyn2_1b = TEST_AGENT2.make_bind_dynamic(
     history = [dyn2_1a.ghid]
 )
 
-dyn3_1a = TEST_AGENT2.make_bind_dynamic(
-    target = cont2_1.ghid
+dyn3_1a = TEST_AGENT3.make_bind_dynamic(
+    target = cont3_1.ghid
 )
-dyn3_1b = TEST_AGENT2.make_bind_dynamic(
-    target = cont2_2.ghid,
-    ghid_dynamic = dyn2_1a.ghid_dynamic,
-    history = [dyn2_1a.ghid]
+dyn3_1b = TEST_AGENT3.make_bind_dynamic(
+    target = cont3_2.ghid,
+    ghid_dynamic = dyn3_1a.ghid_dynamic,
+    history = [dyn3_1a.ghid]
 )
 
 # And make some fraudulent ones
@@ -241,6 +193,11 @@ dynF_b = TEST_AGENT2.make_bind_dynamic(
     ghid_dynamic = dynF_a.ghid_dynamic,
     history = [dynF_a.ghid]
 )
+dynF_c = TEST_AGENT3.make_bind_dynamic(
+    target = cont2_2.ghid,
+    ghid_dynamic = dynF_a.ghid_dynamic,
+    history = [dynF_a.ghid]
+)
 
 # Make some debindings
 dyndebind1_1 = TEST_AGENT1.make_debind(
@@ -248,4 +205,66 @@ dyndebind1_1 = TEST_AGENT1.make_debind(
 )
 dyndebind2_1 = TEST_AGENT2.make_debind(
     target = dyn2_1b.ghid_dynamic
+)
+
+# Make some debindings
+debind1_1 = TEST_AGENT1.make_debind(
+    target = bind1_1.ghid
+)
+debind1_2 = TEST_AGENT1.make_debind(
+    target = bind1_2.ghid
+)
+
+# Make some debindings
+debind2_1 = TEST_AGENT2.make_debind(
+    target = bind2_1.ghid
+)
+debind2_2 = TEST_AGENT2.make_debind(
+    target = bind2_2.ghid
+)
+debindR_1 = TEST_AGENT2.make_debind(
+    target = handshake1_1.ghid
+)
+
+# Make some debindings from an unknown author
+debind3_1 = TEST_AGENT3.make_debind(
+    target = bind3_1.ghid
+)
+debind3_2 = TEST_AGENT3.make_debind(
+    target = bind3_2.ghid
+)
+
+# And make some author-inconsistent debindings
+debind1_F = TEST_AGENT2.make_debind(
+    target = bind1_1.ghid
+)
+debind2_F = TEST_AGENT1.make_debind(
+    target = bind2_1.ghid
+)
+debindR_F = TEST_AGENT1.make_debind(
+    target = handshake1_1.ghid
+)
+
+# And make some bad-target debindings
+debind1_TF = TEST_AGENT1.make_debind(
+    target = cont1_1.ghid
+)
+debind3_TF = TEST_AGENT3.make_debind(
+    target = cont3_1.ghid
+)
+
+# And then make some debindings for the debindings
+dedebind2_1 = TEST_AGENT2.make_debind(
+    target = debind2_1.ghid
+)
+dedebind2_2 = TEST_AGENT2.make_debind(
+    target = debind2_2.ghid
+)
+
+# And then make some debindings for the debindings for the...
+dededebind2_1 = TEST_AGENT2.make_debind(
+    target = dedebind2_1.ghid
+)
+dededebind2_2 = TEST_AGENT2.make_debind(
+    target = dedebind2_2.ghid
 )
