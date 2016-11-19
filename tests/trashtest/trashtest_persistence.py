@@ -48,8 +48,8 @@ from hypergolix.persistence import Enforcer
 from hypergolix.persistence import Bookie
 from hypergolix.lawyer import LawyerCore
 from hypergolix.undertaker import UndertakerCore
+from hypergolix.librarian import LibrarianCore
 from hypergolix.librarian import DiskLibrarian
-from hypergolix.librarian import MemoryLibrarian
 
 from hypergolix.postal import MrPostman
 
@@ -421,7 +421,7 @@ class MemoryLibrarianTrashtest(unittest.TestCase, IntegrationTest):
         self.enforcer = Enforcer()
         self.lawyer = LawyerCore()
         self.bookie = Bookie()
-        self.librarian = MemoryLibrarian()
+        self.librarian = LibrarianCore.__fixture__()
         self.postman = MrPostman()
         self.undertaker = UndertakerCore()
         self.salmonator = SalmonatorNoop()

@@ -70,7 +70,7 @@ from hypergolix.lawyer import LawyerCore
 from hypergolix.undertaker import UndertakerCore
 
 from hypergolix.librarian import DiskLibrarian
-from hypergolix.librarian import MemoryLibrarian
+from hypergolix.librarian import LibrarianCore
 
 from hypergolix.postal import PostOffice
 
@@ -200,7 +200,7 @@ class RemotePersistenceServer:
         self.bookie = Bookie()
         
         if cache_dir is None:
-            self.librarian = MemoryLibrarian()
+            self.librarian = LibrarianCore.__fixture__()
         else:
             self.librarian = DiskLibrarian(cache_dir)
             

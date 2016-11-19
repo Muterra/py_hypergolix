@@ -123,7 +123,7 @@ class GenericLawyerTest:
         ''' Test gidc operations.
         '''
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(gidclite1, gidc1),
+            coro = self.librarian.store(gidclite1, gidc1),
             loop = self.nooploop._loop
         )
         
@@ -144,11 +144,11 @@ class GenericLawyerTest:
         ''' Test geoc operations.
         '''
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(gidclite1, gidc1),
+            coro = self.librarian.store(gidclite1, gidc1),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(gidclite2, gidc2),
+            coro = self.librarian.store(gidclite2, gidc2),
             loop = self.nooploop._loop
         )
         

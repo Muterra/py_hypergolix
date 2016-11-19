@@ -210,6 +210,12 @@ class FiniteDict:
         # Update with truncation.
         self._data.update(*args, **kwargs)
         self._truncate()
+        
+    def __eq__(self, other):
+        if isinstance(other, FiniteDict):
+            return self._data == other._data
+        else:
+            return self._data == other
             
     def __len__(self):
         return len(self._data)

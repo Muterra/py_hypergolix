@@ -121,14 +121,14 @@ class GolcoreTest(unittest.TestCase):
         # Our librarian fixturing is a little inadequate, so for now just
         # manually add this stuff.
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(
+            coro = self.librarian.store(
                 _GidcLite(TEST_AGENT1.ghid, TEST_AGENT1.second_party),
                 TEST_AGENT1.second_party.packed
             ),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(
+            coro = self.librarian.store(
                 _GidcLite(TEST_AGENT2.ghid, TEST_AGENT2.second_party),
                 TEST_AGENT2.second_party.packed
             ),
@@ -253,15 +253,15 @@ class GhidproxyTest(unittest.TestCase):
         
         # Hold on to your butts!
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(geoc1_1, cont1_1.packed),
+            coro = self.librarian.store(geoc1_1, cont1_1.packed),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(geoc1_2, cont1_2.packed),
+            coro = self.librarian.store(geoc1_2, cont1_2.packed),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(gobd1_a, dyn1_1a.packed),
+            coro = self.librarian.store(gobd1_a, dyn1_1a.packed),
             loop = self.nooploop._loop
         )
         
@@ -274,7 +274,7 @@ class GhidproxyTest(unittest.TestCase):
         )
         
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(gobd1_b, dyn1_1b.packed),
+            coro = self.librarian.store(gobd1_b, dyn1_1b.packed),
             loop = self.nooploop._loop
         )
         # Intentionally reuse old dynamic ghid, even though it's the same
@@ -308,16 +308,16 @@ class GhidproxyTest(unittest.TestCase):
         
         # Hold on to your butts!
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(geoc2_1, cont2_1.packed),
+            coro = self.librarian.store(geoc2_1, cont2_1.packed),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(geoc2_2, cont2_2.packed),
+            coro = self.librarian.store(geoc2_2, cont2_2.packed),
             loop = self.nooploop._loop
         )
         
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(gobd2_a, dyn2_1a.packed),
+            coro = self.librarian.store(gobd2_a, dyn2_1a.packed),
             loop = self.nooploop._loop
         )
         self.assertEqual(
@@ -329,7 +329,7 @@ class GhidproxyTest(unittest.TestCase):
         )
         
         await_coroutine_threadsafe(
-            coro = self.librarian.add_to_cache(gobd2_b, dyn2_1b.packed),
+            coro = self.librarian.store(gobd2_b, dyn2_1b.packed),
             loop = self.nooploop._loop
         )
         # Intentionally reuse old dynamic ghid, even though it's the same

@@ -477,7 +477,7 @@ class PersistenceCore(metaclass=API):
                 result = task.result()
             
             # This loader task failed, so try the next.
-            elif isinstance(task, MalformedGolixPrimitive):
+            elif isinstance(exc, MalformedGolixPrimitive):
                 continue
             
             # Raise the first exception that we encounter that isn't from it
@@ -493,10 +493,14 @@ class PersistenceCore(metaclass=API):
     async def attempt_load(self, packed):
         ''' Create an ad-hoc doorman fixture.
         '''
-        self._doorman = Doorman.__fixture__()
+        # Note that, because of the weak ref, we need to actually hold this
+        # here to prevent the doorman from being gc'd. So, just create a
+        # disposable one.
+        doorman = Doorman.__fixture__()
+        self._doorman = doorman
         result = \
             await super(PersistenceCore.__fixture__, self).attempt_load(packed)
-        del self._doorman
+        del doorman
         return result
         
     async def ingest(self, packed, remotable=True):
@@ -660,7 +664,7 @@ class Doorman(metaclass=API):
         
         except Exception as exc:
             raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GIDC object.'
+                '0x0001: Invalid formatting for GEOC object.'
             ) from exc
     
     @public_api
@@ -705,7 +709,7 @@ class Doorman(metaclass=API):
         
         except Exception as exc:
             raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GIDC object.'
+                '0x0001: Invalid formatting for GOBS object.'
             ) from exc
     
     @public_api
@@ -750,7 +754,7 @@ class Doorman(metaclass=API):
         
         except Exception as exc:
             raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GIDC object.'
+                '0x0001: Invalid formatting for GOBD object.'
             ) from exc
     
     @public_api
@@ -795,7 +799,7 @@ class Doorman(metaclass=API):
         
         except Exception as exc:
             raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GIDC object.'
+                '0x0001: Invalid formatting for GDXX object.'
             ) from exc
     
     @public_api
@@ -825,7 +829,7 @@ class Doorman(metaclass=API):
         
         except Exception as exc:
             raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GIDC object.'
+                '0x0001: Invalid formatting for GARQ object.'
             ) from exc
 
 

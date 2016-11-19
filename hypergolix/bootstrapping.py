@@ -60,7 +60,6 @@ from .persistence import Enforcer
 from .persistence import Bookie
 from .lawyer import LawyerCore
 from .librarian import DiskLibrarian
-from .librarian import MemoryLibrarian
 from .undertaker import UndertakerCore
 
 from .postal import MrPostman

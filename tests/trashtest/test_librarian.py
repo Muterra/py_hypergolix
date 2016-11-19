@@ -34,20 +34,17 @@ hypergolix: A python Golix client.
 '''
 
 import unittest
-import queue
-import random
-import inspect
-import asyncio
+import tempfile
+import shutil
 
 from loopa import NoopLoop
 from loopa.utils import await_coroutine_threadsafe
-
-from golix._getlow import GIDC
 
 from hypergolix.persistence import Enforcer
 from hypergolix.persistence import PersistenceCore
 from hypergolix.lawyer import LawyerCore
 from hypergolix.librarian import LibrarianCore
+from hypergolix.librarian import DiskLibrarian
 
 from hypergolix.persistence import _GidcLite
 from hypergolix.persistence import _GeocLite
@@ -55,9 +52,6 @@ from hypergolix.persistence import _GobsLite
 from hypergolix.persistence import _GobdLite
 from hypergolix.persistence import _GdxxLite
 from hypergolix.persistence import _GarqLite
-
-from hypergolix.exceptions import InvalidIdentity
-from hypergolix.exceptions import InconsistentAuthor
 
 
 # ###############################################
@@ -136,6 +130,7 @@ class GenericLibrarianTest:
             coro = self.librarian.add_to_cache(gobd1_a, dyn1_1a.packed),
             loop = self.nooploop._loop
         )
+        self.librarian._catalog[gobd1_a.frame_ghid] = gobd1_a
         self.assertEqual(
             await_coroutine_threadsafe(
                 coro = self.librarian.resolve_frame(gobd1_a.ghid),
@@ -147,6 +142,7 @@ class GenericLibrarianTest:
             coro = self.librarian.add_to_cache(gobd1_b, dyn1_1b.packed),
             loop = self.nooploop._loop
         )
+        self.librarian._catalog[gobd1_b.frame_ghid] = gobd1_b
         self.assertEqual(
             await_coroutine_threadsafe(
                 coro = self.librarian.resolve_frame(gobd1_b.ghid),
@@ -242,6 +238,8 @@ class GenericLibrarianTest:
             )
         )
         
+        # We also need this in the catalog so we can clear it later, actually
+        self.librarian._catalog[geoc1_1.ghid] = geoc1_1
         self.assertEqual(
             await_coroutine_threadsafe(
                 coro = self.librarian.get_from_cache(geoc1_1.ghid),
@@ -500,10 +498,88 @@ class LibrarianCoreTest(GenericLibrarianTest, unittest.TestCase):
                 gobd1_a.ghid
             )
         )
+        
+        
+class DiskLibrarianTest(GenericLibrarianTest, unittest.TestCase):
+    ''' Test the plain (golix state stored in memory) disk librarian.
+    Also test its restoration.
+    '''
+        
+    def setUp(self):
+        ''' In addition to the usual, create a tempdir for use.
+        '''
+        self.ghidcache = tempfile.mkdtemp()
+        
+        # Do actually use the fixture, because we need to test the in-memory
+        # version (plus otherwise, we simply cannot test LibrarianCore).
+        self.librarian = DiskLibrarian(self.ghidcache)
+        
+        self.enforcer = Enforcer.__fixture__(self.librarian)
+        self.lawyer = LawyerCore.__fixture__(self.librarian)
+        self.percore = PersistenceCore.__fixture__()
+        
+        # And assemble the librarian
+        self.librarian.assemble(self.enforcer, self.lawyer, self.percore)
+        
+    def tearDown(self):
+        ''' Remove the tempdir we used for the librarian.
+        '''
+        shutil.rmtree(self.ghidcache)
+        
+    def test_restoration(self):
+        ''' Add a test to make sure restoration works.
+        '''
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(geoc1_1, cont1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(gobd1_a, dyn1_1a.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(garq1_1, handshake1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(gdxx1_1, debind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        
+        # Create and assemble a duplicate librarian
+        librarian2 = DiskLibrarian(self.ghidcache)
+        librarian2.assemble(self.enforcer, self.lawyer, self.percore)
+        
+        # Restore it
+        await_coroutine_threadsafe(
+            coro = librarian2.restore(),
+            loop = self.nooploop._loop
+        )
+        
+        # Now make sure all of their internal state is consistent
+        self.assertEqual(
+            set(self.librarian._catalog),
+            set(librarian2._catalog)
+        )
+        self.assertEqual(
+            self.librarian._bound_by_ghid,
+            librarian2._bound_by_ghid
+        )
+        self.assertEqual(
+            self.librarian._debound_by_ghid,
+            librarian2._debound_by_ghid
+        )
+        self.assertEqual(
+            self.librarian._requests_for_recipient,
+            librarian2._requests_for_recipient
+        )
+        self.assertEqual(
+            self.librarian._dyn_resolver,
+            librarian2._dyn_resolver
+        )
 
 
 if __name__ == "__main__":
-
     from hypergolix import logutils
     logutils.autoconfig(loglevel='debug')
     
