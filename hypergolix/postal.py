@@ -116,6 +116,11 @@ class _PostmanBase(loopa.TaskLooper):
         self._librarian = weakref.proxy(librarian)
         self._bookie = weakref.proxy(bookie)
         
+    async def await_idle(self):
+        ''' Wait until the postman has no more deliveries to perform.
+        '''
+        await self._scheduled.join()
+        
     async def loop_init(self):
         ''' Init all of the needed async primitives.
         '''
@@ -152,6 +157,9 @@ class _PostmanBase(loopa.TaskLooper):
                 ).format(subscription, notification) +
                 ''.join(traceback.format_exc())
             )
+            
+        finally:
+            self._scheduled.task_done()
         
     async def loop_stop(self):
         ''' Clear the async primitives.

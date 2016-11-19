@@ -115,7 +115,7 @@ __all__ = [
 # ###############################################
             
             
-class UndertakerCore:
+class UndertakerCore(loopa.TaskLooper):
     ''' Note: what about post-facto removal of bindings that have
     illegal targets? For example, if someone uploads a binding for a
     target that isn't currently known, and then it turns out that the
@@ -126,168 +126,194 @@ class UndertakerCore:
     for it and call it a day? We'd need to make some kind of call to the
     bookie to handle that.
     '''
+    _librarian = weak_property('__librarian')
+    _postman = weak_property('__postman')
     
-    def __init__(self):
-        self._librarian = None
-        self._bookie = None
-        self._postman = None
+    def __init__(self, *args, maxlen=25, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._maxlen = maxlen
+        self._triage = None
         
-        # This, if defined, handles removal of secrets when objects are debound
-        self._psychopomp = None
+        self._check_lookup = {
+            _GidcLite: self._check_gidc,
+            _GeocLite: self._check_geoc,
+            _GobsLite: self._check_gobs,
+            _GobdLite: self._check_gobd,
+            _GdxxLite: self._check_gdxx,
+            _GarqLite: self._check_garq
+        }
         
-        self._staging = None
-        
-    def assemble(self, librarian, bookie, postman, psychopomp=None):
-        # Call before using.
-        self._librarian = weakref.proxy(librarian)
-        self._bookie = weakref.proxy(bookie)
-        self._postman = weakref.proxy(postman)
-        
-        if psychopomp is not None:
-            self._psychopomp = weakref.proxy(psychopomp)
-        
-    def __enter__(self):
-        # Create a new staging object.
-        self._staging = set()
-        return self
-        
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        # TODO: exception handling
-        # This is pretty clever; we need to be able to modify the set while
-        # iterating it, so just wait until it's empty.
-        while self._staging:
-            ghid = self._staging.pop()
-            try:
-                obj = self._librarian.summarize(ghid)
-                
-            except KeyError:
-                logger.warning(
-                    'Attempt to GC an object not found in librarian.'
-                )
-            
-            else:
-                for primitive, gcollector in ((_GidcLite, self._gc_gidc),
-                                            (_GeocLite, self._gc_geoc),
-                                            (_GobsLite, self._gc_gobs),
-                                            (_GobdLite, self._gc_gobd),
-                                            (_GdxxLite, self._gc_gdxx),
-                                            (_GarqLite, self._gc_garq)):
-                    if isinstance(obj, primitive):
-                        gcollector(obj)
-                        break
-                else:
-                    # No appropriate GCer found (should we typerror?); so
-                    # continue with WHILE loop
-                    continue
-                    logger.error('No appropriate GC routine found!')
-            
-        self._staging = None
-        
-    def triage(self, ghid):
-        ''' Schedule GC check for object.
-        
-        Note: should triaging be order-dependent?
+    async def await_idle(self):
+        ''' Wait until the undertaker has no more GC to perform.
         '''
-        logger.debug('Performing triage.')
-        if self._staging is None:
-            raise RuntimeError(
-                'Cannot triage outside of the undertaker\'s context manager.'
-            )
-        else:
-            self._staging.add(ghid)
+        await self._triage.join()
+        
+    async def loop_init(self):
+        ''' Set up the staging queue.
+        '''
+        self._triage = asyncio.Queue(maxsize=self._maxlen)
+        
+    async def loop_stop(self):
+        ''' Clear the staging queue.
+        '''
+        self._triage = None
+        
+    async def loop_run(self):
+        ''' Wait for stuff to be added to the queue, then execute GC on
+        it.
+        '''
+        ghid_to_collect = await self._staging.get()
+        try:
+            obj = await self._librarian.summarize(ghid_to_collect)
             
-    def _gc_gidc(self, obj):
+            try:
+                collection_check = self._check_lookup[type(obj)]
+                if (await collection_check(obj)):
+                    await self._gc_execute(obj)
+            
+            except KeyError as exc:
+                raise TypeError(
+                    'Invalid object type received from librarian.'
+                ) from exc
+            
+        except KeyError:
+            logger.warning(''.join((
+                str(ghid_to_collect),
+                ' missing in librarian. Already collected?'
+            )))
+            
+        finally:
+            self._triage.task_done()
+        
+    def assemble(self, librarian, postman):
+        # Call before using.
+        self._librarian = librarian
+        self._postman = postman
+            
+    async def _check_gidc(self, obj):
         ''' Check whether we should remove a GIDC, and then remove it
         if appropriate. Currently we don't do that, so just leave it
         alone.
         '''
-        return
+        return False
             
-    def _gc_geoc(self, obj):
+    async def _check_geoc(self, obj):
         ''' Check whether we should remove a GEOC, and then remove it if
         appropriate. Pretty simple: is it bound?
         '''
-        if not self._bookie.is_bound(obj):
-            self._gc_execute(obj)
+        # Keep if bound
+        if (await self._librarian.is_bound(obj)):
+            return False
+        # Remove if unbound
+        else:
+            return True
             
-    def _gc_gobs(self, obj):
-        logger.debug('Entering gobs GC.')
-        if self._bookie.is_debound(obj):
-            logger.debug('Gobs is debound. Staging target and executing GC.')
+    async def _check_gobs(self, obj):
+        if (await self._librarian.is_debound(obj)):
             # Add our target to the list of GC checks
-            self._staging.add(obj.target)
-            self._gc_execute(obj)
+            await self._staging.put(obj.target)
+            return True
+        else:
+            return False
             
-    def _gc_gobd(self, obj):
-        # Child bindings can prevent GCing GOBDs
-        if self._bookie.is_debound(obj) and not self._bookie.is_bound(obj):
-            # Still need to add target
-            self._staging.add(obj.target)
-            self._gc_execute(obj)
+    async def _check_gobd(self, obj):
+        # If we've been debound, it might be time to die
+        if (await self._librarian.is_debound(obj)):
+            # Except child bindings can prevent GCing GOBDs
+            if (await self._bookie.is_bound(obj)):
+                return False
             
-    def _gc_gdxx(self, obj):
+            # Dead binding.
+            else:
+                # Still need to add target
+                await self._triage.put(obj.target)
+                return True
+        
+        # Nope, still alive.
+        else:
+            return False
+            
+    async def _check_gdxx(self, obj):
         # Note that removing a debinding cannot result in a downstream target
         # being GCd, because it wouldn't exist.
-        if self._bookie.is_debound(obj):
-            self._gc_execute(obj)
+        if (await self._librarian.is_debound(obj)):
+            return True
+        else:
+            return False
             
-    def _gc_garq(self, obj):
-        if self._bookie.is_debound(obj):
-            self._gc_execute(obj)
+    async def _check_garq(self, obj):
+        if (await self._librarian.is_debound(obj)):
+            return True
+        else:
+            return False
         
-    def _gc_execute(self, obj):
+    async def _gc_execute(self, obj):
         # Next, goodbye object.
-        self._librarian.force_gc(obj)
+        await self._librarian.abandon(obj)
         # Now notify the postman, and tell her it's a removal.
-        self._postman.schedule(obj, removed=True)
-        # Finally, if we have a psychopomp (secrets remover), notify her, too
-        if self._psychopomp is not None:
-            # Protect this with a thread to prevent reentrancy
-            worker = threading.Thread(
-                target = self._psychopomp.schedule,
-                daemon = True,
-                args = (obj,),
-                name = _generate_threadnames('styxwrkr')[0],
-            )
-            worker.start()
+        await self._postman.schedule(obj, removed=True)
         
-    def prep_gidc(self, obj):
+    async def prep_gidc(self, obj):
         ''' GIDC do not affect GC.
         '''
         return True
         
-    def prep_geoc(self, obj):
+    async def prep_geoc(self, obj):
         ''' GEOC do not affect GC.
         '''
         return True
         
-    def prep_gobs(self, obj):
+    async def prep_gobs(self, obj):
         ''' GOBS do not affect GC.
         '''
         return True
         
-    def prep_gobd(self, obj):
+    async def prep_gobd(self, obj):
         ''' GOBD require triage for previous targets.
         '''
         try:
-            existing = self._librarian.summarize(obj.ghid)
+            existing = await self._librarian.summarize(obj.ghid)
         except KeyError:
             # This will always happen if it's the first frame, so let's be sure
             # to ignore that for logging.
             if obj.history:
                 logger.warning('Could not find gobd to check existing target.')
         else:
-            self.triage(existing.target)
+            await self._triage.put(existing.target)
             
         return True
         
-    def prep_gdxx(self, obj):
+    async def prep_gdxx(self, obj):
         ''' GDXX require triage for new targets.
         '''
-        self.triage(obj.target)
+        await self._triage.put(obj.target)
         return True
         
-    def prep_garq(self, obj):
+    async def prep_garq(self, obj):
         ''' GARQ do not affect GC.
         '''
         return True
+        
+        
+class Ferryman(UndertakerCore):
+    ''' An undertaker that also calls privateer.abandon and
+    oracle.forget.
+    '''
+    # This is needed so gc_execute can abandon secrets
+    _privateer = weak_property('__privateer')
+    # This is needed so gc_execute can flush the oracle cache
+    _oracle = weak_property('__oracle')
+    
+    def assemble(self, librarian, oracle, postman, privateer):
+        super().assemble(librarian, postman)
+        self._privateer = privateer
+        self._oracle = oracle
+        
+    async def _gc_execute(self, obj):
+        # Do our stuff first so that there's still access to librarian
+        # state, if it ends up being needed
+        self._oracle.forget(obj.ghid)
+        self._privateer.abandon(obj.ghid, quiet=True)
+        # Don't flush any of the GAOs associated with that; just let it be
+        # rolled into the next push-upstream-update
+        await super()._gc_execute(obj)

@@ -291,7 +291,6 @@ class GAOCore(metaclass=API):
                 'Debinding target does not match GAO applying delete.'
             )
             
-    @fixture_noop
     @public_api
     async def freeze(self):
         ''' Creates a static binding for the most current state of a
@@ -308,6 +307,14 @@ class GAOCore(metaclass=API):
         )
         
         return container_ghid
+        
+    @freeze.fixture
+    async def freeze(self):
+        ''' Just return a pseudorandom ghid.
+        '''
+        return Ghid.from_bytes(
+            b'\x01' + bytes([random.randint(0, 255) for i in range(0, 64)])
+        )
         
     @fixture_noop
     @public_api
