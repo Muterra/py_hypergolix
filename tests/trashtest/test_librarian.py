@@ -71,31 +71,17 @@ from _fixtures.identities import TEST_AGENT2
 from _fixtures.identities import TEST_READER1
 from _fixtures.identities import TEST_READER2
 
-# Identities
-from _fixtures.remote_exchanges import gidc1
-from _fixtures.remote_exchanges import gidc2
-gidclite1 = _GidcLite.from_golix(GIDC.unpack(gidc1))
-gidclite2 = _GidcLite.from_golix(GIDC.unpack(gidc2))
-# Containers
-from _fixtures.remote_exchanges import cont1_1  # Known author
-from _fixtures.remote_exchanges import cont3_1  # Unknown author
-# Static bindings
-from _fixtures.remote_exchanges import bind1_1  # Known author
-from _fixtures.remote_exchanges import bind3_2  # Unknown author
-# Dynamic bindings
-from _fixtures.remote_exchanges import dyn1_1a  # Known author frame 1
-from _fixtures.remote_exchanges import dyn1_1b  # Known author frame 2
-from _fixtures.remote_exchanges import dyn3_1a  # Unknown author frame 1
-from _fixtures.remote_exchanges import dyn3_1b  # Unknown author frame 2
-from _fixtures.remote_exchanges import dynF_a   # Inconsistent author frame 1
-from _fixtures.remote_exchanges import dynF_b   # Inconsistent author frame 2
-# Debindings
-from _fixtures.remote_exchanges import debind1_1        # Consistent author
-from _fixtures.remote_exchanges import debind2_1_bad    # Inconsistent author
-from _fixtures.remote_exchanges import debind3_1        # Unknown author
-# Requests
-from _fixtures.remote_exchanges import handshake1_1     # Known recipient
-from _fixtures.remote_exchanges import handshake3_1     # Unknown recipient
+# Stuff to store
+from _fixtures.remote_exchanges import cont1_1  # Container
+from _fixtures.remote_exchanges import dyn1_1a  # Dynamic binding frame 1
+from _fixtures.remote_exchanges import dyn1_1b  # Dynamic binding frame 2
+from _fixtures.remote_exchanges import handshake1_1
+from _fixtures.remote_exchanges import debind1_1
+geoc1_1 = _GeocLite.from_golix(cont1_1)
+gobd1_a = _GobdLite.from_golix(dyn1_1a)
+gobd1_b = _GobdLite.from_golix(dyn1_1b)
+garq1_1 = _GarqLite.from_golix(handshake1_1)
+gdxx1_1 = _GdxxLite.from_golix(debind1_1)
 
 
 # ###############################################
@@ -120,6 +106,161 @@ class GenericLibrarianTest:
     def tearDownClass(cls):
         # Kill the running loop.
         cls.nooploop.stop_threadsafe_nowait()
+        
+    def test_contains(self):
+        ''' Test librarian.contains(ghid).
+        '''
+        self.assertFalse(
+            await_coroutine_threadsafe(
+                coro = self.librarian.contains(geoc1_1.ghid),
+                loop = self.nooploop._loop
+            )
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(geoc1_1, cont1_1.packed),
+            loop = self.nooploop._loop
+        )
+        
+        self.assertTrue(
+            await_coroutine_threadsafe(
+                coro = self.librarian.contains(geoc1_1.ghid),
+                loop = self.nooploop._loop
+            )
+        )
+        
+    def test_resolution(self):
+        ''' Test librarian.resolve_frame(ghid).
+        '''
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(gobd1_a, dyn1_1a.packed),
+            loop = self.nooploop._loop
+        )
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.librarian.resolve_frame(gobd1_a.ghid),
+                loop = self.nooploop._loop
+            ),
+            gobd1_a.frame_ghid
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(gobd1_b, dyn1_1b.packed),
+            loop = self.nooploop._loop
+        )
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.librarian.resolve_frame(gobd1_b.ghid),
+                loop = self.nooploop._loop
+            ),
+            gobd1_b.frame_ghid
+        )
+        
+    def test_recipient(self):
+        ''' Test librarian.recipient_status(ghid).
+        '''
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.librarian.recipient_status(garq1_1.recipient),
+                loop = self.nooploop._loop
+            ),
+            frozenset()
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(garq1_1, handshake1_1.packed),
+            loop = self.nooploop._loop
+        )
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.librarian.recipient_status(garq1_1.recipient),
+                loop = self.nooploop._loop
+            ),
+            frozenset({garq1_1.ghid})
+        )
+        
+    def test_bind_status(self):
+        ''' Test librarian.bind_status(ghid).
+        '''
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.librarian.bind_status(gobd1_a.target),
+                loop = self.nooploop._loop
+            ),
+            frozenset()
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(gobd1_a, dyn1_1a.packed),
+            loop = self.nooploop._loop
+        )
+        
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.librarian.bind_status(gobd1_a.target),
+                loop = self.nooploop._loop
+            ),
+            frozenset({gobd1_a.ghid})
+        )
+        
+    def test_debind_status(self):
+        ''' Test librarian.debind_status(ghid).
+        '''
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.librarian.debind_status(gdxx1_1.target),
+                loop = self.nooploop._loop
+            ),
+            frozenset()
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(gdxx1_1, debind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.librarian.debind_status(gdxx1_1.target),
+                loop = self.nooploop._loop
+            ),
+            frozenset({gdxx1_1.ghid})
+        )
+        
+    def test_cache(self):
+        ''' Test librarian.add_to_cache(obj, data),
+        librarian.get_from_cache(ghid), and
+        librarian.remove_from_cache(ghid).
+        '''
+        await_coroutine_threadsafe(
+            coro = self.librarian.add_to_cache(geoc1_1, cont1_1.packed),
+            loop = self.nooploop._loop
+        )
+        
+        self.assertTrue(
+            await_coroutine_threadsafe(
+                coro = self.librarian.contains(geoc1_1.ghid),
+                loop = self.nooploop._loop
+            )
+        )
+        
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.librarian.get_from_cache(geoc1_1.ghid),
+                loop = self.nooploop._loop
+            ),
+            cont1_1.packed
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.librarian.remove_from_cache(geoc1_1.ghid),
+            loop = self.nooploop._loop
+        )
+        
+        self.assertFalse(
+            await_coroutine_threadsafe(
+                coro = self.librarian.contains(geoc1_1.ghid),
+                loop = self.nooploop._loop
+            )
+        )
 
 
 class LibrarianCoreTest(GenericLibrarianTest, unittest.TestCase):
@@ -247,18 +388,118 @@ class LibrarianCoreTest(GenericLibrarianTest, unittest.TestCase):
     def test_store(self):
         ''' Test librarian.store(obj, data).
         '''
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(geoc1_1, cont1_1.packed),
+            loop = self.nooploop._loop
+        )
+        self.assertIn(geoc1_1.ghid, self.librarian._shelf)
+        self.assertIn(geoc1_1.ghid, self.librarian._catalog)
+        
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(gobd1_a, dyn1_1a.packed),
+            loop = self.nooploop._loop
+        )
+        self.assertIn(gobd1_a.frame_ghid, self.librarian._shelf)
+        self.assertIn(gobd1_a.frame_ghid, self.librarian._catalog)
+        self.assertIn(gobd1_a.ghid, self.librarian._dyn_resolver)
+        self.assertEqual(
+            gobd1_a.frame_ghid,
+            await_coroutine_threadsafe(
+                coro = self.librarian.resolve_frame(gobd1_a.ghid),
+                loop = self.nooploop._loop
+            )
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(gobd1_b, dyn1_1b.packed),
+            loop = self.nooploop._loop
+        )
+        self.assertIn(gobd1_b.frame_ghid, self.librarian._shelf)
+        self.assertIn(gobd1_b.frame_ghid, self.librarian._catalog)
+        self.assertNotIn(gobd1_a.frame_ghid, self.librarian._shelf)
+        self.assertNotIn(gobd1_a.frame_ghid, self.librarian._catalog)
+        self.assertIn(gobd1_b.ghid, self.librarian._dyn_resolver)
+        self.assertEqual(
+            gobd1_b.frame_ghid,
+            await_coroutine_threadsafe(
+                coro = self.librarian.resolve_frame(gobd1_b.ghid),
+                loop = self.nooploop._loop
+            )
+        )
         
     def test_retrieve(self):
         ''' Test librarian.retrieve(ghid).
         '''
+        self.librarian._shelf[cont1_1.ghid] = cont1_1.packed
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.librarian.retrieve(cont1_1.ghid),
+                loop = self.nooploop._loop
+            ),
+            cont1_1.packed
+        )
+        
+        # Note that as a GOLIX object, this ghid is the frame ghid.
+        self.librarian._shelf[dyn1_1a.ghid] = dyn1_1a.packed
+        self.librarian._dyn_resolver[dyn1_1a.ghid_dynamic] = dyn1_1a.ghid
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.librarian.retrieve(dyn1_1a.ghid_dynamic),
+                loop = self.nooploop._loop
+            ),
+            dyn1_1a.packed
+        )
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.librarian.retrieve(dyn1_1a.ghid),
+                loop = self.nooploop._loop
+            ),
+            dyn1_1a.packed
+        )
         
     def test_summarize(self):
         ''' Test librarian.summarize(ghid).
         '''
+        obj = _GeocLite(ghid=make_random_ghid(), author=make_random_ghid())
+        self.librarian._catalog[obj.ghid] = obj
+        self.assertIs(
+            await_coroutine_threadsafe(
+                coro = self.librarian.summarize(obj.ghid),
+                loop = self.nooploop._loop
+            ),
+            obj
+        )
         
     def test_abandon(self):
         ''' Test librarian.abandon(ghid).
         '''
+        self.librarian._shelf[cont1_1.ghid] = cont1_1.packed
+        self.librarian._catalog[geoc1_1.ghid] = geoc1_1
+        await_coroutine_threadsafe(
+            coro = self.librarian.abandon(geoc1_1),
+            loop = self.nooploop._loop
+        )
+        self.assertNotIn(geoc1_1.ghid, self.librarian._shelf)
+        self.assertNotIn(geoc1_1.ghid, self.librarian._catalog)
+        
+        # Note that as a GOLIX object, this ghid is the frame ghid.
+        self.librarian._shelf[dyn1_1a.ghid] = dyn1_1a.packed
+        self.librarian._dyn_resolver[dyn1_1a.ghid_dynamic] = dyn1_1a.ghid
+        self.librarian._catalog[dyn1_1a.ghid] = gobd1_a
+        self.librarian._bound_by_ghid.add(gobd1_a.target, gobd1_a.ghid)
+        await_coroutine_threadsafe(
+            coro = self.librarian.abandon(gobd1_a),
+            loop = self.nooploop._loop
+        )
+        self.assertNotIn(gobd1_a.frame_ghid, self.librarian._shelf)
+        self.assertNotIn(gobd1_a.frame_ghid, self.librarian._catalog)
+        self.assertNotIn(gobd1_a.ghid, self.librarian._dyn_resolver)
+        self.assertFalse(
+            self.librarian._bound_by_ghid.contains_within(
+                gobd1_a.target,
+                gobd1_a.ghid
+            )
+        )
 
 
 if __name__ == "__main__":

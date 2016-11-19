@@ -260,7 +260,9 @@ class LibrarianCore(metaclass=API):
         # rid of any old dynamic frames and pop them from the catalog.
         if old_ghid is not None:
             await self.remove_from_cache(old_ghid)
-            self._catalog.pop(old_ghid)
+            # We need the None regardless of bugs, in case the old frame is
+            # "stale" enough to have been released from memory
+            self._catalog.pop(old_ghid, None)
     
     @public_api
     async def retrieve(self, ghid):
@@ -337,6 +339,20 @@ class LibrarianCore(metaclass=API):
     # Subclasses MUST define this to work!
     # @abc.abstractmethod
     @fixture_api
+    async def resolve_frame(self, ghid):
+        ''' Get the current frame ghid from the dynamic ghid.
+        '''
+        if not isinstance(ghid, Ghid):
+            raise TypeError('Ghid must be a Ghid.')
+            
+        if ghid in self._dyn_resolver:
+            return self._dyn_resolver[ghid]
+        else:
+            raise KeyError(str(ghid) + ' not known as dynamic ghid.')
+    
+    # Subclasses MUST define this to work!
+    # @abc.abstractmethod
+    @fixture_api
     async def recipient_status(self, ghid):
         ''' Return a frozenset of ghids assigned to the passed ghid as
         a recipient.
@@ -362,20 +378,6 @@ class LibrarianCore(metaclass=API):
         # debind something FOR SOMEONE ELSE before the bookie knows about the
         # original object authorship.
         return self._debound_by_ghid.get_any(ghid)
-    
-    # Subclasses MUST define this to work!
-    # @abc.abstractmethod
-    @fixture_api
-    async def resolve_frame(self, ghid):
-        ''' Get the current frame ghid from the dynamic ghid.
-        '''
-        if not isinstance(ghid, Ghid):
-            raise TypeError('Ghid must be a Ghid.')
-            
-        if ghid in self._dyn_resolver:
-            return self._dyn_resolver[ghid]
-        else:
-            raise KeyError(str(ghid) + ' not known as dynamic ghid.')
             
     # Subclasses MUST define this to work!
     # @abc.abstractmethod
@@ -430,8 +432,10 @@ class LibrarianCore(metaclass=API):
             
         elif isinstance(obj, _GobdLite):
             reference_ghid = obj.frame_ghid
-            self._dyn_resolver.pop(obj.ghid, None)
             self._bound_by_ghid.discard(obj.target, obj.ghid)
+            
+            if self._dyn_resolver.get(obj.ghid, None) == obj.frame_ghid:
+                self._dyn_resolver.pop(obj.ghid, None)
             
         elif isinstance(obj, _GdxxLite):
             reference_ghid = obj.ghid
@@ -440,6 +444,9 @@ class LibrarianCore(metaclass=API):
         elif isinstance(obj, _GarqLite):
             reference_ghid = obj.ghid
             self._requests_for_recipient.discard(obj.recipient, obj.ghid)
+            
+        else:
+            reference_ghid = obj.ghid
         
         self._shelf.pop(reference_ghid, None)
         self._catalog.pop(reference_ghid, None)
