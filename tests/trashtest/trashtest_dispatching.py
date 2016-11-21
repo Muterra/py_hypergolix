@@ -57,8 +57,6 @@ from hypergolix.dispatch import Dispatcher
 from hypergolix.dispatch import _Dispatchable
 from hypergolix.dispatch import _AppDef
 
-from hypergolix.remotes import SalmonatorNoop
-
 from hypergolix.exceptions import UnknownToken
 
 

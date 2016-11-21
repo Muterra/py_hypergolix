@@ -58,7 +58,7 @@ from hypergolix.comms import RequestResponseProtocol as Autocomms
 from hypergolix.comms import BasicServer as WSBasicServer
 
 from hypergolix.remotes import RemotePersistenceProtocol
-from hypergolix.remotes import SalmonatorNoop
+from hypergolix.remotes import Salmonator
 
 from hypergolix.persistence import PersistenceCore
 from hypergolix.persistence import Doorman
@@ -208,7 +208,7 @@ class RemotePersistenceServer:
         self.undertaker = UndertakerCore()
         # I mean, this won't be used unless we set up peering, but it saves us
         # needing to do a modal switch for remote persistence servers
-        self.salmonator = SalmonatorNoop()
+        self.salmonator = Salmonator.__fixture__()
         
     def assemble(self, bridge):
         # Now we need to link everything together.

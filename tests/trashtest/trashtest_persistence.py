@@ -53,7 +53,7 @@ from hypergolix.librarian import DiskLibrarian
 
 from hypergolix.postal import MrPostman
 
-from hypergolix.remotes import SalmonatorNoop
+from hypergolix.remotes import Salmonator
 
 from hypergolix.exceptions import PersistenceError
 from hypergolix.exceptions import StillBoundWarning
@@ -424,7 +424,7 @@ class MemoryLibrarianTrashtest(unittest.TestCase, IntegrationTest):
         self.librarian = LibrarianCore.__fixture__()
         self.postman = MrPostman()
         self.undertaker = UndertakerCore()
-        self.salmonator = SalmonatorNoop()
+        self.salmonator = Salmonator.__fixture__()
         
         self.rolodex = RolodexMock()
         self.golcore = GCoreMock(TEST_AGENT1)
