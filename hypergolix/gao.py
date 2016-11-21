@@ -38,6 +38,7 @@ import traceback
 import collections
 import functools
 import weakref
+import pickle
 # Used to make random ghids for fixturing gao
 import random
 
@@ -721,8 +722,8 @@ class GAO(GAOCore):
     '''
     
     def __init__(self, *args, state, **kwargs):
-        self.state = state
         super().__init__(*args, **kwargs)
+        self.state = state
         
     async def pack_gao(self):
         ''' Packs self into a bytes object. May be overwritten in subs
@@ -744,29 +745,8 @@ class GAO(GAOCore):
         '''
         self.state = packed
         
-    
-class _GAO:
-    ''' Base class for Golix-Aware Objects (Golix Accountability
-    Objects?). Anyways, used by core to handle plaintexts and things.
-    
-    TODO: thread safety? or async safety?
-    TODO: support reference nesting.
-    '''
-            
-            
-class _GAOPickleBase(_GAO):
-    ''' Golix-aware messagepack base object.
-    '''
-    def __init__(self, *args, **kwargs):
-        # Include these so that we can pass *args and **kwargs to the dict
-        super().__init__(*args, **kwargs)
-        # Note: must be RLock, because we need to take opslock in __setitem__
-        # while calling push.
-        self._opslock = threading.RLock()
-        
     def __eq__(self, other):
-        ''' Check total equality first, and then fall back on state 
-        checking.
+        ''' Ensure the other object is the same gao with the same state.
         '''
         equal = True
         
@@ -774,29 +754,28 @@ class _GAOPickleBase(_GAO):
             equal &= (self.dynamic == other.dynamic)
             equal &= (self.ghid == other.ghid)
             equal &= (self.author == other.author)
-            equal &= (self._state == other._state)
+            equal &= (self.state == other.state)
             
         except AttributeError:
             equal = False
         
         return equal
+            
+            
+class _GAOPickleBase(GAO):
+    ''' Golix-aware base object with pickle serialization.
+    '''
         
-    def pull(self, *args, **kwargs):
-        with self._opslock:
-            return super().pull(*args, **kwargs)
-        
-    def push(self, *args, **kwargs):
-        with self._opslock:
-            super().push(*args, **kwargs)
-        
-    @staticmethod
-    def _pack(state):
-        ''' Packs state into a bytes object. May be overwritten in subs
+    async def pack_gao(self):
+        ''' Packs self into a bytes object. May be overwritten in subs
         to pack more complex objects. Should always be a staticmethod or
         classmethod.
+        
+        May be used to implement, for example, packing self into a
+        DispatchableState, etc etc.
         '''
         try:
-            return pickle.dumps(state, protocol=4)
+            return pickle.dumps(self.state, protocol=4)
             
         except Exception:
             logger.error(
@@ -805,14 +784,20 @@ class _GAOPickleBase(_GAO):
             )
             raise
         
-    @staticmethod
-    def _unpack(packed):
-        ''' Unpacks state from a bytes object. May be overwritten in 
-        subs to unpack more complex objects. Should always be a 
+    async def unpack_gao(self, packed):
+        ''' Unpacks state from a bytes object and applies state to self.
+        May be overwritten in subs to unpack more complex objects.
+        
+        May be used to implement, for example, dicts performing a
+        clear() operation before an update() instead of just reassigning
+        the object.
+        '''
+        ''' Unpacks state from a bytes object. May be overwritten in
+        subs to unpack more complex objects. Should always be a
         staticmethod or classmethod.
         '''
         try:
-            return pickle.loads(packed)
+            self.state = pickle.loads(packed)
             
         except Exception:
             logger.error(
@@ -822,365 +807,326 @@ class _GAOPickleBase(_GAO):
             raise
             
             
-class _GAODictBase:
-    ''' A golix-aware dictionary. For now at least, serializes:
-            1. For every change
-            2. Using pickle
+class _DictMixin(dict):
+    ''' A golix-aware dictionary.
     '''
-    def __init__(self, *args, **kwargs):
-        # Statelock needs to be an RLock, because privateer does funny stuff.
-        self._statelock = threading.RLock()
-        self._state = {}
-        super().__init__(*args, **kwargs)
+    
+    def __init__(self, *args, state=None, **kwargs):
+        if state is None:
+            super().__init__(state, *args, **kwargs)
+        else:
+            super().__init__(*args, **kwargs)
         
-    def apply_state(self, state):
-        ''' Apply the UNPACKED state to self.
+    @property
+    def state(self):
+        ''' Pass through to self._state
         '''
-        with self._statelock:
-            self._state.clear()
-            self._state.update(state)
+        return self
         
-    def extract_state(self):
-        ''' Extract self into a packable state.
+    @state.setter
+    def state(self, value):
+        ''' Preserve the actual dictionary object, instead of just
+        replacing it.
         '''
-        # with self._statelock:
-        # Both push and pull take the opslock, and they are the only entry 
-        # points that call extract_state and apply_state, so we should be good
-        # without the lock.
-        return self._state
+        self.clear()
+        self.update(value)
         
-    def __len__(self):
-        # Straight pass-through
-        return len(self._state)
+    # def __len__(self):
+    #     # Straight pass-through
+    #     return len(self._state)
         
-    def __iter__(self):
-        for key in self._state:
-            yield key
+    # def __iter__(self):
+    #     # Pass through to self._state
+    #     return iter(self._state)
             
-    def __getitem__(self, key):
-        with self._statelock:
-            return self._state[key]
+    # def __getitem__(self, key):
+    #     # Pass through to self._state
+    #     return self._state[key]
             
-    def __setitem__(self, key, value):
-        with self._statelock:
-            self._state[key] = value
-            self.push()
+    # def __setitem__(self, key, value):
+    #     # Pass through to self._state
+    #     self._state[key] = value
             
-    def __delitem__(self, key):
-        with self._statelock:
-            del self._state[key]
-            self.push()
+    # def __delitem__(self, key):
+    #     # Pass through to self._state
+    #     del self._state[key]
             
-    def __contains__(self, key):
-        with self._statelock:
-            return key in self._state
+    # def __contains__(self, key):
+    #     # Pass through to self._state
+    #     return key in self._state
             
-    def pop(self, key, *args, **kwargs):
-        with self._statelock:
-            result = self._state.pop(key, *args, **kwargs)
-            self.push()
-            
-        return result
+    # def pop(self, key, *args, **kwargs):
+    #     # Pass through to self._state
+    #     return self._state.pop(key, *args, **kwargs)
         
-    def items(self, *args, **kwargs):
-        # Because the return is a view object, competing use will result in
-        # python errors, so we don't really need to worry about statelock.
-        return self._state.items(*args, **kwargs)
+    # def items(self, *args, **kwargs):
+    #     # Because the return is a view object, competing use will result in
+    #     # python errors, so we don't really need to worry about statelock.
+    #     return self._state.items(*args, **kwargs)
         
-    def keys(self, *args, **kwargs):
-        # Because the return is a view object, competing use will result in
-        # python errors, so we don't really need to worry about statelock.
-        return self._state.keys(*args, **kwargs)
+    # def keys(self, *args, **kwargs):
+    #     # Because the return is a view object, competing use will result in
+    #     # python errors, so we don't really need to worry about statelock.
+    #     return self._state.keys(*args, **kwargs)
         
-    def values(self, *args, **kwargs):
-        # Because the return is a view object, competing use will result in
-        # python errors, so we don't really need to worry about statelock.
-        return self._state_values(*args, **kwargs)
+    # def values(self, *args, **kwargs):
+    #     # Because the return is a view object, competing use will result in
+    #     # python errors, so we don't really need to worry about statelock.
+    #     return self._state.values(*args, **kwargs)
         
-    def setdefault(self, key, *args, **kwargs):
-        ''' Careful, need state lock.
-        '''
-        with self._statelock:
-            if key in self._state:
-                result = self._state.setdefault(key, *args, **kwargs)
-            else:
-                result = self._state.setdefault(key, *args, **kwargs)
-                self.push()
+    # def setdefault(self, key, *args, **kwargs):
+    #     # Pass through to self._state
+    #     return self._state.setdefault(key, *args, **kwargs)
         
-        return result
+    # def get(self, *args, **kwargs):
+    #     # Pass through to self._state
+    #     return self._state.get(*args, **kwargs)
         
-    def get(self, *args, **kwargs):
-        with self._statelock:
-            return self._state.get(*args, **kwargs)
+    # def popitem(self, *args, **kwargs):
+    #     # Pass through to self._state
+    #     return self._state.popitem(*args, **kwargs)
         
-    def popitem(self, *args, **kwargs):
-        with self._statelock:
-            result = self._state.popitem(*args, **kwargs)
-            self.push()
-        return result
+    # def clear(self, *args, **kwargs):
+    #     # Pass through to self._state
+    #     return self._state.clear(*args, **kwargs)
         
-    def clear(self, *args, **kwargs):
-        with self._statelock:
-            self._state.clear(*args, **kwargs)
-            self.push()
-        
-    def update(self, *args, **kwargs):
-        with self._statelock:
-            self._state.update(*args, **kwargs)
-            self.push()
+    # def update(self, *args, **kwargs):
+    #     # Pass through to self._state
+    #     return self._state.update(*args, **kwargs)
     
     
-class _GAODict(_GAODictBase, _GAOPickleBase):
+class _GAODict(_DictMixin, _GAOPickleBase):
+    ''' Combine GAO dicts with pickle serialization.
+    '''
     pass
             
             
-class _GAOSetBase:
-    ''' A golix-aware set. For now at least, serializes:
-            1. For every change
-            2. Using pickle
+class _SetMixin(set):
+    ''' A golix-aware set.
     '''
-    def __init__(self, *args, **kwargs):
-        self._state = set()
-        self._statelock = threading.Lock()
-        super().__init__(*args, **kwargs)
+    
+    def __init__(self, *args, state=None, **kwargs):
+        if state is None:
+            super().__init__(state, *args, **kwargs)
+        else:
+            super().__init__(*args, **kwargs)
         
-    def apply_state(self, state):
-        ''' Apply the UNPACKED state to self.
+    @property
+    def state(self):
+        ''' Pass through to self._state
         '''
-        with self._statelock:
-            to_add = state - self._state
-            to_remove = self._state - state
-            self._state -= to_remove
-            self._state |= to_add
+        return self
         
-    def extract_state(self):
-        ''' Extract self into a packable state.
+    @state.setter
+    def state(self, value):
+        ''' Preserve the actual set object, instead of just replacing
+        it.
         '''
-        # with self._statelock:
-        # Both push and pull take the opslock, and they are the only entry 
-        # points that call extract_state and apply_state, so we should be good
-        # without the lock.
-        return self._state
+        self.clear()
+        self.update(value)
+        
+    # @property
+    # def state(self):
+    #     ''' Pass through to self._state
+    #     '''
+    #     return self._state
+        
+    # @state.setter
+    # def state(self, value):
+    #     ''' Preserve the actual set object, instead of just replacing
+    #     it.
+    #     '''
+    #     if self._state is None:
+    #         self._state = value
+    #     else:
+    #         to_add = value - self._state
+    #         to_remove = self._state - value
+    #         self._state -= to_remove
+    #         self._state |= to_add
+    #         # self._state.clear()
+    #         # self._state.update(value)
             
-    def __contains__(self, key):
-        with self._statelock:
-            return key in self._state
+    # def __contains__(self, key):
+    #     # Pass through to self._state
+    #     return key in self._state
         
-    def __len__(self):
-        # Straight pass-through
-        return len(self._state)
+    # def __len__(self):
+    #     # Pass through to self._state
+    #     return len(self._state)
         
-    def __iter__(self):
-        for key in self._state:
-            yield key
+    # def __iter__(self):
+    #     # Pass through to self._state
+    #     return iter(self._state)
             
-    def add(self, elem):
-        ''' Do a wee bit of checking while we're at it to avoid 
-        superfluous pushing.
-        '''
-        with self._statelock:
-            if elem not in self._state:
-                self._state.add(elem)
-                self.push()
+    # def add(self, elem):
+    #     # Pass through to self._state
+    #     self._state.add(elem)
                 
-    def remove(self, elem):
-        ''' The usual. No need to check; will keyerror before pushing if
-        no-op.
-        '''
-        with self._statelock:
-            self._state.remove(elem)
-            self.push()
+    # def remove(self, elem):
+    #     # Pass through to self._state
+    #     self._state.remove(elem)
             
-    def discard(self, elem):
-        ''' Do need to check for modification to prevent superfluous 
-        pushing.
-        '''
-        with self._statelock:
-            if elem in self._state:
-                self._state.discard(elem)
-                self.push()
+    # def discard(self, elem):
+    #     # Pass through to self._state
+    #     self._state.discard(elem)
             
-    def pop(self):
-        with self._statelock:
-            result = self._state.pop()
-            self.push()
+    # def pop(self):
+    #     # Pass through to self._state
+    #     return self._state.pop()
             
-        return result
+    # def clear(self):
+    #     # Pass through to self._state
+    #     self._state.clear()
             
-    def clear(self):
-        with self._statelock:
-            self._state.clear()
-            self.push()
+    # def isdisjoint(self, other):
+    #     # Pass through to self._state
+    #     return self._state.isdisjoint(other)
             
-    def isdisjoint(self, other):
-        with self._statelock:
-            return self._state.isdisjoint(other)
+    # def issubset(self, other):
+    #     # Pass through to self._state
+    #     return self._state.issubset(other)
             
-    def issubset(self, other):
-        with self._statelock:
-            return self._state.issubset(other)
-            
-    def issuperset(self, other):
-        with self._statelock:
-            return self._state.issuperset(other)
-            
-    def union(self, *others):
-        # Note that union creates a NEW set.
-        with self._statelock:
-            return type(self)(
-                self._golcore, 
-                self._dynamic, 
-                self._legroom, 
-                self._state.union(*others)
-            )
-            
-    def intersection(self, *others):
-        # Note that intersection creates a NEW set.
-        with self._statelock:
-            return type(self)(
-                self._golcore, 
-                self._dynamic, 
-                self._legroom, 
-                self._state.intersection(*others)
-            )
+    # def issuperset(self, other):
+    #     # Pass through to self._state
+    #     return self._state.issuperset(other)
             
             
-class _GAOSet(_GAOSetBase, _GAOPickleBase):
+class _GAOSet(_SetMixin, _GAOPickleBase):
+    ''' Combine GAO sets with pickle serialization.
+    '''
     pass
             
             
-class _GAOSetMapBase:
-    ''' A golix-aware set. For now at least, serializes:
-            1. For every change
-            2. Using pickle
+class _SetMapMixin(SetMap):
+    ''' A golix-aware setmap.
     '''
-    def __init__(self, *args, **kwargs):
-        self._state = SetMap()
-        self._statelock = threading.Lock()
-        super().__init__(*args, **kwargs)
-        
-    def apply_state(self, state):
-        ''' Apply the UNPACKED state to self.
-        '''
-        with self._statelock:
-            # self._state.clear_all()
-            # self._state.update()
-            # Nevermind. For now, just replace the damn thing.
-            self._state = state
-        
-    def extract_state(self):
-        ''' Extract self into a packable state.
-        '''
-        # with self._statelock:
-        # Both push and pull take the opslock, and they are the only entry 
-        # points that call extract_state and apply_state, so we should be good
-        # without the lock.
-        return self._state
-            
-    def __contains__(self, key):
-        with self._statelock:
-            return key in self._state
-        
-    def __len__(self):
-        # Straight pass-through
-        return len(self._state)
-        
-    def __iter__(self):
-        for key in self._state:
-            yield key
     
-    def __getitem__(self, key):
-        ''' Pass-through to the core lookup. Will return a frozenset.
-        Raises keyerror if missing.
-        '''
-        with self._statelock:
-            return self._state[key]
+    def __init__(self, *args, state=None, **kwargs):
+        if state is None:
+            super().__init__(state, *args, **kwargs)
+        else:
+            super().__init__(*args, **kwargs)
         
-    def get_any(self, key):
-        ''' Pass-through to the core lookup. Will return a frozenset.
-        Will never raise a keyerror; if key not in self, returns empty
-        frozenset.
+    @property
+    def state(self):
+        ''' Pass through to self._state
         '''
-        with self._statelock:
-            return self._state.get_any(key)
+        return self
+        
+    @state.setter
+    def state(self, value):
+        ''' Preserve the actual setmap object, instead of just
+        replacing it.
+        '''
+        self.clear_all()
+        self.update_all(value)
+            
+    # def __contains__(self, key):
+    #     with self._statelock:
+    #         return key in self._state
+        
+    # def __len__(self):
+    #     # Straight pass-through
+    #     return len(self._state)
+        
+    # def __iter__(self):
+    #     for key in self._state:
+    #         yield key
+    
+    # def __getitem__(self, key):
+    #     ''' Pass-through to the core lookup. Will return a frozenset.
+    #     Raises keyerror if missing.
+    #     '''
+    #     with self._statelock:
+    #         return self._state[key]
+        
+    # def get_any(self, key):
+    #     ''' Pass-through to the core lookup. Will return a frozenset.
+    #     Will never raise a keyerror; if key not in self, returns empty
+    #     frozenset.
+    #     '''
+    #     with self._statelock:
+    #         return self._state.get_any(key)
                 
-    def pop_any(self, key):
-        with self._statelock:
-            result = self._state.pop_any(key)
-            if result:
-                self.push()
-            return result
+    # def pop_any(self, key):
+    #     with self._statelock:
+    #         result = self._state.pop_any(key)
+    #         if result:
+    #             self.push()
+    #         return result
         
-    def contains_within(self, key, value):
-        ''' Check to see if the key exists, AND the value exists at key.
-        '''
-        with self._statelock:
-            return self._state.contains_within(key, value)
+    # def contains_within(self, key, value):
+    #     ''' Check to see if the key exists, AND the value exists at key.
+    #     '''
+    #     with self._statelock:
+    #         return self._state.contains_within(key, value)
         
-    def add(self, key, value):
-        ''' Adds the value to the set at key. Creates a new set there if 
-        none already exists.
-        '''
-        with self._statelock:
-            # Actually do some detection to figure out if we need to push.
-            if not self._state.contains_within(key, value):
-                self._state.add(key, value)
-                self.push()
+    # def add(self, key, value):
+    #     ''' Adds the value to the set at key. Creates a new set there if
+    #     none already exists.
+    #     '''
+    #     with self._statelock:
+    #         # Actually do some detection to figure out if we need to push.
+    #         if not self._state.contains_within(key, value):
+    #             self._state.add(key, value)
+    #             self.push()
                 
-    def update(self, key, value):
-        ''' Updates the key with the value. Value must support being
-        passed to set.update(), and the set constructor.
-        '''
-        # TODO: add some kind of detection of a delta to make sure this really
-        # changed something
-        with self._statelock:
-            self._state.update(key, value)
-            self.push()
+    # def update(self, key, value):
+    #     ''' Updates the key with the value. Value must support being
+    #     passed to set.update(), and the set constructor.
+    #     '''
+    #     # TODO: add some kind of detection of a delta to make sure this
+    #     # really changed something
+    #     with self._statelock:
+    #         self._state.update(key, value)
+    #         self.push()
         
-    def remove(self, key, value):
-        ''' Removes the value from the set at key. Will raise KeyError 
-        if either the key is missing, or the value is not contained at
-        the key.
-        '''
-        with self._statelock:
-            # Note that this will raise a keyerror before push if nothing is 
-            # going to change.
-            self._state.remove(key, value)
-            self.push()
+    # def remove(self, key, value):
+    #     ''' Removes the value from the set at key. Will raise KeyError
+    #     if either the key is missing, or the value is not contained at
+    #     the key.
+    #     '''
+    #     with self._statelock:
+    #         # Note that this will raise a keyerror before push if nothing is
+    #         # going to change.
+    #         self._state.remove(key, value)
+    #         self.push()
         
-    def discard(self, key, value):
-        ''' Same as remove, but will never raise KeyError.
-        '''
-        with self._statelock:
-            if self._state.contains_within(key, value):
-                self._state.discard(key, value)
-                self.push()
+    # def discard(self, key, value):
+    #     ''' Same as remove, but will never raise KeyError.
+    #     '''
+    #     with self._statelock:
+    #         if self._state.contains_within(key, value):
+    #             self._state.discard(key, value)
+    #             self.push()
         
-    def clear(self, key):
-        ''' Clears the specified key. Raises KeyError if key is not 
-        found.
-        '''
-        with self._statelock:
-            # Note that keyerror will be raised if no delta
-            self._state.clear(key)
-            self.push()
+    # def clear(self, key):
+    #     ''' Clears the specified key. Raises KeyError if key is not
+    #     found.
+    #     '''
+    #     with self._statelock:
+    #         # Note that keyerror will be raised if no delta
+    #         self._state.clear(key)
+    #         self.push()
             
-    def clear_any(self, key):
-        ''' Clears the specified key, if it exists. If not, suppresses
-        KeyError.
-        '''
-        with self._statelock:
-            if key in self._state:
-                self._state.clear_any(key)
-                self.push()
+    # def clear_any(self, key):
+    #     ''' Clears the specified key, if it exists. If not, suppresses
+    #     KeyError.
+    #     '''
+    #     with self._statelock:
+    #         if key in self._state:
+    #             self._state.clear_any(key)
+    #             self.push()
         
-    def clear_all(self):
-        ''' Clears the entire mapping.
-        '''
-        with self._statelock:
-            self._state.clear_all()
-            self.push()
+    # def clear_all(self):
+    #     ''' Clears the entire mapping.
+    #     '''
+    #     with self._statelock:
+    #         self._state.clear_all()
+    #         self.push()
             
             
-class _GAOSetMap(_GAOSetMapBase, _GAOPickleBase):
+class _GAOSetMap(_SetMapMixin, _GAOPickleBase):
+    ''' Combine GAO setmaps with pickle serialization.
+    '''
     pass

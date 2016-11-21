@@ -873,6 +873,16 @@ class SetMap:
                 self._mapping[key].update(value)
             except KeyError:
                 self._mapping[key] = set(value)
+                
+    def update_all(self, other):
+        ''' Updates all keys in other to self.
+        '''
+        with self._lock:
+            for key in other:
+                try:
+                    self._mapping[key].update(other[key])
+                except KeyError:
+                    self._mapping[key] = set(other[key])
             
     def _remove_if_empty(self, key):
         ''' Removes a key entirely if it no longer has any values. Will
@@ -1033,6 +1043,20 @@ class WeakSetMap(SetMap):
                     parent = self,
                     key = key,
                 )
+                
+    def update_all(self, other):
+        ''' Updates all keys in other to self.
+        '''
+        with self._lock:
+            for key in other:
+                try:
+                    self._mapping[key].update(other[key])
+                except KeyError:
+                    self._mapping[key] = _KeyedWeakSet(
+                        data = other[key],
+                        parent = self,
+                        key = key
+                    )
                 
     def __getitem__(self, key):
         ''' Resolves all of our references.
