@@ -254,6 +254,14 @@ debind3_TF = TEST_AGENT3.make_debind(
 )
 
 # And then make some debindings for the debindings
+dedebind1_1 = TEST_AGENT1.make_debind(
+    target = debind1_1.ghid
+)
+dedebind1_2 = TEST_AGENT1.make_debind(
+    target = debind1_2.ghid
+)
+
+# And then make some debindings for the debindings
 dedebind2_1 = TEST_AGENT2.make_debind(
     target = debind2_1.ghid
 )

@@ -95,17 +95,34 @@ __all__ = [
 # ###############################################
 
 
-class Deferrable(type):
+class DeltaTracking(type):
     ''' Use this to construct GAOs that use deferred-action methods that
     can store deltas before flushing.
+    
+    Some thoughts:
+    +   Initial support should simply be a "mutated" flag, which will
+        ease up some performance concerns surrounding flushing the
+        internal account GAOs
+    +   From there, should transition into tracking the actual deltas
+        themselves to remove contention problems
+    +   Will probably need to be implemented using a read-only copy of
+        the object -- potentially with chainmap or something? But if
+        you're using auto-generation via @mutating decorator, it's going
+        to be particularly difficult to do this unless you use a full
+        copy of the overall thing, instead of just storing the deltas
+    +   Could potentially also store the deltas along with a single
+        copy of the thing itself, and then re-apply the deltas after
+        every pull (like a rebase)
+    +   That last one is probably the smartest way to do it
     
     TODO: support this. Currently, it's just one big race condition
     waiting for contention problems.
     '''
     
 
-def deferred(func):
-    ''' Decorator to make a deferred-action method.
+def mutating(func):
+    ''' Decorator to mark a method as mutating, for use in delta
+    tracking.
     '''
     try:
         func.__deferred__ = True
@@ -895,7 +912,7 @@ class _DictMixin(dict):
     #     return self._state.update(*args, **kwargs)
     
     
-class _GAODict(_DictMixin, _GAOPickleBase):
+class GAODict(_DictMixin, _GAOPickleBase):
     ''' Combine GAO dicts with pickle serialization.
     '''
     pass
@@ -991,7 +1008,7 @@ class _SetMixin(set):
     #     return self._state.issuperset(other)
             
             
-class _GAOSet(_SetMixin, _GAOPickleBase):
+class GAOSet(_SetMixin, _GAOPickleBase):
     ''' Combine GAO sets with pickle serialization.
     '''
     pass
@@ -1126,7 +1143,7 @@ class _SetMapMixin(SetMap):
     #         self.push()
             
             
-class _GAOSetMap(_SetMapMixin, _GAOPickleBase):
+class GAOSetMap(_SetMapMixin, _GAOPickleBase):
     ''' Combine GAO setmaps with pickle serialization.
     '''
     pass

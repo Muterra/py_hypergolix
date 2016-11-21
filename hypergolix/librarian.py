@@ -65,6 +65,9 @@ from .persistence import _GobdLite
 from .persistence import _GdxxLite
 from .persistence import _GarqLite
 
+from .persistence import Enforcer
+from .lawyer import LawyerCore
+
 from .gao import GAO
 
 from .hypothetical import API
@@ -233,6 +236,19 @@ class LibrarianCore(metaclass=API):
         # validity check on upload, and the commit call.
         
         return bool(len(debindings) - invalidated)
+        
+    @is_debound.fixture
+    async def is_debound(self, obj):
+        ''' Create ad-hoc enforcers and lawyers when fixturing self.
+        '''
+        enforcer = Enforcer.__fixture__(librarian=self)
+        lawyer = LawyerCore.__fixture__(librarian=self)
+        self._enforcer = enforcer
+        self._lawyer = lawyer
+        result = await super(LibrarianCore.__fixture__, self).is_debound(obj)
+        del enforcer
+        del lawyer
+        return result
     
     @public_api
     async def store(self, obj, data):

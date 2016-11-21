@@ -71,6 +71,7 @@ from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
 from .hypothetical import fixture_noop
+from .hypothetical import fixture_return
 
 from .exceptions import HypergolixException
 from .exceptions import RemoteNak
@@ -115,7 +116,7 @@ __all__ = [
 # ###############################################
             
             
-class UndertakerCore(loopa.TaskLooper):
+class UndertakerCore(loopa.TaskLooper, metaclass=API):
     ''' Note: what about post-facto removal of bindings that have
     illegal targets? For example, if someone uploads a binding for a
     target that isn't currently known, and then it turns out that the
@@ -162,14 +163,28 @@ class UndertakerCore(loopa.TaskLooper):
         ''' Wait for stuff to be added to the queue, then execute GC on
         it.
         '''
-        ghid_to_collect = await self._staging.get()
+        ghid_to_collect = await self._triage.get()
+        logger.debug(''.join((
+            str(ghid_to_collect),
+            ' garbage collection check starting.'
+        )))
         try:
             obj = await self._librarian.summarize(ghid_to_collect)
             
             try:
                 collection_check = self._check_lookup[type(obj)]
-                if (await collection_check(obj)):
+                removable = await collection_check(obj)
+                if removable:
+                    logger.info(''.join((
+                        str(ghid_to_collect),
+                        ' out for garbage collection.'
+                    )))
                     await self._gc_execute(obj)
+                else:
+                    logger.debug(''.join((
+                        str(ghid_to_collect),
+                        ' survived garbage collection attempt.'
+                    )))
             
             except KeyError as exc:
                 raise TypeError(
@@ -211,7 +226,7 @@ class UndertakerCore(loopa.TaskLooper):
     async def _check_gobs(self, obj):
         if (await self._librarian.is_debound(obj)):
             # Add our target to the list of GC checks
-            await self._staging.put(obj.target)
+            await self._triage.put(obj.target)
             return True
         else:
             return False
@@ -220,7 +235,7 @@ class UndertakerCore(loopa.TaskLooper):
         # If we've been debound, it might be time to die
         if (await self._librarian.is_debound(obj)):
             # Except child bindings can prevent GCing GOBDs
-            if (await self._bookie.is_bound(obj)):
+            if (await self._librarian.is_bound(obj)):
                 return False
             
             # Dead binding.
@@ -252,47 +267,71 @@ class UndertakerCore(loopa.TaskLooper):
         await self._librarian.abandon(obj)
         # Now notify the postman, and tell her it's a removal.
         await self._postman.schedule(obj, removed=True)
-        
-    async def prep_gidc(self, obj):
+    
+    @fixture_return(None)
+    @public_api
+    async def alert_gidc(self, obj):
         ''' GIDC do not affect GC.
         '''
-        return True
+        # GIDC creates zero triage calls.
+        return None
         
-    async def prep_geoc(self, obj):
+    @fixture_return(None)
+    @public_api
+    async def alert_geoc(self, obj):
         ''' GEOC do not affect GC.
         '''
-        return True
+        # GEOC creates zero triage calls.
+        return None
         
-    async def prep_gobs(self, obj):
+    @fixture_return(None)
+    @public_api
+    async def alert_gobs(self, obj):
         ''' GOBS do not affect GC.
         '''
-        return True
+        return None
         
-    async def prep_gobd(self, obj):
+    @fixture_return(None)
+    @public_api
+    async def alert_gobd(self, obj):
         ''' GOBD require triage for previous targets.
         '''
         try:
             existing = await self._librarian.summarize(obj.ghid)
+        
         except KeyError:
             # This will always happen if it's the first frame, so let's be sure
             # to ignore that for logging.
             if obj.history:
                 logger.warning('Could not find gobd to check existing target.')
-        else:
-            await self._triage.put(existing.target)
-            
-        return True
+            triaged = None
         
-    async def prep_gdxx(self, obj):
+        else:
+            triaged = existing.target
+            await self._triage.put(triaged)
+            
+        return triaged
+        
+    @public_api
+    async def alert_gdxx(self, obj):
         ''' GDXX require triage for new targets.
         '''
-        await self._triage.put(obj.target)
-        return True
+        triaged = obj.target
+        await self._triage.put(triaged)
+        return triaged
         
-    async def prep_garq(self, obj):
+    @alert_gdxx.fixture
+    async def alert_gdxx(self, obj):
+        ''' Return the obj.target without triaging when fixtured.
+        '''
+        return obj.target
+        
+    @fixture_return(None)
+    @public_api
+    async def alert_garq(self, obj):
         ''' GARQ do not affect GC.
         '''
-        return True
+        return None
         
         
 class Ferryman(UndertakerCore):

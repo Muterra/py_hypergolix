@@ -55,6 +55,12 @@ from .utils import weak_property
 
 from .gao import GAO
 
+from .hypothetical import API
+from .hypothetical import public_api
+from .hypothetical import fixture_api
+from .hypothetical import fixture_noop
+from .hypothetical import fixture_return
+
 
 # ###############################################
 # Boilerplate
@@ -81,7 +87,7 @@ _MrPostcard = collections.namedtuple(
 )
 
             
-class _PostmanBase(loopa.TaskLooper):
+class PostalCore(loopa.TaskLooper, metaclass=API):
     ''' Tracks, delivers notifications about objects using **only weak
     references** to them. Threadsafe.
     
@@ -110,6 +116,13 @@ class _PostmanBase(loopa.TaskLooper):
             _GdxxLite: self._schedule_gdxx,
             _GarqLite: self._schedule_garq
         }
+        
+    @fixture_api
+    def RESET(self):
+        ''' In general this would be where you'd reset self._scheduled,
+        but since self.schedule() is fixtured as a NOOP, there's no
+        real reason to do anything here.
+        '''
         
     def assemble(self, librarian, bookie):
         # Links the librarian and bookie.
@@ -167,6 +180,8 @@ class _PostmanBase(loopa.TaskLooper):
         # Ehhhhh, should the queue be emptied before being destroyed?
         self._scheduled = None
         
+    @fixture_return(True)
+    @public_api
     async def schedule(self, obj, removed=False):
         ''' Schedules update delivery for the passed object.
         '''
@@ -267,7 +282,7 @@ class _PostmanBase(loopa.TaskLooper):
         pass
 
 
-class MrPostman(_PostmanBase):
+class MrPostman(PostalCore):
     ''' Postman to use for local persistence systems.
     
     Note that MrPostman doesn't need to worry about silencing updates,
@@ -328,7 +343,7 @@ class MrPostman(_PostmanBase):
             self._salmonator.deregister(subscription)
         
         
-class PostOffice(_PostmanBase):
+class PostOffice(PostalCore):
     ''' Postman to use for remote persistence servers.
     '''
     

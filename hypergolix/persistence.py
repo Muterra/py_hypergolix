@@ -431,11 +431,10 @@ class PersistenceCore(metaclass=API):
             
             # This is a valid object; let's start to ingest it.
             # ########################
-            # Prep the undertaker for any necessary GC
-            await getattr(self._undertaker, 'prep_' + suffix)(obj)
-            # Everything is validated. Place with the bookie before librarian,
-            # so that it has access to the old librarian state
-            await getattr(self._bookie, 'place_' + suffix)(obj)
+            # Alert the undertaker for any necessary GC of targets, etc. Do
+            # that before storing at the librarian, so that the undertaker has
+            # access to the old state.
+            await getattr(self._undertaker, 'alert_' + suffix)(obj)
             # Finally, add it to the librarian.
             await self._librarian.store(obj, packed)
             

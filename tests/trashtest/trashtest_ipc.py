@@ -172,7 +172,7 @@ class WSIPCTest(unittest.TestCase):
     def setUpClass(cls):
         # Set up the IPC server.
         cls.server_commander = TaskCommander(
-            reusable_loop=False,
+            reusable_loop = False,
             threaded = True,
             debug = True,
             thread_kwargs = {'name': 'server'}

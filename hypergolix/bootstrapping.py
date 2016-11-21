@@ -49,10 +49,10 @@ from .core import GolixCore
 from .core import Oracle
 from .core import GhidProxier
 
-from .gao import _GAO
-from .gao import _GAOSet
-from .gao import _GAODict
-from .gao import _GAOSetMap
+from .gao import GAO
+from .gao import GAOSet
+from .gao import GAODict
+from .gao import GAOSetMap
 
 from .persistence import PersistenceCore
 from .persistence import Doorman
