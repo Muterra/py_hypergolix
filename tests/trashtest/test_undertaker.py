@@ -196,7 +196,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         
         # Gidc should never be GC'd
         await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(gidclite1.ghid),
+            coro = self.undertaker._triage.put((gidclite1.ghid, None)),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -222,7 +222,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         
         # Geoc should be GC'd if unbound.
         await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(obj1.ghid),
+            coro = self.undertaker._triage.put((obj1.ghid, None)),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -246,7 +246,7 @@ class UndertakerLoopingTest(unittest.TestCase):
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(obj1.ghid),
+            coro = self.undertaker._triage.put((obj1.ghid, None)),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -276,7 +276,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         
         # Gobs should be kept if not DEbound.
         await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(sbind1.ghid),
+            coro = self.undertaker._triage.put((sbind1.ghid, None)),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -303,7 +303,7 @@ class UndertakerLoopingTest(unittest.TestCase):
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(sbind1.ghid),
+            coro = self.undertaker._triage.put((sbind1.ghid, None)),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -341,7 +341,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         # Gobd should be kept unless explicitly DEbound (or if also explicitly
         # bound; TODO.)
         await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(dbind1a.ghid),
+            coro = self.undertaker._triage.put((dbind1a.ghid, None)),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -368,7 +368,7 @@ class UndertakerLoopingTest(unittest.TestCase):
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(dbind1a.ghid),
+            coro = self.undertaker._triage.put((dbind1a.ghid, None)),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -401,7 +401,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         
         # Gdxx should be kept if not DEbound.
         await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(xbind1.ghid),
+            coro = self.undertaker._triage.put((xbind1.ghid, None)),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -421,7 +421,7 @@ class UndertakerLoopingTest(unittest.TestCase):
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(xbind1.ghid),
+            coro = self.undertaker._triage.put((xbind1.ghid, None)),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -447,7 +447,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         
         # Garq should be kept if not DEbound.
         await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(req1.ghid),
+            coro = self.undertaker._triage.put((req1.ghid, None)),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -467,7 +467,7 @@ class UndertakerLoopingTest(unittest.TestCase):
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(req1.ghid),
+            coro = self.undertaker._triage.put((req1.ghid, None)),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(

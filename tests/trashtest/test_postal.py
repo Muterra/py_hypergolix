@@ -148,10 +148,10 @@ class PostalCoreTester(PostalCore):
         super().__init__(*args, **kwargs)
         self.delivery_buffer = collections.deque()
         
-    async def _deliver(self, subscription, notification):
+    async def _deliver(self, subscription, notification, skip_conn):
         ''' Just put it into the delivery buffer.
         '''
-        self.delivery_buffer.append((subscription, notification))
+        self.delivery_buffer.append((subscription, notification, skip_conn))
         
     async def get_scheduled(self):
         ''' Empty the scheduling queue.
@@ -206,11 +206,13 @@ class PostalLoopingTest(unittest.TestCase):
         '''
         self.librarian.RESET()
         
-        subs = [(make_random_ghid(), make_random_ghid()) for __ in range(10)]
+        subs = [
+            (make_random_ghid(), make_random_ghid(), None) for __ in range(10)
+        ]
         
-        for pair in subs:
+        for triple in subs:
             await_coroutine_threadsafe(
-                coro = self.postman._scheduled.put(pair),
+                coro = self.postman._scheduled.put(triple),
                 loop = self.postman._loop
             )
             
@@ -219,9 +221,9 @@ class PostalLoopingTest(unittest.TestCase):
             loop = self.postman._loop
         )
         
-        for pair1, pair2 in zip(subs, self.postman.delivery_buffer):
+        for triple1, triple2 in zip(subs, self.postman.delivery_buffer):
             with self.subTest():
-                self.assertEqual(pair1, pair2)
+                self.assertEqual(triple1, triple2)
 
 
 class PostalSchedulingTest(unittest.TestCase):
@@ -299,7 +301,7 @@ class PostalSchedulingTest(unittest.TestCase):
         self.assertTrue(len(scheduled) == 0)
         
         # But with a deferred update...
-        deferred = (dbind1a.ghid, dbind1a.frame_ghid)
+        deferred = (dbind1a.ghid, dbind1a.frame_ghid, None)
         self.postman._deferred.add(obj1.ghid, deferred)
         await_coroutine_threadsafe(
             coro = self.postman.schedule(obj1),
@@ -358,7 +360,7 @@ class PostalSchedulingTest(unittest.TestCase):
         )
         self.assertTrue(len(scheduled) == 1)
         removal = scheduled.pop()
-        self.assertEqual(removal, (dbind1a.ghid, xbind1d.ghid))
+        self.assertEqual(removal, (dbind1a.ghid, xbind1d.ghid, None))
         
         # Test with normal (non-delete), but missing object (should defer)
         await_coroutine_threadsafe(
@@ -372,7 +374,7 @@ class PostalSchedulingTest(unittest.TestCase):
         self.assertTrue(len(scheduled) == 0)
         # Note that this also resets deferred to pristine state!
         deferred = self.postman._deferred.pop_any(obj1.ghid)
-        self.assertIn((dbind1a.ghid, dbind1a.frame_ghid), deferred)
+        self.assertIn((dbind1a.ghid, dbind1a.frame_ghid, None), deferred)
         
         # Finally, test with normal (non-delete), and existant object
         await_coroutine_threadsafe(
@@ -388,7 +390,9 @@ class PostalSchedulingTest(unittest.TestCase):
             loop = self.nooploop._loop
         )
         self.assertTrue(len(scheduled) == 1)
-        self.assertEqual(scheduled.pop(), (dbind1a.ghid, dbind1a.frame_ghid))
+        self.assertEqual(
+            scheduled.pop(), (dbind1a.ghid, dbind1a.frame_ghid, None)
+        )
         
     def test_gdxx(self):
         ''' Test gdxx operations.
@@ -434,7 +438,7 @@ class PostalSchedulingTest(unittest.TestCase):
         )
         self.assertTrue(len(scheduled) == 1)
         removal = scheduled.pop()
-        self.assertEqual(removal, (req1.recipient, xbind1R.ghid))
+        self.assertEqual(removal, (req1.recipient, xbind1R.ghid, None))
         
         # As should non-removal
         await_coroutine_threadsafe(
@@ -447,7 +451,7 @@ class PostalSchedulingTest(unittest.TestCase):
         )
         self.assertTrue(len(scheduled) == 1)
         notification = scheduled.pop()
-        self.assertEqual(notification, (req1.recipient, req1.ghid))
+        self.assertEqual(notification, (req1.recipient, req1.ghid, None))
 
 
 if __name__ == "__main__":

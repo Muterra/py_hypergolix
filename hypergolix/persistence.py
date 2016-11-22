@@ -401,7 +401,7 @@ class PersistenceCore(metaclass=API):
         self._librarian = librarian
         self._salmonator = salmonator
         
-    async def direct_ingest(self, obj, packed, remotable):
+    async def direct_ingest(self, obj, packed, remotable, skip_conn=None):
         ''' Standard ingestion flow for stuff. To be called from ingest
         above, or directly (for objects created "in-house").
         '''
@@ -434,7 +434,7 @@ class PersistenceCore(metaclass=API):
             # Alert the undertaker for any necessary GC of targets, etc. Do
             # that before storing at the librarian, so that the undertaker has
             # access to the old state.
-            await getattr(self._undertaker, 'alert_' + suffix)(obj)
+            await getattr(self._undertaker, 'alert_' + suffix)(obj, skip_conn)
             # Finally, add it to the librarian.
             await self._librarian.store(obj, packed)
             
@@ -502,7 +502,7 @@ class PersistenceCore(metaclass=API):
         del doorman
         return result
         
-    async def ingest(self, packed, remotable=True):
+    async def ingest(self, packed, remotable=True, skip_conn=None):
         ''' Called on an untrusted and unknown object. May be bypassed
         by locally-created, trusted objects (by calling the individual
         ingest methods directly). Parses, validates, and stores the
@@ -522,7 +522,7 @@ class PersistenceCore(metaclass=API):
         # If the object is identical to what we already have, the ingester
         # will return None.
         if ingested:
-            await self._postman.schedule(ingested)
+            await self._postman.schedule(ingested, skip_conn=skip_conn)
             
         else:
             logger.debug(

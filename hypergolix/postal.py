@@ -83,7 +83,7 @@ __all__ = [
 
 _MrPostcard = collections.namedtuple(
     typename = '_MrPostcard',
-    field_names = ('subscription', 'notification'),
+    field_names = ('subscription', 'notification', 'skip_conn'),
 )
 
             
@@ -141,31 +141,21 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
         ''' Deliver notifications as soon as they are available.
         TODO: support parallel sending.
         '''
-        subscription, notification = await self._scheduled.get()
+        subscription, notification, skip_conn = await self._scheduled.get()
         
         try:
-            logger.info(
-                'Postman out for delivery on {!s}.'.format(subscription)
-            )
-            logger.debug(
-                (
-                    'Additionally, {!s} missing ghids are blocking updates ' +
-                    'for other subscriptions.'
-                ).format(len(self._deferred))
-            )
+            logger.info('SUBS ' + str(subscription) + ' out for delivery.')
             # We can't spin this out into a thread because some of our
             # delivery mechanisms want this to have an event loop.
-            await self._deliver(subscription, notification)
+            await self._deliver(subscription, notification, skip_conn)
             
         except asyncio.CancelledError:
             raise
         
         except Exception:
             logger.error(
-                (
-                    'Exception during subscription delivery for {!s} w/ ' +
-                    'notification {!s} w/ traceback:\n'
-                ).format(subscription, notification) +
+                'SUBS ' + str(subscription) + ' FAILED for notification ' +
+                str(notification) + ' w/ traceback:\n' +
                 ''.join(traceback.format_exc())
             )
             
@@ -180,7 +170,7 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
         
     @fixture_return(True)
     @public_api
-    async def schedule(self, obj, removed=False):
+    async def schedule(self, obj, removed=False, skip_conn=None):
         ''' Schedules update delivery for the passed object.
         '''
         # It's possible we're being told to schedule nothing, so catch that
@@ -199,26 +189,26 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
                 ) from None
             
             else:
-                await scheduler(obj, removed)
+                await scheduler(obj, removed, skip_conn)
                 
             return True
         
-    async def _schedule_gidc(self, obj, removed):
+    async def _schedule_gidc(self, obj, removed, skip_conn):
         # GIDC will never trigger a subscription.
         pass
         
-    async def _schedule_geoc(self, obj, removed):
+    async def _schedule_geoc(self, obj, removed, skip_conn):
         # GEOC will never trigger a subscription directly, though they might
         # have deferred updates.
         # Note that these have already been put into _MrPostcard form.
         for deferred in self._deferred.pop_any(obj.ghid):
             await self._scheduled.put(deferred)
         
-    async def _schedule_gobs(self, obj, removed):
+    async def _schedule_gobs(self, obj, removed, skip_conn):
         # GOBS will never trigger a subscription.
         pass
         
-    async def _schedule_gobd(self, obj, removed):
+    async def _schedule_gobd(self, obj, removed, skip_conn):
         # GOBD might trigger a subscription! But, we also might to need to
         # defer it. Or, we might be removing it.
         if removed:
@@ -239,11 +229,11 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
             # getting the single element from it.
             debinding_ghid = next(iter(debinding_ghids))
             await self._scheduled.put(
-                _MrPostcard(obj.ghid, debinding_ghid)
+                _MrPostcard(obj.ghid, debinding_ghid, skip_conn)
             )
             
         else:
-            notifier = _MrPostcard(obj.ghid, obj.frame_ghid)
+            notifier = _MrPostcard(obj.ghid, obj.frame_ghid, skip_conn)
             if (await self._librarian.contains(obj.target)):
                 logger.debug(''.join((
                     str(obj.ghid),
@@ -259,13 +249,13 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
                     str(obj.target)
                 )))
         
-    async def _schedule_gdxx(self, obj, removed):
+    async def _schedule_gdxx(self, obj, removed, skip_conn):
         # GDXX will never directly trigger a subscription. If they are removing
         # a subscribed object, the actual removal (in the undertaker GC) will
         # trigger a subscription without us.
         pass
         
-    async def _schedule_garq(self, obj, removed):
+    async def _schedule_garq(self, obj, removed, skip_conn):
         # GARQ might trigger a subscription! Or we might be removing it.
         if removed:
             debinding_ghids = await self._librarian.debind_status(obj.ghid)
@@ -285,14 +275,14 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
             # getting the single element from it.
             debinding_ghid = next(iter(debinding_ghids))
             await self._scheduled.put(
-                _MrPostcard(obj.recipient, debinding_ghid)
+                _MrPostcard(obj.recipient, debinding_ghid, skip_conn)
             )
         else:
             await self._scheduled.put(
-                _MrPostcard(obj.recipient, obj.ghid)
+                _MrPostcard(obj.recipient, obj.ghid, skip_conn)
             )
             
-    async def _deliver(self, subscription, notification):
+    async def _deliver(self, subscription, notification, skip_conn):
         ''' Do the actual subscription update.
         '''
         # We need to freeze the listeners before we operate on them, but we
@@ -326,7 +316,7 @@ class MrPostman(PostalCore):
         self._oracle = weakref.proxy(oracle)
         self._salmonator = weakref.proxy(salmonator)
             
-    async def _deliver(self, subscription, notification):
+    async def _deliver(self, subscription, notification, skip_conn):
         ''' Do the actual subscription update.
         '''
         # We just got a garq for our identity. Rolodex handles these.
@@ -404,7 +394,7 @@ class PostOffice(PostalCore):
         '''
         self._listeners.discard(ghid, callback)
             
-    async def _deliver(self, subscription, notification):
+    async def _deliver(self, subscription, notification, skip_conn):
         ''' Do the actual subscription update.
         '''
         # We need to freeze the listeners before we operate on them, but we

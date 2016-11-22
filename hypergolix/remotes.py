@@ -64,6 +64,7 @@ from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
 from .hypothetical import fixture_noop
+from .hypothetical import fixture_return
 
 from .persistence import _GidcLite
 from .persistence import _GeocLite
@@ -85,7 +86,7 @@ from .exceptions import IllegalDynamicFrame
 from .exceptions import IntegrityError
 from .exceptions import UnavailableUpstream
 
-from .utils import call_coroutine_threadsafe
+from .utils import weak_property
 
 from .comms import RequestResponseProtocol
 from .comms import request
@@ -130,24 +131,15 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
                                 default_version=b'\x00\x00'):
     ''' Defines the protocol for remote persisters.
     '''
-    
-    def __init__(self, *args, **kwargs):
-        ''' Add intentionally invalid initialization for the components
-        that need to be assembled.
-        '''
-        self._percore = None
-        self._bookie = None
-        self._librarian = None
-        self._postman = None
+    _percore = weak_property('__percore')
+    _librarian = weak_property('__librarian')
+    _postman = weak_property('__postman')
         
-        super().__init__(*args, **kwargs)
-        
-    def assemble(self, persistence_core, bookie, librarian, postman):
+    def assemble(self, percore, librarian, postman):
         # Link to the remote core.
-        self._percore = weakref.proxy(persistence_core)
-        self._bookie = weakref.proxy(bookie)
-        self._postman = weakref.proxy(postman)
-        self._librarian = weakref.proxy(librarian)
+        self._percore = percore
+        self._postman = postman
+        self._librarian = librarian
     
     @request(b'!!')
     async def subscription_update(self, connection, subscription_ghid,
@@ -200,19 +192,22 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
     async def publish(self, connection, body):
         ''' Handle a published object.
         '''
-        # TODO: something that isn't this.
-        obj = await self._loop.run_in_executor(
-            self._ingester,         # executor
-            self._percore.ingest,   # func
-            body,                   # packed
-            False                   # remotable
+        obj = await self._percore.ingest(
+            packed = body,
+            remotable = False,
+            skip_conn = weakref.ref(connection)
         )
         
-        # Note that obj will be None if the object already existed.
-        # TODO: how do we handle silencing the update to this connection?
+        # Object already existed.
+        if obj is None:
+            response = b'\x00'
+        
+        # Object is new
+        else:
+            response = b'\x01'
             
         # We don't need to wait for the mail run to have a successful return
-        return b'\x01'
+        return response
         
     @publish.response_handler
     async def publish(self, connection, response, exc):
@@ -328,7 +323,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
         '''
         ghid = Ghid.from_bytes(body)
         # TODO: probably should asyncify this
-        ghidlist = self._bookie.bind_status(ghid)
+        ghidlist = await self._librarian.bind_status(ghid)
         parser = generate_ghidlist_parser()
         return parser.pack(ghidlist)
         
@@ -354,7 +349,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
         '''
         ghid = Ghid.from_bytes(body)
         # TODO: should probably make this async
-        ghidlist = self._bookie.debind_status(ghid)
+        ghidlist = await self._librarian.debind_status(ghid)
         parser = generate_ghidlist_parser()
         return parser.pack(ghidlist)
         

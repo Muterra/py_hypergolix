@@ -581,6 +581,13 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
     async def await_connection(self):
         ''' Wait for a connection to be available.
         '''
+        # There is a potential race condition here with loop_init. The quick
+        # and dirty solution to it is to yield control to the event loop
+        # repeatedly until it appears. Also, go ahead and add in a bit of a
+        # delay for good measure.
+        while self._conn_available is None:
+            await asyncio.sleep(.01)
+            
         await self._conn_available.wait()
 
 

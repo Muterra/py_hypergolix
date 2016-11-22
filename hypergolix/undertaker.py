@@ -163,28 +163,23 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
         ''' Wait for stuff to be added to the queue, then execute GC on
         it.
         '''
-        ghid_to_collect = await self._triage.get()
-        logger.debug(''.join((
-            str(ghid_to_collect),
-            ' garbage collection check starting.'
-        )))
+        ghid_to_collect, skip_conn = await self._triage.get()
+        logger.debug('GC ' + str(ghid_to_collect) + ' check starting.')
         try:
             obj = await self._librarian.summarize(ghid_to_collect)
             
             try:
                 collection_check = self._check_lookup[type(obj)]
-                removable = await collection_check(obj)
+                removable = await collection_check(obj, skip_conn)
                 if removable:
-                    logger.info(''.join((
-                        str(ghid_to_collect),
-                        ' out for garbage collection.'
-                    )))
-                    await self._gc_execute(obj)
+                    logger.info(
+                        'GC ' + str(ghid_to_collect) + ' collection starting.'
+                    )
+                    await self._gc_execute(obj, skip_conn)
                 else:
-                    logger.debug(''.join((
-                        str(ghid_to_collect),
-                        ' survived garbage collection attempt.'
-                    )))
+                    logger.debug(
+                        'GC ' + str(ghid_to_collect) + ' collection survived.'
+                    )
             
             except KeyError as exc:
                 raise TypeError(
@@ -192,10 +187,10 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
                 ) from exc
             
         except KeyError:
-            logger.warning(''.join((
-                str(ghid_to_collect),
+            logger.warning(
+                'GC ' + str(ghid_to_collect) +
                 ' missing in librarian. Already collected?'
-            )))
+            )
             
         finally:
             self._triage.task_done()
@@ -205,14 +200,14 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
         self._librarian = librarian
         self._postman = postman
             
-    async def _check_gidc(self, obj):
+    async def _check_gidc(self, obj, skip_conn=None):
         ''' Check whether we should remove a GIDC, and then remove it
         if appropriate. Currently we don't do that, so just leave it
         alone.
         '''
         return False
             
-    async def _check_geoc(self, obj):
+    async def _check_geoc(self, obj, skip_conn=None):
         ''' Check whether we should remove a GEOC, and then remove it if
         appropriate. Pretty simple: is it bound?
         '''
@@ -223,15 +218,15 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
         else:
             return True
             
-    async def _check_gobs(self, obj):
+    async def _check_gobs(self, obj, skip_conn=None):
         if (await self._librarian.is_debound(obj)):
             # Add our target to the list of GC checks
-            await self._triage.put(obj.target)
+            await self._triage.put((obj.target, skip_conn))
             return True
         else:
             return False
             
-    async def _check_gobd(self, obj):
+    async def _check_gobd(self, obj, skip_conn=None):
         # If we've been debound, it might be time to die
         if (await self._librarian.is_debound(obj)):
             # Except child bindings can prevent GCing GOBDs
@@ -241,14 +236,14 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
             # Dead binding.
             else:
                 # Still need to add target
-                await self._triage.put(obj.target)
+                await self._triage.put((obj.target, skip_conn))
                 return True
         
         # Nope, still alive.
         else:
             return False
             
-    async def _check_gdxx(self, obj):
+    async def _check_gdxx(self, obj, skip_conn=None):
         # Note that removing a debinding cannot result in a downstream target
         # being GCd, because it wouldn't exist.
         if (await self._librarian.is_debound(obj)):
@@ -256,21 +251,21 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
         else:
             return False
             
-    async def _check_garq(self, obj):
+    async def _check_garq(self, obj, skip_conn=None):
         if (await self._librarian.is_debound(obj)):
             return True
         else:
             return False
         
-    async def _gc_execute(self, obj):
+    async def _gc_execute(self, obj, skip_conn):
         # Next, goodbye object.
         await self._librarian.abandon(obj)
         # Now notify the postman, and tell her it's a removal.
-        await self._postman.schedule(obj, removed=True)
+        await self._postman.schedule(obj, removed=True, skip_conn=skip_conn)
     
     @fixture_return(None)
     @public_api
-    async def alert_gidc(self, obj):
+    async def alert_gidc(self, obj, skip_conn=None):
         ''' GIDC do not affect GC.
         '''
         # GIDC creates zero triage calls.
@@ -278,7 +273,7 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
         
     @fixture_return(None)
     @public_api
-    async def alert_geoc(self, obj):
+    async def alert_geoc(self, obj, skip_conn=None):
         ''' GEOC do not affect GC.
         '''
         # GEOC creates zero triage calls.
@@ -286,14 +281,14 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
         
     @fixture_return(None)
     @public_api
-    async def alert_gobs(self, obj):
+    async def alert_gobs(self, obj, skip_conn=None):
         ''' GOBS do not affect GC.
         '''
         return None
         
     @fixture_return(None)
     @public_api
-    async def alert_gobd(self, obj):
+    async def alert_gobd(self, obj, skip_conn=None):
         ''' GOBD require triage for previous targets.
         '''
         try:
@@ -308,27 +303,27 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
         
         else:
             triaged = existing.target
-            await self._triage.put(triaged)
+            await self._triage.put((triaged, skip_conn))
             
         return triaged
         
     @public_api
-    async def alert_gdxx(self, obj):
+    async def alert_gdxx(self, obj, skip_conn=None):
         ''' GDXX require triage for new targets.
         '''
         triaged = obj.target
-        await self._triage.put(triaged)
+        await self._triage.put((triaged, skip_conn))
         return triaged
         
     @alert_gdxx.fixture
-    async def alert_gdxx(self, obj):
+    async def alert_gdxx(self, obj, skip_conn=None):
         ''' Return the obj.target without triaging when fixtured.
         '''
         return obj.target
         
     @fixture_return(None)
     @public_api
-    async def alert_garq(self, obj):
+    async def alert_garq(self, obj, skip_conn=None):
         ''' GARQ do not affect GC.
         '''
         return None
