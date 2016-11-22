@@ -51,6 +51,7 @@ from .persistence import _GarqLite
 
 from .utils import SetMap
 from .utils import WeakSetMap
+from .utils import WeakKeySetMap
 from .utils import weak_property
 
 from .gao import GAO
@@ -293,7 +294,8 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
 
 
 class MrPostman(PostalCore):
-    ''' Postman to use for local persistence systems.
+    ''' Postman to use for LOCAL persistence systems -- ie ones that
+    have logins and do not support subsription.
     
     Note that MrPostman doesn't need to worry about silencing updates,
     because the persistence ingestion tract will only result in a mail
@@ -301,8 +303,8 @@ class MrPostman(PostalCore):
     objects will be DOA.
     '''
     
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self._rolodex = None
         self._golcore = None
         self._oracle = None
@@ -318,6 +320,8 @@ class MrPostman(PostalCore):
             
     async def _deliver(self, subscription, notification, skip_conn):
         ''' Do the actual subscription update.
+        
+        NOTE THAT SKIP_CONN is a weakref.ref.
         '''
         # We just got a garq for our identity. Rolodex handles these.
         if subscription == self._golcore.whoami:
@@ -356,53 +360,79 @@ class MrPostman(PostalCore):
 class PostOffice(PostalCore):
     ''' Postman to use for remote persistence servers.
     '''
+    _remoter = weak_property('__remoter')
     
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         # By using WeakSetMap we can automatically handle dropped connections
         # Lookup <subscribed ghid>: set(<subscribed callbacks>)
-        self._opslock_listen = threading.Lock()
-        self._listeners = WeakSetMap()
+        self._connections = WeakSetMap()
+        self._subscriptions = WeakKeySetMap()
         
-    def subscribe(self, ghid, callback):
-        ''' Tells the postman that the watching_session would like to be
+    def assemble(self, librarian, remoter):
+        super().assemble(librarian)
+        self._remoter = remoter
+        
+    async def subscribe(self, connection, ghid):
+        ''' Tells the postman that the connection would like to be
         updated about ghid.
-        
-        TODO: instead of postoffices subscribing with a callback, they
-        should subscribe with a session. That way, we're not spewing off
-        extra strong references and just generally mangling up our
-        object lifetimes.
         '''
         # First add the subscription listeners
-        with self._opslock_listen:
-            self._listeners.add(ghid, callback)
-            
+        self._connections.add(ghid, connection)
+        self._subscriptions.add(connection, ghid)
+        
         # Now manually reinstate any desired notifications for garq requests
         # that have yet to be handled
-        for existing_mail in self._bookie.recipient_status(ghid):
+        for existing_mail in self._librarian.recipient_status(ghid):
+            obj = await self._librarian.summarize(existing_mail)
+            await self.schedule(obj)
             
-            # HEY LOOK AT ME THIS IS AN ERROR! This is a call to a coro, but
-            # it's within a function. But Postal needs a total workover anyways
-            # so punt on it for now
-            
-            obj = self._librarian.summarize(existing_mail)
-            self.schedule(obj)
-            
-    def unsubscribe(self, ghid, callback):
+    async def unsubscribe(self, connection, ghid):
         ''' Remove the callback for ghid. Indempotent; will never raise
         a keyerror.
         '''
-        self._listeners.discard(ghid, callback)
+        try:
+            # Discard the subscription (no keyerror)
+            self._subscriptions.discard(connection, ghid)
+            # Remove the connection (allowing it to raise if missing)
+            self._connections.remove(ghid, connection)
+        except KeyError:
+            return False
+        else:
+            return True
             
     async def _deliver(self, subscription, notification, skip_conn):
         ''' Do the actual subscription update.
+        
+        NOTE THAT SKIP_CONN is a weakref.ref.
         '''
         # We need to freeze the listeners before we operate on them, but we
         # don't need to lock them while we go through all of the callbacks.
         # Instead, just sacrifice any subs being added concurrently to the
         # current delivery run.
-        callbacks = self._listeners.get_any(subscription)
-        postcard = _MrPostcard(subscription, notification)
+        connections = self._connections.get_any(subscription)
+        
+        # Resolve the weak reference to the connection
+        if skip_conn is not None:
+            # This could still be None, but that won't affect our comparison
+            skip_conn = skip_conn()
+            
+        for connection in connections:
+            if connection is not skip_conn:
+                await self._remoter.subscription_update(
+                    connection,
+                    subscription,
+                    notification
+                )
+    
+    async def list_subs(self, connection):
+        ''' List all subscriptions for the connection.
+        '''
+        return self._subscriptions.get_any(connection)
                 
-        for callback in callbacks:
-            callback(*postcard)
+    async def clear_subs(self, connection):
+        ''' Clear all subscriptions for the connection.
+        '''
+        subscriptions = self._subscriptions.pop_any(connection)
+        for ghid in subscriptions:
+            self._connections.discard(ghid, connection)

@@ -343,7 +343,7 @@ class Ferryman(UndertakerCore):
         self._privateer = privateer
         self._oracle = oracle
         
-    async def _gc_execute(self, obj):
+    async def _gc_execute(self, obj, skip_conn):
         # Do our stuff first so that there's still access to librarian
         # state, if it ends up being needed
         self._oracle.forget(obj.ghid)

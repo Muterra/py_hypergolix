@@ -1010,12 +1010,6 @@ class WeakSetMap(SetMap):
     ''' SetMap that uses WeakerSets internally.
     '''
     
-    def __init__(self, *args, **kwargs):
-        ''' Override our mapping to be a weakref.WeakValueDict.
-        '''
-        super().__init__(*args, **kwargs)
-        self._mapping = {}
-    
     def add(self, key, value):
         ''' Adds the value to the set at key. Creates a new set there if
         none already exists.
@@ -1069,6 +1063,17 @@ class WeakSetMap(SetMap):
         '''
         result = super().get_any(key)
         return frozenset(ref() for ref in result)
+        
+        
+class WeakKeySetMap(SetMap):
+    ''' SetMap with weak keys (but strong sets).
+    '''
+    
+    def __init__(self, *args, **kwargs):
+        ''' Override our mapping to be a weakref.WeakKeyDictionary.
+        '''
+        super().__init__(*args, **kwargs)
+        self._mapping = weakref.WeakKeyDictionary()
         
         
 class NoContext:

@@ -88,7 +88,7 @@ from .exceptions import UnavailableUpstream
 
 from .utils import weak_property
 
-from .comms import RequestResponseProtocol
+from .comms import RequestResponseAPI
 from .comms import request
 
 
@@ -126,7 +126,7 @@ ERROR_CODES = {
 }
         
         
-class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
+class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
                                 error_codes=ERROR_CODES,
                                 default_version=b'\x00\x00'):
     ''' Defines the protocol for remote persisters.
@@ -146,9 +146,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
                                   notification_ghid):
         ''' Send a subscription update to the connection.
         '''
-        # TODO: move this to the call in the postman. It won't work here.
-        if notification_ghid not in self._silenced:
-            return bytes(subscription_ghid) + bytes(notification_ghid)
+        return bytes(subscription_ghid) + bytes(notification_ghid)
         
     @subscription_update.request_handler
     async def subscription_update(self, connection, body):
@@ -157,9 +155,13 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
         subscribed_ghid = Ghid.from_bytes(body[0:65])
         notification_ghid = Ghid.from_bytes(body[65:130])
         
-        # TODO: make this properly async.
-        for callback in self._subscriptions[subscribed_ghid]:
-            await callback(subscribed_ghid, notification_ghid)
+        packed = await self.get(connection, notification_ghid)
+        # Note that this handles postman scheduling as well.
+        await self._percore.ingest(
+            packed,
+            remotable = False,
+            skip_conn = connection
+        )
         
         return b'\x01'
         
@@ -229,7 +231,6 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
         ''' Handle get requests.
         '''
         ghid = Ghid.from_bytes(body)
-        # TODO: librarian should be async calls.
         return (await self._librarian.retrieve(ghid))
         
     @request(b'+S')
@@ -243,8 +244,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
         ''' Handle subscription requests.
         '''
         ghid = Ghid.from_bytes(body)
-        # TODO: uhhhh, postman... suboptimal...
-        self._postman.subscribe(connection, ghid)
+        await self._postman.subscribe(connection, ghid)
         return b'\x01'
         
     @subscribe.response_handler
@@ -267,7 +267,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
         ''' Handle unsubscription requests.
         '''
         ghid = Ghid.from_bytes(body)
-        had_subscription = self._postman.unsubscribe(connection, ghid)
+        had_subscription = await self._postman.unsubscribe(connection, ghid)
         
         if had_subscription:
             return b'\x01'
@@ -297,7 +297,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
     async def query_subscriptions(self, connection, body):
         ''' Handle subscription query requests.
         '''
-        ghidlist = list(self._postman.list_subs(connection))
+        ghidlist = list(await self._postman.list_subs(connection))
         parser = generate_ghidlist_parser()
         return parser.pack(ghidlist)
         
@@ -309,7 +309,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
             raise exc
         
         parser = generate_ghidlist_parser()
-        return parser.unpack(response)
+        return set(parser.unpack(response))
         
     @request(b'?B')
     async def query_bindings(self, connection, ghid):
@@ -322,10 +322,9 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
         ''' Handle binding query requests.
         '''
         ghid = Ghid.from_bytes(body)
-        # TODO: probably should asyncify this
         ghidlist = await self._librarian.bind_status(ghid)
         parser = generate_ghidlist_parser()
-        return parser.pack(ghidlist)
+        return parser.pack(list(ghidlist))
         
     @query_bindings.response_handler
     async def query_bindings(self, connection, response, exc):
@@ -335,7 +334,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
             raise exc
             
         parser = generate_ghidlist_parser()
-        return parser.unpack(response)
+        return set(parser.unpack(response))
         
     @request(b'?D')
     async def query_debindings(self, connection, ghid):
@@ -348,10 +347,9 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
         ''' Handles debinding query requests.
         '''
         ghid = Ghid.from_bytes(body)
-        # TODO: should probably make this async
         ghidlist = await self._librarian.debind_status(ghid)
         parser = generate_ghidlist_parser()
-        return parser.pack(ghidlist)
+        return parser.pack(list(ghidlist))
         
     @query_debindings.response_handler
     async def query_debindings(self, connection, response, exc):
@@ -361,7 +359,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
             raise exc
             
         parser = generate_ghidlist_parser()
-        return parser.unpack(response)
+        return set(parser.unpack(response))
         
     @request(b'?E')
     async def query_existence(self, connection, ghid):
@@ -400,7 +398,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseProtocol,
     async def disconnect(self, connection, body):
         ''' Handle disconnect requests.
         '''
-        self._postman.clear_subs(connection)
+        await self._postman.clear_subs(connection)
         return b'\x01'
 
 
