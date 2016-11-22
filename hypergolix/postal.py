@@ -96,7 +96,6 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
     Question: should the distributed state management of GARQ recipients
     be managed here, or in the bookie (where it currently is)?
     '''
-    _bookie = weak_property('__bookie')
     _librarian = weak_property('__librarian')
     
     def __init__(self, *args, **kwargs):
@@ -124,10 +123,9 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
         real reason to do anything here.
         '''
         
-    def assemble(self, librarian, bookie):
-        # Links the librarian and bookie.
-        self._librarian = weakref.proxy(librarian)
-        self._bookie = weakref.proxy(bookie)
+    def assemble(self, librarian):
+        # Links the librarian.
+        self._librarian = librarian
         
     async def await_idle(self):
         ''' Wait until the postman has no more deliveries to perform.
@@ -187,22 +185,23 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
         '''
         # It's possible we're being told to schedule nothing, so catch that
         # here.
-        for deferred in self._has_deferred(obj):
-            await self._scheduled.put(deferred)
-        
-        try:
-            scheduler = self._scheduler_lookup(type(obj))
-        
-        except KeyError:
-            raise TypeError(
-                'Could not schedule: does not appear to be a Golix ' +
-                'primitive.'
-            ) from None
+        if obj is None:
+            return
         
         else:
-            await scheduler(obj, removed)
+            try:
+                scheduler = self._scheduler_lookup[type(obj)]
             
-        return True
+            except KeyError:
+                raise TypeError(
+                    'Could not schedule: does not appear to be a Golix ' +
+                    'primitive.'
+                ) from None
+            
+            else:
+                await scheduler(obj, removed)
+                
+            return True
         
     async def _schedule_gidc(self, obj, removed):
         # GIDC will never trigger a subscription.
@@ -223,24 +222,42 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
         # GOBD might trigger a subscription! But, we also might to need to
         # defer it. Or, we might be removing it.
         if removed:
-            debinding_ghids = self._bookie.debind_status(obj.ghid)
-            if not debinding_ghids:
-                raise RuntimeError(
-                    'Obj flagged removed, but bookie lacks debinding for it.'
-                )
-            for debinding_ghid in debinding_ghids:
-                await self._scheduled.put(
-                    _MrPostcard(obj.ghid, debinding_ghid)
-                )
+            debinding_ghids = await self._librarian.debind_status(obj.ghid)
+            
+            # Check to see that there are the proper number of debindings
+            num_debindings = len(debinding_ghids)
+            if num_debindings != 1:
+                logger.error(''.join((
+                    str(obj.ghid),
+                    ' (gobd) flagged as removed, but has ',
+                    str(num_debindings),
+                    ' debindings, when it should have exactly one.'
+                )))
+                raise RuntimeError('Imporoper debinding number.')
+                
+            # Debinding_ghids is a frozenset; this is the fastest way of
+            # getting the single element from it.
+            debinding_ghid = next(iter(debinding_ghids))
+            await self._scheduled.put(
+                _MrPostcard(obj.ghid, debinding_ghid)
+            )
+            
         else:
             notifier = _MrPostcard(obj.ghid, obj.frame_ghid)
-            if not (await self._librarian.contains(obj.target)):
-                self._defer_update(
-                    awaiting_ghid = obj.target,
-                    postcard = notifier,
-                )
-            else:
+            if (await self._librarian.contains(obj.target)):
+                logger.debug(''.join((
+                    str(obj.ghid),
+                    ' subscription notification scheduled for ',
+                    str(obj.target)
+                )))
                 await self._scheduled.put(notifier)
+            else:
+                self._deferred.add(obj.target, notifier)
+                logger.debug(''.join((
+                    str(obj.ghid),
+                    ' subscription notification deferred; waiting on ',
+                    str(obj.target)
+                )))
         
     async def _schedule_gdxx(self, obj, removed):
         # GDXX will never directly trigger a subscription. If they are removing
@@ -251,26 +268,29 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
     async def _schedule_garq(self, obj, removed):
         # GARQ might trigger a subscription! Or we might be removing it.
         if removed:
-            debinding_ghids = self._bookie.debind_status(obj.ghid)
-            if not debinding_ghids:
-                raise RuntimeError(
-                    'Obj flagged removed, but bookie lacks debinding for it.'
-                )
-            for debinding_ghid in debinding_ghids:
-                await self._scheduled.put(
-                    _MrPostcard(obj.recipient, debinding_ghid)
-                )
+            debinding_ghids = await self._librarian.debind_status(obj.ghid)
+            
+            # Check to see that there are the proper number of debindings
+            num_debindings = len(debinding_ghids)
+            if num_debindings != 1:
+                logger.error(''.join((
+                    str(obj.ghid),
+                    ' (garq) flagged as removed, but has ',
+                    str(num_debindings),
+                    ' debindings, when it should have exactly one.'
+                )))
+                raise RuntimeError('Imporoper debinding number.')
+                
+            # Debinding_ghids is a frozenset; this is the fastest way of
+            # getting the single element from it.
+            debinding_ghid = next(iter(debinding_ghids))
+            await self._scheduled.put(
+                _MrPostcard(obj.recipient, debinding_ghid)
+            )
         else:
             await self._scheduled.put(
                 _MrPostcard(obj.recipient, obj.ghid)
             )
-            
-    def _defer_update(self, awaiting_ghid, postcard):
-        ''' Defer a subscription notification until the awaiting_ghid is
-        received as well.
-        '''
-        self._deferred.add(awaiting_ghid, postcard)
-        logger.debug('Postman update deferred for ' + str(awaiting_ghid))
             
     async def _deliver(self, subscription, notification):
         ''' Do the actual subscription update.
