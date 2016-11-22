@@ -146,12 +146,12 @@ class PostalCoreTester(PostalCore):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._delivery_buffer = collections.deque()
+        self.delivery_buffer = collections.deque()
         
     async def _deliver(self, subscription, notification):
         ''' Just put it into the delivery buffer.
         '''
-        self._delivery_buffer.append((subscription, notification))
+        self.delivery_buffer.append((subscription, notification))
         
     async def get_scheduled(self):
         ''' Empty the scheduling queue.
@@ -167,7 +167,6 @@ class PostalCoreTester(PostalCore):
 # ###############################################
 
 
-@unittest.skip('DNE')
 class PostalLoopingTest(unittest.TestCase):
     ''' Test the actual, real, live undertaker loop, but inject stuff
     directly into self._triage instead of using _check calls.
@@ -181,7 +180,7 @@ class PostalLoopingTest(unittest.TestCase):
         # First prep fixtures
         cls.librarian = LibrarianCore.__fixture__()
         
-        cls.undertaker = PostalCoreTester(
+        cls.postman = PostalCoreTester(
             reusable_loop = False,
             threaded = True,
             debug = True,
@@ -202,300 +201,27 @@ class PostalLoopingTest(unittest.TestCase):
         # Kill the running loop.
         cls.postman.stop_threadsafe_nowait()
         
-    def test_gidc(self):
-        ''' Test gidc operations.
+    def test_burndown(self):
+        ''' Test burning down a scheduled queue.
         '''
         self.librarian.RESET()
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(gidclite1, gidc1),
-            loop = self.postman._loop
-        )
         
-        # Gidc should never be GC'd
-        await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(gidclite1.ghid),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker.await_idle(),
-            loop = self.postman._loop
-        )
-        self.assertTrue(
+        subs = [(make_random_ghid(), make_random_ghid()) for __ in range(10)]
+        
+        for pair in subs:
             await_coroutine_threadsafe(
-                coro = self.librarian.contains(gidclite1.ghid),
+                coro = self.postman._scheduled.put(pair),
                 loop = self.postman._loop
             )
-        )
-        
-    def test_geoc(self):
-        ''' Test geoc operations.
-        '''
-        self.librarian.RESET()
+            
         await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1),
+            coro = self.postman.await_idle(),
             loop = self.postman._loop
         )
         
-        # Geoc should be GC'd if unbound.
-        await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(obj1.ghid),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker.await_idle(),
-            loop = self.postman._loop
-        )
-        self.assertFalse(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(obj1.ghid),
-                loop = self.postman._loop
-            )
-        )
-        
-        # But kept if bound.
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(sbind1, bind1_1),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(obj1.ghid),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker.await_idle(),
-            loop = self.postman._loop
-        )
-        self.assertTrue(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(obj1.ghid),
-                loop = self.postman._loop
-            )
-        )
-        
-    def test_gobs(self):
-        ''' Test gobs operations.
-        '''
-        self.librarian.RESET()
-        self.postman.RESET()
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(sbind1, bind1_1),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1),
-            loop = self.postman._loop
-        )
-        
-        # Gobs should be kept if not DEbound.
-        await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(sbind1.ghid),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker.await_idle(),
-            loop = self.postman._loop
-        )
-        self.assertTrue(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(sbind1.ghid),
-                loop = self.postman._loop
-            )
-        )
-        # As should their targets.
-        self.assertTrue(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(obj1.ghid),
-                loop = self.postman._loop
-            )
-        )
-        
-        # But removed otherwise.
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1, debind1_1),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(sbind1.ghid),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker.await_idle(),
-            loop = self.postman._loop
-        )
-        self.assertFalse(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(sbind1.ghid),
-                loop = self.postman._loop
-            )
-        )
-        # As should their targets.
-        self.assertFalse(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(obj1.ghid),
-                loop = self.postman._loop
-            )
-        )
-        
-    def test_gobd(self):
-        ''' Test gobd operations.
-        '''
-        self.librarian.RESET()
-        self.postman.RESET()
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(dbind1a, dyn1_1a),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1),
-            loop = self.postman._loop
-        )
-        
-        # Gobd should be kept unless explicitly DEbound (or if also explicitly
-        # bound; TODO.)
-        await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(dbind1a.ghid),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker.await_idle(),
-            loop = self.postman._loop
-        )
-        self.assertTrue(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(dbind1a.frame_ghid),
-                loop = self.postman._loop
-            )
-        )
-        # As should their targets.
-        self.assertTrue(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(obj1.ghid),
-                loop = self.postman._loop
-            )
-        )
-        
-        # But removed otherwise.
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1d, dyndebind1_1),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(dbind1a.ghid),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker.await_idle(),
-            loop = self.postman._loop
-        )
-        self.assertFalse(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(dbind1a.frame_ghid),
-                loop = self.postman._loop
-            )
-        )
-        # As should their targets.
-        self.assertFalse(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(obj1.ghid),
-                loop = self.postman._loop
-            )
-        )
-        
-    def test_gdxx(self):
-        ''' Test gdxx operations.
-        '''
-        self.librarian.RESET()
-        self.postman.RESET()
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1, debind1_1),
-            loop = self.postman._loop
-        )
-        
-        # Gdxx should be kept if not DEbound.
-        await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(xbind1.ghid),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker.await_idle(),
-            loop = self.postman._loop
-        )
-        self.assertTrue(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(xbind1.ghid),
-                loop = self.postman._loop
-            )
-        )
-        
-        # But removed otherwise.
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1x, dedebind1_1),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(xbind1.ghid),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker.await_idle(),
-            loop = self.postman._loop
-        )
-        self.assertFalse(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(xbind1.ghid),
-                loop = self.postman._loop
-            )
-        )
-        
-    def test_garq(self):
-        ''' Test garq operations.
-        '''
-        self.librarian.RESET()
-        self.postman.RESET()
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(req1, handshake1_1),
-            loop = self.postman._loop
-        )
-        
-        # Garq should be kept if not DEbound.
-        await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(req1.ghid),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker.await_idle(),
-            loop = self.postman._loop
-        )
-        self.assertTrue(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(req1.ghid),
-                loop = self.postman._loop
-            )
-        )
-        
-        # But removed otherwise.
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1R, debindR_1),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker._triage.put(req1.ghid),
-            loop = self.postman._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.undertaker.await_idle(),
-            loop = self.postman._loop
-        )
-        self.assertFalse(
-            await_coroutine_threadsafe(
-                coro = self.librarian.contains(req1.ghid),
-                loop = self.postman._loop
-            )
-        )
+        for pair1, pair2 in zip(subs, self.postman.delivery_buffer):
+            with self.subTest():
+                self.assertEqual(pair1, pair2)
 
 
 class PostalSchedulingTest(unittest.TestCase):

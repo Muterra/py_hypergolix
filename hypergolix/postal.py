@@ -141,9 +141,9 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
         ''' Deliver notifications as soon as they are available.
         TODO: support parallel sending.
         '''
+        subscription, notification = await self._scheduled.get()
+        
         try:
-            subscription, notification = await self._scheduled.get()
-            
             logger.info(
                 'Postman out for delivery on {!s}.'.format(subscription)
             )
