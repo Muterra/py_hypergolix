@@ -221,7 +221,8 @@ class Rolodex(metaclass=API):
         # successfully post.
         await self._percore.direct_ingest(
             obj = _GarqLite.from_golix(request),
-            packed = request.packed
+            packed = request.packed,
+            remotable = True
         )
         
     async def notification_handler(self, subscription, notification):
@@ -240,7 +241,7 @@ class Rolodex(metaclass=API):
             # This case should only be relevant if we have multiple agents
             # logged in at separate locations at the same time, processing the
             # same GARQs.
-            self._handle_debinding(request_or_debind)
+            await self._handle_debinding(request_or_debind)
             
         else:
             raise RuntimeError(
@@ -260,7 +261,10 @@ class Rolodex(metaclass=API):
         
             # TODO: have this filter based on contacts.
             if not (await self._librarian.contains(unpacked.author)):
-                self._salmonator.attempt_pull(unpacked.author, quiet=True)
+                await self._salmonator.attempt_pull(
+                    unpacked.author,
+                    quiet = True
+                )
         
             payload = await self._loop.run_in_executor(
                 self._executor,
@@ -278,10 +282,11 @@ class Rolodex(metaclass=API):
             )
             await self._percore.direct_ingest(
                 obj = _GdxxLite.from_golix(debinding),
-                packed = debinding.packed
+                packed = debinding.packed,
+                remotable = True
             )
         
-    def _handle_debinding(self, debinding):
+    async def _handle_debinding(self, debinding):
         ''' The notification is a debinding. Deal with it.
         '''
         # For now we just need to remove any pending requests for the
@@ -301,10 +306,10 @@ class Rolodex(metaclass=API):
             await self._handle_handshake(payload, source_ghid)
             
         elif isinstance(payload, AsymAck):
-            self._handle_ack(payload)
+            await self._handle_ack(payload)
             
         elif isinstance(payload, AsymNak):
-            self._handle_nak(payload)
+            await self._handle_nak(payload)
             
         else:
             raise RuntimeError('Encountered an unknown request type.')
@@ -343,15 +348,19 @@ class Rolodex(metaclass=API):
                 target = source_ghid
             )
         
-        response = self._golcore.make_request(request.author, response_obj)
+        response = await self._golcore.make_request(
+            request.author,
+            response_obj
+        )
         await self._percore.direct_ingest(
             obj = _GarqLite.from_golix(response),
-            packed = response.packed
+            packed = response.packed,
+            remotable = True
         )
             
-        self.share_handler(request.target, request.author)
+        await self.share_handler(request.target, request.author)
             
-    def _handle_ack(self, request):
+    async def _handle_ack(self, request):
         ''' Handles a handshake ack after reception.
         '''
         try:
@@ -362,9 +371,9 @@ class Rolodex(metaclass=API):
                 str(request.target)
             )
         else:
-            self.receipt_ack_handler(target, recipient)
+            await self.receipt_ack_handler(target, recipient)
             
-    def _handle_nak(self, request):
+    async def _handle_nak(self, request):
         ''' Handles a handshake nak after reception.
         '''
         try:
@@ -375,7 +384,7 @@ class Rolodex(metaclass=API):
                 str(request.target)
             )
         else:
-            self.receipt_nak_handler(target, recipient)
+            await self.receipt_nak_handler(target, recipient)
     
     @fixture_noop
     @public_api
