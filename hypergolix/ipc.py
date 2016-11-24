@@ -472,13 +472,15 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         # Note: need to add some kind of handling for legroom.
         _legroom = None
         
+        private = bool(self._dispatch.get_parent_token(obj.ghid))
+        
         return self._pack_object_def(
             obj.ghid,
             obj.author,
             state,
             is_link,
             obj.api_id,
-            obj.private,
+            private,
             obj.dynamic,
             _legroom
         )

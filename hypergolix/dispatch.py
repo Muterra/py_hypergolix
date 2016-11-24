@@ -48,11 +48,13 @@ from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
 
-from .gao import GAOCore as _GAO
+from .gao import GAOCore
 
 from .utils import WeakSetMap
 from .utils import call_coroutine_threadsafe
 from .utils import NoContext
+from .utils import weak_property
+from .utils import immutable_property
 
 from .exceptions import DispatchError
 from .exceptions import UnknownToken
@@ -125,14 +127,13 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
     TODO: support notification mechanism to push new objects to other
     concurrent hypergolix instances. See note in ipc.ipccore.send_object
     '''
+    _ipc_protocol_server = weak_property('__ipc_proto')
     
     @public_api
     def __init__(self, *args, **kwargs):
         ''' Yup yup yup yup yup yup yup
         '''
         super().__init__(*args, **kwargs)
-        
-        self._ipc_protocol_server = None
         
         # Temporarily set distributed state to None.
         # Lookup for all known tokens: set(<tokens>)
@@ -210,7 +211,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         
     def assemble(self, ipc_protocol_server):
         # Set up a weakref to the ipc system
-        self._ipc_protocol_server = weakref.proxy(ipc_protocol_server)
+        self._ipc_protocol_server = ipc_protocol_server
         
     def bootstrap(self, all_tokens, startup_objs, private_by_ghid, token_lock,
                   incoming_shares, orphan_acks, orphan_naks):
@@ -435,7 +436,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
             
         # This is not a private object, so we're going to anyone who wants it
         else:
-            obj = self._oracle.get_object(
+            obj = await self._oracle.get_object(
                 gaoclass = _Dispatchable,
                 ghid = ghid,
                 dispatch = self._dispatch,
@@ -718,127 +719,62 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
             return None
             
             
-class _Dispatchable(_GAO):
-    ''' A dispatchable object.
+class _Dispatchable(GAOCore):
+    ''' A dispatchable object. Note that privacy is store within the
+    dispatcher itself, and not within the individual dispatchables.
     '''
+    _dispatch = weak_property('__dispatch')
+    _ipc_protocol = weak_property('__ipc_protocol')
+    api_id = immutable_property('_api_id')
     
-    def __init__(self, dispatch, ipc_core, api_id=None, private=False,
-                 state=None, *args, **kwargs):
+    def __init__(self, *args, api_id, state, dispatch, ipc_protocol, **kwargs):
         super().__init__(*args, **kwargs)
-        # Dispatch is already a weakref.proxy...
+        
         self._dispatch = dispatch
-        # But ipc_core is not.
-        self._ipccore = weakref.proxy(ipc_core)
+        self._ipc_protocol = ipc_protocol
         
         self.state = state
         self.api_id = api_id
         
-    @property
-    def parent_token(self):
-        ''' Read-only proxy to dispatch to check for a private parent.
-        Returns the parent app token, or None if not a private object.
+    async def _pull(self):
+        ''' Extend GAOCore._pull() to notify IPC about updates.
         '''
-        return self._dispatch.get_parent_token(self.ghid)
+        await super()._pull()
+        await self._dispatch.schedule_update_distribution(self.ghid)
         
-    @property
-    def private(self):
-        ''' Returns true/false if the object is private.
-        '''
-        return bool(self._dispatch.get_parent_token(self.ghid))
-        
-    def pull(self, *args, **kwargs):
-        ''' Refreshes self from upstream. Should NOT be called at object
-        instantiation for any existing objects. Should instead be called
-        directly, or through _weak_pull for any new status.
-        '''
-        modified = super().pull(*args, **kwargs)
-        if modified:
-            logger.debug('Pull detected modifications. Sending to ipc.')
-            call_coroutine_threadsafe(
-                coro = self._ipccore.notify_update(self.ghid, deleted=False),
-                loop = self._ipccore._loop
-            )
-            logger.debug('IPC completed update notifications.')
-        return modified
-        
-    @staticmethod
-    def _pack(state):
+    async def pack_gao(self):
         ''' Packs state into a bytes object. May be overwritten in subs
         to pack more complex objects. Should always be a staticmethod or
         classmethod.
         '''
         version = b'\x00'
-        return b'hgxd' + version + state[0] + state[1]
+        return b'hgxd' + version + self.api_id + self.state
         
-    @staticmethod
-    def _unpack(packed):
+    async def unpack_gao(self, packed):
         ''' Unpacks state from a bytes object. May be overwritten in
         subs to unpack more complex objects. Should always be a
         staticmethod or classmethod.
         '''
         magic = packed[0:4]
         version = packed[4:5]
+        api_id = packed[5:70]
         
         if magic != b'hgxd':
             raise DispatchError('Object does not appear to be dispatchable.')
-        if version != b'\x00':
+        elif version != b'\x00':
             raise DispatchError('Incompatible dispatchable version number.')
+        elif self.api_id is None:
+            self.api_id = api_id
+        elif api_id != self.api_id:
+            raise DispatchError('Cannot change API ID.')
             
-        api_id = packed[5:70]
-        state = packed[70:]
+        self.state = packed[70:]
         
-        return _DispatchableState(api_id, state)
-        
-    def apply_state(self, state):
-        ''' Apply the UNPACKED state to self.
+    async def apply_delete(self, debinding):
+        ''' Extend GAOCore.apply_delete to notify consumers of deletion.
         '''
-        # TODO: make sure this doesn't accidentally change api_id or app_token
-        # Maybe set the _attributes directly or something as well?
-        self.api_id = state[0]
-        self.state = state[1]
-        
-    def extract_state(self):
-        ''' Extract self into a packable state.
-        '''
-        return _DispatchableState(self.api_id, self.state)
-        
-    @property
-    def api_id(self):
-        # Warn if both api_id and app_token are undefined
-        # Is this the appropriate time to check this?
-        if self._api_id == bytes(65):
-            return None
-        else:
-            return self._api_id
-        
-    @api_id.setter
-    def api_id(self, value):
-        if value is None:
-            value = bytes(65)
-        else:
-            value = bytes(value)
-            if len(value) != 65:
-                raise ValueError('API IDs must be 65 bytes long.')
-            
-        self._api_id = value
-        
-    def update(self, state):
-        ''' Wrapper to apply state that reuses api_id and app_token, and
-        then call push.
-        '''
-        if not self.dynamic:
-            raise DispatchError(
-                'Object is not dynamic. Cannot update.'
-            )
-            
-        self.apply_state(
-            state = (self.api_id, state)
-        )
-        self.push()
-        
-    def apply_delete(self):
-        super().apply_delete()
-        call_coroutine_threadsafe(
-            coro = self._ipccore.notify_update(self.ghid, deleted=True),
-            loop = self._ipccore._loop
+        await super().apply_delete(debinding)
+        await self._dispatch.schedule_update_distribution(
+            self.ghid,
+            deleted = True
         )
