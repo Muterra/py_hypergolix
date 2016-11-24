@@ -321,7 +321,8 @@ class GAOCore(metaclass=API):
         binding = await self._golcore.make_binding_stat(container_ghid)
         await self._percore.direct_ingest(
             obj = _GobsLite.from_golix(binding),
-            packed = binding.packed
+            packed = binding.packed,
+            remotable = True
         )
         
         return container_ghid
@@ -342,7 +343,8 @@ class GAOCore(metaclass=API):
         binding = await self._golcore.make_binding_stat(self.ghid)
         await self._percore.direct_ingest(
             obj = _GobsLite.from_golix(binding),
-            packed = binding.packed
+            packed = binding.packed,
+            remotable = True
         )
         
     @fixture_noop
@@ -355,12 +357,13 @@ class GAOCore(metaclass=API):
             debinding = await self._golcore.make_debinding(self.ghid)
             await self._percore.direct_ingest(
                 obj = _GdxxLite.from_golix(debinding),
-                packed = debinding.packed
+                packed = debinding.packed,
+                remotable = True
             )
             
         else:
             # Get frozenset of binding ghids
-            bindings = self._bookie.bind_status()
+            bindings = await self._librarian.bind_status(self.ghid)
             
             for binding in bindings:
                 obj = await self._librarian.summarize(binding)
@@ -371,7 +374,8 @@ class GAOCore(metaclass=API):
                         )
                         await self._percore.direct_ingest(
                             obj = _GdxxLite.from_golix(debinding),
-                            packed = debinding.packed
+                            packed = debinding.packed,
+                            remotable = True
                         )
             
     def _get_new_secret(self):
@@ -458,7 +462,8 @@ class GAOCore(metaclass=API):
                 # Publish to persister
                 await self._percore.direct_ingest(
                     obj = _GobdLite.from_golix(binding),
-                    packed = binding.packed
+                    packed = binding.packed,
+                    remotable = True
                 )
             
             # Static object.
@@ -473,13 +478,15 @@ class GAOCore(metaclass=API):
                 )
                 await self._percore.direct_ingest(
                     obj = _GobsLite.from_golix(binding),
-                    packed = binding.packed
+                    packed = binding.packed,
+                    remotable = True
                 )
                 
             # Finally, ingest the object itself.
             await self._percore.direct_ingest(
                 obj = _GeocLite.from_golix(container),
-                packed = container.packed
+                packed = container.packed,
+                remotable = True
             )
         
         # Necessary for else clause (grumble grumble)
