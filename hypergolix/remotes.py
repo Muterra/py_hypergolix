@@ -54,6 +54,8 @@ import traceback
 import asyncio
 import loopa
 
+from loopa.utils import make_background_future
+
 from golix import Ghid
 from golix import SecurityError
 
@@ -87,9 +89,11 @@ from .exceptions import IntegrityError
 from .exceptions import UnavailableUpstream
 
 from .utils import weak_property
+from .utils import readonly_property
 
 from .comms import RequestResponseAPI
 from .comms import request
+from .comms import ConnectionManager
 
 
 # ###############################################
@@ -400,12 +404,62 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
         '''
         await self._postman.clear_subs(connection)
         return b'\x01'
+        
+        
+class Remote(ConnectionManager):
+    ''' Add connection init to exchange identifying infos and subscribe
+    to relevant ghids.
+    '''
+    _golcore = weak_property('__golcore')
+    _salmonator = weak_property('__salmonator')
+    
+    def __init__(self, *args, golcore, salmonator, **kwargs):
+        ''' Add in the salmonator and golcore to self.
+        '''
+        self._golcore = golcore
+        self._salmonator = salmonator
+    
+    async def connection_init(self, connection, protocol):
+        ''' Do stuff and things.
+        '''
+        # Ehh, just always publish. Latency is going to be worse than most
+        # connections for the (only few kB) identity
+        await protocol.publish(
+            connection,
+            self._golcore._identity.second_party.packed
+        )
+        
+        await protocol.subscribe(connection, self._golcore.whoami)
+            
+        # For every every active (salmonator-registered) GAO's ghid...
+        tasks = set()
+        for registrant in self._salmonator._registered:
+            # Record that we need to perform...
+            tasks.add(
+                # ...as a background future (which handles its own errors)...
+                make_background_future(
+                    # ...a subscription call with our connection at protocol
+                    protocol.subscribe(connection, registrant)
+                )
+            )
+        
+        # We need to make sure there's at least one task.
+        if tasks:
+            # And now just wait for all of that to complete.
+            await asyncio.wait(
+                fs = tasks,
+                return_when = asyncio.ALL_COMPLETED
+            )
 
 
 class Salmonator(loopa.TaskLooper, metaclass=API):
     ''' Responsible for disseminating Golix objects upstream and
     downstream. Handles all comms with them as well.
     '''
+    _golcore = weak_property('__golcore')
+    _percore = weak_property('__percore')
+    _librarian = weak_property('__librarian')
+    _remoter = weak_property('__remoter')
     
     @public_api
     def __init__(self, *args, **kwargs):
@@ -413,14 +467,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         '''
         super().__init__(*args, **kwargs)
         
-        self._percore = None
-        self._golcore = None
-        self._postman = None
-        self._librarian = None
-        self._doorman = None
-        
         self._clear_q = None
-        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
         
         self._upstream_remotes = set()
         self._downstream_remotes = set()
@@ -428,64 +475,27 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         # Lookup for <registered ghid>
         self._registered = set()
         
-    def assemble(self, golix_core, persistence_core, doorman, postman,
-                 librarian):
-        self._golcore = weakref.proxy(golix_core)
-        self._percore = weakref.proxy(persistence_core)
-        self._postman = weakref.proxy(postman)
-        self._librarian = weakref.proxy(librarian)
+    def assemble(self, golcore, percore, librarian, remoter):
+        self._golcore = golcore
+        self._percore = percore
+        self._librarian = librarian
+        self._remoter = remoter
     
     @fixture_noop
     @public_api
-    def add_upstream_remote(self, persister):
-        ''' Adds an upstream persister.
-        
-        TODO: move most of this into the connection init for the remote.
-        
-        PersistenceCore will attempt to have a constantly consistent
-        state with upstream persisters. That means that any local
-        resources will either be subscribed to upstream, or checked for
-        updates before ingestion by the Hypergolix service.
-        
-        HOWEVER, the Salmonator will make no attempt to synchronize
-        state **between** upstream remotes.
+    def add_upstream_remote(self, task_commander, connection_cls, *args,
+                            **kwargs):
+        ''' Adds an upstream remote persister.
+        *args and **kwargs will be passed to the task_commander task.
         '''
-        # Before we do anything, we should try pushing up our identity.
-        try:
-            if not persister.query(self._golcore.whoami):
-                persister.publish(self._golcore._identity.second_party.packed)
-            
-            self._upstream_remotes.add(persister)
-            # Subscribe to our identity, assuming we actually have a golix core
-            try:
-                persister.subscribe(
-                    self._golcore.whoami,
-                    self._remote_callback
-                )
-            except AttributeError:
-                logger.error(
-                    'Missing golcore while attempting to add upstream ' +
-                    'remote!'
-                )
-                
-            # Subscribe to every active GAO's ghid
-            for registrant in self._registered:
-                persister.subscribe(registrant, self._remote_callback)
-        
-        except Exception:
-            logger.error(
-                'Failed to add upstream remote w/ traceback:\n' +
-                ''.join(traceback.format_exc())
-            )
-    
-    @fixture_noop
-    @public_api
-    def remove_upstream_remote(self, persister):
-        ''' Inverse of above.
-        '''
-        self._upstream_remotes.remove(persister)
-        # Remove all subscriptions
-        persister.disconnect()
+        remote = Remote(
+            connection_cls = connection_cls,
+            msg_handler = self._remoter,
+            golcore = self._golcore,
+            salmonator = self
+        )
+        task_commander.register_task(remote, *args, **kwargs)
+        self._upstream_remotes.add(remote)
         
     def add_downstream_remote(self, persister):
         ''' Adds a downstream persister.
@@ -501,26 +511,13 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         raise NotImplementedError()
         self._downstream_remotes.add(persister)
         
-    def remove_downstream_remote(self, persister):
-        ''' Inverse of above.
-        '''
-        raise NotImplementedError()
-        self._downstream_remotes.remove(persister)
-        
-    def _remote_callback(self, subscription, notification):
-        ''' Callback to use when subscribing to things at remotes.
-        '''
-        logger.debug('Hitting remote callback.')
-        # TODO: make this non-blocking
-        self.schedule_pull(notification)
-        
     async def loop_init(self, *args, **kwargs):
         ''' On top of the usual stuff, set up our queues.
         '''
         await super().loop_init(*args, **kwargs)
         # This "must" be unbounded, because we don't have any control over
         # finalization of objects.
-        self._clear_q = asyncio.Queue(loop=self._loop)
+        self._clear_q = asyncio.Queue()
         
     async def loop_stop(self, *args, **kwargs):
         ''' On top of the usual stuff, clear our queues.
@@ -535,13 +532,15 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         disconnections = set()
         for remote in self._upstream_remotes:
             disconnections.add(
-                loopa.utils.make_background_future(remote.disconnect())
+                make_background_future(remote.disconnect())
             )
-            
-        await asyncio.wait(
-            fs = disconnections,
-            return_when = asyncio.ALL_COMPLETED
-        )
+        
+        # Need to make sure it's not empty
+        if disconnections:
+            await asyncio.wait(
+                fs = disconnections,
+                return_when = asyncio.ALL_COMPLETED
+            )
         
     async def loop_run(self, *args, **kwargs):
         ''' Wait for object finalizers, and then immediately unsub the
@@ -552,46 +551,83 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
     
     @fixture_noop
     @public_api
+    async def register(self, gao):
+        ''' Tells the Salmonator to listen upstream for any updates
+        while the gao is retained in memory.
+        '''
+        if gao.dynamic:
+            logger.info(
+                'GAO ' + str(gao.ghid) + ' upstream registration starting.'
+            )
+            self._registered.add(gao.ghid)
+    
+            subscriptions = set()
+            for remote in self._upstream_remotes:
+                subscriptions.add(
+                    make_background_future(remote.subscribe(gao.ghid))
+                )
+                
+            # Need to make sure it's not empty
+            if subscriptions:
+                await asyncio.wait(
+                    fs = subscriptions,
+                    return_when = asyncio.ALL_COMPLETED
+                )
+                    
+            # Add deregister as a finalizer, but don't call it atexit.
+            finalizer = weakref.finalize(gao, self._deregister, gao.ghid)
+            finalizer.atexit = False
+        
+    def _deregister(self, ghid):
+        ''' Finalizer for GAO objects that executes async deregister()
+        from within the event loop. Must be called from within our own
+        thread, which it should be (finalizers are called from object
+        thread, and all gao must be created within event loop's thread).
+        '''
+        # This needs to be a function, not a coro, so use nowait.
+        self._clear_q.put_nowait(ghid)
+    
+    @fixture_noop
+    @public_api
+    async def deregister(self, ghid):
+        ''' Tells the salmonator to stop listening for upstream object
+        updates.
+        '''
+        # This should maybe use remove instead of discard?
+        self._registered.discard(ghid)
+    
+        unsubscriptions = set()
+        for remote in self._upstream_remotes:
+            unsubscriptions.add(
+                make_background_future(remote.unsubscribe(ghid))
+            )
+        
+        # Need to make sure it's not empty
+        if unsubscriptions:
+            await asyncio.wait(
+                fs = unsubscriptions,
+                return_when = asyncio.ALL_COMPLETED
+            )
+    
+    @fixture_noop
+    @public_api
     async def push(self, ghid):
         ''' Push a single ghid to all remotes.
         '''
-        try:
-            data = await self._librarian.retrieve(ghid)
+        data = await self._librarian.retrieve(ghid)
         
-        except Exception as exc:
-            logger.error(
-                'Error while pushing an object upstream:\n' +
-                ''.join(traceback.format_exc()) +
-                repr(exc)
-            )
-            return
-        
-        tasks_available = []
+        tasks = set()
         for remote in self._upstream_remotes:
-            this_push = asyncio.ensure_future(
-                self._loop.run_in_executor(
-                    self._executor,
-                    remote.publish,
-                    data
-                )
+            tasks.add(
+                make_background_future(remote.push(data))
             )
-            tasks_available.append(this_push)
             
-        if tasks_available:
-            finished, pending = await asyncio.wait(
-                fs = tasks_available,
+        # Need to make sure it's not empty
+        if tasks:
+            await asyncio.wait(
+                fs = tasks,
                 return_when = asyncio.ALL_COMPLETED
             )
-            
-            # Pending will be empty (or asyncio bugged up)
-            for task in finished:
-                exc = task.exception()
-                if exc is not None:
-                    logger.error(
-                        'Error while pushing to remote:\n' +
-                        ''.join(traceback.format_tb(exc.__traceback__)) +
-                        repr(exc)
-                    )
     
     @fixture_noop
     @public_api
@@ -604,12 +640,14 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         pull_complete = None
         tasks_available = set()
         for remote in self._upstream_remotes:
-            this_pull = asyncio.ensure_future(
-                self._attempt_pull_single(ghid, remote)
+            tasks_available.add(
+                asyncio.ensure_future(
+                    self._attempt_pull_single(ghid, remote)
+                )
             )
-            tasks_available.add(this_pull)
             
         # Wait until the first successful task completion
+        # Note that this also shields us against having no tasks
         while tasks_available and not pull_complete:
             finished, pending = await asyncio.wait(
                 fs = tasks_available,
@@ -691,14 +729,6 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                         'missing both locally and upstream.'
                     )
         
-        # We know the pull was successful, but that could indicate that the
-        # requested ghid was already known locally. In that case, there's no
-        # harm in doing an extra mail run, so make it happen regardless.
-        await self._loop.run_in_executor(
-            self._executor,
-            self._postman.do_mail_run
-        )
-        
         logger.debug('Successful pull handled.')
     
     @fixture_noop
@@ -729,158 +759,12 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         # This may error, but any errors here will be caught by the parent.
         data = await remote.get(ghid)
         
-        # This may or may not be an update we already have.
-        try:
-            # Call as remotable=False to avoid infinite loops.
-            obj = self._percore.ingest(data, remotable=False)
+        # Call as remotable=False to avoid infinite loops.
+        obj = await self._percore.ingest(data, remotable=False)
         
-        # Couldn't load. Return False.
-        except Exception as exc:
-            logger.warning(
-                'Error while pulling from upstream: \n' +
-                ''.join(traceback.format_exc()) +
-                repr(exc)
-            )
-            return False
-            
-        # As soon as we have it, return True so parent can stop checking
-        # other remotes.
+        # Note that ingest can either return None, if we already have
+        # the object, or the object itself, if it's new.
+        if obj is None:
+            return True
         else:
-            # Note that ingest can either return None, if we already have
-            # the object, or the object itself, if it's new.
-            if obj is None:
-                return True
-            else:
-                return obj
-        
-    async def _inspect(self, ghid):
-        ''' Checks librarian for an existing ghid. If it has it, checks
-        the object's integrity by re-parsing it. If it is dynamic, also
-        queries upstream remotes for newer versions.
-        
-        returns None if no local copy exists
-        returns True if local copy exists and is valid
-        raises IntegrityError if local copy exists, but is corrupted.
-        ~~(returns False if dynamic and local copy is out of date)~~
-            Note: this is unimplemented currently, blocking on several
-            upstream changes.
-            
-        DEPRECATED / UNUSED
-        '''
-        # Load the object locally
-        try:
-            obj = await self._librarian.summarize(ghid)
-        
-        # Librarian has no copy.
-        except KeyError:
-            return None
-            
-        # The only object that can mutate is a Gobd
-        # This is blocking on updates to the remote persistence spec, which is
-        # in turn blocking on changes to the Golix spec.
-        # if isinstance(obj, _GobdLite):
-        #     self._check_for_updates(obj)
-        
-        await self._verify_existing(obj)
-        return True
-            
-    def _check_for_updates(self, obj):
-        ''' Checks with all upstream remotes for new versions of a
-        dynamic object.
-        '''
-        # Oh wait, we can't actually do this, because the remote persistence
-        # protocol doesn't support querying what the current binding frame is
-        # without just loading the whole binding.
-        # When the Golix spec changes to semi-stateless dynamic bindings, using
-        # a counter for validating monotonicity instead of a hash chain, then
-        # the remote persistence spec should be expanded to include a query_ctr
-        # command for ultra-lightweight checks. For now, we're stuck with ~1kB
-        # dynamic bindings.
-        raise NotImplementedError()
-            
-    async def _verify_existing(self, obj):
-        ''' Re-loads an object to make sure it's still good.
-        Obj should be a lightweight hypergolix representation, not the
-        packed Golix object, unpacked Golix object, nor the GAO.
-        
-        DEPRECATED / UNUSED
-        '''
-        packed = await self._librarian.retrieve(obj.ghid)
-        
-        for primitive, loader in ((_GidcLite, self._doorman.load_gidc),
-                                  (_GeocLite, self._doorman.load_geoc),
-                                  (_GobsLite, self._doorman.load_gobs),
-                                  (_GobdLite, self._doorman.load_gobd),
-                                  (_GdxxLite, self._doorman.load_gdxx),
-                                  (_GarqLite, self._doorman.load_garq)):
-            # Attempt this loader
-            if isinstance(obj, primitive):
-                try:
-                    loader(packed)
-                except (MalformedGolixPrimitive, SecurityError) as exc:
-                    logger.error('Integrity of local object appears '
-                                 'compromised.')
-                    raise IntegrityError('Local copy of object appears to be '
-                                         'corrupt or compromised.') from exc
-                else:
-                    break
-                    
-        # If we didn't find a loader, typeerror.
-        else:
-            raise TypeError('Invalid object type while verifying object.')
-    
-    @fixture_noop
-    @public_api
-    async def register(self, gao):
-        ''' Tells the Salmonator to listen upstream for any updates
-        while the gao is retained in memory.
-        '''
-        if gao.dynamic:
-            self._registered.add(gao.ghid)
-    
-            for remote in self._upstream_remotes:
-                try:
-                    remote.subscribe(gao.ghid, self._remote_callback)
-                except Exception:
-                    logger.warning(
-                        'Exception while subscribing to upstream updates '
-                        'for GAO at ' + str(gao.ghid) + '\n' +
-                        ''.join(traceback.format_exc())
-                    )
-                else:
-                    logger.debug(
-                        'Successfully subscribed to upstream updates for '
-                        'GAO at ' + str(gao.ghid)
-                    )
-                    
-            # Add deregister as a finalizer, but don't call it atexit.
-            finalizer = weakref.finalize(gao, self._deregister, gao.ghid)
-            finalizer.atexit = False
-        
-    def _deregister(self, ghid):
-        ''' Finalizer for GAO objects that executes async deregister()
-        from within the event loop. Must be called from within our own
-        thread, which it should be (finalizers are called from object
-        thread, and all gao must be created within event loop's thread).
-        '''
-        # This needs to be a function, not a coro, so use nowait.
-        self._clear_q.put_nowait(ghid)
-    
-    @fixture_noop
-    @public_api
-    async def deregister(self, ghid):
-        ''' Tells the salmonator to stop listening for upstream
-        object updates.
-        '''
-        # This should maybe use remove instead of discard?
-        self._registered.discard(ghid)
-        
-        for remote in self._upstream_remotes:
-            try:
-                await remote.unsubscribe(ghid, self._remote_callback)
-            except Exception:
-                logger.warning(
-                    'Exception while unsubscribing from upstream updates '
-                    'during GAO cleanup for ' + str(ghid) + '\n' +
-                    ''.join(traceback.format_exc())
-                )
+            return obj
