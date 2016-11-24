@@ -427,7 +427,6 @@ class Oracle(metaclass=API):
     _ghidproxy = weak_property('__ghidproxy')
     _privateer = weak_property('__privateer')
     _percore = weak_property('__percore')
-    _bookie = weak_property('__bookie')
     _librarian = weak_property('__librarian')
     
     def __init__(self, *args, **kwargs):
@@ -442,14 +441,13 @@ class Oracle(metaclass=API):
         '''
         self._lookup.clear()
         
-    def assemble(self, golcore, ghidproxy, privateer, percore, bookie,
-                 librarian, salmonator):
+    def assemble(self, golcore, ghidproxy, privateer, percore, librarian,
+                 salmonator):
         # Chicken, meet egg.
         self._golcore = golcore
         self._ghidproxy = ghidproxy
         self._privateer = privateer
         self._percore = percore
-        self._bookie = bookie
         self._librarian = librarian
         self._salmonator = salmonator
         
@@ -497,7 +495,6 @@ class Oracle(metaclass=API):
                 ghidproxy = self._ghidproxy,
                 privateer = self._privateer,
                 percore = self._percore,
-                bookie = self._bookie,
                 librarian = self._librarian,
                 **kwargs
             )
@@ -544,7 +541,6 @@ class Oracle(metaclass=API):
             ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
-            bookie = self._bookie,
             librarian = self._librarian,
             **kwargs
         )

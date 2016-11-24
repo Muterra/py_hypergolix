@@ -47,7 +47,6 @@ from hypergolix.gao import GAOCore
 from hypergolix.privateer import Privateer
 from hypergolix.remotes import Salmonator
 from hypergolix.persistence import PersistenceCore
-from hypergolix.persistence import Bookie
 from hypergolix.librarian import LibrarianCore
 from hypergolix.persistence import _GidcLite
 from hypergolix.persistence import _GeocLite
@@ -366,14 +365,12 @@ class OracleTest(unittest.TestCase):
         self.ghidproxy = GhidProxier()
         self.privateer = Privateer.__fixture__(TEST_AGENT1)
         self.percore = PersistenceCore.__fixture__()
-        self.bookie = Bookie.__fixture__()
         self.librarian = LibrarianCore.__fixture__()
         self.salmonator = Salmonator.__fixture__()
         
         # This is obviously necessary to test.
         self.oracle.assemble(self.golcore, self.ghidproxy, self.privateer,
-                             self.percore, self.bookie, self.librarian,
-                             self.salmonator)
+                             self.percore, self.librarian, self.salmonator)
     
     def test_load(self):
         ''' Test getting an existing object.

@@ -206,7 +206,6 @@ class GAOCore(metaclass=API):
     _ghidproxy = weak_property('__ghidproxy')
     _privateer = weak_property('__privateer')
     _percore = weak_property('__percore')
-    _bookie = weak_property('__bookie')
     _librarian = weak_property('__librarian')
     
     # Make readonly properties for dynamic, ghid, and author. Note that the
@@ -256,8 +255,8 @@ class GAOCore(metaclass=API):
         return bool(self._master_secret)
     
     def __init__(self, ghid, dynamic, author, legroom, *args, golcore,
-                 ghidproxy, privateer, percore, bookie, librarian,
-                 master_secret=None, **kwargs):
+                 ghidproxy, privateer, percore, librarian, master_secret=None,
+                 **kwargs):
         ''' Init should be used only to create a representation of an
         EXISTING (or about to be existing) object. If any fields are
         unknown, they must be explicitly passed None.
@@ -272,7 +271,6 @@ class GAOCore(metaclass=API):
         self._ghidproxy = ghidproxy
         self._privateer = privateer
         self._percore = percore
-        self._bookie = bookie
         self._librarian = librarian
         
         # Dynamic and author be explicitly None; ghid should always be defined
