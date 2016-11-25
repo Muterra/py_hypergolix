@@ -92,10 +92,10 @@ from .exceptions import IllegalDynamicFrame
 from .exceptions import IntegrityError
 from .exceptions import UnavailableUpstream
 
-from .utils import call_coroutine_threadsafe
 from .utils import WeakSetMap
 from .utils import SetMap
 from .utils import ApiID
+from .utils import weak_property
 
 from .comms import RequestResponseAPI
 from .comms import RequestResponseProtocol
@@ -269,31 +269,24 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
                         error_codes=ERROR_CODES, default_version=b'\x00\x00'):
     ''' Defines the protocol for IPC, with handlers specific to servers.
     '''
-    
-    @public_api
-    def __init__(self, *args, **kwargs):
-        ''' Add intentionally invalid init to force assemblage.
-        '''
-        super().__init__(*args, **kwargs)
+    _dispatch = weak_property('__dispatch')
+    _oracle = weak_property('__oracle')
+    _golcore = weak_property('__golcore')
+    _rolodex = weak_property('__rolodex')
+    _salmonator = weak_property('__salmonator')
         
-        self._dispatch = None
-        self._oracle = None
-        self._golcore = None
-        self._rolodex = None
-        self._salmonator = None
-        
-    @__init__.fixture
+    @fixture_api
     def __init__(self, whoami, *args, **kwargs):
         super(IPCServerProtocol.__fixture__, self).__init__(*args, **kwargs)
         self._whoami = whoami
         
-    def assemble(self, golix_core, oracle, dispatch, rolodex, salmonator):
+    def assemble(self, golcore, oracle, dispatch, rolodex, salmonator):
         # Chicken, egg, etc.
-        self._golcore = weakref.proxy(golix_core)
-        self._oracle = weakref.proxy(oracle)
-        self._dispatch = weakref.proxy(dispatch)
-        self._rolodex = weakref.proxy(rolodex)
-        self._salmonator = weakref.proxy(salmonator)
+        self._golcore = golcore
+        self._oracle = oracle
+        self._dispatch = dispatch
+        self._rolodex = rolodex
+        self._salmonator = salmonator
         
     @request(b'+T')
     async def set_token(self, connection, token=None):
@@ -312,20 +305,20 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         
         # Getting a new token.
         if token == b'':
-            token = self._dispatch.start_application(connection)
+            token = await self._dispatch.start_application(connection)
             logger.info(''.join((
                 'CONN ', str(connection), ' generating new token: ', str(token)
             )))
         
         # Setting an existing token, but the connection already exists.
-        elif self._dispatch.which_token(connection):
+        elif self._dispatch.token_lookup(connection):
             raise IPCError(
                 'Attempt to reregister a new concurrent token for an ' +
                 'existing connection. Each app may use only one token.'
             )
             
         # Setting an existing token, but the token already exists.
-        elif self._dispatch.which_connection(token):
+        elif self._dispatch.connection_lookup(token) is not None:
             raise IPCError(
                 'Attempt to reregister a new concurrent connection for ' +
                 'an existing token. Each app may only use one connection.'
@@ -337,7 +330,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
                 'CONN ', str(connection), ' registering existing token: ',
                 str(token)
             )))
-            self._dispatch.start_application(connection, token)
+            await self._dispatch.start_application(connection, token)
         
         return token
         
@@ -394,8 +387,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         ''' Request a startup object, or notify an app of its declared
         startup object.
         '''
-        token = self._dispatch.which_token(connection)
-        ghid = self._dispatch.get_startup_obj(token)
+        token = self._dispatch.token_lookup(connection)
+        ghid = await self._dispatch.get_startup_obj(token)
         
         if ghid is not None:
             return bytes(ghid)
@@ -406,8 +399,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
     async def get_startup_obj(self, connection, body):
         ''' Handles requests for startup objects.
         '''
-        token = self._dispatch.which_token(connection)
-        ghid = self._dispatch.get_startup_obj(token)
+        token = self._dispatch.token_lookup(connection)
+        ghid = await self._dispatch.get_startup_obj(token)
         
         if ghid is not None:
             return bytes(ghid)
@@ -425,7 +418,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         ''' Handles startup object registration. Server only.
         '''
         ghid = Ghid.from_bytes(body)
-        self._dispatch.register_startup(connection, ghid)
+        await self._dispatch.register_startup(connection, ghid)
         return b'\x01'
         
     @request(b'-$')
@@ -438,7 +431,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
     async def deregister_startup_obj(self, connection, body):
         ''' Handles startup object registration. Server only.
         '''
-        self._dispatch.deregister_startup(connection)
+        await self._dispatch.deregister_startup(connection)
         return b'\x01'
         
     @request(b'>O')
@@ -472,7 +465,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         # Note: need to add some kind of handling for legroom.
         _legroom = None
         
-        private = bool(self._dispatch.get_parent_token(obj.ghid))
+        # Not a big fan of how this works, seems inelegant to me
+        private = bool(self._dispatch.private_parent_lookup(obj.ghid))
         
         return self._pack_object_def(
             obj.ghid,
@@ -505,7 +499,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
          api_id,
          private,
          dynamic,
-         _legroom) = self._unpack_object_def(body)
+         legroom) = self._unpack_object_def(body)
         
         if is_link:
             raise NotImplementedError('Linked objects are not yet supported.')
@@ -514,10 +508,10 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         obj = await self._oracle.new_object(
             gaoclass = _Dispatchable,
             dispatch = self._dispatch,
-            ipc_core = self,
-            state = _DispatchableState(api_id, state),
+            ipc_protocol = self,
+            state = state,
             dynamic = dynamic,
-            _legroom = _legroom,
+            legroom = legroom,
             api_id = api_id,
         )
             
@@ -536,7 +530,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
                 gaoclass = _Dispatchable,
                 ghid = ghid,
                 dispatch = self._dispatch,
-                ipc_core = self
+                ipc_protocol = self
             )
             
         # No CancelledError catch necessary because we're re-raising any exc
@@ -554,11 +548,11 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
                 obj.ghid,
                 obj.author,
                 obj.state,
-                False, # is_link is currently unsupported
+                False,      # is_link (currently unsupported)
                 obj.api_id,
-                None,
+                None,       # private
                 obj.dynamic,
-                None
+                None        # legroom
             )
         
     @update_obj.request_handler
@@ -566,14 +560,14 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         ''' Handles update object requests.
         '''
         logger.debug('Handling update request from ' + str(connection))
-        (address,
+        (ghid,
          author,    # Unused and set to None.
          state,
          is_link,
          api_id,    # Unused and set to None.
          private,   # TODO: use this.
          dynamic,   # Unused and set to None.
-         _legroom   # TODO: use this.
+         legroom   # TODO: use this.
          ) = self._unpack_object_def(body)
         
         if is_link:
@@ -582,11 +576,17 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             
         obj = await self._oracle.get_object(
             gaoclass = _Dispatchable,
-            ghid = address,
+            ghid = ghid,
             dispatch = self._dispatch,
-            ipc_core = self
+            ipc_protocol = self
         )
-        obj.update(state)
+        obj.state = state
+        
+        # Converting a private object to a public one
+        if self._dispatch.private_parent_lookup(ghid) and not private:
+            self._dispatch.make_public(ghid)
+            
+        await obj.push()
         
         await self._dispatch.schedule_update_distribution(
             obj.ghid,
@@ -627,14 +627,13 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         # Instead of forbidding unregistered apps from sharing objects,
         # go for it, but document that you will never be notified of a
         # share success or failure without an app token.
-        requesting_token = self._dispatch.which_token(connection)
+        requesting_token = self._dispatch.token_lookup(connection)
         if requesting_token is None:
             logger.info(
-                (
-                    'CONN {!s} is sharing {!s} with {!s} without defining ' +
-                    'an app token, and therefore cannot be notified of ' +
-                    'share success or failure.'
-                ).format(connection, ghid, recipient)
+                'CONN ' + str(connection) + ' is sharing ' + str(ghid) +
+                ' with ' + str(recipient) + ' without defining an app ' +
+                'token, and therefore cannot be notified of share success ' +
+                'or failure.'
             )
             
         await self._rolodex.share_object(ghid, recipient, requesting_token)
@@ -684,9 +683,9 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             gaoclass = _Dispatchable,
             ghid = ghid,
             dispatch = self._dispatch,
-            ipc_core = self
+            ipc_protocol = self
         )
-        frozen_address = obj.freeze()
+        frozen_address = await obj.freeze()
         
         return bytes(frozen_address)
         
@@ -708,9 +707,9 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             gaoclass = _Dispatchable,
             ghid = ghid,
             dispatch = self._dispatch,
-            ipc_core = self
+            ipc_protocol = self
         )
-        obj.hold()
+        await obj.hold()
         return b'\x01'
         
     @request(b'-O')
@@ -746,10 +745,13 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             gaoclass = _Dispatchable,
             ghid = ghid,
             dispatch = self._dispatch,
-            ipc_core = self
+            ipc_protocol = self
         )
         self._dispatch.untrack_object(connection, ghid)
-        obj.delete()
+        # TODO: shift to a dispatch.delete_object method that can ignore this
+        # connection when the intevitable "deleted that object!" warning comes
+        # back
+        await obj.delete()
         return b'\x01'
 
 
@@ -757,15 +759,9 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
                         error_codes=ERROR_CODES, default_version=b'\x00\x00'):
     ''' Defines the protocol for IPC, with handlers specific to clients.
     '''
-    
-    @public_api
-    def __init__(self, *args, **kwargs):
-        ''' Add intentionally invalid init to force assemblage.
-        '''
-        super().__init__(*args, **kwargs)
-        self._hgxlink = None
+    _hgxlink = weak_property('__hgxlink')
         
-    @__init__.fixture
+    @fixture_api
     def __init__(self, whoami, *args, **kwargs):
         ''' Create the fixture internals.
         '''
@@ -820,7 +816,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         
     def assemble(self, hgxlink):
         # Chicken, egg, etc.
-        self._hgxlink = weakref.proxy(hgxlink)
+        self._hgxlink = hgxlink
         
     @public_api
     @request(b'+T')

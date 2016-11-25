@@ -102,7 +102,7 @@ def clear_ghidcache(cache_dir):
 # ###############################################
     
     
-class _GenericPersisterTest:
+class _GenericRemoteTest:
     def dummy_callback_alice(self, subs_ghid, notify_ghid):
         # Note that we can't necessarily simply look for notify_ghid in the
         # vault, because for dynamic objects, the notify_ghid is the frame_ghid
@@ -379,7 +379,7 @@ class _GenericPersisterTest:
         
     
 @unittest.skip('Deprecated.')
-class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
+class WSPersisterTrashtest(unittest.TestCase, _GenericRemoteTest):
     @classmethod
     def setUpClass(cls):
         cls.aengel = Aengel()

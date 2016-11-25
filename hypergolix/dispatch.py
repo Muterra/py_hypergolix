@@ -47,9 +47,11 @@ import loopa
 from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
+from .hypothetical import fixture_noop
 
 from .gao import GAOCore
 
+from .utils import ApiID
 from .utils import WeakSetMap
 from .utils import call_coroutine_threadsafe
 from .utils import NoContext
@@ -126,8 +128,13 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
     
     TODO: support notification mechanism to push new objects to other
     concurrent hypergolix instances. See note in ipc.ipccore.send_object
+    
+    TODO: move most of the misc stuff into dedicated new_object and
+    get_object methods within dispatch, which (for the most part) just
+    pass on straight to the oracle, but add all of the extra tracking
+    stuff (and so on) internally.
     '''
-    _ipc_protocol_server = weak_property('__ipc_proto')
+    _ipc_protocol = weak_property('__ipc_protocol')
     
     @public_api
     def __init__(self, *args, **kwargs):
@@ -211,7 +218,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         
     def assemble(self, ipc_protocol_server):
         # Set up a weakref to the ipc system
-        self._ipc_protocol_server = ipc_protocol_server
+        self._ipc_protocol = ipc_protocol_server
         
     def bootstrap(self, all_tokens, startup_objs, private_by_ghid, token_lock,
                   incoming_shares, orphan_acks, orphan_naks):
@@ -269,6 +276,48 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         ''' Remove the async queues.
         '''
         self._dispatch_q = None
+            
+    @public_api
+    def token_lookup(self, connection):
+        ''' Return the token associated with the connection, or None if
+        there is no currently defined token.
+        '''
+        try:
+            return self._token_from_endpoint[connection]
+            
+        except KeyError as exc:
+            return None
+            
+    @public_api
+    def connection_lookup(self, token):
+        ''' Returns the current connection associated with the token, or
+        None if there is no currently available connection.
+        '''
+        try:
+            return self._endpoint_from_token[token]
+            
+        except KeyError as exc:
+            return None
+            
+    def private_parent_lookup(self, ghid):
+        ''' Returns the app_token parent for the passed ghid, if (and
+        only if) it's private. Otherwise, returns None.
+        '''
+        try:
+            return self._private_by_ghid[ghid]
+        except KeyError:
+            return None
+        
+    def make_public(self, ghid):
+        ''' Makes a private object public.
+        '''
+        try:
+            del self._private_by_ghid[ghid]
+            
+        except KeyError as exc:
+            raise ValueError(
+                'Obj w/ passed ghid is unknown or already public: ' + str(ghid)
+            ) from exc
         
     @public_api
     def add_api(self, connection, api_id):
@@ -283,16 +332,15 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         '''
         self._endpoints_from_api.discard(api_id, connection)
         
-    def new_token(self):
-        # Use a dummy api_id to force the while condition to be true initially
-        token = b'\x00\x00\x00\x00'
+    def _make_new_token(self):
+        token = None
         # Birthday paradox be damned; we can actually *enforce* uniqueness
-        while token in self._all_known_tokens:
+        while token is None or token in self._all_known_tokens:
             token = os.urandom(4)
         return token
         
     @public_api
-    def start_application(self, connection, token=None):
+    async def start_application(self, connection, token=None):
         ''' Ensures that an application is known to the dispatcher.
         
         Currently just checks within all known tokens. In the future,
@@ -301,8 +349,13 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         startup objects to the application.
         '''
         if token is None:
+            # Token lock is currently a NoContext, but eventually will need to
+            # be a distributed lock -- or, the token lookup needs to be made
+            # into a no-contention system. Which I'm not sure it possibly can
+            # be, since we're best off actually ENFORCING the "no birthday
+            # collisions" for tokens.
             with self._token_lock:
-                token = self.new_token()
+                token = self._make_new_token()
                 # Do this right away to prevent race condition
                 self._all_known_tokens.add(token)
             
@@ -316,7 +369,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         return token
         
     @start_application.fixture
-    def start_application(self, connection, token=None):
+    async def start_application(self, connection, token=None):
         if token is None:
             token = os.urandom(4)
         
@@ -327,28 +380,27 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         self._token_from_endpoint[connection] = token
         
         return token
-            
+    
+    @fixture_noop
     @public_api
     def track_object(self, connection, ghid):
         ''' Registers a connection as tracking a ghid.
+        
+        This is necessary so that upstream updates can be properly
+        dispatched to any applications with copies of the object.
         '''
         self._update_listeners.add(ghid, connection)
-        
-    @track_object.fixture
-    def track_object(self, connection, ghid):
-        ''' Don't do anything for this fixture.
-        '''
-        
+    
+    @fixture_noop
     @public_api
     def untrack_object(self, connection, ghid):
         ''' Remove a connection as tracking a ghid.
+        
+        This indicates an application no longer has a copy of the
+        object, therefore silencing any updates it would otherwise have
+        received.
         '''
         self._update_listeners.discard(ghid, connection)
-        
-    @untrack_object.fixture
-    def untrack_object(self, connection, ghid):
-        ''' Don't do anything for this fixture.
-        '''
         
     @public_api
     async def register_object(self, connection, ghid, private):
@@ -401,6 +453,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
                 )
                 self._private_by_ghid[ghid] = token
     
+    @fixture_noop
     @public_api
     async def schedule_share_distribution(self, ghid, origin, skip_conn=None):
         ''' Schedules a distribution of an object share.
@@ -410,16 +463,11 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
             self._distribute_update, ghid, origin, skip_conn
         ))
         
-    @schedule_share_distribution.fixture
-    async def schedule_share_distribution(self, *args, **kwargs):
-        # Do nothing.
-        pass
-        
     async def _distribute_share(self, ghid, origin, skip_conn):
         ''' Perform an actual share distribution.
         '''
         callsheet = set()
-        private_owner = self.get_parent_token(ghid)
+        private_owner = self.private_parent_lookup(ghid)
         
         # The object has a private owner, so we're exclusively going to it.
         if private_owner:
@@ -429,9 +477,8 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
                 )
             except KeyError:
                 logger.warning(
-                    'Connection unavailable for app token {!s}.'.format(
-                        private_owner
-                    )
+                    'Connection unavailable for app token ' +
+                    str(private_owner) + '.'
                 )
             
         # This is not a private object, so we're going to anyone who wants it
@@ -439,8 +486,8 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
             obj = await self._oracle.get_object(
                 gaoclass = _Dispatchable,
                 ghid = ghid,
-                dispatch = self._dispatch,
-                ipc_core = self
+                dispatch = self,
+                ipc_protocol = self._ipc_protocol
             )
             
             callsheet.update(
@@ -464,7 +511,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
             )
             
             await self._distribute(
-                self._ipc_protocol_server.share_obj,    # distr_coro
+                self._ipc_protocol.share_obj,    # distr_coro
                 callsheet,
                 ghid,
                 origin,
@@ -475,6 +522,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
             sharelog = _ShareLog(ghid, origin)
             self._orphan_incoming_shares.add(sharelog)
     
+    @fixture_noop
     @public_api
     async def schedule_update_distribution(self, ghid, deleted=False,
                                            skip_conn=None):
@@ -484,11 +532,6 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         await self._dispatch_q.put((
             self._distribute_update, ghid, deleted, skip_conn
         ))
-    
-    @schedule_update_distribution.fixture
-    async def schedule_update_distribution(self, *args, **kwargs):
-        # Do nothing for the fixture.
-        pass
         
     async def _distribute_update(self, ghid, deleted, skip_conn):
         ''' Perform an actual update distribution.
@@ -506,14 +549,14 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         
         if deleted:
             await self._distribute(
-                self._ipc_protocol_server.delete_obj,   # distr_coro
+                self._ipc_protocol.delete_obj,   # distr_coro
                 callsheet,
                 ghid
             )
             
         else:
             await self._distribute(
-                self._ipc_protocol_server.update_obj,   # distr_coro
+                self._ipc_protocol.update_obj,   # distr_coro
                 callsheet,
                 ghid
             )
@@ -544,7 +587,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         
         # Distribute the share failure to all apps that requested its delivery
         await self._distribute(
-            self._ipc_protocol_server.notify_share_success,   # distr_coro
+            self._ipc_protocol.notify_share_success,   # distr_coro
             callsheet,
             ghid,
             recipient
@@ -576,7 +619,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
         
         # Distribute the share failure to all apps that requested its delivery
         await self._distribute(
-            self._ipc_protocol_server.notify_share_failure,   # distr_coro
+            self._ipc_protocol.notify_share_failure,   # distr_coro
             callsheet,
             ghid,
             recipient
@@ -622,29 +665,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
                 )
             
     @public_api
-    def which_token(self, connection):
-        ''' Return the token associated with the connection, or None if
-        there is no currently defined token.
-        '''
-        try:
-            return self._token_from_endpoint[connection]
-            
-        except KeyError as exc:
-            return None
-            
-    @public_api
-    def which_connection(self, token):
-        ''' Returns the current connection associated with the token, or
-        None if there is no currently available connection.
-        '''
-        try:
-            return self._endpoint_from_token[token]
-            
-        except KeyError as exc:
-            return None
-            
-    @public_api
-    def register_startup(self, connection, ghid):
+    async def register_startup(self, connection, ghid):
         ''' Registers a ghid to be used as a startup object for token.
         '''
         try:
@@ -665,7 +686,7 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
                 self._startup_by_token[token] = ghid
                 
     @public_api
-    def deregister_startup(self, connection):
+    async def deregister_startup(self, connection):
         ''' Deregisters a ghid to be used as a startup object for token.
         '''
         try:
@@ -685,41 +706,21 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
                 del self._startup_by_token[token]
     
     @public_api
-    def get_startup_obj(self, token):
+    async def get_startup_obj(self, token):
         ''' Returns the ghid of the declared startup object for that
         token, or None if none has been declared.
         '''
-        with self._token_lock:
-            if token not in self._all_known_tokens:
-                raise UnknownToken()
-            elif token not in self._startup_by_token:
-                return None
-            else:
-                return self._startup_by_token[token]
+        if token not in self._all_known_tokens:
+            raise UnknownToken()
         
-    def make_public(self, ghid):
-        ''' Makes a private object public.
-        '''
-        try:
-            del self._private_by_ghid[ghid]
-            
-        except KeyError as exc:
-            raise ValueError(
-                'Obj w/ passed ghid is unknown or already public: ' + str(ghid)
-            ) from exc
-            
-    def get_parent_token(self, ghid):
-        ''' Returns the app_token parent for the passed ghid, if (and
-        only if) it's private. Otherwise, returns None.
-        '''
-        try:
-            return self._private_by_ghid[ghid]
-        except KeyError:
-            logger.debug(str(ghid) + ' has no parent token.')
+        elif token not in self._startup_by_token:
             return None
+        
+        else:
+            return self._startup_by_token[token]
             
             
-class _Dispatchable(GAOCore):
+class _Dispatchable(GAOCore, metaclass=API):
     ''' A dispatchable object. Note that privacy is store within the
     dispatcher itself, and not within the individual dispatchables.
     '''
@@ -735,12 +736,19 @@ class _Dispatchable(GAOCore):
         
         self.state = state
         self.api_id = api_id
-        
+    
+    @public_api
     async def _pull(self):
         ''' Extend GAOCore._pull() to notify IPC about updates.
         '''
         await super()._pull()
         await self._dispatch.schedule_update_distribution(self.ghid)
+        
+    @_pull.fixture
+    async def _pull(self):
+        ''' Call super() to FIXTURE super instead of dispatchable.
+        '''
+        await super(_Dispatchable, self)._pull()
         
     async def pack_gao(self):
         ''' Packs state into a bytes object. May be overwritten in subs
@@ -748,7 +756,7 @@ class _Dispatchable(GAOCore):
         classmethod.
         '''
         version = b'\x00'
-        return b'hgxd' + version + self.api_id + self.state
+        return b'hgxd' + version + bytes(self.api_id) + self.state
         
     async def unpack_gao(self, packed):
         ''' Unpacks state from a bytes object. May be overwritten in
@@ -757,7 +765,7 @@ class _Dispatchable(GAOCore):
         '''
         magic = packed[0:4]
         version = packed[4:5]
-        api_id = packed[5:70]
+        api_id = ApiID.from_bytes(packed[5:70])
         
         if magic != b'hgxd':
             raise DispatchError('Object does not appear to be dispatchable.')
@@ -769,7 +777,9 @@ class _Dispatchable(GAOCore):
             raise DispatchError('Cannot change API ID.')
             
         self.state = packed[70:]
-        
+    
+    @fixture_noop
+    @public_api
     async def apply_delete(self, debinding):
         ''' Extend GAOCore.apply_delete to notify consumers of deletion.
         '''
