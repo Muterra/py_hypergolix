@@ -47,6 +47,18 @@ from golix._getlow import GIDC
 
 from hypergolix.librarian import LibrarianCore
 from hypergolix.postal import PostalCore
+from hypergolix.postal import PostOffice
+from hypergolix.postal import MrPostman
+
+from hypergolix.core import GolixCore
+from hypergolix.rolodex import Rolodex
+from hypergolix.core import Oracle
+from hypergolix.remotes import Salmonator
+from hypergolix.remotes import RemotePersistenceProtocol
+from hypergolix.dispatch import _Dispatchable
+
+from hypergolix.persistence import Enforcer
+from hypergolix.persistence import PersistenceCore
 
 from hypergolix.persistence import _GidcLite
 from hypergolix.persistence import _GeocLite
@@ -57,6 +69,8 @@ from hypergolix.persistence import _GarqLite
 
 from hypergolix.exceptions import InvalidIdentity
 from hypergolix.exceptions import InconsistentAuthor
+
+from hypergolix.utils import ApiID
 
 
 # ###############################################
@@ -452,6 +466,156 @@ class PostalSchedulingTest(unittest.TestCase):
         self.assertTrue(len(scheduled) == 1)
         notification = scheduled.pop()
         self.assertEqual(notification, (req1.recipient, req1.ghid, None))
+        
+        
+class MrPostmanTest(unittest.TestCase):
+    ''' Test postman for local persistence systems.
+    '''
+    
+    @classmethod
+    def setUpClass(cls):
+        cls.nooploop = NoopLoop(
+            debug = True,
+            threaded = True
+        )
+        cls.nooploop.start()
+        
+    @classmethod
+    def tearDownClass(cls):
+        # Kill the running loop.
+        cls.nooploop.stop_threadsafe_nowait()
+    
+    def setUp(self):
+        ''' Do a per-test fresh init of the undertaker, as well as the
+        fixtures for both librarian and postman.
+        '''
+        # First prep fixtures
+        self.librarian = LibrarianCore.__fixture__()
+        self.rolodex = Rolodex.__fixture__()
+        self.golcore = GolixCore.__fixture__(TEST_AGENT1)
+        self.oracle = Oracle.__fixture__()
+        self.salmonator = Salmonator.__fixture__()
+        
+        self.postman = MrPostman()
+        self.postman.assemble(self.golcore, self.oracle, self.librarian,
+                              self.rolodex, self.salmonator)
+        
+        # Manually call loop init to create _scheduled
+        await_coroutine_threadsafe(
+            coro = self.postman.loop_init(),
+            loop = self.nooploop._loop
+        )
+        
+    def test_delivery(self):
+        ''' Test specialized delivery.
+        '''
+        await_coroutine_threadsafe(
+            coro = self.postman._deliver(
+                subscription = make_random_ghid(),
+                notification = make_random_ghid(),
+                skip_conn = None
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.postman._deliver(
+                subscription = self.golcore.whoami,
+                notification = make_random_ghid(),
+                skip_conn = None
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        seed_state = bytes([random.randint(0, 255) for i in range(0, 20)])
+        obj = _Dispatchable.__fixture__(
+            ghid = make_random_ghid(),
+            dynamic = True,
+            author = self.golcore.whoami,
+            legroom = 7,
+            api_id = ApiID(bytes(64)),
+            state = seed_state,
+            dispatch = self,
+            ipc_protocol = self,    # Well, we can't use None because weakref.
+            golcore = self.golcore,
+            ghidproxy = self,       # Ditto...
+            privateer = self,       # Ditto...
+            percore = self,         # Ditto...
+            librarian = self        # Ditto...
+        )
+        self.oracle.add_object(obj.ghid, obj)
+        
+        await_coroutine_threadsafe(
+            coro = self.postman._deliver(
+                subscription = obj.ghid,
+                notification = make_random_ghid(),
+                skip_conn = None
+            ),
+            loop = self.nooploop._loop
+        )
+    
+    
+class PostOfficeTest(unittest.TestCase):
+    ''' Test postman for server persistence systems.
+    '''
+    
+    @classmethod
+    def setUpClass(cls):
+        cls.nooploop = NoopLoop(
+            debug = True,
+            threaded = True
+        )
+        cls.nooploop.start()
+        
+    @classmethod
+    def tearDownClass(cls):
+        # Kill the running loop.
+        cls.nooploop.stop_threadsafe_nowait()
+    
+    def setUp(self):
+        ''' Do a per-test fresh init of the undertaker, as well as the
+        fixtures for both librarian and postman.
+        '''
+        # First prep fixtures
+        self.librarian = LibrarianCore.__fixture__()
+        self.remoter = RemotePersistenceProtocol.__fixture__()
+        
+        self.postman = PostOffice()
+        self.postman.assemble(self.librarian, self.remoter)
+        
+        # Manually call loop init to create _scheduled
+        await_coroutine_threadsafe(
+            coro = self.postman.loop_init(),
+            loop = self.nooploop._loop
+        )
+        
+    def test_delivery(self):
+        ''' Test specialized delivery.
+        '''
+        await_coroutine_threadsafe(
+            coro = self.postman._deliver(
+                subscription = make_random_ghid(),
+                notification = make_random_ghid(),
+                skip_conn = None
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        # Now add in some "connections". They needn't be anything special,
+        # because the remoter fixture is a noop. Well, though, they do need to
+        # be weakref-able. So, use the object *class*
+        sub = make_random_ghid()
+        self.postman._connections.add(sub, object)
+        self.postman._connections.add(sub, object)
+        
+        await_coroutine_threadsafe(
+            coro = self.postman._deliver(
+                subscription = sub,
+                notification = make_random_ghid(),
+                skip_conn = None
+            ),
+            loop = self.nooploop._loop
+        )
 
 
 if __name__ == "__main__":

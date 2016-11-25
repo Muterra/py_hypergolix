@@ -302,26 +302,22 @@ class MrPostman(PostalCore):
     run if there's a new object there. So, by definition, any re-sent
     objects will be DOA.
     '''
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._rolodex = None
-        self._golcore = None
-        self._oracle = None
-        self._salmonator = None
+    _rolodex = weak_property('__rolodex')
+    _golcore = weak_property('__golcore')
+    _oracle = weak_property('__oracle')
+    _salmonator = weak_property('__salmonator')
         
-    def assemble(self, golcore, oracle, librarian, bookie, rolodex,
-                 salmonator):
-        super().assemble(librarian, bookie)
-        self._golcore = weakref.proxy(golcore)
-        self._rolodex = weakref.proxy(rolodex)
-        self._oracle = weakref.proxy(oracle)
-        self._salmonator = weakref.proxy(salmonator)
+    def assemble(self, golcore, oracle, librarian, rolodex, salmonator):
+        super().assemble(librarian)
+        self._golcore = golcore
+        self._rolodex = rolodex
+        self._oracle = oracle
+        self._salmonator = salmonator
             
     async def _deliver(self, subscription, notification, skip_conn):
         ''' Do the actual subscription update.
         
-        NOTE THAT SKIP_CONN is a weakref.ref.
+        NOTE THAT SKIP_CONN is a weakref.ref (or None).
         '''
         # We just got a garq for our identity. Rolodex handles these.
         if subscription == self._golcore.whoami:
@@ -354,7 +350,7 @@ class MrPostman(PostalCore):
                 str(notification)
                 
             )))
-            self._salmonator.deregister(subscription)
+            await self._salmonator.deregister(subscription)
         
         
 class PostOffice(PostalCore):

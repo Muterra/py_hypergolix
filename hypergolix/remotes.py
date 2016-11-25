@@ -145,12 +145,20 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
         self._postman = postman
         self._librarian = librarian
     
+    @public_api
     @request(b'!!')
     async def subscription_update(self, connection, subscription_ghid,
                                   notification_ghid):
         ''' Send a subscription update to the connection.
         '''
         return bytes(subscription_ghid) + bytes(notification_ghid)
+        
+    @subscription_update.fixture
+    async def subscription_update(self, connection, subscription_ghid,
+                                  notification_ghid):
+        ''' Make a manual no-op fixture, since inspect signatures
+        apparently don't from_callable on a descriptor... (grrr)
+        '''
         
     @subscription_update.request_handler
     async def subscription_update(self, connection, body):

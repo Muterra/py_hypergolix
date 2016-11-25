@@ -431,6 +431,12 @@ class GAOCore(metaclass=API):
             
         else:
             raise TypeError('Static objects cannot be updated.')
+            
+    @push.fixture
+    async def push(self):
+        ''' For fixture, just pass to _push directly.
+        '''
+        await self._push()
     
     @public_api
     async def _push(self):
@@ -576,6 +582,12 @@ class GAOCore(metaclass=API):
             
         else:
             raise TypeError('Static objects cannot be pulled.')
+            
+    @pull.fixture
+    async def pull(self, notification):
+        ''' For the fixture, just pass to _pull directly.
+        '''
+        await self._pull()
     
     @public_api
     async def _pull(self):

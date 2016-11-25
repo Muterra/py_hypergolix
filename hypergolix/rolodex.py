@@ -224,7 +224,9 @@ class Rolodex(metaclass=API):
             packed = request.packed,
             remotable = True
         )
-        
+    
+    @fixture_noop
+    @public_api
     async def notification_handler(self, subscription, notification):
         ''' Callback to handle any requests.
         '''
