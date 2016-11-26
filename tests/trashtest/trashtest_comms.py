@@ -148,6 +148,34 @@ class TestParrot(metaclass=RequestResponseProtocol, error_codes=ERROR_LOOKUP):
     async def make_death(self, connection, body):
         raise RuntimeError()
         
+    @request(b'N1')
+    async def make_nest_1(self, connection, counter):
+        ''' Nest commands.
+        '''
+        return counter.to_bytes(length=4, byteorder='big')
+        
+    @make_nest_1.request_handler
+    async def make_nest_1(self, connection, body):
+        await self.make_nest_2(connection, body)
+        return body
+        
+    @make_nest_1.response_handler
+    async def make_nest_1(self, connection, response, exc):
+        if exc is not None:
+            raise exc
+            
+        return int.from_bytes(response, byteorder='big')
+        
+    @request(b'N2')
+    async def make_nest_2(self, connection, packed_counter):
+        return packed_counter
+        
+    @make_nest_2.request_handler
+    async def make_nest_2(self, connection, body):
+        counter = int.from_bytes(body, byteorder='big')
+        self.nested_counter = counter
+        return body
+        
     def check_result(self, timeout=1):
         result_available = self.flag.wait(timeout=timeout)
         self.flag.clear()
@@ -328,6 +356,16 @@ class WSBasicTrashTest(unittest.TestCase):
                 loop = self.server_commander._loop
             )
             self.assertEqual(msg, self.server_protocol.check_result())
+            
+    def test_nest(self):
+        counter = random.randint(0, 255)
+        
+        result = await_coroutine_threadsafe(
+            coro = self.client1.make_nest_1(counter, timeout=1),
+            loop = self.client1_commander._loop
+        )
+        self.assertEqual(self.server_protocol.nested_counter, counter)
+        self.assertEqual(result, counter)
             
     def test_failures(self):
         # This kind of failure has a specific error defined

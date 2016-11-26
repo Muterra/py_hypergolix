@@ -127,8 +127,8 @@ def autoconfig(tofile=True, logdirname='logs', loglevel='warning', prefix='',
         'info': logging.INFO,
         'warning': logging.WARNING,
         'error': logging.ERROR,
-        'shouty': logging.ERROR,
-        'extreme': logging.ERROR
+        'shouty': logging.DEBUG,
+        'extreme': logging.DEBUG
     }
     try:
         log_setpoint = loglevel_enum[loglevel]

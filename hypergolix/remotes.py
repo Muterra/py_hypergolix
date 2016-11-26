@@ -47,6 +47,7 @@ RemoteNak status code conventions:
 '''
 
 # Global dependencies
+import logging
 import weakref
 import concurrent.futures
 import threading
@@ -101,7 +102,6 @@ from .comms import ConnectionManager
 # ###############################################
 
 
-import logging
 logger = logging.getLogger(__name__)
 
 # Control * imports.
@@ -128,8 +128,8 @@ ERROR_CODES = {
     b'\x00\x09': IllegalDynamicFrame,
     b'\xFF\xFF': RemoteNak,
 }
-        
-        
+
+
 class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
                                 error_codes=ERROR_CODES,
                                 default_version=b'\x00\x00'):
@@ -144,38 +144,6 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
         self._percore = percore
         self._postman = postman
         self._librarian = librarian
-    
-    @public_api
-    @request(b'!!')
-    async def subscription_update(self, connection, subscription_ghid,
-                                  notification_ghid):
-        ''' Send a subscription update to the connection.
-        '''
-        return bytes(subscription_ghid) + bytes(notification_ghid)
-        
-    @subscription_update.fixture
-    async def subscription_update(self, connection, subscription_ghid,
-                                  notification_ghid):
-        ''' Make a manual no-op fixture, since inspect signatures
-        apparently don't from_callable on a descriptor... (grrr)
-        '''
-        
-    @subscription_update.request_handler
-    async def subscription_update(self, connection, body):
-        ''' Handles an incoming subscription update.
-        '''
-        subscribed_ghid = Ghid.from_bytes(body[0:65])
-        notification_ghid = Ghid.from_bytes(body[65:130])
-        
-        packed = await self.get(connection, notification_ghid)
-        # Note that this handles postman scheduling as well.
-        await self._percore.ingest(
-            packed,
-            remotable = False,
-            skip_conn = connection
-        )
-        
-        return b'\x01'
         
     @request(b'??')
     async def ping(self, connection):
@@ -186,7 +154,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
     @ping.request_handler
     async def ping(self, connection, body):
         # Really not much to see here.
-        return '\x01'
+        return b'\x01'
         
     @ping.response_handler
     async def ping(self, connection, response, exc):
@@ -197,10 +165,10 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
             return False
             
     @request(b'PB')
-    async def publish(self, connection, obj):
+    async def publish(self, connection, packed):
         ''' Publish a packed Golix object.
         '''
-        return obj
+        return packed
         
     @publish.request_handler
     async def publish(self, connection, body):
@@ -259,15 +227,6 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
         await self._postman.subscribe(connection, ghid)
         return b'\x01'
         
-    @subscribe.response_handler
-    async def subscribe(self, connection, response, exc):
-        ''' Handle responses to subscription requests.
-        '''
-        if exc is not None:
-            raise exc
-        
-        return True
-        
     @request(b'-S')
     async def unsubscribe(self, connection, ghid):
         ''' Unsubscribe from updates at a remote.
@@ -298,6 +257,38 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
         # For now, ignore (success & UNsub) vs (success & NOsub)
         else:
             return True
+    
+    @public_api
+    @request(b'!!')
+    async def subscription_update(self, connection, subscription_ghid,
+                                  notification_ghid):
+        ''' Send a subscription update to the connection.
+        '''
+        return bytes(subscription_ghid) + bytes(notification_ghid)
+        
+    @subscription_update.fixture
+    async def subscription_update(self, connection, subscription_ghid,
+                                  notification_ghid):
+        ''' Make a manual no-op fixture, since inspect signatures
+        apparently don't from_callable on a descriptor... (grrr)
+        '''
+        
+    @subscription_update.request_handler
+    async def subscription_update(self, connection, body):
+        ''' Handles an incoming subscription update.
+        '''
+        # subscribed_ghid = Ghid.from_bytes(body[0:65])
+        notification_ghid = Ghid.from_bytes(body[65:130])
+        
+        packed = await self.get(connection, notification_ghid)
+        # Note that this handles postman scheduling as well.
+        await self._percore.ingest(
+            packed,
+            remotable = False,
+            skip_conn = connection
+        )
+        
+        return b'\x01'
         
     @request(b'?S')
     async def query_subscriptions(self, connection):

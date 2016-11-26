@@ -200,6 +200,8 @@ class _ConnectionBase(metaclass=abc.ABCMeta):
             raise
             
         else:
+            logger.debug('CONN ' + str(self) + ' message received.')
+            
             try:
                 # When we pass to the receiver, make sure we give them a strong
                 # reference, so hashing and stuff continues to work.
@@ -308,9 +310,10 @@ class WSConnection(_ConnectionBase):
         try:
             await server.wait_closed()
             
-        except asyncio.CancelledError:
+        except Exception:
             server.close()
             await server.wait_closed()
+            raise
         
     @classmethod
     async def new(cls, host, port, tls):
@@ -346,8 +349,12 @@ class WSConnection(_ConnectionBase):
         # If the connection is closed, call our own close (and therefore
         # self-destruct)
         except websockets.exceptions.ConnectionClosed as exc:
-            await self.close()
-            raise ConnectionClosed() from exc
+            try:
+                # await self.close()
+                raise ConnectionClosed() from exc
+                
+            finally:
+                self.terminate()
         
     async def recv(self):
         ''' Receive from the same event loop as the websocket.
@@ -358,8 +365,12 @@ class WSConnection(_ConnectionBase):
         # If the connection is closed, call our own close (and therefore
         # self-destruct)
         except websockets.exceptions.ConnectionClosed as exc:
-            await self.close()
-            raise ConnectionClosed() from exc
+            try:
+                # await self.close()
+                raise ConnectionClosed() from exc
+                
+            finally:
+                self.terminate()
     
     
 class MsgBuffer(loopa.TaskLooper):
@@ -574,7 +585,7 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
         '''
         # Wait for the connection to be available.
         method = getattr(self.protocol_def, request_name)
-        await self._conn_available.wait()
+        await self.await_connection()
         return (await method(self._connection, *args, **kwargs))
     
     @loopa.utils.triplicated
@@ -897,6 +908,14 @@ class _ReqResMixin:
             await self._responses[connection][token].put(response)
         except KeyError:
             logger.warning(msg_id + ' token unknown.')
+        except Exception:
+            logger.error(
+                msg_id + ' FAILED TO AWAKEN SENDER:\n' +
+                traceback.format_exc()
+            )
+            raise
+        else:
+            logger.debug(msg_id + ' sender awoken.')
         
     async def packit(self, code, token, body):
         ''' Serialize a message.
@@ -1007,7 +1026,7 @@ class _ReqResMixin:
         
         else:
             logger.info(
-                req_id + ' successfully completed.'
+                req_id + ' completed.'
             )
         
     def _pack_failure(self, exc):
@@ -1085,6 +1104,11 @@ class _ReqResMixin:
         # Note that this will automatically ensure we have a self._responses
         # key, so we don't need to call _ensure_responseable later.
         token = self._new_request_token(connection)
+        # Make a message ID for brevity later
+        msg_id = 'CONN ' + str(connection) + ' REQ ' + str(token)
+        # First log entry into wrap requestor.
+        logger.info(msg_id + ' starting request ' + str(code))
+        
         # Note the use of an explicit self!
         body = await requestor(self, connection, *args, **kwargs)
         # Pack the request
@@ -1099,6 +1123,7 @@ class _ReqResMixin:
             # time the duration of the request.
             start = time.monotonic()
             await connection.send(request)
+            logger.debug(msg_id + ' sent. Awaiting response.')
             
             # Wait for the response
             response, exc = await asyncio.wait_for(waiter.get(), timeout)
@@ -1142,6 +1167,8 @@ class _ReqResMixin:
                 return response
                 
         finally:
+            # Log exit from wrap requestor.
+            logger.info(msg_id + ' exiting request ' + str(code))
             del waiter
             del self._responses[connection][token]
             

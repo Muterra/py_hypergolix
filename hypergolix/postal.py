@@ -293,7 +293,7 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
         pass
 
 
-class MrPostman(PostalCore):
+class MrPostman(PostalCore, metaclass=API):
     ''' Postman to use for LOCAL persistence systems -- ie ones that
     have logins and do not support subsription.
     
@@ -353,7 +353,7 @@ class MrPostman(PostalCore):
             await self._salmonator.deregister(subscription)
         
         
-class PostOffice(PostalCore):
+class PostOffice(PostalCore, metaclass=API):
     ''' Postman to use for remote persistence servers.
     '''
     _remoter = weak_property('__remoter')
@@ -368,7 +368,9 @@ class PostOffice(PostalCore):
     def assemble(self, librarian, remoter):
         super().assemble(librarian)
         self._remoter = remoter
-        
+    
+    @fixture_noop
+    @public_api
     async def subscribe(self, connection, ghid):
         ''' Tells the postman that the connection would like to be
         updated about ghid.
@@ -382,7 +384,9 @@ class PostOffice(PostalCore):
         for existing_mail in self._librarian.recipient_status(ghid):
             obj = await self._librarian.summarize(existing_mail)
             await self.schedule(obj)
-            
+    
+    @fixture_noop
+    @public_api
     async def unsubscribe(self, connection, ghid):
         ''' Remove the callback for ghid. Indempotent; will never raise
         a keyerror.
@@ -421,11 +425,15 @@ class PostOffice(PostalCore):
                     notification
                 )
     
+    @fixture_return(frozenset())
+    @public_api
     async def list_subs(self, connection):
         ''' List all subscriptions for the connection.
         '''
         return self._subscriptions.get_any(connection)
-                
+    
+    @fixture_noop
+    @public_api
     async def clear_subs(self, connection):
         ''' Clear all subscriptions for the connection.
         '''

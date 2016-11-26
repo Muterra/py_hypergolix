@@ -501,7 +501,9 @@ class PersistenceCore(metaclass=API):
             await super(PersistenceCore.__fixture__, self).attempt_load(packed)
         del doorman
         return result
-        
+    
+    @fixture_noop
+    @public_api
     async def ingest(self, packed, remotable=True, skip_conn=None):
         ''' Called on an untrusted and unknown object. May be bypassed
         by locally-created, trusted objects (by calling the individual
