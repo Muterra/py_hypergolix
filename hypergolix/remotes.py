@@ -264,7 +264,8 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
                                   notification_ghid):
         ''' Send a subscription update to the connection.
         '''
-        return bytes(subscription_ghid) + bytes(notification_ghid)
+        payload = await self._librarian.retrieve(notification_ghid)
+        return bytes(subscription_ghid) + payload
         
     @subscription_update.fixture
     async def subscription_update(self, connection, subscription_ghid,
@@ -278,12 +279,11 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
         ''' Handles an incoming subscription update.
         '''
         # subscribed_ghid = Ghid.from_bytes(body[0:65])
-        notification_ghid = Ghid.from_bytes(body[65:130])
+        notification = body[65:]
         
-        packed = await self.get(connection, notification_ghid)
         # Note that this handles postman scheduling as well.
         await self._percore.ingest(
-            packed,
+            notification,
             remotable = False,
             skip_conn = connection
         )

@@ -356,7 +356,8 @@ class WSBasicTrashTest(unittest.TestCase):
                 loop = self.server_commander._loop
             )
             self.assertEqual(msg, self.server_protocol.check_result())
-            
+    
+    @unittest.skip('DNX')
     def test_nest(self):
         counter = random.randint(0, 255)
         
