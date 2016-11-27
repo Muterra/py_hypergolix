@@ -298,7 +298,7 @@ class PostalSchedulingTest(unittest.TestCase):
         ''' Test geoc operations.
         '''
         await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1),
+            coro = self.librarian.store(obj1, cont1_1.packed),
             loop = self.nooploop._loop
         )
         
@@ -334,7 +334,7 @@ class PostalSchedulingTest(unittest.TestCase):
         ''' Test gobs operations.
         '''
         await_coroutine_threadsafe(
-            coro = self.librarian.store(sbind1, bind1_1),
+            coro = self.librarian.store(sbind1, bind1_1.packed),
             loop = self.nooploop._loop
         )
         
@@ -355,11 +355,11 @@ class PostalSchedulingTest(unittest.TestCase):
         '''
         # Prep with dynamic binding and debinding
         await_coroutine_threadsafe(
-            coro = self.librarian.store(dbind1a, dyn1_1a),
+            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1d, dyndebind1_1),
+            coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
             loop = self.nooploop._loop
         )
         
@@ -392,7 +392,7 @@ class PostalSchedulingTest(unittest.TestCase):
         
         # Finally, test with normal (non-delete), and existant object
         await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1),
+            coro = self.librarian.store(obj1, cont1_1.packed),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
@@ -412,7 +412,7 @@ class PostalSchedulingTest(unittest.TestCase):
         ''' Test gdxx operations.
         '''
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1, debind1_1),
+            coro = self.librarian.store(xbind1, debind1_1.packed),
             loop = self.nooploop._loop
         )
         
@@ -433,11 +433,11 @@ class PostalSchedulingTest(unittest.TestCase):
         '''
         # Prep with dynamic binding and debinding
         await_coroutine_threadsafe(
-            coro = self.librarian.store(req1, handshake1_1),
+            coro = self.librarian.store(req1, handshake1_1.packed),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1R, debindR_1),
+            coro = self.librarian.store(xbind1R, debindR_1.packed),
             loop = self.nooploop._loop
         )
         

@@ -34,15 +34,18 @@ hypergolix: A python Golix client.
 '''
 
 import unittest
+import logging
 import queue
 import random
 import inspect
 import asyncio
 
 from loopa import TaskLooper
+from loopa import NoopLoop
 from loopa.utils import await_coroutine_threadsafe
 
 from hypergolix.gao import GAO
+from hypergolix.gao import GAOCore
 
 from hypergolix.persistence import PersistenceCore
 from hypergolix.persistence import Bookie
@@ -50,6 +53,13 @@ from hypergolix.core import GolixCore
 from hypergolix.core import GhidProxier
 from hypergolix.privateer import Privateer
 from hypergolix.librarian import LibrarianCore
+
+from hypergolix.persistence import _GidcLite
+from hypergolix.persistence import _GeocLite
+from hypergolix.persistence import _GobsLite
+from hypergolix.persistence import _GobdLite
+from hypergolix.persistence import _GdxxLite
+from hypergolix.persistence import _GarqLite
 
 
 # ###############################################
@@ -61,138 +71,575 @@ from _fixtures.ghidutils import make_random_ghid
 from _fixtures.identities import TEST_AGENT1
 from _fixtures.identities import TEST_AGENT2
 
+from golix._getlow import GIDC
+from _fixtures.remote_exchanges import gidc1
+from _fixtures.remote_exchanges import secret1_1
+from _fixtures.remote_exchanges import secret1_2
+from _fixtures.remote_exchanges import cont1_1
+from _fixtures.remote_exchanges import cont1_2
+from _fixtures.remote_exchanges import bind1_1
+from _fixtures.remote_exchanges import dyn1_1a
+from _fixtures.remote_exchanges import dyn1_1b
+from _fixtures.remote_exchanges import debind1_1
+from _fixtures.remote_exchanges import dyndebind1_1
+
+logger = logging.getLogger(__name__)
+
+gidclite1 = _GidcLite.from_golix(GIDC.unpack(gidc1))
+obj1 = _GeocLite.from_golix(cont1_1)
+obj2 = _GeocLite.from_golix(cont1_2)
+sbind1 = _GobsLite.from_golix(bind1_1)
+dbind1a = _GobdLite.from_golix(dyn1_1a)
+dbind1b = _GobdLite.from_golix(dyn1_1b)
+xbind1 = _GdxxLite.from_golix(debind1_1)
+xbind1d = _GdxxLite.from_golix(dyndebind1_1)
+
+
+async def make_gao(ghid, dynamic, author, legroom, *args, state, golcore,
+                   ghidproxy, privateer, percore, librarian,
+                   master_secret=None, **kwargs):
+    ''' Called to init a GAO within the loop such that the correct loop
+    is used for the internal asyncio primitives.
+    '''
+    return GAO(ghid, dynamic, author, legroom, *args, state=state,
+               golcore=golcore, ghidproxy=ghidproxy, privateer=privateer,
+               percore=percore, librarian=librarian,
+               master_secret=master_secret, **kwargs)
+
 
 # ###############################################
 # Testing
 # ###############################################
 
-        
-@unittest.skip('Unfinished.')
+
 class GAOTest(unittest.TestCase):
+    ''' Test the standard GAO.
+    '''
+    
+    @classmethod
+    def setUpClass(cls):
+        cls.nooploop = NoopLoop(
+            debug = True,
+            threaded = True
+        )
+        cls.nooploop.start()
+        
+    @classmethod
+    def tearDownClass(cls):
+        # Kill the running loop.
+        cls.nooploop.stop_threadsafe_nowait()
+        
     def setUp(self):
         # These are directly required by the GAO
-        self.golcore = GolixCore.__fixture__(TEST_AGENT1)
-        self.ghidproxy = GhidProxier.__fixture__()
-        self.privateer = Privateer.__fixture__()
-        self.percore = PersistenceCore.__fixture__()
-        self.bookie = Bookie.__fixture__()
         self.librarian = LibrarianCore.__fixture__()
+        self.golcore = GolixCore.__fixture__(TEST_AGENT1,
+                                             librarian=self.librarian)
+        self.ghidproxy = GhidProxier.__fixture__()
+        self.privateer = Privateer.__fixture__(TEST_AGENT1)
+        self.percore = PersistenceCore.__fixture__()
         
-        # These are a mix of "necessary" and "unnecessary if well-fixtured"
-        self.golcore.assemble(self.librarian)
-        self.ghidproxy.assemble(self.librarian, self.salmonator)
-        self.oracle.assemble(self.golcore, self.ghidproxy, self.privateer, 
-                            self.percore, self.bookie, self.librarian, 
-                            self.postman, self.salmonator)
-        self.privateer.assemble(self.golcore, self.ghidproxy, self.oracle)
-        self.percore.assemble(self.doorman, self.enforcer, self.lawyer, 
-                            self.bookie, self.librarian, self.postman, 
-                            self.undertaker, self.salmonator)
-        self.doorman.assemble(self.librarian)
-        self.enforcer.assemble(self.librarian)
-        self.lawyer.assemble(self.librarian)
-        self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
-        self.librarian.assemble(self.percore)
-        self.postman.assemble(self.golcore, self.librarian, self.bookie,
-                            self.rolodex)
-        self.undertaker.assemble(self.librarian, self.bookie, self.postman)
-        
-        # These are both "who-knows-if-necessary-when-fixtured"
-        credential = MockCredential(self.privateer, TEST_AGENT1)
-        self.golcore.bootstrap(credential)
-        self.privateer.prep_bootstrap()
-        # Just do this manually.
-        self.privateer._credential = credential
-        # self.privateer.bootstrap(
-        #     persistent_secrets = {}, 
-        #     staged_secrets = {},
-        #     chains = {}
-        # )
-        self.percore.ingest(TEST_AGENT1.second_party.packed)
-        
-    def test_source(self):
-        ''' These tests are alone-ish and can definitely be wholly 
-        fixtured
+    def test_make(self):
+        ''' Test making a GAO.
         '''
-        # Test a static object being created
-        obj_static = _GAO(self.golcore, self.ghidproxy, self.privateer, 
-                        self.percore, self.bookie, self.librarian, False)
-        msg1 = b'hello stagnant world'
-        obj_static.apply_state(msg1)
-        obj_static.push()
-        self.assertTrue(obj_static.ghid)
-        self.assertEqual(obj_static.extract_state(), msg1)
-        self.assertIn(obj_static.ghid, self.privateer)
-        self.assertIn(obj_static.ghid, self.librarian)
+        GAO1 = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = None,
+                dynamic = None,
+                author = None,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
+        self.assertTrue(isinstance(GAO1, GAOCore))
         
-        # Now test a dynamic object being created
-        obj_dyn = _GAO(self.golcore, self.ghidproxy, self.privateer, 
-                        self.percore, self.bookie, self.librarian, True)
-        msg2 = b'hello mutable world'
-        obj_dyn.apply_state(msg2)
-        obj_dyn.push()
-        self.assertTrue(obj_dyn.ghid)
-        # Speaking of inadequate fixturing...
-        self.oracle._lookup[obj_dyn.ghid] = obj_dyn
-        # Back to business as usual now.
-        self.assertEqual(obj_dyn.extract_state(), msg2)
-        # We should NOT see the dynamic ghid in privateer.
-        self.assertNotIn(obj_dyn.ghid, self.privateer)
-        # But we should see the most recent target
-        self.assertIn(obj_dyn._history_targets[0], self.privateer)
-        self.assertIn(obj_dyn.ghid, self.librarian)
+        GAO2 = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = None,
+                dynamic = None,
+                author = None,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian,
+                master_secret = self.privateer.new_secret()
+            ),
+            loop = self.nooploop._loop
+        )
+        self.assertTrue(isinstance(GAO2, GAOCore))
         
-        # And let's test mutation thereof. 0000001000000110000011100001111
-        msg3 = b'AFFIRMATIVE'
-        obj_dyn.apply_state(msg3)
-        obj_dyn.push()
-        self.assertTrue(obj_dyn.ghid)
-        self.assertEqual(obj_dyn.extract_state(), msg3)
-        # We should NOT see the dynamic ghid in privateer.
-        self.assertNotIn(obj_dyn.ghid, self.privateer)
-        # But we should see the most recent target
-        self.assertIn(obj_dyn._history_targets[0], self.privateer)
-        self.assertIn(obj_dyn.ghid, self.librarian)
+    def test_apply_delete(self):
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(obj1, cont1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(sbind1, bind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(xbind1, debind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
-        # Now let's try freezing it
-        frozen_ghid = obj_dyn.freeze()
-        self.assertEqual(frozen_ghid, obj_dyn._history_targets[0])
+        GAO_s = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = obj1.ghid,
+                dynamic = False,
+                author = obj1.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
         
-        # And then delete the original
-        obj_dyn.delete()
-        # TODO: assess that this has actually deleted anything...
+        await_coroutine_threadsafe(
+            coro = GAO_s.apply_delete(xbind1),
+            loop = self.nooploop._loop
+        )
+        self.assertFalse(GAO_s.isalive)
         
-    def test_sink(self):
-        ''' Test retrieval from known ghids, pulls, etc
-        '''
-        # "Remote" frame 1
-        from _fixtures.remote_exchanges import pt1
-        from _fixtures.remote_exchanges import secret1_1
-        from _fixtures.remote_exchanges import cont1_1
-        from _fixtures.remote_exchanges import dyn1_1a
+        GAO_d = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = dbind1a.ghid,
+                dynamic = True,
+                author = dbind1a.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
         
-        # "Remote" frame 2
-        from _fixtures.remote_exchanges import pt2
-        from _fixtures.remote_exchanges import secret1_2
-        from _fixtures.remote_exchanges import cont1_2
-        from _fixtures.remote_exchanges import dyn1_1b
+        await_coroutine_threadsafe(
+            coro = GAO_d.apply_delete(xbind1d),
+            loop = self.nooploop._loop
+        )
+        self.assertFalse(GAO_d.isalive)
         
-        self.percore.ingest(dyn1_1a.packed)
-        self.percore.ingest(cont1_1.packed)
-        self.privateer.stage(cont1_1.ghid, secret1_1)
+    def test_freeze(self):
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(obj1, cont1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(sbind1, bind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(xbind1, debind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
-        obj_dyn = _GAO.from_ghid(dyn1_1a.ghid_dynamic, self.golcore, 
-            self.ghidproxy, self.privateer, self.percore, self.bookie,
-            self.librarian)
-        self.assertEqual(obj_dyn.extract_state(), pt1)
+        GAO_s = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = obj1.ghid,
+                dynamic = False,
+                author = obj1.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
         
-        # NOTE! These are not ratcheted.
-        self.percore.ingest(dyn1_1b.packed)
-        self.percore.ingest(cont1_2.packed)
-        self.privateer.stage(cont1_2.ghid, secret1_2)
+        with self.assertRaises(TypeError):
+            await_coroutine_threadsafe(
+                coro = GAO_s.freeze(),
+                loop = self.nooploop._loop
+            )
         
-        obj_dyn.pull()
-        self.assertEqual(obj_dyn.extract_state(), pt2)
+        GAO_d = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = dbind1a.ghid,
+                dynamic = True,
+                author = dbind1a.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        frozen = await_coroutine_threadsafe(
+            coro = GAO_d.freeze(),
+            loop = self.nooploop._loop
+        )
+        self.assertEqual(frozen, obj1.ghid)
+        
+    def test_hold(self):
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(obj1, cont1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(sbind1, bind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(xbind1, debind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
+        
+        GAO_s = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = obj1.ghid,
+                dynamic = False,
+                author = obj1.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        await_coroutine_threadsafe(
+            coro = GAO_s.hold(),
+            loop = self.nooploop._loop
+        )
+        
+        GAO_d = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = dbind1a.ghid,
+                dynamic = True,
+                author = dbind1a.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        await_coroutine_threadsafe(
+            coro = GAO_d.hold(),
+            loop = self.nooploop._loop
+        )
+        
+    def test_delete(self):
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(obj1, cont1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(sbind1, bind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(xbind1, debind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
+        
+        GAO_d = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = dbind1a.ghid,
+                dynamic = True,
+                author = dbind1a.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        await_coroutine_threadsafe(
+            coro = GAO_d.delete(),
+            loop = self.nooploop._loop
+        )
+        
+        GAO_s = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = obj1.ghid,
+                dynamic = False,
+                author = obj1.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = GAO_s.delete(),
+            loop = self.nooploop._loop
+        )
+        
+    def test_push(self):
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(obj1, cont1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(sbind1, bind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(xbind1, debind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
+        
+        GAO_s = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = obj1.ghid,
+                dynamic = False,
+                author = obj1.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        with self.assertRaises(TypeError):
+            await_coroutine_threadsafe(
+                coro = GAO_s.push(),
+                loop = self.nooploop._loop
+            )
+        
+        GAO_d1 = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = dbind1a.ghid,
+                dynamic = True,
+                author = dbind1a.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
+        GAO_d1.frame_history.append(dbind1a.frame_ghid)
+        GAO_d1.target_history.append(obj1.ghid)
+        self.privateer.stage(obj1.ghid, secret1_1)
+        
+        await_coroutine_threadsafe(
+            coro = GAO_d1.push(),
+            loop = self.nooploop._loop
+        )
+        
+        GAO_d2 = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = dbind1a.ghid,
+                dynamic = True,
+                author = dbind1a.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian,
+                master_secret = secret1_1   # This isn't really correct but w/e
+            ),
+            loop = self.nooploop._loop
+        )
+        GAO_d2.frame_history.append(dbind1a.frame_ghid)
+        GAO_d2.target_history.append(obj1.ghid)
+        
+        await_coroutine_threadsafe(
+            coro = GAO_d2.push(),
+            loop = self.nooploop._loop
+        )
+        
+    def test_pull(self):
+        logger.info('STARTING GAO PULL TEST!')
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(gidclite1, gidc1),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(obj2, cont1_2.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(obj1, cont1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(sbind1, bind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(xbind1, debind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
+            loop = self.nooploop._loop
+        )
+        self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
+        
+        GAO_s = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = obj1.ghid,
+                dynamic = False,
+                author = obj1.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        with self.assertRaises(TypeError):
+            await_coroutine_threadsafe(
+                coro = GAO_s.pull(),
+                loop = self.nooploop._loop
+            )
+        
+        GAO_d1 = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = dbind1a.ghid,
+                dynamic = True,
+                author = dbind1a.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian
+            ),
+            loop = self.nooploop._loop
+        )
+        GAO_d1.frame_history.append(dbind1a.frame_ghid)
+        GAO_d1.target_history.append(obj1.ghid)
+        self.privateer.stage(obj1.ghid, secret1_1)
+        self.privateer.stage(obj2.ghid, secret1_2)
+        
+        # Do this late or we will accidentally overwrite other stuff.
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(dbind1b, dyn1_1b.packed),
+            loop = self.nooploop._loop
+        )
+        
+        await_coroutine_threadsafe(
+            coro = GAO_d1.pull(dbind1b.frame_ghid),
+            loop = self.nooploop._loop
+        )
+        
+        GAO_d2 = await_coroutine_threadsafe(
+            coro = make_gao(
+                ghid = dbind1a.ghid,
+                dynamic = True,
+                author = dbind1a.author,
+                legroom = 7,
+                state = b'hello world',
+                golcore = self.golcore,
+                ghidproxy = self.ghidproxy,
+                privateer = self.privateer,
+                percore = self.percore,
+                librarian = self.librarian,
+                master_secret = secret1_1   # This isn't really correct but w/e
+            ),
+            loop = self.nooploop._loop
+        )
+        GAO_d2.frame_history.append(dbind1a.frame_ghid)
+        GAO_d2.target_history.append(obj1.ghid)
+        
+        await_coroutine_threadsafe(
+            coro = GAO_d2.pull(dbind1b.frame_ghid),
+            loop = self.nooploop._loop
+        )
         
 
 if __name__ == "__main__":

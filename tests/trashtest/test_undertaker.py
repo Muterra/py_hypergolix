@@ -216,7 +216,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         self.librarian.RESET()
         self.postman.RESET()
         await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1),
+            coro = self.librarian.store(obj1, cont1_1.packed),
             loop = self.undertaker._loop
         )
         
@@ -238,11 +238,11 @@ class UndertakerLoopingTest(unittest.TestCase):
         
         # But kept if bound.
         await_coroutine_threadsafe(
-            coro = self.librarian.store(sbind1, bind1_1),
+            coro = self.librarian.store(sbind1, bind1_1.packed),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1),
+            coro = self.librarian.store(obj1, cont1_1.packed),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -266,11 +266,11 @@ class UndertakerLoopingTest(unittest.TestCase):
         self.librarian.RESET()
         self.postman.RESET()
         await_coroutine_threadsafe(
-            coro = self.librarian.store(sbind1, bind1_1),
+            coro = self.librarian.store(sbind1, bind1_1.packed),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1),
+            coro = self.librarian.store(obj1, cont1_1.packed),
             loop = self.undertaker._loop
         )
         
@@ -299,7 +299,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         
         # But removed otherwise.
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1, debind1_1),
+            coro = self.librarian.store(xbind1, debind1_1.packed),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -330,11 +330,11 @@ class UndertakerLoopingTest(unittest.TestCase):
         self.librarian.RESET()
         self.postman.RESET()
         await_coroutine_threadsafe(
-            coro = self.librarian.store(dbind1a, dyn1_1a),
+            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1),
+            coro = self.librarian.store(obj1, cont1_1.packed),
             loop = self.undertaker._loop
         )
         
@@ -364,7 +364,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         
         # But removed otherwise.
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1d, dyndebind1_1),
+            coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -395,7 +395,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         self.librarian.RESET()
         self.postman.RESET()
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1, debind1_1),
+            coro = self.librarian.store(xbind1, debind1_1.packed),
             loop = self.undertaker._loop
         )
         
@@ -417,7 +417,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         
         # But removed otherwise.
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1x, dedebind1_1),
+            coro = self.librarian.store(xbind1x, dedebind1_1.packed),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -441,7 +441,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         self.librarian.RESET()
         self.postman.RESET()
         await_coroutine_threadsafe(
-            coro = self.librarian.store(req1, handshake1_1),
+            coro = self.librarian.store(req1, handshake1_1.packed),
             loop = self.undertaker._loop
         )
         
@@ -463,7 +463,7 @@ class UndertakerLoopingTest(unittest.TestCase):
         
         # But removed otherwise.
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1R, debindR_1),
+            coro = self.librarian.store(xbind1R, debindR_1.packed),
             loop = self.undertaker._loop
         )
         await_coroutine_threadsafe(
@@ -537,7 +537,7 @@ class UndertakerCheckTest(unittest.TestCase):
         ''' Test geoc operations.
         '''
         await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1),
+            coro = self.librarian.store(obj1, cont1_1.packed),
             loop = self.nooploop._loop
         )
         
@@ -551,7 +551,7 @@ class UndertakerCheckTest(unittest.TestCase):
         
         # But kept if bound.
         await_coroutine_threadsafe(
-            coro = self.librarian.store(sbind1, bind1_1),
+            coro = self.librarian.store(sbind1, bind1_1.packed),
             loop = self.nooploop._loop
         )
         self.assertFalse(
@@ -565,7 +565,7 @@ class UndertakerCheckTest(unittest.TestCase):
         ''' Test gobs operations.
         '''
         await_coroutine_threadsafe(
-            coro = self.librarian.store(sbind1, bind1_1),
+            coro = self.librarian.store(sbind1, bind1_1.packed),
             loop = self.nooploop._loop
         )
         
@@ -579,7 +579,7 @@ class UndertakerCheckTest(unittest.TestCase):
         
         # But removed otherwise.
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1, debind1_1),
+            coro = self.librarian.store(xbind1, debind1_1.packed),
             loop = self.nooploop._loop
         )
         self.assertTrue(
@@ -593,7 +593,7 @@ class UndertakerCheckTest(unittest.TestCase):
         ''' Test gobd operations.
         '''
         await_coroutine_threadsafe(
-            coro = self.librarian.store(dbind1a, dyn1_1a),
+            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
             loop = self.nooploop._loop
         )
         
@@ -608,7 +608,7 @@ class UndertakerCheckTest(unittest.TestCase):
         
         # But removed otherwise.
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1d, dyndebind1_1),
+            coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
             loop = self.nooploop._loop
         )
         self.assertTrue(
@@ -622,7 +622,7 @@ class UndertakerCheckTest(unittest.TestCase):
         ''' Test gdxx operations.
         '''
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1, debind1_1),
+            coro = self.librarian.store(xbind1, debind1_1.packed),
             loop = self.nooploop._loop
         )
         
@@ -636,7 +636,7 @@ class UndertakerCheckTest(unittest.TestCase):
         
         # But removed otherwise.
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1x, dedebind1_1),
+            coro = self.librarian.store(xbind1x, dedebind1_1.packed),
             loop = self.nooploop._loop
         )
         self.assertTrue(
@@ -650,7 +650,7 @@ class UndertakerCheckTest(unittest.TestCase):
         ''' Test garq operations.
         '''
         await_coroutine_threadsafe(
-            coro = self.librarian.store(req1, handshake1_1),
+            coro = self.librarian.store(req1, handshake1_1.packed),
             loop = self.nooploop._loop
         )
         
@@ -664,7 +664,7 @@ class UndertakerCheckTest(unittest.TestCase):
         
         # But removed otherwise.
         await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1R, debindR_1),
+            coro = self.librarian.store(xbind1R, debindR_1.packed),
             loop = self.nooploop._loop
         )
         self.assertTrue(
@@ -759,7 +759,7 @@ class UndertakerAlertTest(unittest.TestCase):
         
         # Need to store the first frame in librarian for this to work.
         await_coroutine_threadsafe(
-            coro = self.librarian.store(dbind1a, dyn1_1a),
+            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
             loop = self.nooploop._loop
         )
         

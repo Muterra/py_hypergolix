@@ -263,15 +263,15 @@ class GenericLawyerTest:
         # SECOND FRAME #######################################################
         # Prep by loading first frame...
         await_coroutine_threadsafe(
-            coro = self.librarian.store(dbind1a, dyn1_1a),
+            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.store(dbind3a, dyn3_1a),
+            coro = self.librarian.store(dbind3a, dyn3_1a.packed),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.store(dbindFa, dynF_a),
+            coro = self.librarian.store(dbindFa, dynF_a.packed),
             loop = self.nooploop._loop
         )
         
@@ -317,23 +317,23 @@ class GenericLawyerTest:
         
         # Load debinding targets
         await_coroutine_threadsafe(
-            coro = self.librarian.store(sbind1, bind1_1),
+            coro = self.librarian.store(sbind1, bind1_1.packed),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.store(sbind3, bind3_1),
+            coro = self.librarian.store(sbind3, bind3_1.packed),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.store(req1, handshake1_1),
+            coro = self.librarian.store(req1, handshake1_1.packed),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1),
+            coro = self.librarian.store(obj1, cont1_1.packed),
             loop = self.nooploop._loop
         )
         await_coroutine_threadsafe(
-            coro = self.librarian.store(obj3, cont3_1),
+            coro = self.librarian.store(obj3, cont3_1.packed),
             loop = self.nooploop._loop
         )
         

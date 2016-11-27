@@ -69,6 +69,7 @@ from .hypothetical import API
 from .hypothetical import public_api
 from .hypothetical import fixture_api
 from .hypothetical import fixture_noop
+from .hypothetical import fixture_return
 
 from .exceptions import HypergolixException
 from .exceptions import RemoteNak
@@ -400,7 +401,9 @@ class PersistenceCore(metaclass=API):
         self._undertaker = undertaker
         self._librarian = librarian
         self._salmonator = salmonator
-        
+    
+    @fixture_return(None)
+    @public_api
     async def direct_ingest(self, obj, packed, remotable, skip_conn=None):
         ''' Standard ingestion flow for stuff. To be called from ingest
         above, or directly (for objects created "in-house").

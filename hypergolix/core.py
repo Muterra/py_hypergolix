@@ -112,7 +112,7 @@ class GolixCore(metaclass=API):
         setattr(self, '__loop', loop)
         
     @__init__.fixture
-    def __init__(self, test_agent, *args, **kwargs):
+    def __init__(self, test_agent, *args, librarian=None, **kwargs):
         ''' Just, yknow, throw in the towel. Err, agent. Whatever.
         '''
         super(GolixCore.__fixture__, self).__init__(
@@ -122,6 +122,9 @@ class GolixCore(metaclass=API):
             **kwargs
         )
         self._identity = test_agent
+        
+        if librarian is not None:
+            self._librarian = librarian
         
     def assemble(self, librarian):
         # Chicken, meet egg.
@@ -141,7 +144,8 @@ class GolixCore(metaclass=API):
         ''' Return the Agent's Ghid.
         '''
         return self._identity.ghid
-        
+    
+    @public_api
     async def unpack_request(self, request):
         ''' Just like it says on the label...
         Note that the request is PACKED, not unpacked.
@@ -153,6 +157,12 @@ class GolixCore(metaclass=API):
             request
         ))
         
+    @unpack_request.fixture
+    async def unpack_request(self, request):
+        ''' Bypass executor for the fixture.
+        '''
+        return self._unpack_request(request)
+        
     def _unpack_request(self, request):
         ''' Just like it says on the label...
         Note that the request is PACKED, not unpacked.
@@ -161,6 +171,7 @@ class GolixCore(metaclass=API):
             unpacked = self._identity.unpack_request(request)
         return unpacked
         
+    @public_api
     async def open_request(self, unpacked):
         ''' Just like it says on the label...
         Note that the request is UNPACKED, not packed.
@@ -183,12 +194,22 @@ class GolixCore(metaclass=API):
             requestor
         ))
         
+    @open_request.fixture
+    async def open_request(self, unpacked):
+        ''' Also bypass executor here.
+        '''
+        requestor = SecondParty.from_packed(
+            await self._librarian.retrieve(unpacked.author)
+        )
+        return self._open_request(unpacked, requestor)
+        
     def _open_request(self, unpacked, requestor):
         ''' Just like it says on the label...
         Note that the request is UNPACKED, not packed.
         '''
         return self._identity.receive_request(requestor, unpacked)
-        
+    
+    @public_api
     async def make_request(self, recipient, payload):
         # Just like it says on the label...
         try:
@@ -208,6 +229,15 @@ class GolixCore(metaclass=API):
             payload
         ))
         
+    @make_request.fixture
+    async def make_request(self, recipient, payload):
+        ''' Bypass the goddamn executor. Ffs.
+        '''
+        recipient = SecondParty.from_packed(
+            await self._librarian.retrieve(recipient)
+        )
+        return self._make_request(recipient, payload)
+        
     def _make_request(self, recipient, payload):
         # Just like it says on the label...
         with self._mutex_request:
@@ -215,7 +245,8 @@ class GolixCore(metaclass=API):
                 recipient = recipient,
                 request = payload,
             )
-        
+    
+    @public_api
     async def open_container(self, container, secret):
         author = SecondParty.from_packed(
             await self._librarian.retrieve(container.author)
@@ -231,6 +262,16 @@ class GolixCore(metaclass=API):
             author
         ))
         
+    @open_container.fixture
+    async def open_container(self, container, secret):
+        ''' Bypass executor for fixture.
+        '''
+        author = SecondParty.from_packed(
+            await self._librarian.retrieve(container.author)
+        )
+        
+        return self._open_container(container, secret, author)
+        
     def _open_container(self, container, secret, author):
         # Wrapper around golix.FirstParty.receive_container.
         with self._mutex_container:
@@ -239,7 +280,8 @@ class GolixCore(metaclass=API):
                 secret = secret,
                 container = container
             )
-        
+    
+    @public_api
     async def make_container(self, data, secret):
         # Simple wrapper around golix.FirstParty.make_container
         # Run the actual function in the executor
@@ -250,6 +292,12 @@ class GolixCore(metaclass=API):
             secret
         ))
         
+    @make_container.fixture
+    async def make_container(self, data, secret):
+        ''' Bypass executor.
+        '''
+        return self._make_container(data, secret)
+        
     def _make_container(self, data, secret):
         # Simple wrapper around golix.FirstParty.make_container
         with self._mutex_container:
@@ -258,6 +306,7 @@ class GolixCore(metaclass=API):
                 plaintext = data
             )
 
+    @public_api
     async def make_binding_stat(self, target):
         # Note that this requires no open() method, as bindings are verified by
         # the local persister.
@@ -267,13 +316,20 @@ class GolixCore(metaclass=API):
             self._make_binding_stat,
             target
         ))
+        
+    @make_binding_stat.fixture
+    async def make_binding_stat(self, target):
+        ''' Skip the executor for the fixture.
+        '''
+        return self._make_binding_stat(target)
 
     def _make_binding_stat(self, target):
         # Note that this requires no open() method, as bindings are verified by
         # the local persister.
         with self._mutex_sbinding:
             return self._identity.make_bind_static(target)
-        
+    
+    @public_api
     async def make_binding_dyn(self, target, ghid=None, history=None):
         ''' Make a new dynamic binding frame.
         If supplied, ghid is the dynamic address, and history is an
@@ -293,6 +349,12 @@ class GolixCore(metaclass=API):
             history
         ))
         
+    @make_binding_dyn.fixture
+    async def make_binding_dyn(self, target, ghid=None, history=None):
+        ''' Yep, just bypass the executor
+        '''
+        return self._make_binding_dyn(target, ghid, history)
+        
     def _make_binding_dyn(self, target, ghid, history):
         ''' Make a new dynamic binding frame.
         If supplied, ghid is the dynamic address, and history is an
@@ -304,7 +366,8 @@ class GolixCore(metaclass=API):
                 ghid_dynamic = ghid,
                 history = history
             )
-        
+    
+    @public_api
     async def make_debinding(self, target):
         # Simple wrapper around golix.FirstParty.make_debind
         # Run the actual function in the executor
@@ -313,6 +376,12 @@ class GolixCore(metaclass=API):
             self._make_debinding,
             target
         ))
+        
+    @make_debinding.fixture
+    async def make_debinding(self, target):
+        ''' Bypass executor for the fixture.
+        '''
+        return self._make_debinding(target)
         
     def _make_debinding(self, target):
         # Simple wrapper around golix.FirstParty.make_debind

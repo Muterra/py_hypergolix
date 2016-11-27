@@ -302,10 +302,20 @@ class GAOCore(metaclass=API):
         Note that this gets used by Dispatchable to dispatch deletion to
         applications.
         '''
-        if debinding.target != self.ghid:
-            raise ValueError(
-                'Debinding target does not match GAO applying delete.'
-            )
+        if self.dynamic:
+            if debinding.target != self.ghid:
+                raise ValueError(
+                    'Debinding target does not match GAO applying delete.'
+                )
+        else:
+            debinding_target = \
+                await self._librarian.summarize(debinding.target)
+            if debinding_target.target != self.ghid:
+                raise ValueError(
+                    'Debinding target does not match GAO applying delete.'
+                )
+                
+        self.isalive = False
             
     @public_api
     async def freeze(self):
@@ -337,6 +347,9 @@ class GAOCore(metaclass=API):
     @public_api
     async def hold(self):
         ''' Make a static binding for the gao.
+        Note that, since third parties can bind arbitrary objects, there
+        isn't an easy way of checking for an existing static binding for
+        this specific ghid.
         '''
         binding = await self._golcore.make_binding_stat(self.ghid)
         await self._percore.direct_ingest(
@@ -350,6 +363,10 @@ class GAOCore(metaclass=API):
     async def delete(self):
         ''' Permanently removes the object. This method is only called
         locally; upstream deletes should call self.apply_delete.
+        Incidentally, apply_delete will eventually get called through
+        this. Which means (for the record) that the deleter will also
+        get a notification of the delete (iff it was actually successful
+        in removing the object).
         '''
         if self.dynamic:
             debinding = await self._golcore.make_debinding(self.ghid)
@@ -454,7 +471,7 @@ class GAOCore(metaclass=API):
                 binding = await self._golcore.make_binding_dyn(
                     target = container.ghid,
                     ghid = self.ghid,
-                    history = self._history
+                    history = self.frame_history
                 )
                 # Update ghid if it was not defined (new object)
                 self._conditional_init(
@@ -565,7 +582,7 @@ class GAOCore(metaclass=API):
                 # We're being updated.
                 elif summary.ghid == self.ghid:
                     async with self._update_lock:
-                        await self._pull(summary)
+                        await self._pull()
                         logger.info(''.join((
                             'GAO at ',
                             str(self.ghid),
@@ -598,7 +615,7 @@ class GAOCore(metaclass=API):
         '''
         # Make sure we have the most recent binding, regardless of what was
         # recently passed.
-        binding = await self.librarian.summarize(self.ghid)
+        binding = await self._librarian.summarize(self.ghid)
         
         # Okay, if this is calling _pull from oracle._get_object, we may be
         # going for either a dynamic binding or a static object (container).
@@ -611,7 +628,11 @@ class GAOCore(metaclass=API):
                 # frame to the history. So, we preserve the maximum depth to
                 # heal the ratchet at this point.
                 self._advance_history(binding)
-                self._privateer.heal_chain(gao=self, binding=binding)
+                self._privateer.heal_chain(
+                    proxy = self.ghid,
+                    target_history = self.target_history,
+                    master_secret = self._master_secret
+                )
             
             # Now, we need to be sure our local history doesn't forget about
             # our current-most-recent frame when making an update.
@@ -638,7 +659,11 @@ class GAOCore(metaclass=API):
         
         # If this was just pulled for the first time, init the dynamic and
         # author attributes.
-        self._conditional_init(dynamic=dynamic, author=binding.author)
+        self._conditional_init(
+            ghid = binding.ghid,
+            dynamic = dynamic,
+            author = binding.author
+        )
         
         try:
             # TODO: fix the leaky abstraction of jumping into the _identity
