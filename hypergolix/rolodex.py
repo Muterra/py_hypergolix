@@ -31,12 +31,9 @@ hypergolix: A python Golix client.
 '''
 
 # Global dependencies
-import weakref
 import traceback
-import threading
 import collections
 
-from golix import SecondParty
 from golix import Ghid
 
 from golix.utils import AsymHandshake
@@ -99,12 +96,8 @@ class Rolodex(metaclass=API):
     _salmonator = weak_property('__salmonator')
     _dispatch = weak_property('__dispatch')
     
-    # Async stuff
-    _executor = readonly_property('__executor')
-    _loop = readonly_property('__loop')
-    
     @public_api
-    def __init__(self, executor, loop, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
         # Persistent dict-like lookup for
@@ -113,20 +106,11 @@ class Rolodex(metaclass=API):
         # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
         self._outstanding_shares = None
         
-        # Async-specific stuff
-        setattr(self, '__executor', executor)
-        setattr(self, '__loop', loop)
-        
     @__init__.fixture
     def __init__(self, *args, **kwargs):
         ''' Init the fixture.
         '''
-        super(Rolodex.__fixture__, self).__init__(
-            executor = None,
-            loop = None,
-            *args,
-            **kwargs
-        )
+        super(Rolodex.__fixture__, self).__init__(*args, **kwargs)
         
         self.shared = {}
         self._pending_requests = {}
@@ -197,6 +181,9 @@ class Rolodex(metaclass=API):
         if not (await self._librarian.contains(recipient)):
             await self._salmonator.attempt_pull(recipient, quiet=True)
         
+        recipient_identity = \
+            (await self._librarian.summarize(recipient)).identity
+        
         # This is guaranteed to resolve the container fully.
         container_ghid = await self._ghidproxy.resolve(target)
         
@@ -208,7 +195,7 @@ class Rolodex(metaclass=API):
         )
         
         request = self._golcore._identity.make_request(
-            recipient = recipient,
+            recipient = recipient_identity,
             request = handshake
         )
         
@@ -255,11 +242,7 @@ class Rolodex(metaclass=API):
         '''
         try:
             packed = await self._librarian.retrieve(notification)
-            unpacked = await self._loop.run_in_executor(
-                self._executor,
-                self._golcore.unpack_request,
-                packed
-            )
+            unpacked = await self._golcore.unpack_request(packed)
         
             # TODO: have this filter based on contacts.
             if not (await self._librarian.contains(unpacked.author)):
@@ -268,20 +251,12 @@ class Rolodex(metaclass=API):
                     quiet = True
                 )
         
-            payload = await self._loop.run_in_executor(
-                self._executor,
-                self._golcore.open_request,
-                unpacked
-            )
+            payload = await self._golcore.open_request(unpacked)
             await self._dispatch_payload(payload, notification)
 
         # Don't forget to (always) debind.
         finally:
-            debinding = await self._loop.run_in_executor(
-                self._executor,
-                self._golcore.make_debinding,
-                notification
-            )
+            debinding = await self._golcore.make_debinding(notification)
             await self._percore.direct_ingest(
                 obj = _GdxxLite.from_golix(debinding),
                 packed = debinding.packed,

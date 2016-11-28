@@ -561,6 +561,8 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
                 ghid
             )
             
+    @fixture_noop
+    @public_api
     async def schedule_sharesuccess_distribution(self, ghid, recipient,
                                                  tokens):
         ''' Schedules notification of any available connections for all
@@ -592,7 +594,9 @@ class Dispatcher(loopa.TaskLooper, metaclass=API):
             ghid,
             recipient
         )
-            
+    
+    @fixture_noop
+    @public_api
     async def schedule_sharefailure_distribution(self, ghid, recipient,
                                                  tokens):
         ''' Schedules notification of any available connections for all

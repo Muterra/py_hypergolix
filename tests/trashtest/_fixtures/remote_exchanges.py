@@ -225,6 +225,9 @@ debind2_2 = TEST_AGENT2.make_debind(
 debindR_1 = TEST_AGENT2.make_debind(
     target = handshake1_1.ghid
 )
+debindR_2 = TEST_AGENT1.make_debind(
+    target = handshake2_1.ghid
+)
 
 # Make some debindings from an unknown author
 debind3_1 = TEST_AGENT3.make_debind(
