@@ -33,17 +33,11 @@ hypergolix: A python Golix client.
 
 '''
 
-import IPython
 import unittest
-import warnings
-import collections
-import threading
-import queue
-import time
 import logging
-import weakref
-import asyncio
-import random
+import loopa
+
+from loopa.utils import await_coroutine_threadsafe
 
 from queue import Empty
 
@@ -53,6 +47,8 @@ from hypergolix.utils import LooperTrooper
 from hypergolix.utils import Aengel
 from hypergolix.utils import SetMap
 
+from hypergolix.ipc import IPCServerProtocol
+
 from hypergolix.dispatch import Dispatcher
 from hypergolix.dispatch import _Dispatchable
 from hypergolix.dispatch import _AppDef
@@ -61,7 +57,7 @@ from hypergolix.exceptions import UnknownToken
 
 
 # ###############################################
-# Fixturing
+# Fixture imports
 # ###############################################
 
 
@@ -69,29 +65,44 @@ from _fixtures.ghidutils import make_random_ghid
 
 
 # ###############################################
+# Fixture code and boilerplate
+# ###############################################
+
+
+logger = logging.getLogger(__name__)
+
+
+# ###############################################
 # Testing
 # ###############################################
         
         
-@unittest.skip('Deprecated.')
+@unittest.skip('DNX')
 class TestDispatcher(unittest.TestCase):
-    def __init__(self, *args, **kwargs):
-        self.token_iters = 500
-        super().__init__(*args, **kwargs)
+    ''' Test the Dispatcher, YO!
+    '''
     
     @classmethod
     def setUpClass(cls):
-        cls.aengel = Aengel()
+        cls.nooploop = NoopLoop(
+            debug = True,
+            threaded = True
+        )
+        cls.nooploop.start()
+        
+    @classmethod
+    def tearDownClass(cls):
+        # Kill the running loop.
+        cls.nooploop.stop_threadsafe_nowait()
         
     def setUp(self):
+        ''' Perform test-specific setup.
+        '''
+        # Whoami isn't relevant here, so just ignore it.
+        self.ipc_protocol = IPCServerProtocol.__fixture__(whoami=None)
+        # Some assembly required
         self.dispatch = Dispatcher()
-        self.dispatch.assemble()
-        self.dispatch.bootstrap(
-            all_tokens = set(),
-            startup_objs = {},
-            private_by_ghid = {},
-            token_lock = threading.Lock()
-        )
+        self.dispatch.assemble(self.ipc_protocol)
         
     def test_new_token(self):
         for __ in range(self.token_iters):
@@ -176,13 +187,11 @@ class TestDispatcher(unittest.TestCase):
             self.dispatch.make_public(make_random_ghid())
         
         
-@unittest.skip('Deprecated.')
+@unittest.skip('DNX')
 class TestDispatchable(unittest.TestCase):
-    @unittest.expectedFailure
     def test_dispatchable(self):
         raise NotImplementedError()
             
-    @unittest.expectedFailure
     def test_notify(self):
         raise NotImplementedError()
         # Test update notification

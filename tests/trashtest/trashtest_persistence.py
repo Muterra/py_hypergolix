@@ -267,6 +267,14 @@ class IntegrationTest(unittest.TestCase):
         ''' Reset the librarian and postman to a pristine state.
         '''
         self.librarian.RESET()
+        await_coroutine_threadsafe(
+            coro = self.postman.await_idle(),
+            loop = self.cmd._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.undertaker.await_idle(),
+            loop = self.cmd._loop
+        )
         self.postman.deliveries.clear()
         
     def test_gidc(self):

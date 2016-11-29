@@ -214,9 +214,9 @@ class Dispatcher(metaclass=API):
         # Reverse lookup <connection/session/conn>: <app token>
         self._token_from_conn.clear()
         
-    def assemble(self, ipc_protocol_server):
+    def assemble(self, ipc_protocol):
         # Set up a weakref to the ipc system
-        self._ipc_protocol = ipc_protocol_server
+        self._ipc_protocol = ipc_protocol
         
     def bootstrap(self, all_tokens, startup_objs, private_by_ghid, token_lock,
                   incoming_shares, orphan_acks, orphan_naks):
@@ -280,6 +280,7 @@ class Dispatcher(metaclass=API):
         except KeyError:
             return None
     
+    @public_api
     def make_public(self, ghid):
         ''' Makes a private object public.
         '''

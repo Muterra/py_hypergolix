@@ -32,30 +32,13 @@ hypergolix: A python Golix client.
 
 
 # Global dependencies
-import abc
-import collections
-import warnings
-import functools
-import struct
-import weakref
-import queue
-import pathlib
-import base64
-import concurrent.futures
 import asyncio
-import websockets
-from websockets.exceptions import ConnectionClosed
 import threading
 import traceback
 
 from golix import ThirdParty
 from golix import SecondParty
-from golix import Ghid
-from golix import Secret
-from golix import ParseError
 from golix import SecurityError
-
-from golix.utils import generate_ghidlist_parser
 
 from golix._getlow import GIDC
 from golix._getlow import GEOC

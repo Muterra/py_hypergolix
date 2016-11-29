@@ -257,30 +257,6 @@ class WeakSetTest(unittest.TestCase):
         self.assertNotEqual(west1, objs)
         
         
-@unittest.skipIf(True, 'DNE')
-class WeakerSetTest(WeakSetTest):
-    ''' Test creation of _WeakerSets.
-    '''
-    # TEST_CLS = _WeakerSet
-    
-    def test_make(self):
-        objs = {Refferee() for __ in range(10)}
-        west0 = {weakref.ref(item) for item in objs}
-        
-        west1 = self.TEST_CLS()
-        gc.collect()
-        self.assertTrue(west1._live)
-        west2 = self.TEST_CLS(objs)
-        gc.collect()
-        self.assertTrue(west2._live)
-        
-        for obj in objs:
-            self.assertTrue(west2._live)
-            self.assertIn(obj, west2)
-            self.assertNotIn(obj, gc.get_referents(west1))
-            self.assertNotIn(obj, gc.get_referents(west2))
-        
-        
 class SetMapTest(unittest.TestCase):
     ''' Test normal SetMaps.
     '''

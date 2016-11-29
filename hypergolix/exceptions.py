@@ -59,6 +59,7 @@ __all__ = [
     'DispatchError',
     'UnknownToken',
     'DispatchWarning',
+    'CatOuttaBagError',
     # These are IPC/embed errors
     'IPCError',
     'DeadObject',   # Also a local persistence error
@@ -226,6 +227,12 @@ class DispatchError(HypergolixException, RuntimeError):
 
 class UnknownToken(DispatchError, ValueError):
     ''' Raised when something fails with dispatch.
+    '''
+    pass
+
+
+class CatOuttaBagError(DispatchError, ValueError):
+    ''' Raised when trying to make a public object private.
     '''
     pass
 

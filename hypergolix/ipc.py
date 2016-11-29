@@ -62,7 +62,6 @@ IPC Apps should not have access to objects that are not _Dispatchable.
 '''
 
 # External dependencies
-import weakref
 import collections
 import traceback
 # These are just used for fixturing.
@@ -93,6 +92,7 @@ from .exceptions import InconsistentAuthor
 from .exceptions import IllegalDynamicFrame
 from .exceptions import IntegrityError
 from .exceptions import UnavailableUpstream
+from .exceptions import CatOuttaBagError
 
 from .utils import WeakSetMap
 from .utils import SetMap
@@ -585,8 +585,16 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         obj.state = state
         
         # Converting a private object to a public one
-        if self._dispatch.private_parent_lookup(ghid) and not private:
-            self._dispatch.make_public(ghid)
+        if self._dispatch.private_parent_lookup(ghid):
+            if not private:
+                self._dispatch.make_public(ghid)
+        
+        else:
+            if private:
+                raise CatOuttaBagError(
+                    'Once made public, objects cannot be made private. They ' +
+                    'have already been distributed to other applications.'
+                )
             
         await obj.push()
         
