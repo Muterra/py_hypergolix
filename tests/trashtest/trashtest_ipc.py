@@ -192,7 +192,7 @@ class WSIPCTest(unittest.TestCase):
         )
         # Convert the frozenset we'll get from getitem into a set and then pop
         # the only member of it, thereby getting the connection
-        connection = set(self.dispatch._endpoints_from_api[apiid]).pop()
+        connection = set(self.dispatch._conns_from_api[apiid]).pop()
         
         # Restore the dispatch to its previous state
         await_coroutine_threadsafe(
@@ -251,22 +251,22 @@ class WSIPCTest(unittest.TestCase):
             coro = self.client1.register_api(apiid_1, timeout=1),
             loop = self.client1_commander._loop
         )
-        self.assertIn(apiid_1, self.dispatch._endpoints_from_api)
+        self.assertIn(apiid_1, self.dispatch._conns_from_api)
         
         # Test adding a second
         await_coroutine_threadsafe(
             coro = self.client1.register_api(apiid_2, timeout=1),
             loop = self.client1_commander._loop
         )
-        self.assertIn(apiid_2, self.dispatch._endpoints_from_api)
+        self.assertIn(apiid_2, self.dispatch._conns_from_api)
         
         # Now test removing the first
         await_coroutine_threadsafe(
             coro = self.client1.deregister_api(apiid_1, timeout=1),
             loop = self.client1_commander._loop
         )
-        self.assertNotIn(apiid_1, self.dispatch._endpoints_from_api)
-        self.assertIn(apiid_2, self.dispatch._endpoints_from_api)
+        self.assertNotIn(apiid_1, self.dispatch._conns_from_api)
+        self.assertIn(apiid_2, self.dispatch._conns_from_api)
         
     def test_whoami(self):
         whoami = await_coroutine_threadsafe(

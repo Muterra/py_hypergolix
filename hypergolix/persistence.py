@@ -442,13 +442,15 @@ class PersistenceCore(metaclass=API):
             await self._librarian.store(obj, packed)
             
             if remotable:
-                await self._salmonator.schedule_push(obj.ghid)
+                await self._salmonator.push(obj.ghid)
         
             return obj
     
     @public_api
     async def attempt_load(self, packed):
         ''' Attempt to load a packed golix object.
+        
+        TODO: move into doorman.
         '''
         tasks = set()
         

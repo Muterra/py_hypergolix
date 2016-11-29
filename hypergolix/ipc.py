@@ -70,6 +70,8 @@ import random
 
 from golix import Ghid
 
+from loopa.utils import make_background_future
+
 # Intrapackage dependencies
 from .hypothetical import public_api
 from .hypothetical import fixture_api
@@ -588,9 +590,12 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             
         await obj.push()
         
-        await self._dispatch.schedule_update_distribution(
-            obj.ghid,
-            skip_conn = connection
+        # Schedule an update in the background.
+        make_background_future(
+            self._dispatch.distribute_update(
+                obj.ghid,
+                skip_conn = connection
+            )
         )
         
         return b'\x01'

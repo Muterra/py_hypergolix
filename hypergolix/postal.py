@@ -82,8 +82,8 @@ __all__ = [
 # ###############################################
             
 
-_MrPostcard = collections.namedtuple(
-    typename = '_MrPostcard',
+_SubsUpdate = collections.namedtuple(
+    typename = '_SubsUpdate',
     field_names = ('subscription', 'notification', 'skip_conn'),
 )
 
@@ -201,7 +201,7 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
     async def _schedule_geoc(self, obj, removed, skip_conn):
         # GEOC will never trigger a subscription directly, though they might
         # have deferred updates.
-        # Note that these have already been put into _MrPostcard form.
+        # Note that these have already been put into _SubsUpdate form.
         for deferred in self._deferred.pop_any(obj.ghid):
             await self._scheduled.put(deferred)
         
@@ -230,11 +230,11 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
             # getting the single element from it.
             debinding_ghid = next(iter(debinding_ghids))
             await self._scheduled.put(
-                _MrPostcard(obj.ghid, debinding_ghid, skip_conn)
+                _SubsUpdate(obj.ghid, debinding_ghid, skip_conn)
             )
             
         else:
-            notifier = _MrPostcard(obj.ghid, obj.frame_ghid, skip_conn)
+            notifier = _SubsUpdate(obj.ghid, obj.frame_ghid, skip_conn)
             if (await self._librarian.contains(obj.target)):
                 logger.debug(''.join((
                     str(obj.ghid),
@@ -276,11 +276,11 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
             # getting the single element from it.
             debinding_ghid = next(iter(debinding_ghids))
             await self._scheduled.put(
-                _MrPostcard(obj.recipient, debinding_ghid, skip_conn)
+                _SubsUpdate(obj.recipient, debinding_ghid, skip_conn)
             )
         else:
             await self._scheduled.put(
-                _MrPostcard(obj.recipient, obj.ghid, skip_conn)
+                _SubsUpdate(obj.recipient, obj.ghid, skip_conn)
             )
             
     async def _deliver(self, subscription, notification, skip_conn):

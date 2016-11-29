@@ -212,7 +212,7 @@ class LibrarianCore(metaclass=API):
                 
             # Validation failed. Remove illegal debinding.
             except (InvalidTarget, InconsistentAuthor):
-                logger.warning(''.join((
+                logger.error(''.join((
                     'Removed invalid existing debinding.\n',
                     '    Debinding author:     ', str(debinding.author), '\n',
                     '    Valid object author:  ', str(obj.author), '\n',

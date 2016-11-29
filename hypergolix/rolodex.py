@@ -40,6 +40,8 @@ from golix.utils import AsymHandshake
 from golix.utils import AsymAck
 from golix.utils import AsymNak
 
+from loopa.utils import make_background_future
+
 # Local dependencies
 from .hypothetical import API
 from .hypothetical import public_api
@@ -373,7 +375,10 @@ class Rolodex(metaclass=API):
         future, object sharing will be at least partly handled within
         its own dedicated rolodex pipeline.
         '''
-        await self._dispatch.schedule_share_distribution(target, sender)
+        # Distribute the share in the background
+        make_background_future(
+            self._dispatch.distribute_share(target, sender)
+        )
     
     @fixture_noop
     @public_api
@@ -384,10 +389,13 @@ class Rolodex(metaclass=API):
         sharepair = _SharePair(target, recipient)
         tokens = self._outstanding_shares.pop_any(sharepair)
         
-        await self._dispatch.schedule_sharesuccess_distribution(
-            target,
-            recipient,
-            tokens
+        # Distribute the share success in the background
+        make_background_future(
+            self._dispatch.distribute_share_success(
+                target,
+                recipient,
+                tokens
+            )
         )
     
     @fixture_noop
@@ -399,8 +407,11 @@ class Rolodex(metaclass=API):
         sharepair = _SharePair(target, recipient)
         tokens = self._outstanding_shares.pop_any(sharepair)
         
-        await self._dispatch.schedule_sharefailure_distribution(
-            target,
-            recipient,
-            tokens
+        # Distribute the share failure in the background
+        make_background_future(
+            self._dispatch.distribute_share_failure(
+                target,
+                recipient,
+                tokens
+            )
         )

@@ -206,6 +206,9 @@ dyndebind1_1 = TEST_AGENT1.make_debind(
 dyndebind2_1 = TEST_AGENT2.make_debind(
     target = dyn2_1b.ghid_dynamic
 )
+dyndebind1_F = TEST_AGENT2.make_debind(
+    target = dyn1_1b.ghid_dynamic
+)
 
 # Make some debindings
 debind1_1 = TEST_AGENT1.make_debind(
@@ -264,18 +267,18 @@ dedebind1_2 = TEST_AGENT1.make_debind(
     target = debind1_2.ghid
 )
 
+# And then make some debindings for the debindings for the...
+dededebind1_1 = TEST_AGENT1.make_debind(
+    target = dedebind1_1.ghid
+)
+dededebind1_2 = TEST_AGENT1.make_debind(
+    target = dedebind1_2.ghid
+)
+
 # And then make some debindings for the debindings
 dedebind2_1 = TEST_AGENT2.make_debind(
     target = debind2_1.ghid
 )
 dedebind2_2 = TEST_AGENT2.make_debind(
     target = debind2_2.ghid
-)
-
-# And then make some debindings for the debindings for the...
-dededebind2_1 = TEST_AGENT2.make_debind(
-    target = dedebind2_1.ghid
-)
-dededebind2_2 = TEST_AGENT2.make_debind(
-    target = dedebind2_2.ghid
 )

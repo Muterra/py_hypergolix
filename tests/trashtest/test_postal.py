@@ -43,8 +43,6 @@ import asyncio
 from loopa import NoopLoop
 from loopa.utils import await_coroutine_threadsafe
 
-from golix._getlow import GIDC
-
 from hypergolix.librarian import LibrarianCore
 from hypergolix.postal import PostalCore
 from hypergolix.postal import PostOffice
@@ -78,6 +76,7 @@ from hypergolix.utils import ApiID
 # ###############################################
 
 
+from golix._getlow import GIDC
 from _fixtures.ghidutils import make_random_ghid
 from _fixtures.identities import TEST_AGENT1
 from _fixtures.identities import TEST_AGENT2
