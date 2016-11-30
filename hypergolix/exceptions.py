@@ -57,6 +57,7 @@ __all__ = [
     'UnknownParty',
     # These are dispatch errors
     'DispatchError',
+    'ExistantAppError',
     'UnknownToken',
     'DispatchWarning',
     'CatOuttaBagError',
@@ -235,6 +236,12 @@ class CatOuttaBagError(DispatchError, ValueError):
     ''' Raised when trying to make a public object private.
     '''
     pass
+
+
+class ExistantAppError(DispatchError):
+    ''' Raised when attempting to register a second application for the
+    same connection, or the same token for a different connection.
+    '''
 
 
 class DispatchWarning(HypergolixException, RuntimeWarning):

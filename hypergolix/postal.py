@@ -131,6 +131,9 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
     async def await_idle(self):
         ''' Wait until the postman has no more deliveries to perform.
         '''
+        while self._scheduled is None:
+            await asyncio.sleep(.01)
+        
         await self._scheduled.join()
         
     async def loop_init(self):

@@ -61,6 +61,8 @@ from .utils import immutable_property
 
 from .exceptions import DispatchError
 from .exceptions import UnknownToken
+from .exceptions import ExistantAppError
+from .exceptions import CatOuttaBagError
 
 
 # ###############################################
@@ -81,18 +83,6 @@ __all__ = [
 # ###############################################
 # Lib
 # ###############################################
-            
-            
-_AppDef = collections.namedtuple(
-    typename = '_AppDef',
-    field_names = ('app_token',),
-)
-            
-            
-_DispatchableState = collections.namedtuple(
-    typename = '_DispatchableState',
-    field_names = ('api_id', 'state'),
-)
             
             
 # Identity here can be either a sender or recipient dependent upon context
@@ -136,6 +126,7 @@ class Dispatcher(metaclass=API):
     stuff (and so on) internally.
     '''
     _ipc_protocol = weak_property('__ipc_protocol')
+    _oracle = weak_property('__oracle')
     
     @public_api
     def __init__(self, *args, **kwargs):
@@ -214,8 +205,8 @@ class Dispatcher(metaclass=API):
         # Reverse lookup <connection/session/conn>: <app token>
         self._token_from_conn.clear()
         
-    def assemble(self, ipc_protocol):
-        # Set up a weakref to the ipc system
+    def assemble(self, oracle, ipc_protocol):
+        self._oracle = oracle
         self._ipc_protocol = ipc_protocol
         
     def bootstrap(self, all_tokens, startup_objs, private_by_ghid, token_lock,
@@ -321,7 +312,15 @@ class Dispatcher(metaclass=API):
         that responsibility elsewhere), and then sending all of the
         startup objects to the application.
         '''
-        if token is None:
+        if connection in self._token_from_conn:
+            raise ExistantAppError('Token already registered for connection.')
+            
+        elif token in self._conn_from_token:
+            raise ExistantAppError(
+                'Token already started at different connection.'
+            )
+            
+        elif token is None:
             # Token lock is currently a NoContext, but eventually will need to
             # be a distributed lock -- or, the token lookup needs to be made
             # into a no-contention system. Which I'm not sure it possibly can
@@ -403,7 +402,7 @@ class Dispatcher(metaclass=API):
             make_background_future(
                 self.distribute_share(
                     ghid,
-                    origin = self._golcore.whoami,
+                    origin = None,
                     skip_conn = connection
                 )
             )
@@ -427,44 +426,93 @@ class Dispatcher(metaclass=API):
                     '; bypassing distribution.'
                 )
                 self._private_by_ghid[ghid] = token
+            
+    @public_api
+    async def register_startup(self, connection, ghid):
+        ''' Registers a ghid to be used as a startup object for token.
+        '''
+        try:
+            token = self._token_from_conn[connection]
+            
+        except KeyError as exc:
+            raise UnknownToken(
+                'Must register app token before registering startup objects.'
+            ) from exc
+            
+        else:
+            if token in self._startup_by_token:
+                raise ValueError(
+                    'Startup object already defined for that application. '
+                    'Deregister it before registering a new startup object.'
+                )
+            else:
+                self._startup_by_token[token] = ghid
+                
+    @public_api
+    async def deregister_startup(self, connection):
+        ''' Deregisters a ghid to be used as a startup object for token.
+        '''
+        try:
+            token = self._token_from_conn[connection]
+            
+        except KeyError as exc:
+            raise UnknownToken(
+                'Must register app token before deregistering startup objects.'
+            ) from exc
+            
+        else:
+            if token not in self._startup_by_token:
+                raise ValueError(
+                    'Startup object has not been defined for that application.'
+                )
+            else:
+                del self._startup_by_token[token]
+    
+    @public_api
+    async def get_startup_obj(self, token):
+        ''' Returns the ghid of the declared startup object for that
+        token, or None if none has been declared.
+        '''
+        if token not in self._all_known_tokens:
+            raise UnknownToken()
+        
+        elif token not in self._startup_by_token:
+            return None
+        
+        else:
+            return self._startup_by_token[token]
     
     @fixture_noop
     @public_api
     async def distribute_share(self, ghid, origin, skip_conn=None):
         ''' Perform an actual share distribution.
+        
+        Pass an explicit None as the origin to indicate self as origin.
         '''
         callsheet = set()
-        private_owner = self.private_parent_lookup(ghid)
         
-        # The object has a private owner, so we're exclusively going to it.
-        if private_owner:
-            try:
-                callsheet.add(
-                    self._conn_from_token[private_owner]
-                )
-            except KeyError:
-                logger.warning(
-                    'Connection unavailable for app token ' +
-                    str(private_owner) + '.'
-                )
-            
-        # This is not a private object, so we're going to anyone who wants it
-        else:
-            obj = await self._oracle.get_object(
-                gaoclass = _Dispatchable,
-                ghid = ghid,
-                dispatch = self,
-                ipc_protocol = self._ipc_protocol
-            )
-            
-            callsheet.update(
-                # Get any connections that have registered the api_id
-                self._conns_from_api.get_any(obj.api_id)
-            )
-            callsheet.update(
-                # Get any connections that have an instance of the object
-                self._update_listeners.get_any(obj.ghid)
-            )
+        # Note that this is called in exactly two situations: when creating a
+        # new object locally, through register_object, or when receiving a new
+        # share, through rolodex. As such, this will never be called when the
+        # object is private. So, don't check for a private owner.
+        
+        obj = await self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            ghid = ghid,
+            api_id = None,  # Let _pull() apply this.
+            state = None,   # Let _pull() apply this.
+            dispatch = self,
+            ipc_protocol = self._ipc_protocol
+        )
+        
+        callsheet.update(
+            # Get any connections that have registered the api_id
+            self._conns_from_api.get_any(obj.api_id)
+        )
+        callsheet.update(
+            # Get any connections that have an instance of the object
+            self._update_listeners.get_any(obj.ghid)
+        )
             
         # Now, check to see if we have anything in the callsheet. Do it before
         # discarding, so that we know if it's actually an orphan share.
@@ -477,15 +525,18 @@ class Dispatcher(metaclass=API):
                 )
             )
             
-            await self._distribute(
-                self._ipc_protocol.share_obj,    # distr_coro
-                callsheet,
-                ghid,
-                origin,
-                obj.api_id
-            )
-            
-        else:
+            # If we still have a callsheet, distribute it.
+            if callsheet:
+                await self._distribute(
+                    self._ipc_protocol.share_obj,    # distr_coro
+                    callsheet,
+                    ghid,
+                    origin,
+                    obj.api_id
+                )
+        
+        # Only make an orphan_shares entry if we didn't create the object.
+        elif origin is not None:
             sharelog = _ShareLog(ghid, origin)
             self._orphan_incoming_shares.add(sharelog)
     
@@ -567,95 +618,32 @@ class Dispatcher(metaclass=API):
         ''' Call distr_coro with *args and **kwargs at each of the
         connections in the callsheet. Log (but don't raise) any errors.
         '''
-        distributions = []
+        logger.info(
+            'Dispatching ' + str(len(callsheet)) + ' calls to ' +
+            str(distr_coro)
+        )
+        distributions = set()
         for connection in callsheet:
             # For each connection...
-            distributions.append(
+            distributions.add(
                 # ...in parallel, schedule a single execution of the
                 # distribution coroutine.
-                asyncio.ensure_future(distr_coro(connection, *args, **kwargs))
+                make_background_future(distr_coro(connection, *args, **kwargs))
             )
             
-        # And gather the results, logging (but not raising) any exceptions
-        try:
-            distribution_task = asyncio.gather(
-                *distributions,
-                return_exceptions = True
-            )
-            results = await distribution_task
-            
-        except asyncio.CancelledError:
-            distribution_task.cancel()
-            raise
-        
-        else:
-            exceptions = [
-                result for result in results if isinstance(result, Exception)
-            ]
-            for exc in exceptions:
-                logger.error(
-                    'Error distributing share:\n' +
-                    ''.join(traceback.format_exception(
-                        type(exc),
-                        exc,
-                        exc.__traceback__
-                    ))
+        # And gather the results, logging (but not raising) any exceptions.
+        # BUT, only do it if we have some to do.
+        if distributions:
+            try:
+                await asyncio.wait(
+                    fs = distributions,
+                    return_when = asyncio.ALL_COMPLETED
                 )
             
-    @public_api
-    async def register_startup(self, connection, ghid):
-        ''' Registers a ghid to be used as a startup object for token.
-        '''
-        try:
-            token = self._token_from_conn[connection]
-            
-        except KeyError as exc:
-            raise UnknownToken(
-                'Must register app token before registering startup objects.'
-            ) from exc
-            
-        else:
-            if token in self._startup_by_token:
-                raise ValueError(
-                    'Startup object already defined for that application. '
-                    'Deregister it before registering a new startup object.'
-                )
-            else:
-                self._startup_by_token[token] = ghid
-                
-    @public_api
-    async def deregister_startup(self, connection):
-        ''' Deregisters a ghid to be used as a startup object for token.
-        '''
-        try:
-            token = self._token_from_conn[connection]
-            
-        except KeyError as exc:
-            raise UnknownToken(
-                'Must register app token before deregistering startup objects.'
-            ) from exc
-            
-        else:
-            if token not in self._startup_by_token:
-                raise ValueError(
-                    'Startup object has not been defined for that application.'
-                )
-            else:
-                del self._startup_by_token[token]
-    
-    @public_api
-    async def get_startup_obj(self, token):
-        ''' Returns the ghid of the declared startup object for that
-        token, or None if none has been declared.
-        '''
-        if token not in self._all_known_tokens:
-            raise UnknownToken()
-        
-        elif token not in self._startup_by_token:
-            return None
-        
-        else:
-            return self._startup_by_token[token]
+            except asyncio.CancelledError:
+                for distr in distributions:
+                    distr.cancel()
+                raise
             
             
 class _Dispatchable(GAOCore, metaclass=API):
@@ -672,8 +660,12 @@ class _Dispatchable(GAOCore, metaclass=API):
         self._dispatch = dispatch
         self._ipc_protocol = ipc_protocol
         
-        self.state = state
-        self.api_id = api_id
+        # These may be explicitly set to None to allow pull() to apply them.
+        if state is not None:
+            self.state = state
+            
+        if api_id is not None:
+            self.api_id = api_id
     
     @public_api
     async def _pull(self):

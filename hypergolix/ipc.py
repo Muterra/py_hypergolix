@@ -62,6 +62,7 @@ IPC Apps should not have access to objects that are not _Dispatchable.
 '''
 
 # External dependencies
+import logging
 import collections
 import traceback
 # These are just used for fixturing.
@@ -104,24 +105,28 @@ from .comms import RequestResponseProtocol
 from .comms import request
 
 from .dispatch import _Dispatchable
-from .dispatch import _DispatchableState
-from .dispatch import _AppDef
 
 # from .objproxy import ObjBase
 
 
 # ###############################################
-# Boilerplate
+# Boilerplate, etc
 # ###############################################
 
 
-import logging
 logger = logging.getLogger(__name__)
+
 
 # Control * imports.
 __all__ = [
     # 'Inquisitor',
 ]
+
+
+_ShareLog = collections.namedtuple(
+    typename = '_ShareLog',
+    field_names = ('connection', 'ghid', 'origin', 'api_id')
+)
 
 
 # ###############################################
@@ -143,13 +148,6 @@ ERROR_CODES = {
     b'\x00\x0A': RemoteNak,
     b'\xFF\xFF': IPCError
 }
-
-
-# Identity here can be either a sender or recipient dependent upon context
-_ShareLog = collections.namedtuple(
-    typename = '_ShareLog',
-    field_names = ('ghid', 'identity'),
-)
 
 
 class _IPCSerializer:
@@ -281,6 +279,11 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
     def __init__(self, whoami, *args, **kwargs):
         super(IPCServerProtocol.__fixture__, self).__init__(*args, **kwargs)
         self._whoami = whoami
+        self.shares = collections.deque()
+        self.updates = collections.deque()
+        self.deletes = collections.deque()
+        self.share_successes = collections.deque()
+        self.share_failures = collections.deque()
         
     def assemble(self, golcore, oracle, dispatch, rolodex, salmonator):
         # Chicken, egg, etc.
@@ -522,7 +525,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         self._dispatch.track_object(connection, obj.ghid)
         
         return bytes(obj.ghid)
-        
+    
+    @public_api
     @request(b'!O')
     async def update_obj(self, connection, ghid):
         ''' Update an object or notify an app of an incoming update.
@@ -556,7 +560,14 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
                 obj.dynamic,
                 None        # legroom
             )
-        
+    
+    @update_obj.fixture
+    async def update_obj(self, connection, ghid):
+        ''' Manual no-op fixture, courtesy of descriptors not being
+        callable or whatever.
+        '''
+        self.updates.append((connection, ghid))
+    
     @update_obj.request_handler
     async def update_obj(self, connection, body):
         ''' Handles update object requests.
@@ -622,13 +633,26 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         ghid = Ghid.from_bytes(body)
         await self._salmonator.attempt_pull(ghid)
         return b'\x01'
-        
+    
+    @public_api
     @request(b'@O')
     async def share_obj(self, connection, ghid, origin, api_id):
         ''' Request an object share or notify an app of an incoming
         share.
         '''
+        if origin is None:
+            origin = self._golcore.whoami
+        
         return bytes(ghid) + bytes(origin) + bytes(api_id)
+        
+    @share_obj.fixture
+    async def share_obj(self, connection, ghid, origin, api_id):
+        ''' Manual no-op fixture, courtesy of descriptors not being
+        callable or whatever.
+        '''
+        self.shares.append(
+            _ShareLog(connection, ghid, origin, api_id)
+        )
         
     @share_obj.request_handler
     async def share_obj(self, connection, body):
@@ -651,26 +675,42 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             
         await self._rolodex.share_object(ghid, recipient, requesting_token)
         return b'\x01'
-        
+    
+    @public_api
     @request(b'^S')
     async def notify_share_success(self, connection, ghid, recipient):
         ''' Notify app of successful share. Server only.
         '''
         return bytes(ghid) + bytes(recipient)
-        
+    
+    @notify_share_success.fixture
+    async def notify_share_success(self, connection, ghid, recipient):
+        ''' Manual no-op fixture, courtesy of descriptors not being
+        callable or whatever.
+        '''
+        self.share_successes.append((connection, ghid, recipient))
+    
     @notify_share_success.request_handler
     async def notify_share_success(self, connection, body):
         ''' Handles app notifications for successful shares. Client
         only.
         '''
         raise NotImplementedError()
-        
+    
+    @public_api
     @request(b'^F')
     async def notify_share_failure(self, connection, ghid, recipient):
         ''' Notify app of unsuccessful share. Server only.
         '''
         return bytes(ghid) + bytes(recipient)
         
+    @notify_share_failure.fixture
+    async def notify_share_failure(self, connection, ghid, recipient):
+        ''' Manual no-op fixture, courtesy of descriptors not being
+        callable or whatever.
+        '''
+        self.share_failures.append((connection, ghid, recipient))
+    
     @notify_share_failure.request_handler
     async def notify_share_failure(self, connection, body):
         ''' Handles app notifications for unsuccessful shares. Client
@@ -738,7 +778,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         ghid = Ghid.from_bytes(body)
         self._dispatch.untrack_object(connection, ghid)
         return b'\x01'
-        
+    
+    @public_api
     @request(b'XO')
     async def delete_obj(self, connection, ghid):
         ''' Request an object deletion or notify an app of an incoming
@@ -748,7 +789,14 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             raise TypeError('ghid must be type Ghid or similar.')
         
         return bytes(ghid)
-        
+    
+    @delete_obj.fixture
+    async def delete_obj(self, connection, ghid):
+        ''' Manual no-op fixture, courtesy of descriptors not being
+        callable or whatever.
+        '''
+        self.deletes.append((connection, ghid))
+    
     @delete_obj.request_handler
     async def delete_obj(self, connection, body):
         ''' Handles object deletion requests.

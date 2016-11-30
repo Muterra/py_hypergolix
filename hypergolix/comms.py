@@ -31,7 +31,6 @@ hypergolix: A python Golix client.
 '''
 
 import logging
-import abc
 import asyncio
 import websockets
 import traceback
@@ -40,13 +39,19 @@ import base64
 import loopa
 # Note that time is only used for request timing
 import time
-# Note that random is only used for exponential backoff
+# Note that random is only used for:
+# 1. exponential backoff
+# 2. fixturing connection recv
 import random
 
 from collections import namedtuple
 
 # Internal deps
 from .hypothetical import API
+from .hypothetical import public_api
+from .hypothetical import fixture_api
+from .hypothetical import fixture_noop
+from .hypothetical import fixture_return
 
 from .exceptions import RequestError
 from .exceptions import RequestFinished
@@ -115,7 +120,7 @@ class BasicServer(loopa.ManagedTask):
         await self.connection_cls.serve_forever(*args, **kwargs)
 
 
-class _ConnectionBase(metaclass=abc.ABCMeta):
+class _ConnectionBase(metaclass=API):
     ''' Defines common interface for all connections.
     
     TODO: modify this such that the return is ALWAYS weakly referenced,
@@ -226,34 +231,47 @@ class _ConnectionBase(metaclass=abc.ABCMeta):
             await self.listener(receiver)
         
     @classmethod
-    @abc.abstractmethod
+    @fixture_api
     async def serve_forever(cls, msg_handler, *args, **kwargs):
         ''' Starts a server for this kind of connection. Should handle
         its own return, and be cancellable via task cancellation.
         '''
         
     @classmethod
-    @abc.abstractmethod
+    @fixture_api
     async def new(cls, *args, **kwargs):
         ''' Creates and returns a new connection. Intended to be called
         by clients; servers may call __init__ directly.
         '''
-        
-    @abc.abstractmethod
+    
+    @fixture_api
     async def close(self):
         ''' Closes the existing connection, performing any necessary
         cleanup.
         '''
-        
-    @abc.abstractmethod
+    
+    @fixture_api
     async def send(self, msg):
         ''' Does whatever is needed to send a message.
         '''
-        
-    @abc.abstractmethod
+        # Noop fixture.
+    
+    @fixture_api
     async def recv(self):
         ''' Waits for first available message and returns it.
         '''
+        # Floating point [0.0, 1.0]
+        scalar = random.random()
+        # Wait somewhere between 0 and .1 seconds
+        delay = scalar * .1
+        # Figure out how long to make the message -- somewhere between 32 bytes
+        # and a kilobibite, inclusive
+        length = random.randrange(32, 1024)
+        # Make the message itself
+        msg = bytes([random.randint(0, 255) for i in range(length)])
+        # Wait the delay and then return
+        await asyncio.sleep(delay)
+        return msg
         
         
 class _WSLoc(namedtuple('_WSLoc', ('host', 'port', 'tls'))):

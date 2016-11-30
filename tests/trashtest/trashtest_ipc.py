@@ -59,7 +59,6 @@ from hypergolix.core import Oracle
 
 from hypergolix.dispatch import _Dispatchable
 from hypergolix.dispatch import Dispatcher
-from hypergolix.dispatch import _AppDef
 
 from hypergolix.remotes import Salmonator
 from hypergolix.rolodex import Rolodex

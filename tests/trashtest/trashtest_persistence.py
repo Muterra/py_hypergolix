@@ -622,6 +622,7 @@ class IntegrationTest(unittest.TestCase):
         )
         
         # TEST-SPECIFIC:
+        self.postman.deliveries.clear()
         await_coroutine_threadsafe(
             coro = self.percore.ingest(dyn1_1b.packed),
             loop = self.cmd._loop
@@ -648,6 +649,7 @@ class IntegrationTest(unittest.TestCase):
         )
         
         # TEST-SPECIFIC:
+        self.postman.deliveries.clear()
         await_coroutine_threadsafe(
             coro = self.percore.ingest(dyn1_1b.packed),
             loop = self.cmd._loop
@@ -1231,6 +1233,7 @@ class IntegrationTest(unittest.TestCase):
         )
         
         # TEST-SPECIFIC:
+        self.postman.deliveries.clear()
         await_coroutine_threadsafe(
             coro = self.percore.ingest(handshake1_1.packed),
             loop = self.cmd._loop

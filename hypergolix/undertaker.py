@@ -147,6 +147,9 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
     async def await_idle(self):
         ''' Wait until the undertaker has no more GC to perform.
         '''
+        while self._triage is None:
+            await asyncio.sleep(.01)
+        
         await self._triage.join()
         
     async def loop_init(self):
