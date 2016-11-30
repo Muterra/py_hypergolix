@@ -365,7 +365,7 @@ class PersistenceCore(metaclass=API):
     }
         
     @fixture_api
-    def __init__(self, *args, **kwargs):
+    def __init__(self, librarian=None, *args, **kwargs):
         ''' Right now, well, this is basically a noop. Anticipating
         substantial changes!
         '''
@@ -373,6 +373,9 @@ class PersistenceCore(metaclass=API):
             *args,
             **kwargs
         )
+        
+        if librarian is not None:
+            self._librarian = librarian
         
     def assemble(self, doorman, enforcer, lawyer, bookie, librarian, postman,
                  undertaker, salmonator):
@@ -385,7 +388,6 @@ class PersistenceCore(metaclass=API):
         self._librarian = librarian
         self._salmonator = salmonator
     
-    @fixture_return(None)
     @public_api
     async def direct_ingest(self, obj, packed, remotable, skip_conn=None):
         ''' Standard ingestion flow for stuff. To be called from ingest
@@ -428,6 +430,19 @@ class PersistenceCore(metaclass=API):
                 await self._salmonator.push(obj.ghid)
         
             return obj
+    
+    @direct_ingest.fixture
+    async def direct_ingest(self, obj, packed, remotable, skip_conn=None):
+        ''' Fixture direct ingest to just store at librarian directly
+        with no verification (if librarian exists), otherwise simply
+        return None.
+        '''
+        try:
+            librarian = self._librarian
+        except AttributeError:
+            return None
+        else:
+            await librarian.store(obj, packed)
     
     @public_api
     async def attempt_load(self, packed):

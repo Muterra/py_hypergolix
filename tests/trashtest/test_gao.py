@@ -165,7 +165,7 @@ class GAOTestingCore:
             coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
             loop = self.nooploop._loop
         )
-        self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
+        # self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
         GAO_s = await_coroutine_threadsafe(
             coro = self.make_gao(
@@ -220,7 +220,7 @@ class GAOTestingCore:
             coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
             loop = self.nooploop._loop
         )
-        self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
+        # self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
         GAO_s = await_coroutine_threadsafe(
             coro = self.make_gao(
@@ -275,7 +275,7 @@ class GAOTestingCore:
             coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
             loop = self.nooploop._loop
         )
-        self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
+        # self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
         GAO_s = await_coroutine_threadsafe(
             coro = self.make_gao(
@@ -328,7 +328,7 @@ class GAOTestingCore:
             coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
             loop = self.nooploop._loop
         )
-        self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
+        # self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
         GAO_d = await_coroutine_threadsafe(
             coro = self.make_gao(
@@ -380,7 +380,7 @@ class GAOTestingCore:
             coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
             loop = self.nooploop._loop
         )
-        self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
+        # self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
         GAO_s = await_coroutine_threadsafe(
             coro = self.make_gao(
@@ -464,7 +464,7 @@ class GAOTestingCore:
             coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
             loop = self.nooploop._loop
         )
-        self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
+        # self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
         GAO_s = await_coroutine_threadsafe(
             coro = self.make_gao(
@@ -540,9 +540,12 @@ class GAOTest(GAOTestingCore, unittest.TestCase):
         self.librarian = LibrarianCore.__fixture__()
         self.golcore = GolixCore.__fixture__(TEST_AGENT1,
                                              librarian=self.librarian)
-        self.ghidproxy = GhidProxier.__fixture__()
+        # Don't fixture this. We need to actually resolve things.
+        self.ghidproxy = GhidProxier()
         self.privateer = Privateer.__fixture__(TEST_AGENT1)
-        self.percore = PersistenceCore.__fixture__()
+        self.percore = PersistenceCore.__fixture__(librarian=self.librarian)
+        # Some assembly required
+        self.ghidproxy.assemble(self.librarian)
     
     async def make_gao(self, ghid, dynamic, author, legroom, *args, **kwargs):
         ''' Make a standard GAO.
