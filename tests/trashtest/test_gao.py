@@ -104,6 +104,13 @@ class GAOTestingCore:
         ''' Must be capable of making a gao from this input. This is
         just here for reference.
         '''
+        
+    async def modify_gao(self, obj):
+        ''' Inplace modification to gao for pushing. Allowed to be noop
+        if (and only if) subsequent push() commands will still generate
+        a new frame (ie, this must be defined for anything that tracks
+        deltas, if adequate test coverage is to be hit).
+        '''
     
     @classmethod
     def setUpClass(cls):
@@ -359,171 +366,151 @@ class GAOTestingCore:
             loop = self.nooploop._loop
         )
         
-    def test_push(self):
+    def test_pushme_pullyou_static(self):
+        ''' Test pushing and pulling static objects, ensuring that both
+        directions work (and produce symmetric objects).
+        '''
+        # We need to have our author "on file" for any pulls.
         await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1.packed),
+            coro = self.librarian.store(gidclite1, gidc1),
             loop = self.nooploop._loop
         )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(sbind1, bind1_1.packed),
-            loop = self.nooploop._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
-            loop = self.nooploop._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1, debind1_1.packed),
-            loop = self.nooploop._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
-            loop = self.nooploop._loop
-        )
-        # self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
-        GAO_s = await_coroutine_threadsafe(
+        # First create a new static object.
+        GAO_s1 = await_coroutine_threadsafe(
             coro = self.make_gao(
-                ghid = obj1.ghid,
+                ghid = None,
                 dynamic = False,
-                author = obj1.author,
-                legroom = 7
+                author = None,
+                legroom = 0
             ),
             loop = self.nooploop._loop
         )
+        # Note that we call directly to _push here (note underscore)
+        await_coroutine_threadsafe(
+            coro = GAO_s1._push(),
+            loop = self.nooploop._loop
+        )
         
+        # Make sure a ghid was actually assigned.
+        self.assertTrue(GAO_s1.ghid)
+        
+        # Now test normal push (no underscore), which should fail.
         with self.assertRaises(TypeError):
             await_coroutine_threadsafe(
-                coro = GAO_s.push(),
+                coro = GAO_s1.push(),
+                loop = self.nooploop._loop
+            )
+            
+        # Now attemt to get it back...
+        GAO_s2 = await_coroutine_threadsafe(
+            coro = self.make_gao(
+                ghid = GAO_s1.ghid,
+                dynamic = None,
+                author = None,
+                legroom = 0
+            ),
+            loop = self.nooploop._loop
+        )
+        # A direct call to gao._pull() (note underscore) should succeed.
+        await_coroutine_threadsafe(
+            coro = GAO_s2._pull(),
+            loop = self.nooploop._loop
+        )
+        # It should also compare equally to the original object.
+        self.assertEqual(GAO_s1, GAO_s2)
+        
+        # But calls to gao.pull() (no underscore) should TypeError.
+        with self.assertRaises(TypeError):
+            await_coroutine_threadsafe(
+                coro = GAO_s2.pull(notification=GAO_s1.ghid),
                 loop = self.nooploop._loop
             )
         
+    def test_pushme_pullyou_dynamic(self):
+        ''' Test pushing and pulling dynamic objects, ensuring that both
+        directions work (and produce symmetric objects).
+        '''
+        # We need to have our author "on file" for any pulls.
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(gidclite1, gidc1),
+            loop = self.nooploop._loop
+        )
+        
         GAO_d1 = await_coroutine_threadsafe(
             coro = self.make_gao(
-                ghid = dbind1a.ghid,
+                ghid = None,
                 dynamic = True,
-                author = dbind1a.author,
+                author = None,
                 legroom = 7
             ),
             loop = self.nooploop._loop
         )
-        GAO_d1.frame_history.append(dbind1a.frame_ghid)
-        GAO_d1.target_history.append(obj1.ghid)
-        self.privateer.stage(obj1.ghid, secret1_1)
-        
         await_coroutine_threadsafe(
             coro = GAO_d1.push(),
             loop = self.nooploop._loop
         )
         
+        # Make sure a ghid was actually assigned.
+        self.assertTrue(GAO_d1.ghid)
+        
+        # Now make sure retrieval (of first frame) works correctly
         GAO_d2 = await_coroutine_threadsafe(
             coro = self.make_gao(
-                ghid = dbind1a.ghid,
-                dynamic = True,
-                author = dbind1a.author,
-                legroom = 7,
-                master_secret = secret1_1   # This isn't really correct but w/e
-            ),
-            loop = self.nooploop._loop
-        )
-        GAO_d2.frame_history.append(dbind1a.frame_ghid)
-        GAO_d2.target_history.append(obj1.ghid)
-        
-        await_coroutine_threadsafe(
-            coro = GAO_d2.push(),
-            loop = self.nooploop._loop
-        )
-        
-    def test_pull(self):
-        logger.info('STARTING GAO PULL TEST!')
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(gidclite1, gidc1),
-            loop = self.nooploop._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(obj2, cont1_2.packed),
-            loop = self.nooploop._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(obj1, cont1_1.packed),
-            loop = self.nooploop._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(sbind1, bind1_1.packed),
-            loop = self.nooploop._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(dbind1a, dyn1_1a.packed),
-            loop = self.nooploop._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1, debind1_1.packed),
-            loop = self.nooploop._loop
-        )
-        await_coroutine_threadsafe(
-            coro = self.librarian.store(xbind1d, dyndebind1_1.packed),
-            loop = self.nooploop._loop
-        )
-        # self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
-        
-        GAO_s = await_coroutine_threadsafe(
-            coro = self.make_gao(
-                ghid = obj1.ghid,
-                dynamic = False,
-                author = obj1.author,
+                ghid = GAO_d1.ghid,
+                dynamic = None,
+                author = None,
                 legroom = 7
             ),
             loop = self.nooploop._loop
         )
-        
-        with self.assertRaises(TypeError):
-            await_coroutine_threadsafe(
-                coro = GAO_s.pull(),
-                loop = self.nooploop._loop
-            )
-        
-        GAO_d1 = await_coroutine_threadsafe(
-            coro = self.make_gao(
-                ghid = dbind1a.ghid,
-                dynamic = True,
-                author = dbind1a.author,
-                legroom = 7
-            ),
-            loop = self.nooploop._loop
-        )
-        GAO_d1.frame_history.append(dbind1a.frame_ghid)
-        GAO_d1.target_history.append(obj1.ghid)
-        self.privateer.stage(obj1.ghid, secret1_1)
-        self.privateer.stage(obj2.ghid, secret1_2)
-        
-        # Do this late or we will accidentally overwrite other stuff.
+        # Note that the first time, we call (underscored) gao._pull() directly
         await_coroutine_threadsafe(
-            coro = self.librarian.store(dbind1b, dyn1_1b.packed),
+            coro = GAO_d2._pull(),
             loop = self.nooploop._loop
         )
+        # These should compare equally!
+        self.assertEqual(GAO_d1, GAO_d2)
         
+        # NOW, test with a second frame.
+        # Modify the original in-place
         await_coroutine_threadsafe(
-            coro = GAO_d1.pull(dbind1b.frame_ghid),
+            coro = self.modify_gao(GAO_d1),
             loop = self.nooploop._loop
         )
-        
-        GAO_d2 = await_coroutine_threadsafe(
-            coro = self.make_gao(
-                ghid = dbind1a.ghid,
-                dynamic = True,
-                author = dbind1a.author,
-                legroom = 7,
-                master_secret = secret1_1   # This isn't really correct but w/e
-            ),
-            loop = self.nooploop._loop
-        )
-        GAO_d2.frame_history.append(dbind1a.frame_ghid)
-        GAO_d2.target_history.append(obj1.ghid)
-        
+        # Push the updates
         await_coroutine_threadsafe(
-            coro = GAO_d2.pull(dbind1b.frame_ghid),
+            coro = GAO_d1.push(),
             loop = self.nooploop._loop
         )
+        
+        # Pull them on the second object, using complete gao.pull()
+        await_coroutine_threadsafe(
+            coro = GAO_d2.pull(notification=GAO_d1.frame_history[0]),
+            loop = self.nooploop._loop
+        )
+        # These should (still) compare equally!
+        self.assertEqual(GAO_d1, GAO_d2)
+        
+        # NOW, test with a third frame.
+        # Modify the original in-place
+        await_coroutine_threadsafe(
+            coro = self.modify_gao(GAO_d1),
+            loop = self.nooploop._loop
+        )
+        # Push the updates
+        await_coroutine_threadsafe(
+            coro = GAO_d1.push(),
+            loop = self.nooploop._loop
+        )
+        
+        # Pull them on the second object, using complete gao.pull()
+        await_coroutine_threadsafe(
+            coro = GAO_d2.pull(notification=GAO_d1.frame_history[0]),
+            loop = self.nooploop._loop
+        )
+        # These should (still) compare equally!
+        self.assertEqual(GAO_d1, GAO_d2)
 
 
 # ###############################################

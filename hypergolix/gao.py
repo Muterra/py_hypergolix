@@ -628,9 +628,11 @@ class GAOCore(metaclass=API):
                 # frame to the history. So, we preserve the maximum depth to
                 # heal the ratchet at this point.
                 self._advance_history(binding)
+                # HOWEVER, when healing, we also need to add our current target
+                # to the target_vector, or we will not recover the new secret.
                 self._privateer.heal_chain(
                     proxy = self.ghid,
-                    target_history = self.target_history,
+                    target_vector = (binding.target, *self.target_history),
                     master_secret = self._master_secret
                 )
             
@@ -657,14 +659,6 @@ class GAOCore(metaclass=API):
         secret = self._privateer.get(container_ghid)
         packed = await self._librarian.retrieve(container_ghid)
         
-        # If this was just pulled for the first time, init the dynamic and
-        # author attributes.
-        self._conditional_init(
-            ghid = binding.ghid,
-            dynamic = dynamic,
-            author = binding.author
-        )
-        
         try:
             # TODO: fix the leaky abstraction of jumping into the _identity
             unpacked = self._golcore._identity.unpack_container(packed)
@@ -679,6 +673,14 @@ class GAOCore(metaclass=API):
             
         else:
             self._privateer.commit(container_ghid, localize=self._local_secret)
+        
+        # If this was just pulled for the first time, init the dynamic and
+        # author attributes.
+        self._conditional_init(
+            ghid = binding.ghid,    # Not actually the binding ghid for static
+            dynamic = dynamic,
+            author = binding.author
+        )
         
         # Finally, with all of the administrative stuff handled, unpack the
         # actual payload.
@@ -700,34 +702,50 @@ class GAOCore(metaclass=API):
         
     def _advance_history(self, new_obj):
         ''' Updates our history to match the new one.
+        NOTE THAT THIS DEPENDS ON THE PERSISTER to enforce the history
+        hash chain. This is only aligning the histories, and NOT looking
+        at the current frames themselves.
         '''
         old_history = self.frame_history
         new_history = new_obj.history
-        new_legroom = len(new_history)
         
-        # Find how far offset the new_history is from the old_history.
-        for offset in range(new_legroom):
-            # Align the histories by checking the ii'th new element against an
-            # offset ii'th old element.
-            for ii in range(new_legroom - offset):
-                # The new element matches the offset old element, so don't
-                # change the offset.
-                if new_history[offset + ii] == old_history[ii]:
-                    continue
-                
-                # It didn't match, so we need to up the offset by one. Short
-                # circuit the inner loop via break.
+        # We need to check to make sure this isn't pulling in the zeroth frame.
+        if new_history:
+            new_legroom = len(new_history)
+            
+            # Find how far offset the new_history is from the old_history.
+            for offset in range(new_legroom):
+                # Align the histories by checking the ii'th new element against
+                # an offset ii'th old element.
+                for ii in range(new_legroom - offset):
+                    # The new element matches the offset old element, so don't
+                    # change the offset.
+                    if new_history[offset + ii] == old_history[ii]:
+                        continue
+                    
+                    # It didn't match, so we need to up the offset by one.
+                    # Short circuit the inner loop via break.
+                    else:
+                        break
+                    
+                # We found a match. Short-circuit parent loop.
                 else:
                     break
-                
-            # We found a match. Short-circuit parent loop.
+        
+            # We never found a match. Offset should be made into the length of
+            # the entire thing. This depends on persistence system to enforce
+            # the hash chain!
             else:
-                break
-    
-        # We never found a match. Offset should be made into the length of the
-        # entire thing.
+                offset += 1
+        
+        # This is pulling the zeroth frame. We have no history.
         else:
-            offset += 1
+            # Make sure new_legroom is always at least 1. Otherwise, the zeroth
+            # frame (which by definition has no history) will forever damn the
+            # object from being pulled (until it gets updated at its origin
+            # first).
+            new_legroom = 1
+            offset = 0
                     
         # Now we need to make sure that our legroom matches the new object's.
         # Do this after advancing the history so that we don't accidentally
@@ -749,6 +767,8 @@ class GAOCore(metaclass=API):
         '''
         if self._dynamic is None:
             self._dynamic = dynamic
+            
+        if self._author is None:
             self._author = author
             
         if self.ghid is None:

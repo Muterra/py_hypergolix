@@ -421,7 +421,7 @@ class Privateer(metaclass=API):
             
         return ratcheted
             
-    def heal_chain(self, proxy, target_history, master_secret=None):
+    def heal_chain(self, proxy, target_vector, master_secret=None):
         ''' Heals the ratchet for a binding using the gao. Call this any
         time an agent RECEIVES a new EXTERNAL ratcheted object. Stages
         the resulting secret for the most recent frame in binding, BUT
@@ -434,19 +434,19 @@ class Privateer(metaclass=API):
         NOTE that the binding is the LITEWEIGHT version from the
         librarian already, so its ghid is already the dynamic one.
         '''
-        max_index = len(target_history) - 1
+        max_index = len(target_vector) - 1
         broken = (not bool(master_secret)) and \
-                 (target_history[max_index] not in self._secrets)
+                 (target_vector[max_index] not in self._secrets)
         if broken:
             raise RatchetError('Broken ratchet.')
         
         # Go from the oldest to the newest, but start after the first one,
         # because we verified that above.
-        # We can't use reversed(enumerate(target_history)) without re-casting
-        # target_history into a dedicated sequence. We'd like to keep the
+        # We can't use reversed(enumerate(target_vector)) without re-casting
+        # target_vector into a dedicated sequence. We'd like to keep the
         # original iterator, so do it manually.
         for ii in range(max_index - 1, -1, -1):
-            target = target_history[ii]
+            target = target_vector[ii]
             # Skip the first one (deques don't support slicing)
             # Skip if we already have a secret
             if target in self._secrets:
@@ -456,7 +456,7 @@ class Privateer(metaclass=API):
             else:
                 secret = self.ratchet_chain(
                     proxy,
-                    current_target = target_history[ii + 1],
+                    current_target = target_vector[ii + 1],
                     master_secret = master_secret
                 )
                 self.stage(target, secret)
