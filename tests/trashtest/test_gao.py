@@ -95,26 +95,15 @@ xbind1 = _GdxxLite.from_golix(debind1_1)
 xbind1d = _GdxxLite.from_golix(dyndebind1_1)
 
 
-async def make_gao(ghid, dynamic, author, legroom, *args, state, golcore,
-                   ghidproxy, privateer, percore, librarian,
-                   master_secret=None, **kwargs):
-    ''' Called to init a GAO within the loop such that the correct loop
-    is used for the internal asyncio primitives.
+class GAOTestingCore:
+    ''' Unified testing mechanism for GAO. Just add water (err, a
+    make_gao method and a setUp method) to start.
     '''
-    return GAO(ghid, dynamic, author, legroom, *args, state=state,
-               golcore=golcore, ghidproxy=ghidproxy, privateer=privateer,
-               percore=percore, librarian=librarian,
-               master_secret=master_secret, **kwargs)
-
-
-# ###############################################
-# Testing
-# ###############################################
-
-
-class GAOTest(unittest.TestCase):
-    ''' Test the standard GAO.
-    '''
+    
+    async def make_gao(self, ghid, dynamic, author, legroom, *args, **kwargs):
+        ''' Must be capable of making a gao from this input. This is
+        just here for reference.
+        '''
     
     @classmethod
     def setUpClass(cls):
@@ -129,47 +118,26 @@ class GAOTest(unittest.TestCase):
         # Kill the running loop.
         cls.nooploop.stop_threadsafe_nowait()
         
-    def setUp(self):
-        # These are directly required by the GAO
-        self.librarian = LibrarianCore.__fixture__()
-        self.golcore = GolixCore.__fixture__(TEST_AGENT1,
-                                             librarian=self.librarian)
-        self.ghidproxy = GhidProxier.__fixture__()
-        self.privateer = Privateer.__fixture__(TEST_AGENT1)
-        self.percore = PersistenceCore.__fixture__()
-        
     def test_make(self):
         ''' Test making a GAO.
         '''
         GAO1 = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = None,
                 dynamic = None,
                 author = None,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
         self.assertTrue(isinstance(GAO1, GAOCore))
         
         GAO2 = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = None,
                 dynamic = None,
                 author = None,
                 legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian,
                 master_secret = self.privateer.new_secret()
             ),
             loop = self.nooploop._loop
@@ -200,17 +168,11 @@ class GAOTest(unittest.TestCase):
         self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
         GAO_s = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = obj1.ghid,
                 dynamic = False,
                 author = obj1.author,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
@@ -222,17 +184,11 @@ class GAOTest(unittest.TestCase):
         self.assertFalse(GAO_s.isalive)
         
         GAO_d = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = dbind1a.ghid,
                 dynamic = True,
                 author = dbind1a.author,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
@@ -267,17 +223,11 @@ class GAOTest(unittest.TestCase):
         self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
         GAO_s = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = obj1.ghid,
                 dynamic = False,
                 author = obj1.author,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
@@ -289,17 +239,11 @@ class GAOTest(unittest.TestCase):
             )
         
         GAO_d = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = dbind1a.ghid,
                 dynamic = True,
                 author = dbind1a.author,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
@@ -334,17 +278,11 @@ class GAOTest(unittest.TestCase):
         self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
         GAO_s = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = obj1.ghid,
                 dynamic = False,
                 author = obj1.author,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
@@ -355,17 +293,11 @@ class GAOTest(unittest.TestCase):
         )
         
         GAO_d = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = dbind1a.ghid,
                 dynamic = True,
                 author = dbind1a.author,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
@@ -399,17 +331,11 @@ class GAOTest(unittest.TestCase):
         self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
         GAO_d = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = dbind1a.ghid,
                 dynamic = True,
                 author = dbind1a.author,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
@@ -420,17 +346,11 @@ class GAOTest(unittest.TestCase):
         )
         
         GAO_s = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = obj1.ghid,
                 dynamic = False,
                 author = obj1.author,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
@@ -463,17 +383,11 @@ class GAOTest(unittest.TestCase):
         self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
         GAO_s = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = obj1.ghid,
                 dynamic = False,
                 author = obj1.author,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
@@ -485,17 +399,11 @@ class GAOTest(unittest.TestCase):
             )
         
         GAO_d1 = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = dbind1a.ghid,
                 dynamic = True,
                 author = dbind1a.author,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
@@ -509,17 +417,11 @@ class GAOTest(unittest.TestCase):
         )
         
         GAO_d2 = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = dbind1a.ghid,
                 dynamic = True,
                 author = dbind1a.author,
                 legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian,
                 master_secret = secret1_1   # This isn't really correct but w/e
             ),
             loop = self.nooploop._loop
@@ -565,17 +467,11 @@ class GAOTest(unittest.TestCase):
         self.ghidproxy.lookup[dbind1a.ghid] = obj1.ghid
         
         GAO_s = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = obj1.ghid,
                 dynamic = False,
                 author = obj1.author,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
@@ -587,17 +483,11 @@ class GAOTest(unittest.TestCase):
             )
         
         GAO_d1 = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = dbind1a.ghid,
                 dynamic = True,
                 author = dbind1a.author,
-                legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian
+                legroom = 7
             ),
             loop = self.nooploop._loop
         )
@@ -618,17 +508,11 @@ class GAOTest(unittest.TestCase):
         )
         
         GAO_d2 = await_coroutine_threadsafe(
-            coro = make_gao(
+            coro = self.make_gao(
                 ghid = dbind1a.ghid,
                 dynamic = True,
                 author = dbind1a.author,
                 legroom = 7,
-                state = b'hello world',
-                golcore = self.golcore,
-                ghidproxy = self.ghidproxy,
-                privateer = self.privateer,
-                percore = self.percore,
-                librarian = self.librarian,
                 master_secret = secret1_1   # This isn't really correct but w/e
             ),
             loop = self.nooploop._loop
@@ -639,6 +523,43 @@ class GAOTest(unittest.TestCase):
         await_coroutine_threadsafe(
             coro = GAO_d2.pull(dbind1b.frame_ghid),
             loop = self.nooploop._loop
+        )
+
+
+# ###############################################
+# Testing
+# ###############################################
+    
+    
+class GAOTest(GAOTestingCore, unittest.TestCase):
+    ''' Test the standard GAO.
+    '''
+        
+    def setUp(self):
+        # These are directly required by the GAO
+        self.librarian = LibrarianCore.__fixture__()
+        self.golcore = GolixCore.__fixture__(TEST_AGENT1,
+                                             librarian=self.librarian)
+        self.ghidproxy = GhidProxier.__fixture__()
+        self.privateer = Privateer.__fixture__(TEST_AGENT1)
+        self.percore = PersistenceCore.__fixture__()
+    
+    async def make_gao(self, ghid, dynamic, author, legroom, *args, **kwargs):
+        ''' Make a standard GAO.
+        '''
+        return GAO(
+            ghid,
+            dynamic,
+            author,
+            legroom,
+            state = bytes([random.randint(0, 255) for i in range(32)]),
+            *args,
+            golcore = self.golcore,
+            ghidproxy = self.ghidproxy,
+            privateer = self.privateer,
+            percore = self.percore,
+            librarian = self.librarian,
+            **kwargs
         )
         
 

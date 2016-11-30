@@ -34,18 +34,8 @@ hypergolix: A python Golix client.
 '''
 
 import unittest
-import threading
-import time
-import os
-import warnings
-import collections
-import IPython
-import asyncio
 import random
-import traceback
 import logging
-import copy
-import weakref
 
 from loopa import TaskCommander
 from loopa.utils import await_coroutine_threadsafe

@@ -644,7 +644,7 @@ class TestDispatcher(unittest.TestCase):
         shfalog = self.ipc_protocol.share_failures.pop()
         self.assertEqual(shfalog, (conn, obj.ghid, recipient))
             
-    def test_register_startup(self):
+    def test_startup_objs(self):
         ''' Test share failure distribution with dummy tokens.
         '''
         # Create a new connection and object fixture
