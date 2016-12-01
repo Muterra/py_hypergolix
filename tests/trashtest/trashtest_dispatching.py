@@ -701,32 +701,7 @@ class TestDispatcher(unittest.TestCase):
             )
         
         
-@unittest.skip('DNX')
-class TestDispatchable(unittest.TestCase):
-    def test_dispatchable(self):
-        raise NotImplementedError()
-            
-    def test_notify(self):
-        raise NotImplementedError()
-        # Test update notification
-        ghid = make_random_ghid()
-        self.dispatch.notify(ghid)
-        argbuffer = self.ipccore.arg_buffer.popleft()
-        self.assertEqual(ghid, argbuffer[0])
-        callsheetbuffer = self.ipccore.callsheet_buffer.popleft()
-        self.assertEqual(self.ipccore.endpoints, callsheetbuffer)
-        callerbuffer = self.ipccore.caller_buffer.popleft()
-        self.assertEqual(callerbuffer, self.ipccore.send_update)
-        
-        # Test deletion notification
-        ghid = make_random_ghid()
-        self.dispatch.notify(ghid, deleted=True)
-        argbuffer = self.ipccore.arg_buffer.popleft()
-        self.assertEqual(ghid, argbuffer[0])
-        callsheetbuffer = self.ipccore.callsheet_buffer.popleft()
-        self.assertEqual(self.ipccore.endpoints, callsheetbuffer)
-        callerbuffer = self.ipccore.caller_buffer.popleft()
-        self.assertEqual(callerbuffer, self.ipccore.send_delete)
+# Note that _Dispatchable is tested in test_gao!
         
 
 if __name__ == "__main__":

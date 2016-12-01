@@ -227,7 +227,7 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
                     str(num_debindings),
                     ' debindings, when it should have exactly one.'
                 )))
-                raise RuntimeError('Imporoper debinding number.')
+                raise ValueError('Improper debinding number.')
                 
             # Debinding_ghids is a frozenset; this is the fastest way of
             # getting the single element from it.

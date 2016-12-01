@@ -172,6 +172,7 @@ class LibrarianCore(metaclass=API):
     def RESET(self):
         ''' Reset all of the librarian.
         '''
+        self._catalog.clear()
         self._shelf.clear()
         self._dyn_resolver.clear()
         self._bound_by_ghid.clear_all()

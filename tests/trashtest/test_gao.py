@@ -46,6 +46,12 @@ from loopa.utils import await_coroutine_threadsafe
 
 from hypergolix.gao import GAO
 from hypergolix.gao import GAOCore
+from hypergolix.gao import GAODict
+from hypergolix.gao import GAOSet
+from hypergolix.gao import GAOSetMap
+from hypergolix.dispatch import _Dispatchable
+
+from hypergolix.utils import ApiID
 
 from hypergolix.persistence import PersistenceCore
 from hypergolix.persistence import Bookie
@@ -53,6 +59,9 @@ from hypergolix.core import GolixCore
 from hypergolix.core import GhidProxier
 from hypergolix.privateer import Privateer
 from hypergolix.librarian import LibrarianCore
+
+from hypergolix.ipc import IPCServerProtocol
+from hypergolix.dispatch import Dispatcher
 
 from hypergolix.persistence import _GidcLite
 from hypergolix.persistence import _GeocLite
@@ -551,6 +560,252 @@ class GAOTest(GAOTestingCore, unittest.TestCase):
             librarian = self.librarian,
             **kwargs
         )
+        
+    async def modify_gao(self, obj):
+        ''' Update state.
+        '''
+        obj.state = bytes([random.randint(0, 255) for i in range(32)])
+    
+    
+class GAODictTest(GAOTestingCore, unittest.TestCase):
+    ''' Test the standard GAO.
+    '''
+        
+    def setUp(self):
+        # These are directly required by the GAO
+        self.librarian = LibrarianCore.__fixture__()
+        self.golcore = GolixCore.__fixture__(TEST_AGENT1,
+                                             librarian=self.librarian)
+        # Don't fixture this. We need to actually resolve things.
+        self.ghidproxy = GhidProxier()
+        self.privateer = Privateer.__fixture__(TEST_AGENT1)
+        self.percore = PersistenceCore.__fixture__(librarian=self.librarian)
+        # Some assembly required
+        self.ghidproxy.assemble(self.librarian)
+    
+    async def make_gao(self, ghid, dynamic, author, legroom, *args, **kwargs):
+        ''' Make a standard GAO.
+        '''
+        return GAODict(
+            ghid,
+            dynamic,
+            author,
+            legroom,
+            state = {1: bytes([random.randint(0, 255) for i in range(32)])},
+            *args,
+            golcore = self.golcore,
+            ghidproxy = self.ghidproxy,
+            privateer = self.privateer,
+            percore = self.percore,
+            librarian = self.librarian,
+            **kwargs
+        )
+        
+    async def modify_gao(self, obj):
+        ''' Update state.
+        '''
+        obj.state[1] = bytes([random.randint(0, 255) for i in range(32)])
+        
+    def test_dict_stuff(self):
+        ''' Make sure gaodict acts like, well, a dict.
+        '''
+        gao = await_coroutine_threadsafe(
+            coro = self.make_gao(
+                ghid = None,
+                dynamic = True,
+                author = None,
+                legroom = 7
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        gao[1] = 5
+        val = gao.pop(1)
+        self.assertEqual(val, 5)
+        gao.clear()
+        gao[1] = 7
+        self.assertEqual(gao[1], 7)
+        del gao[1]
+        gao.update({1: 1, 2: 2, 3: 3})
+        len(gao)
+        1 in gao
+        for it in gao:
+            pass
+    
+    
+class GAOSetTest(GAOTestingCore, unittest.TestCase):
+    ''' Test the standard GAO.
+    '''
+        
+    def setUp(self):
+        # These are directly required by the GAO
+        self.librarian = LibrarianCore.__fixture__()
+        self.golcore = GolixCore.__fixture__(TEST_AGENT1,
+                                             librarian=self.librarian)
+        # Don't fixture this. We need to actually resolve things.
+        self.ghidproxy = GhidProxier()
+        self.privateer = Privateer.__fixture__(TEST_AGENT1)
+        self.percore = PersistenceCore.__fixture__(librarian=self.librarian)
+        # Some assembly required
+        self.ghidproxy.assemble(self.librarian)
+    
+    async def make_gao(self, ghid, dynamic, author, legroom, *args, **kwargs):
+        ''' Make a standard GAO.
+        '''
+        return GAOSet(
+            ghid,
+            dynamic,
+            author,
+            legroom,
+            state = {bytes([random.randint(0, 255) for i in range(32)])},
+            *args,
+            golcore = self.golcore,
+            ghidproxy = self.ghidproxy,
+            privateer = self.privateer,
+            percore = self.percore,
+            librarian = self.librarian,
+            **kwargs
+        )
+        
+    async def modify_gao(self, obj):
+        ''' Update state.
+        '''
+        obj.state.add(bytes([random.randint(0, 255) for i in range(32)]))
+        
+    def test_set_stuff(self):
+        ''' Make sure gaodict acts like, well, a dict.
+        '''
+        gao = await_coroutine_threadsafe(
+            coro = self.make_gao(
+                ghid = None,
+                dynamic = True,
+                author = None,
+                legroom = 7
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        gao.clear()
+        gao.add(5)
+        val = gao.pop()
+        self.assertEqual(val, 5)
+        gao.add(7)
+        gao.update({1, 2, 3})
+        len(gao)
+        1 in gao
+        for it in gao:
+            pass
+    
+    
+class GAOSetMapTest(GAOTestingCore, unittest.TestCase):
+    ''' Test the standard GAO.
+    '''
+        
+    def setUp(self):
+        # These are directly required by the GAO
+        self.librarian = LibrarianCore.__fixture__()
+        self.golcore = GolixCore.__fixture__(TEST_AGENT1,
+                                             librarian=self.librarian)
+        # Don't fixture this. We need to actually resolve things.
+        self.ghidproxy = GhidProxier()
+        self.privateer = Privateer.__fixture__(TEST_AGENT1)
+        self.percore = PersistenceCore.__fixture__(librarian=self.librarian)
+        # Some assembly required
+        self.ghidproxy.assemble(self.librarian)
+    
+    async def make_gao(self, ghid, dynamic, author, legroom, *args, **kwargs):
+        ''' Make a standard GAO.
+        '''
+        return GAOSetMap(
+            ghid,
+            dynamic,
+            author,
+            legroom,
+            *args,
+            golcore = self.golcore,
+            ghidproxy = self.ghidproxy,
+            privateer = self.privateer,
+            percore = self.percore,
+            librarian = self.librarian,
+            **kwargs
+        )
+        
+    async def modify_gao(self, obj):
+        ''' Update state.
+        '''
+        obj.state.add(
+            bytes([random.randint(0, 255) for i in range(4)]),
+            bytes([random.randint(0, 255) for i in range(32)])
+        )
+        
+    def test_setmap_stuff(self):
+        ''' Make sure gaodict acts like, well, a dict.
+        '''
+        gao = await_coroutine_threadsafe(
+            coro = self.make_gao(
+                ghid = None,
+                dynamic = True,
+                author = None,
+                legroom = 7
+            ),
+            loop = self.nooploop._loop
+        )
+        
+        gao.clear_all()
+        gao.add(5, 5)
+        val = gao.pop_any(5)
+        self.assertEqual(val, {5})
+        gao.add(7, 7)
+        gao.update(5, {1, 2, 3})
+        len(gao)
+        1 in gao
+        for it in gao:
+            pass
+    
+    
+class DispatchableTest(GAOTestingCore, unittest.TestCase):
+    ''' Test the standard GAO.
+    '''
+        
+    def setUp(self):
+        # These are directly required by the GAO
+        self.librarian = LibrarianCore.__fixture__()
+        self.golcore = GolixCore.__fixture__(TEST_AGENT1,
+                                             librarian=self.librarian)
+        # Don't fixture this. We need to actually resolve things.
+        self.ghidproxy = GhidProxier()
+        self.privateer = Privateer.__fixture__(TEST_AGENT1)
+        self.percore = PersistenceCore.__fixture__(librarian=self.librarian)
+        # Some assembly required
+        self.ghidproxy.assemble(self.librarian)
+        self.ipc_protocol = IPCServerProtocol.__fixture__(whoami=None)
+        self.dispatch = Dispatcher.__fixture__()
+    
+    async def make_gao(self, ghid, dynamic, author, legroom, *args, **kwargs):
+        ''' Make a standard GAO.
+        '''
+        return _Dispatchable(
+            ghid,
+            dynamic,
+            author,
+            legroom,
+            *args,
+            state = bytes([random.randint(0, 255) for i in range(32)]),
+            api_id = ApiID(bytes([random.randint(0, 255) for i in range(64)])),
+            golcore = self.golcore,
+            ghidproxy = self.ghidproxy,
+            privateer = self.privateer,
+            percore = self.percore,
+            librarian = self.librarian,
+            dispatch = self.dispatch,
+            ipc_protocol = self.ipc_protocol,
+            **kwargs
+        )
+        
+    async def modify_gao(self, obj):
+        ''' Update state.
+        '''
+        obj.state = bytes([random.randint(0, 255) for i in range(32)])
         
 
 if __name__ == "__main__":

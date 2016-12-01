@@ -705,8 +705,14 @@ class _Dispatchable(GAOCore, metaclass=API):
             raise DispatchError('Incompatible dispatchable version number.')
         elif self.api_id is None:
             self.api_id = api_id
-        elif api_id != self.api_id:
-            raise DispatchError('Cannot change API ID.')
+        else:
+            self._api_id = api_id
+        # Checking for this from other people isn't really that useful. We'll
+        # already error out if you try to change it locally, and if someone
+        # goes to the effort of changing it elsewhere, well, more power to them
+        # I guess.
+        # elif api_id != self.api_id:
+        #     raise DispatchError('Cannot change API ID.')
             
         self.state = packed[70:]
     
@@ -719,3 +725,21 @@ class _Dispatchable(GAOCore, metaclass=API):
         make_background_future(
             self._dispatch.distribute_update(self.ghid, deleted=True)
         )
+        
+    def __eq__(self, other):
+        ''' Ensure the other object is the same gao with the same state.
+        Intended pretty much exclusively for use in testing.
+        '''
+        equal = True
+        
+        try:
+            equal &= (self.dynamic == other.dynamic)
+            equal &= (self.ghid == other.ghid)
+            equal &= (self.author == other.author)
+            equal &= (self.state == other.state)
+            equal &= (self.api_id == other.api_id)
+            
+        except AttributeError:
+            equal = False
+        
+        return equal

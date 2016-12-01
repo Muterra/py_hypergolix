@@ -95,6 +95,44 @@ __all__ = [
 # ###############################################
 
 
+PROXY_CORO = object()
+PROXY_FUNC = object()
+
+
+class ProxiedAPI(API):
+    ''' Use this to construct GAOs that pass along methods to proxied
+    objects.
+    '''
+    
+    def __new__(mcls, clsname, bases, namespace, *args, **kwargs):
+        ''' Modify the existing namespace. Look for anything with a
+        "__is_proxied__" attribute, and use it to create a proxy.
+        '''
+        new_namespace = {}
+        for name, obj in namespace.items():
+            if obj is PROXY_CORO:
+                async def prox(self, *args, __proxname=name, **kwargs):
+                    proxied = getattr(self.state, __proxname)
+                    return (await proxied(*args, **kwargs))
+                
+                prox.__name__ = name
+                new_namespace[name] = prox
+                
+            elif obj is PROXY_FUNC:
+                def prox(self, *args, __proxname=name, **kwargs):
+                    proxied = getattr(self.state, __proxname)
+                    return proxied(*args, **kwargs)
+                        
+                prox.__name__ = name
+                new_namespace[name] = prox
+                
+            else:
+                new_namespace[name] = obj
+                
+        return super().__new__(mcls, clsname, bases, new_namespace, *args,
+                               **kwargs)
+
+
 class DeltaTracking(type):
     ''' Use this to construct GAOs that use deferred-action methods that
     can store deltas before flushing.
@@ -460,11 +498,11 @@ class GAOCore(metaclass=API):
         ''' The actual "meat and bones" for pushing.
         '''
         secret = self._get_new_secret()
+        packed = await self.pack_gao()
+        container = await self._golcore.make_container(packed, secret)
         
         # We have a secret. Now we need a container and a binding frame.
         try:
-            packed = await self.pack_gao()
-            container = await self._golcore.make_container(packed, secret)
             self._privateer.stage(container.ghid, secret)
             
             if self.dynamic:
@@ -841,7 +879,7 @@ class GAO(GAOCore):
         return equal
             
             
-class _GAOPickleBase(GAO):
+class _GAOPickleBase(GAOCore):
     ''' Golix-aware base object with pickle serialization.
     '''
         
@@ -885,30 +923,50 @@ class _GAOPickleBase(GAO):
             )
             raise
             
+    __eq__ = GAO.__eq__
             
-class _DictMixin(dict):
+            
+class _DictMixin(metaclass=ProxiedAPI):
     ''' A golix-aware dictionary.
     '''
     
     def __init__(self, *args, state=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        
         if state is None:
-            super().__init__(state, *args, **kwargs)
+            self._state = {}
         else:
-            super().__init__(*args, **kwargs)
+            self._state = dict(state)
         
     @property
     def state(self):
         ''' Pass through to self._state
         '''
-        return self
+        return self._state
         
     @state.setter
     def state(self, value):
         ''' Preserve the actual dictionary object, instead of just
         replacing it.
         '''
-        self.clear()
-        self.update(value)
+        self._state.clear()
+        self._state.update(value)
+        
+    __len__ = PROXY_FUNC
+    __iter__ = PROXY_FUNC
+    __contains__ = PROXY_FUNC
+    __getitem__ = PROXY_FUNC
+    __setitem__ = PROXY_FUNC
+    __delitem__ = PROXY_FUNC
+    pop = PROXY_FUNC
+    items = PROXY_FUNC
+    keys = PROXY_FUNC
+    values = PROXY_FUNC
+    setdefault = PROXY_FUNC
+    get = PROXY_FUNC
+    popitem = PROXY_FUNC
+    clear = PROXY_FUNC
+    update = PROXY_FUNC
         
     # def __len__(self):
     #     # Straight pass-through
@@ -974,36 +1032,51 @@ class _DictMixin(dict):
     #     return self._state.update(*args, **kwargs)
     
     
-class GAODict(_DictMixin, _GAOPickleBase):
+class GAODict(_GAOPickleBase, _DictMixin):
     ''' Combine GAO dicts with pickle serialization.
     '''
     pass
             
             
-class _SetMixin(set):
+class _SetMixin(metaclass=ProxiedAPI):
     ''' A golix-aware set.
     '''
     
     def __init__(self, *args, state=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        
         if state is None:
-            super().__init__(state, *args, **kwargs)
+            self._state = set()
         else:
-            super().__init__(*args, **kwargs)
+            self._state = set(state)
         
     @property
     def state(self):
         ''' Pass through to self._state
         '''
-        return self
+        return self._state
         
     @state.setter
     def state(self, value):
         ''' Preserve the actual set object, instead of just replacing
         it.
         '''
-        self.clear()
-        self.update(value)
-        
+        self._state.clear()
+        self._state.update(value)
+    
+    __len__ = PROXY_FUNC
+    __iter__ = PROXY_FUNC
+    __contains__ = PROXY_FUNC
+    add = PROXY_FUNC
+    remove = PROXY_FUNC
+    discard = PROXY_FUNC
+    pop = PROXY_FUNC
+    clear = PROXY_FUNC
+    isdisjoint = PROXY_FUNC
+    issubset = PROXY_FUNC
+    issuperset = PROXY_FUNC
+    update = PROXY_FUNC
+    
     # @property
     # def state(self):
     #     ''' Pass through to self._state
@@ -1070,35 +1143,50 @@ class _SetMixin(set):
     #     return self._state.issuperset(other)
             
             
-class GAOSet(_SetMixin, _GAOPickleBase):
+class GAOSet(_GAOPickleBase, _SetMixin):
     ''' Combine GAO sets with pickle serialization.
     '''
     pass
             
             
-class _SetMapMixin(SetMap):
+class _SetMapMixin(metaclass=ProxiedAPI):
     ''' A golix-aware setmap.
     '''
     
-    def __init__(self, *args, state=None, **kwargs):
-        if state is None:
-            super().__init__(state, *args, **kwargs)
-        else:
-            super().__init__(*args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._state = SetMap()
         
     @property
     def state(self):
         ''' Pass through to self._state
         '''
-        return self
+        return self._state
         
     @state.setter
     def state(self, value):
         ''' Preserve the actual setmap object, instead of just
         replacing it.
         '''
-        self.clear_all()
-        self.update_all(value)
+        self._state.clear_all()
+        self._state.update_all(value)
+        
+    __len__ = PROXY_FUNC
+    __iter__ = PROXY_FUNC
+    __contains__ = PROXY_FUNC
+    __bool__ = PROXY_FUNC
+    get_any = PROXY_FUNC
+    pop_any = PROXY_FUNC
+    contains_within = PROXY_FUNC
+    add = PROXY_FUNC
+    update = PROXY_FUNC
+    update_all = PROXY_FUNC
+    remove = PROXY_FUNC
+    discard = PROXY_FUNC
+    clear = PROXY_FUNC
+    clear_any = PROXY_FUNC
+    clear_all = PROXY_FUNC
+    combine = PROXY_FUNC
             
     # def __contains__(self, key):
     #     with self._statelock:
@@ -1205,7 +1293,7 @@ class _SetMapMixin(SetMap):
     #         self.push()
             
             
-class GAOSetMap(_SetMapMixin, _GAOPickleBase):
+class GAOSetMap(_GAOPickleBase, _SetMapMixin):
     ''' Combine GAO setmaps with pickle serialization.
     '''
     pass

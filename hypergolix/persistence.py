@@ -400,7 +400,7 @@ class PersistenceCore(metaclass=API):
             check_ghid = obj.ghid
         
         if (await self._librarian.contains(check_ghid)):
-            return None
+            return False
         
         else:
             # Calculate "gidc", etc
@@ -429,7 +429,7 @@ class PersistenceCore(metaclass=API):
             if remotable:
                 await self._salmonator.push(obj.ghid)
         
-            return obj
+            return True
     
     @direct_ingest.fixture
     async def direct_ingest(self, obj, packed, remotable, skip_conn=None):
@@ -456,40 +456,20 @@ class PersistenceCore(metaclass=API):
         for loader in (self._doorman.load_gidc, self._doorman.load_geoc,
                        self._doorman.load_gobs, self._doorman.load_gobd,
                        self._doorman.load_gdxx, self._doorman.load_garq):
-            # Attempt this loader
-            tasks.add(asyncio.ensure_future(loader(packed)))
+            try:
+                obj = await loader(packed)
             
-        # Do all of the ingesters. This could be smarter (short-circuit as soon
-        # as a successful loader completes) but for now this is good enough.
-        finished, pending = await asyncio.wait(
-            fs = tasks,
-            return_when = asyncio.ALL_COMPLETED
-        )
-        
-        # Don't bother with pending tasks because THEORETICALLY we can't have
-        # any.
-        result = None
-        for task in finished:
-            exc = task.exception()
-            
-            # No exception means we successfully loaded. Ingest it! But don't
-            # immediately exit the loop, because we need to collect the rest of
-            # the exceptions first.
-            if exc is None:
-                result = task.result()
-            
-            # This loader task failed, so try the next.
-            elif isinstance(exc, MalformedGolixPrimitive):
+            except MalformedGolixPrimitive:
                 continue
-            
-            # Raise the first exception that we encounter that isn't from it
-            # being an incorrect primitive.
-            else:
-                raise exc
                 
-        # We might return None here, but let the parent function raise in that
-        # case.
-        return result
+            else:
+                # Short circuit if anything was found.
+                return obj
+        
+        # If no successful loader was found, return None, and allow the parent
+        # to raise.
+        else:
+            return None
         
     @attempt_load.fixture
     async def attempt_load(self, packed):
@@ -527,7 +507,7 @@ class PersistenceCore(metaclass=API):
         # If the object is identical to what we already have, the ingester
         # will return None.
         if ingested:
-            await self._postman.schedule(ingested, skip_conn=skip_conn)
+            await self._postman.schedule(obj, skip_conn=skip_conn)
             
         else:
             logger.debug(

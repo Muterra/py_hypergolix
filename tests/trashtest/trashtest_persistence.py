@@ -647,11 +647,25 @@ class IntegrationTest(unittest.TestCase):
             coro = self.librarian.store(dbind1a, dyn1_1a.packed),
             loop = self.cmd._loop
         )
+        self.assertFalse(
+            await_coroutine_threadsafe(
+                coro = self.librarian.contains(dyn1_1b.target),
+                loop = self.cmd._loop
+            )
+        )
         
         # TEST-SPECIFIC:
+        await_coroutine_threadsafe(
+            coro = self.postman.await_idle(),
+            loop = self.cmd._loop
+        )
         self.postman.deliveries.clear()
         await_coroutine_threadsafe(
             coro = self.percore.ingest(dyn1_1b.packed),
+            loop = self.cmd._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.postman.await_idle(),
             loop = self.cmd._loop
         )
         
@@ -662,6 +676,11 @@ class IntegrationTest(unittest.TestCase):
         # Now upload the object
         await_coroutine_threadsafe(
             coro = self.percore.ingest(cont1_2.packed),
+            loop = self.cmd._loop
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.postman.await_idle(),
             loop = self.cmd._loop
         )
         
