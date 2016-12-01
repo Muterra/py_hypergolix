@@ -49,8 +49,7 @@ RemoteNak status code conventions:
 # Global dependencies
 import logging
 import weakref
-import concurrent.futures
-import threading
+import collections
 import traceback
 import asyncio
 import loopa
@@ -91,6 +90,7 @@ from .exceptions import UnavailableUpstream
 
 from .utils import weak_property
 from .utils import readonly_property
+from .utils import ListMap
 
 from .comms import RequestResponseAPI
 from .comms import request
@@ -138,6 +138,17 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
     _percore = weak_property('__percore')
     _librarian = weak_property('__librarian')
     _postman = weak_property('__postman')
+    
+    @fixture_api
+    def __init__(self, percore=None, librarian=None, *args, **kwargs):
+        super(RemotePersistenceProtocol.__fixture__, self).__init__(
+            *args,
+            **kwargs
+        )
+        if percore is not None:
+            self._percore = percore
+        if librarian is not None:
+            self._librarian = librarian
         
     def assemble(self, percore, librarian, postman):
         # Link to the remote core.
@@ -163,12 +174,21 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
             return True
         else:
             return False
-            
+    
+    @public_api
     @request(b'PB')
     async def publish(self, connection, packed):
         ''' Publish a packed Golix object.
         '''
         return packed
+        
+    @publish.fixture
+    async def publish(self, connection, packed):
+        ''' Just slap the thing into librarian with no checking for
+        fixtures.
+        '''
+        obj = await self._percore.attempt_load(packed)
+        await self._librarian.store(obj, packed)
         
     @publish.request_handler
     async def publish(self, connection, body):
@@ -199,12 +219,19 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
             raise exc
         else:
             return True
-        
+    
+    @public_api
     @request(b'GT')
     async def get(self, connection, ghid):
         ''' Request an object from the persistence provider.
         '''
         return bytes(ghid)
+        
+    @get.fixture
+    async def get(self, connection, ghid):
+        ''' Fixture to just pull directly from librarian.
+        '''
+        return (await self._librarian.retrieve(ghid))
         
     @get.request_handler
     async def get(self, connection, body):
@@ -212,12 +239,18 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
         '''
         ghid = Ghid.from_bytes(body)
         return (await self._librarian.retrieve(ghid))
-        
+    
+    @public_api
     @request(b'+S')
     async def subscribe(self, connection, ghid):
         ''' Subscribe to updates from the remote.
         '''
         return bytes(ghid)
+        
+    @subscribe.fixture
+    async def subscribe(self, connection, ghid):
+        ''' Manual noop.
+        '''
         
     @subscribe.request_handler
     async def subscribe(self, connection, body):
@@ -363,12 +396,19 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
             
         parser = generate_ghidlist_parser()
         return set(parser.unpack(response))
-        
+    
+    @public_api
     @request(b'?E')
     async def query_existence(self, connection, ghid):
         ''' Checks if the passed <ghid> exists at the remote.
         '''
         return bytes(ghid)
+        
+    @query_existence.fixture
+    async def query_existence(self, connection, ghid):
+        ''' Just always return false.
+        '''
+        return (await self._librarian.contains(ghid))
         
     @query_existence.request_handler
     async def query_existence(self, connection, body):
@@ -403,52 +443,6 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
         '''
         await self._postman.clear_subs(connection)
         return b'\x01'
-        
-        
-class Remote(ConnectionManager):
-    ''' Add connection init to exchange identifying infos and subscribe
-    to relevant ghids.
-    '''
-    _golcore = weak_property('__golcore')
-    _salmonator = weak_property('__salmonator')
-    
-    def __init__(self, *args, golcore, salmonator, **kwargs):
-        ''' Add in the salmonator and golcore to self.
-        '''
-        self._golcore = golcore
-        self._salmonator = salmonator
-    
-    async def connection_init(self, connection, protocol):
-        ''' Do stuff and things.
-        '''
-        # Ehh, just always publish. Latency is going to be worse than most
-        # connections for the (only few kB) identity
-        await protocol.publish(
-            connection,
-            self._golcore._identity.second_party.packed
-        )
-        
-        await protocol.subscribe(connection, self._golcore.whoami)
-            
-        # For every every active (salmonator-registered) GAO's ghid...
-        tasks = set()
-        for registrant in self._salmonator._registered:
-            # Record that we need to perform...
-            tasks.add(
-                # ...as a background future (which handles its own errors)...
-                make_background_future(
-                    # ...a subscription call with our connection at protocol
-                    protocol.subscribe(connection, registrant)
-                )
-            )
-        
-        # We need to make sure there's at least one task.
-        if tasks:
-            # And now just wait for all of that to complete.
-            await asyncio.wait(
-                fs = tasks,
-                return_when = asyncio.ALL_COMPLETED
-            )
 
 
 class Salmonator(loopa.TaskLooper, metaclass=API):
@@ -458,7 +452,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
     _golcore = weak_property('__golcore')
     _percore = weak_property('__percore')
     _librarian = weak_property('__librarian')
-    _remoter = weak_property('__remoter')
+    _remote_protocol = weak_property('__remote_protocol')
     
     @public_api
     def __init__(self, *args, **kwargs):
@@ -466,6 +460,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         '''
         super().__init__(*args, **kwargs)
         
+        self._deferred = ListMap()
         self._clear_q = None
         
         self._upstream_remotes = set()
@@ -474,11 +469,11 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         # Lookup for <registered ghid>
         self._registered = set()
         
-    def assemble(self, golcore, percore, librarian, remoter):
+    def assemble(self, golcore, percore, librarian, remote_protocol):
         self._golcore = golcore
         self._percore = percore
         self._librarian = librarian
-        self._remoter = remoter
+        self._remote_protocol = remote_protocol
     
     @fixture_noop
     @public_api
@@ -487,11 +482,10 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         ''' Adds an upstream remote persister.
         *args and **kwargs will be passed to the task_commander task.
         '''
-        remote = Remote(
+        remote = ConnectionManager(
             connection_cls = connection_cls,
-            msg_handler = self._remoter,
-            golcore = self._golcore,
-            salmonator = self
+            msg_handler = self._remote_protocol,
+            conn_init = self.restore_connection
         )
         task_commander.register_task(remote, *args, **kwargs)
         self._upstream_remotes.add(remote)
@@ -612,14 +606,20 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
     @public_api
     async def push(self, ghid):
         ''' Push a single ghid to all remotes.
+        
+        TODO: smartly defer any pushes to unavailable remotes using
+        "if remote.has_connection()"
         '''
         data = await self._librarian.retrieve(ghid)
         
         tasks = set()
         for remote in self._upstream_remotes:
-            tasks.add(
-                make_background_future(remote.push(data))
-            )
+            if remote.has_connection:
+                tasks.add(
+                    make_background_future(remote.publish(data))
+                )
+            else:
+                self._deferred.append(remote, data)
             
         # Need to make sure it's not empty
         if tasks:
@@ -767,3 +767,60 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
             return True
         else:
             return obj
+    
+    @fixture_noop
+    @public_api
+    async def restore_connection(self, remote, connection):
+        ''' Start or re-start a connection.
+        '''
+        # First check to make sure the remote server actually knows us.
+        known_to_remote = await self._remote_protocol.query_existence(
+            connection,
+            self._golcore.whoami
+        )
+        
+        # If not, we need to publish our actual identity.
+        if not known_to_remote:
+            await self._remote_protocol.publish(
+                connection,
+                self._golcore._identity.second_party.packed
+            )
+        
+        # Pass to the salmonator to restore the connection.
+        await self._remote_protocol.subscribe(connection, self._golcore.whoami)
+        
+        # For every every active (salmonator-registered) GAO's ghid...
+        tasks = set()
+        for registrant in self._registered:
+            # Record that we need to perform...
+            tasks.add(
+                # ...as a background future (which handles its own errors)...
+                make_background_future(
+                    # ...a subscription call with our connection at protocol
+                    self._remote_protocol.subscribe(connection, registrant)
+                )
+            )
+        
+        # We need to make sure there's at least one task.
+        if tasks:
+            # And now just wait for all of that to complete.
+            await asyncio.wait(
+                fs = tasks,
+                return_when = asyncio.ALL_COMPLETED
+            )
+        
+        # Now, we need to destructively iterate over our deferreds until the
+        # remote list is exhausted. We have to do this in order, sequentially,
+        # and serially, because eg. containers require bindings, etc.
+        to_push = collections.deque(self._deferred.pop_key(remote))
+        try:
+            while to_push:
+                data = to_push.popleft()
+                await self._remote_protocol.publish(connection, data)
+        
+        # Restore the last to_push, put it back into the deferred list, and
+        # then re-raise
+        except Exception:
+            to_push.appendleft(data)
+            self._deferred.extend(remote, to_push)
+            raise

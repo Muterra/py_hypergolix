@@ -450,8 +450,6 @@ class PersistenceCore(metaclass=API):
         
         TODO: move into doorman.
         '''
-        tasks = set()
-        
         # First run through all of the loaders and see if anything catches.
         for loader in (self._doorman.load_gidc, self._doorman.load_geoc,
                        self._doorman.load_gobs, self._doorman.load_gobd,

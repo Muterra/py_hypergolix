@@ -1074,6 +1074,156 @@ class WeakKeySetMap(SetMap):
         '''
         super().__init__(*args, **kwargs)
         self._mapping = weakref.WeakKeyDictionary()
+            
+            
+class ListMap:
+    ''' Combines a mapping with a list. Threadsafe.
+    '''
+    
+    def __init__(self):
+        ''' Create a lookup!
+        
+        Currently does not support pre-population during __init__().
+        '''
+        self._mapping = {}
+        self._lock = threading.RLock()
+    
+    def __getitem__(self, key):
+        ''' Pass-through to the core lookup. Will return a frozenset.
+        Raises keyerror if missing.
+        '''
+        with self._lock:
+            return tuple(self._mapping[key])
+        
+    def get_key(self, key):
+        ''' Pass-through to the core lookup. Will return a frozenset.
+        Will never raise a keyerror; if key not in self, returns empty
+        frozenset.
+        '''
+        with self._lock:
+            try:
+                return tuple(self._mapping[key])
+            except KeyError:
+                return tuple()
+                
+    def pop_key(self, key):
+        ''' Unlike other methods, pop_any returns the actual list,
+        instead of a tuple copy.
+        '''
+        with self._lock:
+            try:
+                return self._mapping.pop(key)
+            except KeyError:
+                return list()
+        
+    def __contains__(self, key):
+        ''' Check to see if the key exists.
+        '''
+        with self._lock:
+            return key in self._mapping
+        
+    def contains_within(self, key, value):
+        ''' Check to see if the key exists, AND the value exists at key.
+        '''
+        with self._lock:
+            try:
+                return value in self._mapping[key]
+            except KeyError:
+                return False
+        
+    def append(self, key, value):
+        ''' Adds the value to the set at key. Creates a new set there if
+        none already exists.
+        '''
+        with self._lock:
+            try:
+                self._mapping[key].append(value)
+            except KeyError:
+                self._mapping[key] = [value]
+                
+    def extend(self, key, value):
+        ''' Extends the key with the value. Value must support being
+        passed to set.extend(), and the list constructor.
+        '''
+        with self._lock:
+            try:
+                self._mapping[key].extend(value)
+            except KeyError:
+                self._mapping[key] = list(value)
+                
+    def extend_all(self, other):
+        ''' Updates all keys in other to self.
+        '''
+        with self._lock:
+            for key in other:
+                try:
+                    self._mapping[key].extend(other[key])
+                except KeyError:
+                    self._mapping[key] = list(other[key])
+            
+    def _remove_if_empty(self, key):
+        ''' Removes a key entirely if it no longer has any values. Will
+        suppress KeyError if the key is not found.
+        '''
+        try:
+            if len(self._mapping[key]) == 0:
+                del self._mapping[key]
+        except KeyError:
+            pass
+        
+    def pop(self, key):
+        ''' Removes the value from the set at key. Will raise KeyError
+        if either the key is missing, or the value is not contained at
+        the key.
+        '''
+        with self._lock:
+            try:
+                val = self._mapping[key].pop()
+            finally:
+                self._remove_if_empty(key)
+                
+            return val
+        
+    def discard(self, key, value):
+        ''' Same as remove, but will never raise KeyError.
+        '''
+        with self._lock:
+            try:
+                self._mapping[key].discard(value)
+            except KeyError:
+                pass
+            finally:
+                self._remove_if_empty(key)
+        
+    def clear_key(self, key):
+        ''' Clears the specified key. Raises KeyError if key is not
+        found.
+        '''
+        with self._lock:
+            del self._mapping[key]
+        
+    def clear_all(self):
+        ''' Clears the entire mapping.
+        '''
+        with self._lock:
+            self._mapping.clear()
+            
+    def __len__(self):
+        ''' Returns the length of the mapping only.
+        '''
+        return len(self._mapping)
+            
+    def __iter__(self):
+        ''' Send this through to the dict, bypassing the usual route,
+        because otherwise we'll have a deadlock.
+        '''
+        with self._lock:
+            for key in self._mapping:
+                yield key
+        
+    def __bool__(self):
+        # Pass bool straight to mapping.
+        return bool(self._mapping)
         
         
 class NoContext:

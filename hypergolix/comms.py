@@ -128,6 +128,7 @@ class _ConnectionBase(metaclass=API):
     with ConnectionClosed errors.
     '''
     
+    @public_api
     def __init__(self, *args, **kwargs):
         ''' Log the creation of the connection.
         '''
@@ -154,6 +155,15 @@ class _ConnectionBase(metaclass=API):
         )
         # And log our creation.
         logger.info('CONN ' + str(self) + ' CREATED.')
+        
+    @__init__.fixture
+    def __init__(self, msg_iterator=None, *args, **kwargs):
+        ''' Add in an isalive flag and an iterator to simulate message
+        reciept.
+        '''
+        super(_ConnectionBase.__fixture__, self).__init__(*args, **kwargs)
+        self._isalive = True
+        self._msg_iterator = msg_iterator
         
     def terminate(self):
         ''' Remove our circular reference, which (assuming all other
@@ -243,12 +253,14 @@ class _ConnectionBase(metaclass=API):
         ''' Creates and returns a new connection. Intended to be called
         by clients; servers may call __init__ directly.
         '''
+        return cls(*args, **kwargs)
     
     @fixture_api
     async def close(self):
         ''' Closes the existing connection, performing any necessary
         cleanup.
         '''
+        self._isalive = False
     
     @fixture_api
     async def send(self, msg):
@@ -264,14 +276,23 @@ class _ConnectionBase(metaclass=API):
         scalar = random.random()
         # Wait somewhere between 0 and .1 seconds
         delay = scalar * .1
-        # Figure out how long to make the message -- somewhere between 32 bytes
-        # and a kilobibite, inclusive
-        length = random.randrange(32, 1024)
-        # Make the message itself
-        msg = bytes([random.randint(0, 255) for i in range(length)])
-        # Wait the delay and then return
-        await asyncio.sleep(delay)
-        return msg
+        
+        if self._msg_iterator is None:
+            # Figure out how long to make the message -- somewhere between
+            # 32 bytes and a kilobibite, inclusive
+            length = random.randrange(32, 1024)
+            # Make the message itself
+            msg = bytes([random.randint(0, 255) for i in range(length)])
+        else:
+            msg = next(self._msg_iterator)
+            
+        if self._isalive:
+            # Wait the delay and then return
+            await asyncio.sleep(delay)
+            return msg
+        
+        else:
+            raise ConnectionClosed()
         
         
 class _WSLoc(namedtuple('_WSLoc', ('host', 'port', 'tls'))):
@@ -498,13 +519,23 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
     # Maximum delay before retrying a connection, in seconds (1 hour)
     MAX_RETRY_DELAY = 3600
     
-    def __init__(self, connection_cls, msg_handler, *args, **kwargs):
+    def __init__(self, connection_cls, msg_handler, conn_init=None,
+                 conn_close=None, *args, **kwargs):
         ''' We need to assign our connection class.
+        
+        conn_init, if defined, will be awaited (as a background task)
+        every time the connection itself is created.
+        
+        conn_close, if defined, will be awaited (but not as a background
+        task) every time the connection itself has terminated -- AFTER
+        the closure.
         '''
         super().__init__(*args, **kwargs)
         
         self.connection_cls = connection_cls
         self.protocol_def = msg_handler
+        self.conn_init = conn_init
+        self.conn_close = conn_close
         self._connection = None
         self._conn_available = None
         self._conn_args = None
@@ -521,10 +552,6 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
                 return (await self.perform_request(_method, args, kwargs))
             
             setattr(self, name, wrap_request)
-        
-    async def connection_init(self, connection, protocol):
-        ''' Run any desired setup for the connection.
-        '''
     
     async def loop_init(self, *args, **kwargs):
         ''' *args and **kwargs will be passed to the connection class.
@@ -583,10 +610,18 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
             self._consecutive_attempts = 0
             # See note above re: strong/weak references
             self._connection = connection
-            await self.connection_init(connection, self.protocol_def)
             self._conn_available.set()
             
             try:
+                # If we need to do something to establish the connection, do
+                # that here. We don't need to worry about race conditions with
+                # task starting, because we don't cede execution flow control
+                # to the loop until we hit the next await.
+                if self.conn_init is not None:
+                    loopa.utils.make_background_future(
+                        self.conn_init(self, connection)
+                    )
+                
                 # We don't expect clients to have a high enough message volume
                 # to justify a buffer, so directly invoke the message handler
                 await connection.listen_forever(receiver=self.protocol_def)
@@ -596,6 +631,9 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
             finally:
                 self._conn_available.clear()
                 await connection.close()
+                
+                if self.conn_close is not None:
+                    await self.conn_close(self, connection)
             
     async def perform_request(self, request_name, args, kwargs):
         ''' Make the given request using the protocol_def, but wait
@@ -605,6 +643,10 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
         method = getattr(self.protocol_def, request_name)
         await self.await_connection()
         return (await method(self._connection, *args, **kwargs))
+        
+    def has_connection(self):
+        # Hmmm
+        return self._conn_available.is_set()
     
     @loopa.utils.triplicated
     async def await_connection(self):
