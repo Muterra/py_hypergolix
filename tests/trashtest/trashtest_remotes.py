@@ -48,8 +48,6 @@ from loopa import NoopLoop
 from hypergolix.remotes import RemotePersistenceProtocol
 from hypergolix.remotes import Salmonator
 
-from hypergolix.service import RemotePersistenceServer
-
 from hypergolix.comms import BasicServer
 from hypergolix.comms import WSConnection
 from hypergolix.comms import ConnectionManager

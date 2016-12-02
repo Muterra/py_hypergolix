@@ -359,7 +359,7 @@ class MrPostman(PostalCore, metaclass=API):
 class PostOffice(PostalCore, metaclass=API):
     ''' Postman to use for remote persistence servers.
     '''
-    _remoter = weak_property('__remoter')
+    _remote_protocol = weak_property('__remote_protocol')
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -368,9 +368,9 @@ class PostOffice(PostalCore, metaclass=API):
         self._connections = WeakSetMap()
         self._subscriptions = WeakKeySetMap()
         
-    def assemble(self, librarian, remoter):
+    def assemble(self, librarian, remote_protocol):
         super().assemble(librarian)
-        self._remoter = remoter
+        self._remote_protocol = remote_protocol
     
     @fixture_noop
     @public_api
@@ -422,7 +422,7 @@ class PostOffice(PostalCore, metaclass=API):
             
         for connection in connections:
             if connection is not skip_conn:
-                await self._remoter.subscription_update(
+                await self._remote_protocol.subscription_update(
                     connection,
                     subscription,
                     notification

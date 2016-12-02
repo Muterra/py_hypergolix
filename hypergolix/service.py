@@ -35,7 +35,8 @@ hypergolix: A python Golix client.
 
 # Global dependencies
 import logging
-import traceback
+import loopa
+import concurrent.futures
 import time
 import argparse
 import socket
@@ -53,12 +54,8 @@ from daemoniker.exceptions import ReceivedSignal
 # Intra-package dependencies (that require explicit imports, courtesy of
 # daemonization)
 from hypergolix import logutils
-from hypergolix.utils import Aengel
-from hypergolix.comms import RequestResponseProtocol as Autocomms
-from hypergolix.comms import BasicServer as WSBasicServer
-
-from hypergolix.remotes import RemotePersistenceProtocol
-from hypergolix.remotes import Salmonator
+from hypergolix.comms import BasicServer
+from hypergolix.comms import WSConnection
 
 from hypergolix.persistence import PersistenceCore
 from hypergolix.persistence import Doorman
@@ -66,11 +63,12 @@ from hypergolix.persistence import Enforcer
 from hypergolix.persistence import Bookie
 
 from hypergolix.lawyer import LawyerCore
-
 from hypergolix.undertaker import UndertakerCore
-
-from hypergolix.librarian import DiskLibrarian
 from hypergolix.librarian import LibrarianCore
+from hypergolix.librarian import DiskLibrarian
+from hypergolix.postal import PostalCore
+from hypergolix.remotes import Salmonator
+from hypergolix.remotes import RemotePersistenceProtocol
 
 from hypergolix.postal import PostOffice
 
@@ -115,7 +113,7 @@ def _serve_healthcheck(port=7777):
         # Do it in a daemon thread so that application exits are reflected as
         # unavailable, instead of persisting everything
         daemon = True,
-        target = server.serve_forever(),
+        target = server.serve_forever,
         name = 'hlthchk'
     )
     return server, worker
@@ -159,27 +157,9 @@ def _cast_host(host):
     
     # Otherwise, host stays the same
     return host
-    
-    
-def _shielded_server(host, port, cache_dir, debug, traceur, aengel=None):
-    ''' Wraps an _hgx_server in a run-forever while loop, catching and
-    logging all RuntimeErrors but otherwise restarting immediately.
-    
-    Ahhhhh shit, unfortunately because everything is happening in its
-    own thread this won't really work.
-    '''
-    while True:
-        try:
-            _hgx_server(host, port, cache_dir, debug, traceur, aengel)
-            
-        except Exception:
-            logger.critical(
-                'Server failed with traceback:\n' +
-                ''.join(traceback.format_exc())
-            )
 
 
-class RemotePersistenceServer:
+class RemotePersistenceServer(loopa.TaskCommander):
     ''' Simple persistence server.
     Expected defaults:
     host:       'localhost'
@@ -190,76 +170,70 @@ class RemotePersistenceServer:
     traceur:    False
     '''
     
-    def __init__(self, cache_dir=None):
-        self.bridge = None
+    def __init__(self, cache_dir, host, port, *args, **kwargs):
+        ''' Do all of that other smart setup while we're at it.
+        '''
+        super().__init__(*args, **kwargs)
         
+        self.executor = concurrent.futures.ThreadPoolExecutor()
+        
+        # Persistence stuff
         self.percore = PersistenceCore()
-        self.doorman = Doorman()
+        self.doorman = Doorman(self.executor, self._loop)
         self.enforcer = Enforcer()
-        self.lawyer = LawyerCore()
         self.bookie = Bookie()
-        
-        if cache_dir is None:
-            self.librarian = LibrarianCore.__fixture__()
-        else:
-            self.librarian = DiskLibrarian(cache_dir)
-            
+        self.lawyer = LawyerCore()
+        self.librarian = DiskLibrarian(cache_dir)
         self.postman = PostOffice()
         self.undertaker = UndertakerCore()
         # I mean, this won't be used unless we set up peering, but it saves us
         # needing to do a modal switch for remote persistence servers
         self.salmonator = Salmonator.__fixture__()
+        self.remote_protocol = RemotePersistenceProtocol()
         
-    def assemble(self, bridge):
-        # Now we need to link everything together.
-        self.percore.assemble(self.doorman, self.enforcer,
-                              self.lawyer, self.bookie,
-                              self.librarian, self.postman,
-                              self.undertaker, self.salmonator)
-        self.doorman.assemble(self.librarian)
-        self.enforcer.assemble(self.librarian)
-        self.lawyer.assemble(self.librarian)
-        self.bookie.assemble(self.librarian, self.lawyer, self.undertaker)
-        self.librarian.assemble(self.percore)
-        self.postman.assemble(self.librarian, self.bookie)
-        self.undertaker.assemble(self.librarian, self.bookie, self.postman)
-        # Note that this will break if we ever try to use it, because
-        # golix_core isn't actually a golix_core.
-        self.salmonator.assemble(self, self.percore, self.doorman,
-                                 self.postman, self.librarian)
+        self.percore.assemble(
+            doorman = self.doorman,
+            enforcer = self.enforcer,
+            lawyer = self.lawyer,
+            bookie = self.bookie,
+            librarian = self.librarian,
+            postman = self.postman,
+            undertaker = self.undertaker,
+            salmonator = self.salmonator
+        )
+        self.doorman.assemble(librarian=self.librarian)
+        self.enforcer.assemble(librarian=self.librarian)
+        self.bookie.assemble(librarian=self.librarian)
+        self.lawyer.assemble(librarian=self.librarian)
+        self.librarian.assemble(
+            enforcer = self.enforcer,
+            lawyer = self.lawyer,
+            percore = self.percore
+        )
+        self.postman.assemble(
+            librarian = self.librarian,
+            remote_protocol = self.remote_protocol
+        )
+        self.undertaker.assemble(
+            librarian = self.librarian,
+            postman = self.postman
+        )
+        self.remote_protocol.assemble(
+            percore = self.percore,
+            librarian = self.librarian,
+            postman = self.postman
+        )
         
-        # Okay, now set up the bridge, and we should be ready.
-        self.bridge = bridge
-        self.bridge.assemble(self.percore, self.bookie,
-                             self.librarian, self.postman)
-
-
-def _hgx_server(host, port, cache_dir, debug, traceur, aengel=None):
-    ''' Simple remote persistence server over websockets.
-    Explicitly pass None to cache_dir to use in-memory only.
-    '''
-    if not aengel:
-        aengel = Aengel()
-        
-    remote = RemotePersistenceServer(cache_dir)
-    server = Autocomms(
-        autoresponder_name = 'reremser',
-        autoresponder_class = PersisterBridgeServer,
-        connector_name = 'wsremser',
-        connector_class = WSBasicServer,
-        connector_kwargs = {
-            'host': host,
-            'port': port,
-            'tls': False,
-            # 48 bits = 1% collisions at 2.4 e 10^6 connections
-            'birthday_bits': 48,
-        },
-        debug = debug,
-        aengel = aengel,
-    )
-    remote.assemble(server)
-    
-    return remote, server
+        self.server = BasicServer(connection_cls=WSConnection)
+        self.register_task(
+            self.server,
+            msg_handler = self.remote_protocol,
+            host = host,
+            port = port,
+            tls = False
+        )
+        self.register_task(self.postman)
+        self.register_task(self.undertaker)
 
     
 def start(namespace=None):
@@ -318,12 +292,6 @@ def start(namespace=None):
             strip_cmd_args = False
         )
         
-        if not is_parent:
-            # Do signal handling within the Daemonizer so that the parent knows
-            # it was correctly init'd
-            sighandler = SignalHandler1(pid_path)
-            sighandler.start()
-        
         #####################
         # PARENT EXITS HERE #
         #####################
@@ -338,28 +306,41 @@ def start(namespace=None):
             loglevel = verbosity
         )
         
-    logger.debug('Starting remote persistence server...')
+    logger.debug('Parsing config...')
     host = _cast_host(host)
-    remote, server = _hgx_server(host, port, cache_dir, debug, traceur)
-    logger.info('Remote persistence server successfully started.')
+    rps = RemotePersistenceServer(
+        cache_dir,
+        host,
+        port,
+        reusable_loop = False,
+        threaded = False,
+        debug = debug
+    )
     
+    logger.debug('Starting health check...')
     # Start a health check
     healthcheck_server, healthcheck_thread = _serve_healthcheck()
-
-    # Wait indefinitely until signal caught.
-    # TODO: literally anything smarter than this.
-    try:
-        while True:
-            time.sleep(.5)
-    except SIGTERM:
-        logger.info('Caught SIGTERM. Exiting.')
+    healthcheck_thread.start()
         
-    healthcheck_server.shutdown()
+    logger.debug('Starting signal handler...')
     
-    del remote
-    del server
-    del healthcheck_thread
-    del healthcheck_server
+    def signal_handler(signum):
+        logger.info('Caught signal. Exiting.')
+        healthcheck_server.shutdown()
+        rps.stop_threadsafe_nowait()
+        
+    # Normally I'd do this within daemonization, but in this case, we need to
+    # wait to have access to the handler.
+    sighandler = SignalHandler1(
+        pid_path,
+        sigint = signal_handler,
+        sigterm = signal_handler,
+        sigabrt = signal_handler
+    )
+    sighandler.start()
+    
+    logger.info('Starting remote persistence server...')
+    rps.start()
     
     
 def stop(namespace=None):

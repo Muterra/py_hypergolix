@@ -327,7 +327,7 @@ class WSConnection(_ConnectionBase):
         self.path = path
         
     @classmethod
-    async def serve_forever(cls, msg_handler, host, port):
+    async def serve_forever(cls, msg_handler, host, port, tls=False):
         ''' Starts a server for this kind of connection. Should handle
         its own return, and be cancellable via task cancellation.
         '''
