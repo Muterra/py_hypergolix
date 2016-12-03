@@ -32,24 +32,33 @@ hypergolix: A python Golix client.
 
 # Global dependencies
 import traceback
-from concurrent.futures import CancelledError
+import loopa
+import concurrent.futures
 
 # Intra-package dependencies (that require explicit imports, courtesy of
 # daemonization)
-from hypergolix.bootstrapping import AgentBootstrap
-
-from hypergolix.utils import Aengel
-from hypergolix.utils import _generate_threadnames
-
-from hypergolix.comms import RequestResponseProtocol as Autocomms
-from hypergolix.comms import ConnectionManager as WSBasicClient
-from hypergolix.comms import BasicServer as WSBasicServer
-
-from hypergolix.remotes import RemotePersistenceProtocol
-
-from hypergolix.config import Config
-
 from hypergolix import logutils
+from hypergolix.comms import BasicServer
+from hypergolix.comms import WSConnection
+
+from hypergolix.persistence import PersistenceCore
+from hypergolix.persistence import Doorman
+from hypergolix.persistence import Enforcer
+from hypergolix.persistence import Bookie
+
+from hypergolix.lawyer import LawyerCore
+from hypergolix.undertaker import Ferryman
+from hypergolix.librarian import DiskLibrarian
+from hypergolix.postal import MrPostman
+from hypergolix.remotes import Salmonator
+from hypergolix.remotes import RemotePersistenceProtocol
+from hypergolix.core import GolixCore
+from hypergolix.core import GhidProxier
+from hypergolix.core import Oracle
+from hypergolix.rolodex import Rolodex
+from hypergolix.dispatch import Dispatcher
+from hypergolix.ipc import IPCServerProtocol
+from hypergolix.privateer import Privateer
 
 
 # ###############################################
@@ -69,6 +78,154 @@ __all__ = [
 # ###############################################
 # Library
 # ###############################################
+
+
+class HypergolixCore(loopa.TaskCommander):
+    ''' The core Hypergolix system.
+    '''
+    
+    def __init__(self, cache_dir, ipc_port, *args, **kwargs):
+        ''' Create and assemble everything, readying it for a bootstrap
+        (etc).
+        '''
+        super().__init__(*args, **kwargs)
+        
+        # Manufacturing!
+        ######################################################################
+        
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=25)
+        
+        # Persistence stuff
+        self.percore = PersistenceCore()
+        self.doorman = Doorman(self.executor, self._loop)
+        self.enforcer = Enforcer()
+        self.bookie = Bookie()
+        self.lawyer = LawyerCore()
+        self.librarian = DiskLibrarian(cache_dir)
+        self.postman = MrPostman()
+        self.undertaker = Ferryman()
+        self.salmonator = Salmonator()
+        self.remote_protocol = RemotePersistenceProtocol()
+        
+        # Golix stuff
+        self.golcore = GolixCore(self.executor, self._loop)
+        self.ghidproxy = GhidProxier()
+        self.oracle = Oracle()
+        self.privateer = Privateer()
+        
+        # Application engine stuff
+        self.rolodex = Rolodex()
+        self.dispatch = Dispatcher()
+        self.ipc_protocol = IPCServerProtocol()
+        self.ipc_server = BasicServer(connection_cls=WSConnection)
+        
+        # Assembly!
+        ######################################################################
+        
+        # Persistence assembly
+        self.percore.assemble(
+            doorman = self.doorman,
+            enforcer = self.enforcer,
+            lawyer = self.lawyer,
+            bookie = self.bookie,
+            librarian = self.librarian,
+            postman = self.postman,
+            undertaker = self.undertaker,
+            salmonator = self.salmonator
+        )
+        self.doorman.assemble(librarian=self.librarian)
+        self.enforcer.assemble(librarian=self.librarian)
+        self.bookie.assemble(librarian=self.librarian)
+        self.lawyer.assemble(librarian=self.librarian)
+        self.librarian.assemble(
+            enforcer = self.enforcer,
+            lawyer = self.lawyer,
+            percore = self.percore
+        )
+        self.postman.assemble(
+            golcore = self.golcore,
+            oracle = self.oracle,
+            librarian = self.librarian,
+            rolodex = self.rolodex,
+            salmonator = self.salmonator
+        )
+        self.undertaker.assemble(
+            librarian = self.librarian,
+            oracle = self.oracle,
+            postman = self.postman,
+            privateer = self.privateer
+        )
+        self.salmonator.assemble(
+            percore = self.percore,
+            librarian = self.librarian,
+            postman = self.postman
+        )
+        self.remote_protocol.assemble(
+            percore = self.percore,
+            librarian = self.librarian,
+            postman = self.postman
+        )
+        
+        # Golix assembly
+        self.golcore.assemble(self.librarian)
+        self.ghidproxy.assemble(self.librarian)
+        self.oracle.assemble(
+            golcore = self.golcore,
+            ghidproxy = self.ghidproxy,
+            privateer = self.privateer,
+            percore = self.percore,
+            librarian = self.librarian,
+            salmonator = self.salmonator
+        )
+        self.privateer.assemble(self.golcore)
+        
+        # App engine assembly
+        self.dispatch.assemble(
+            oracle = self.oracle,
+            ipc_protocol = self.ipc_protocol
+        )
+        self.rolodex.assemble(
+            golcore = self.golcore,
+            ghidproxy = self.ghidproxy,
+            privateer = self.privateer,
+            percore = self.percore,
+            librarian = self.librarian,
+            salmonator = self.salmonator,
+            dispatch = self.dispatch
+        )
+        self.ipc_protocol.assemble(
+            golcore = self.golcore,
+            oracle = self.oracle,
+            dispatch = self.dispatch,
+            rolodex = self.rolodex,
+            salmonator = self.salmonator
+        )
+        
+        # Task registration!
+        ######################################################################
+        
+        self.register_task(
+            self.ipc_server,
+            msg_handler = self.ipc_protocol,
+            host = 'localhost',
+            port = ipc_port
+        )
+        self.register_task(self.salmonator)
+        self.register_task(self.postman)
+        self.register_task(self.undertaker)
+        
+    def add_remote(self, connection_cls, *args, **kwargs):
+        ''' Add an upstream remote. Connection using connection_cls; on
+        instantiation, the connection will use *args and **kwargs.
+        
+        MUST BE CALLED BEFORE STARTING!
+        '''
+        self.salmonator.add_upstream_remote(
+            task_commander = self,
+            connection_cls = connection_cls,
+            *args,
+            **kwargs
+        )
     
     
 def app_core(user_id, password, startup_logger, aengel=None,

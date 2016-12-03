@@ -37,7 +37,6 @@ hypergolix: A python Golix client.
 import logging
 import loopa
 import concurrent.futures
-import time
 import argparse
 import socket
 import pathlib
@@ -49,7 +48,6 @@ import daemoniker
 from daemoniker import Daemonizer
 from daemoniker import SignalHandler1
 from daemoniker import SIGTERM
-from daemoniker.exceptions import ReceivedSignal
 
 # Intra-package dependencies (that require explicit imports, courtesy of
 # daemonization)
@@ -66,11 +64,9 @@ from hypergolix.lawyer import LawyerCore
 from hypergolix.undertaker import UndertakerCore
 from hypergolix.librarian import LibrarianCore
 from hypergolix.librarian import DiskLibrarian
-from hypergolix.postal import PostalCore
+from hypergolix.postal import PostOffice
 from hypergolix.remotes import Salmonator
 from hypergolix.remotes import RemotePersistenceProtocol
-
-from hypergolix.postal import PostOffice
 
 
 # ###############################################

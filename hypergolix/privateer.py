@@ -141,26 +141,6 @@ class Privateer(metaclass=API):
         # Chicken, meet egg.
         self._golcore = golcore
         
-    def prep_bootstrap(self):
-        ''' Creates temporary objects for tracking secrets.
-        
-        TODO: merge into bootstrap, just use different args.
-        '''
-        self._secrets_persistent = _GaoDictBootstrap()
-        self._secrets_staging = {}
-        self._secrets_local = {}
-        self._secrets_quarantine = _GaoDictBootstrap()
-        self._secrets = collections.ChainMap(
-            self._secrets_persistent,
-            self._secrets_local,
-            self._secrets_staging,
-            self._secrets_quarantine,
-        )
-        self._secrets_committed = collections.ChainMap(
-            self._secrets_persistent,
-            self._secrets_local
-        )
-        
     def bootstrap(self, persistent, quarantine):
         ''' Initializes the privateer into a distributed state.
         persistent is a GaoDict
@@ -512,9 +492,7 @@ class Charon(loopa.TaskLooper):
     It's pretty wasteful to use an entire event loop and thread for this
     but that's sorta the situation at hand currently.
     
-    NOTE: this is soon to be superceded by caching abandon hits in the
-    privateer, which then just get rolled into the next push() call.
-    TODO: that.
+    DEPRECATED AND UNUSED. Superceded by undertaker.Ferryman.
     '''
     
     def __init__(self, *args, **kwargs):
