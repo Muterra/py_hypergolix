@@ -414,9 +414,13 @@ class Privateer(metaclass=API):
         NOTE that the binding is the LITEWEIGHT version from the
         librarian already, so its ghid is already the dynamic one.
         '''
+        if len(target_vector) < 1:
+            raise RatchetError('Target vector has no historical references.')
+            
         max_index = len(target_vector) - 1
         broken = (not bool(master_secret)) and \
                  (target_vector[max_index] not in self._secrets)
+        
         if broken:
             raise RatchetError('Broken ratchet.')
         

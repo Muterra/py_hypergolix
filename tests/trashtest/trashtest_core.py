@@ -191,6 +191,17 @@ class GolcoreTest(unittest.TestCase):
             loop = self.nooploop._loop
         )
         
+        # So interestingly, because of the way counters work, we always have
+        # to have access to the previous frame. We can't just create a frame
+        # out of thin air.
+        await_coroutine_threadsafe(
+            coro = self.librarian.store(
+                _GobdLite.from_golix(dynamic1),
+                dynamic1.packed
+            ),
+            loop = self.nooploop._loop
+        )
+        
         dynamic2 = await_coroutine_threadsafe(
             coro = self.golcore.make_binding_dyn(
                 target = cont2_1.ghid,
@@ -236,19 +247,9 @@ class GhidproxyTest(unittest.TestCase):
         from _fixtures.remote_exchanges import cont1_2
         geoc1_2 = _GeocLite(cont1_2.ghid, cont1_2.author)
         from _fixtures.remote_exchanges import dyn1_1a
-        gobd1_a = _GobdLite(
-            dyn1_1a.ghid_dynamic,
-            dyn1_1a.binder,
-            dyn1_1a.target,
-            dyn1_1a.ghid,
-            dyn1_1a.history)
+        gobd1_a = _GobdLite.from_golix(dyn1_1a)
         from _fixtures.remote_exchanges import dyn1_1b
-        gobd1_b = _GobdLite(
-            dyn1_1b.ghid_dynamic,
-            dyn1_1b.binder,
-            dyn1_1b.target,
-            dyn1_1b.ghid,
-            dyn1_1b.history)
+        gobd1_b = _GobdLite.from_golix(dyn1_1b)
         
         # Hold on to your butts!
         await_coroutine_threadsafe(
@@ -291,19 +292,9 @@ class GhidproxyTest(unittest.TestCase):
         from _fixtures.remote_exchanges import cont2_2
         geoc2_2 = _GeocLite(cont2_2.ghid, cont2_2.author)
         from _fixtures.remote_exchanges import dyn2_1a
-        gobd2_a = _GobdLite(
-            dyn2_1a.ghid_dynamic,
-            dyn2_1a.binder,
-            dyn2_1a.target,
-            dyn2_1a.ghid,
-            dyn2_1a.history)
+        gobd2_a = _GobdLite.from_golix(dyn2_1a)
         from _fixtures.remote_exchanges import dyn2_1b
-        gobd2_b = _GobdLite(
-            dyn2_1b.ghid_dynamic,
-            dyn2_1b.binder,
-            dyn2_1b.target,
-            dyn2_1b.ghid,
-            dyn2_1b.history)
+        gobd2_b = _GobdLite.from_golix(dyn2_1b)
         
         # Hold on to your butts!
         await_coroutine_threadsafe(

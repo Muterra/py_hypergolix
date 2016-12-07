@@ -495,7 +495,9 @@ class GAOTestingCore:
         
         # Pull them on the second object, using complete gao.pull()
         await_coroutine_threadsafe(
-            coro = GAO_d2.pull(notification=GAO_d1.frame_history[0]),
+            # Note that this is taking advantage of the fact that librarians
+            # can retrieve via either dynamic or frame ghid.
+            coro = GAO_d2.pull(notification=GAO_d1.ghid),
             loop = self.nooploop._loop
         )
         # These should (still) compare equally!
@@ -515,7 +517,9 @@ class GAOTestingCore:
         
         # Pull them on the second object, using complete gao.pull()
         await_coroutine_threadsafe(
-            coro = GAO_d2.pull(notification=GAO_d1.frame_history[0]),
+            # Note that this is taking advantage of the fact that librarians
+            # can retrieve via either dynamic or frame ghid.
+            coro = GAO_d2.pull(notification=GAO_d1.ghid),
             loop = self.nooploop._loop
         )
         # These should (still) compare equally!

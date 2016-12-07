@@ -300,7 +300,7 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
         except KeyError:
             # This will always happen if it's the first frame, so let's be sure
             # to ignore that for logging.
-            if obj.history:
+            if len(obj.target_vector) > 1:
                 logger.warning('Could not find gobd to check existing target.')
             triaged = None
         

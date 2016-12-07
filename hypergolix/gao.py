@@ -66,6 +66,7 @@ from .utils import immutable_property
 from .exceptions import HGXLinkError
 from .exceptions import DeadObject
 from .exceptions import RatchetError
+from .exceptions import UnknownSecret
 
 from .persistence import _GobdLite
 from .persistence import _GdxxLite
@@ -236,7 +237,6 @@ class GAOCore(metaclass=API):
     
     # Default a few things to prevent attributeerrors
     _legroom = None
-    _frame_history = tuple()
     _target_history = tuple()
     
     # Make weak properties for the various thingajobbers
@@ -257,10 +257,9 @@ class GAOCore(metaclass=API):
     
     # Also, an un-deletable property for history (even if unused), etc
     isalive = immortal_property('_isalive')
-    # Most recent FRAME ghids
-    frame_history = immortal_property('_frame_history')
     # Most recent TARGET ghids
     target_history = immortal_property('_target_history')
+    _counter = immortal_property('__counter')
     
     @property
     def legroom(self):
@@ -279,8 +278,6 @@ class GAOCore(metaclass=API):
             self._legroom = legroom
             # We actually have to create new deques for this, because you
             # cannot resize existing ones.
-            self.frame_history = collections.deque(self.frame_history,
-                                                   maxlen=legroom)
             self.target_history = collections.deque(self.target_history,
                                                     maxlen=legroom)
             
@@ -305,6 +302,9 @@ class GAOCore(metaclass=API):
         '''
         super().__init__(*args, **kwargs)
         
+        # This is an init. It will be overwritten on either a push or a pull.
+        setattr(self, '__counter', None)
+        
         self._golcore = golcore
         self._ghidproxy = ghidproxy
         self._privateer = privateer
@@ -316,7 +316,7 @@ class GAOCore(metaclass=API):
         self._dynamic = dynamic
         self._author = author
         
-        # Note that this also initializes frame_history and target_history
+        # Note that this also initializes target_history
         self.legroom = legroom
         self.isalive = True
         
@@ -509,8 +509,9 @@ class GAOCore(metaclass=API):
                 binding = await self._golcore.make_binding_dyn(
                     target = container.ghid,
                     ghid = self.ghid,
-                    history = self.frame_history
+                    history = self.target_history
                 )
+                counter = binding.counter
                 # Update ghid if it was not defined (new object)
                 self._conditional_init(
                     binding.ghid_dynamic,
@@ -540,6 +541,7 @@ class GAOCore(metaclass=API):
                     packed = binding.packed,
                     remotable = True
                 )
+                counter = 0
                 
             # Finally, ingest the object itself.
             await self._percore.direct_ingest(
@@ -564,8 +566,8 @@ class GAOCore(metaclass=API):
             # of ghid and ours! This is recording the frame ghid.
             # I mean, for static stuff this isn't (strictly speaking) relevant,
             # but it also doesn't really hurt anything, sooo...
-            self.frame_history.appendleft(binding.ghid)
             self.target_history.appendleft(container.ghid)
+            self._counter = counter
             
     @_push.fixture
     async def _push(self):
@@ -593,47 +595,34 @@ class GAOCore(metaclass=API):
             raise DeadObject('Cannot pull a deleted object. Create a new one.')
             
         elif self.dynamic:
-            # If everything is running on our software, and there aren't any
-            # bugs, this path should never get triggered. But, just in case...
-            if notification in self.frame_history:
-                logger.debug(''.join((
-                    'GAO at',
-                    str(self.ghid),
-                    ' PULL IGNORED w/ notification ',
-                    str(notification)
-                )))
+            summary = await self._librarian.summarize(notification)
+            # We've been deleted.
+            if isinstance(summary, _GdxxLite):
+                async with self._update_lock:
+                    await self.apply_delete(summary)
+                    logger.info(''.join((
+                        'GAO at ',
+                        str(self.ghid),
+                        ' PULL COMPLETED; deleted.'
+                    )))
+                    
+            # We're being updated.
+            elif summary.ghid == self.ghid:
+                async with self._update_lock:
+                    await self._pull()
+                    logger.info(''.join((
+                        'GAO at ',
+                        str(self.ghid),
+                        ' PULL COMPLETED with updates.'
+                    )))
             
-            # This notification is not known to us. It could either be a frame
-            # for an update, or it could be a deletion notice.
+            # The update did not match us. This is sufficient to verify
+            # both that the update was a dynamic binding, and that there's
+            # no upstream bug for us.
             else:
-                summary = await self._librarian.summarize(notification)
-                # We've been deleted.
-                if isinstance(summary, _GdxxLite):
-                    async with self._update_lock:
-                        await self.apply_delete(summary)
-                        logger.info(''.join((
-                            'GAO at ',
-                            str(self.ghid),
-                            ' PULL COMPLETED; deleted.'
-                        )))
-                        
-                # We're being updated.
-                elif summary.ghid == self.ghid:
-                    async with self._update_lock:
-                        await self._pull()
-                        logger.info(''.join((
-                            'GAO at ',
-                            str(self.ghid),
-                            ' PULL COMPLETED with updates.'
-                        )))
-                
-                # The update did not match us. This is sufficient to verify
-                # both that the update was a dynamic binding, and that there's
-                # no upstream bug for us.
-                else:
-                    raise ValueError(
-                        'Update failed pull; mismatched binding ghid.'
-                    )
+                raise ValueError(
+                    'Update failed pull; mismatched binding ghid.'
+                )
             
         else:
             raise TypeError('Static objects cannot be pulled.')
@@ -662,24 +651,26 @@ class GAOCore(metaclass=API):
             # will create a canonical update, regardless of success in
             # unpacking.
             try:
-                # This will only update history. It will not add our current
-                # frame to the history. So, we preserve the maximum depth to
-                # heal the ratchet at this point.
-                self._advance_history(binding)
-                # HOWEVER, when healing, we also need to add our current target
-                # to the target_vector, or we will not recover the new secret.
+                # Recover the new secret for the chain.
                 self._privateer.heal_chain(
                     proxy = self.ghid,
-                    target_vector = (binding.target, *self.target_history),
+                    target_vector = self._maximize_target_vector(binding),
                     master_secret = self._master_secret
                 )
+                
+            except RatchetError as exc:
+                if binding.target not in self._privateer:
+                    raise UnknownSecret(binding.target) from exc
             
             # Now, we need to be sure our local history doesn't forget about
             # our current-most-recent frame when making an update.
             finally:
-                # Finally, appendleft the newest frame and the newest target.
-                self.frame_history.appendleft(binding.frame_ghid)
-                self.target_history.appendleft(binding.target)
+                # Finally, update our target_history accordingly.
+                self.target_history = collections.deque(
+                    binding.target_vector,
+                    # Make sure we have at least one historical target
+                    maxlen = max(2, len(binding.target_vector))
+                )
                 
             # Okay, now let's actually do the thing with the new copy.
             container_ghid = binding.target
@@ -738,8 +729,30 @@ class GAOCore(metaclass=API):
             dynamic = bool(random.randint(0, 1))
         )
         
+    def _maximize_target_vector(self, new_obj):
+        ''' Construct the longest possible target vector, given the
+        new_obj and our knowledge of the old target history.
+        '''
+        # We need to accommodate a possible counter is None
+        old_counter = self._counter
+        if old_counter is None:
+            old_counter = 0
+        
+        offset = new_obj.counter - old_counter
+        
+        if offset > len(new_obj.target_vector):
+            maximized = list(new_obj.target_vector)
+        else:
+            maximized = new_obj.target_vector[:offset]
+            maximized.extend(self.target_history)
+            
+        return maximized
+        
     def _advance_history(self, new_obj):
         ''' Updates our history to match the new one.
+        
+        DEPRECATED AND UNUSED.
+        
         NOTE THAT THIS DEPENDS ON THE PERSISTER to enforce the history
         hash chain. This is only aligning the histories, and NOT looking
         at the current frames themselves.
@@ -784,18 +797,16 @@ class GAOCore(metaclass=API):
             # first).
             new_legroom = 1
             offset = 0
+            
+        # Calculate the offset as the difference between the two counters,
+        # easy-peasy style.
+        offset = new_obj.counter - self._counter
                     
-        # Now we need to make sure that our legroom matches the new object's.
-        # Do this after advancing the history so that we don't accidentally
-        # infer offsets between frames that are so far gone that we don't know
-        # their history. Note that this can only happen when there's a race
-        # between the persistence ingestion updating the object, and the update
-        # being applied to the actual GAO.
-        self.legroom = new_legroom
         
         # Now, appendleft the new frame (and an empty target) until we get to
-        # the most recent one.
-        for ii in range(offset - 1, -1, -1):
+        # the most recent one -- but hold off on adding the new target so we
+        # can preserve the maximum history length
+        for ii in range(offset - 1, 0, -1):
             self.frame_history.appendleft(new_history[ii])
             self.target_history.appendleft(None)
             

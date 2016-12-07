@@ -339,13 +339,20 @@ class GolixCore(metaclass=API):
         # undefined.
         if bool(ghid) ^ bool(history):
             raise ValueError('Mixed def of ghid/history while dyn binding.')
+        
+        if ghid:
+            current_binding = await self._librarian.summarize(ghid)
+            counter = current_binding.counter + 1
+        else:
+            counter = 0
             
         # Run the actual function in the executor
         return (await self._loop.run_in_executor(
             self._executor,
             self._make_binding_dyn,
-            target,
             ghid,
+            counter,
+            target,
             history
         ))
         
@@ -353,18 +360,29 @@ class GolixCore(metaclass=API):
     async def make_binding_dyn(self, target, ghid=None, history=None):
         ''' Yep, just bypass the executor
         '''
-        return self._make_binding_dyn(target, ghid, history)
+        if ghid:
+            current_binding = await self._librarian.summarize(ghid)
+            counter = current_binding.counter + 1
+        else:
+            counter = 0
         
-    def _make_binding_dyn(self, target, ghid, history):
+        return self._make_binding_dyn(ghid, counter, target, history)
+        
+    def _make_binding_dyn(self, ghid, counter, target, history):
         ''' Make a new dynamic binding frame.
         If supplied, ghid is the dynamic address, and history is an
         ordered iterable of the previous frame ghids.
         '''
+        if history is not None:
+            target_vector = [target, *history]
+        else:
+            target_vector = [target]
+        
         with self._mutex_dbinding:
             return self._identity.make_bind_dynamic(
-                target = target,
-                ghid_dynamic = ghid,
-                history = history
+                counter = counter,
+                target_vector = target_vector,
+                ghid_dynamic = ghid
             )
     
     @public_api

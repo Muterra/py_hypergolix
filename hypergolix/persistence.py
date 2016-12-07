@@ -213,17 +213,17 @@ class _GobdLite(_BaseLite):
     '''
     __slots__ = [
         'author',
-        'target',
-        'frame_ghid',
-        'history',
+        'counter',
+        'target_vector',
+        'frame_ghid'
     ]
     
-    def __init__(self, ghid, author, target, frame_ghid, history):
+    def __init__(self, ghid, author, counter, target_vector, frame_ghid):
         self.ghid = ghid
         self.author = author
-        self.target = target
+        self.counter = counter
+        self.target_vector = target_vector
         self.frame_ghid = frame_ghid
-        self.history = history
         
     def __eq__(self, other):
         try:
@@ -250,10 +250,16 @@ class _GobdLite(_BaseLite):
         return cls(
             ghid = golix_obj.ghid_dynamic,
             author = golix_obj.binder,
-            target = golix_obj.target,
-            frame_ghid = golix_obj.ghid,
-            history = golix_obj.history,
+            counter = golix_obj.counter,
+            target_vector = golix_obj.target_vector,
+            frame_ghid = golix_obj.ghid
         )
+        
+    @property
+    def target(self):
+        ''' Access the current target.
+        '''
+        return self.target_vector[0]
     
         
 class _GdxxLite(_BaseLite):
@@ -949,14 +955,17 @@ class Enforcer(metaclass=API):
             )
                 
         else:
-            if existing.frame_ghid not in obj.history:
-                logger.debug('New obj frame:     ' + str(obj.frame_ghid))
-                logger.debug('New obj hist:      ' + str(obj.history))
-                logger.debug('Existing frame:    ' + str(existing.frame_ghid))
-                logger.debug('Existing hist:     ' + str(existing.history))
+            if existing.counter >= obj.counter:
+                logger.debug(
+                    'New obj frame:     ' + str(obj.frame_ghid))
+                logger.debug(
+                    'New obj tarvec:    ' + str(obj.target_vector))
+                logger.debug(
+                    'Existing frame:    ' + str(existing.frame_ghid))
+                logger.debug(
+                    'Existing tarvec:   ' + str(existing.target_vector))
                 raise IllegalDynamicFrame(
-                    '0x0009: Illegal frame. Frame history did not contain the '
-                    'most recent frame.'
+                    '0x0009: Illegal frame. Frame counter did not increase.'
                 )
             
             

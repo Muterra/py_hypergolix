@@ -147,56 +147,60 @@ degloveshake2_1 = TEST_AGENT1.make_debind(
 
 # Make some dynamic bindings!
 dyn1_1a = TEST_AGENT1.make_bind_dynamic(
-    target = cont1_1.ghid
+    counter = 0,
+    target_vector = [cont1_1.ghid]
 )
 dyn1_1b = TEST_AGENT1.make_bind_dynamic(
-    target = cont1_2.ghid,
-    ghid_dynamic = dyn1_1a.ghid_dynamic,
-    history = [dyn1_1a.ghid]
+    counter = 1,
+    target_vector = [cont1_2.ghid, cont1_1.ghid],
+    ghid_dynamic = dyn1_1a.ghid_dynamic
 )
 
 dyn2_1a = TEST_AGENT2.make_bind_dynamic(
-    target = cont2_1.ghid
+    counter = 0,
+    target_vector = [cont2_1.ghid]
 )
 dyn2_1b = TEST_AGENT2.make_bind_dynamic(
-    target = cont2_2.ghid,
-    ghid_dynamic = dyn2_1a.ghid_dynamic,
-    history = [dyn2_1a.ghid]
+    counter = 1,
+    target_vector = [cont2_2.ghid, cont2_1.ghid],
+    ghid_dynamic = dyn2_1a.ghid_dynamic
 )
 
 dyn3_1a = TEST_AGENT3.make_bind_dynamic(
-    target = cont3_1.ghid
+    counter = 0,
+    target_vector = [cont3_1.ghid]
 )
 dyn3_1b = TEST_AGENT3.make_bind_dynamic(
-    target = cont3_2.ghid,
-    ghid_dynamic = dyn3_1a.ghid_dynamic,
-    history = [dyn3_1a.ghid]
+    counter = 1,
+    target_vector = [cont3_2.ghid, cont3_1.ghid],
+    ghid_dynamic = dyn3_1a.ghid_dynamic
 )
 
 # And make some fraudulent ones
 dynF_1b = TEST_AGENT1.make_bind_dynamic(
-    target = cont1_2.ghid,
-    ghid_dynamic = dyn2_1a.ghid_dynamic,
-    history = [dyn2_1a.ghid]
+    counter = 1,
+    target_vector = [cont1_2.ghid, cont2_1.ghid],
+    ghid_dynamic = dyn2_1a.ghid_dynamic
 )
 dynF_2b = TEST_AGENT2.make_bind_dynamic(
-    target = cont2_2.ghid,
-    ghid_dynamic = dyn1_1a.ghid_dynamic,
-    history = [dyn1_1a.ghid]
+    counter = 1,
+    target_vector = [cont2_2.ghid, cont1_1.ghid],
+    ghid_dynamic = dyn1_1a.ghid_dynamic
 )
 
 dynF_a = TEST_AGENT1.make_bind_dynamic(
-    target = cont1_2.ghid
+    counter = 0,
+    target_vector = [cont1_2.ghid]
 )
 dynF_b = TEST_AGENT2.make_bind_dynamic(
-    target = cont2_2.ghid,
-    ghid_dynamic = dynF_a.ghid_dynamic,
-    history = [dynF_a.ghid]
+    counter = 1,
+    target_vector = [cont2_2.ghid, cont1_2.ghid],
+    ghid_dynamic = dynF_a.ghid_dynamic
 )
 dynF_c = TEST_AGENT3.make_bind_dynamic(
-    target = cont2_2.ghid,
-    ghid_dynamic = dynF_a.ghid_dynamic,
-    history = [dynF_a.ghid]
+    counter = 1,
+    target_vector = [cont2_2.ghid, cont1_2.ghid],
+    ghid_dynamic = dynF_a.ghid_dynamic
 )
 
 # Make some debindings
