@@ -39,6 +39,8 @@ import concurrent.futures
 from loopa import NoopLoop
 from loopa.utils import await_coroutine_threadsafe
 
+from hypergolix.accounting import Account
+
 from hypergolix.core import GolixCore
 from hypergolix.core import Oracle
 from hypergolix.core import GhidProxier
@@ -64,27 +66,6 @@ from golix import Ghid
 from _fixtures.identities import TEST_AGENT1
 from _fixtures.identities import TEST_AGENT2
 from _fixtures.ghidutils import make_random_ghid
-        
-        
-class MockCredential:
-    ''' Temporary bypass of password inflation for purpose of getting
-    the privateer bootstrap up and running. JUST FOR TESTING PURPOSES.
-    '''
-    
-    def __init__(self, privateer, identity):
-        self.identity = identity
-        self._lookup = {}
-        self._privateer = privateer
-        
-    def get_master(self, proxy):
-        # JIT creation of the proxy secret. JUST FOR TESTING PURPOSES.
-        if proxy not in self._lookup:
-            self._lookup[proxy] = self._privateer.new_secret()
-        return self._lookup[proxy]
-        
-    def is_primary(self, ghid):
-        # Probably always false?
-        return False
 
 
 # ###############################################
@@ -115,7 +96,7 @@ class GolcoreTest(unittest.TestCase):
         
         self.golcore = GolixCore(self.executor, self.nooploop._loop)
         self.golcore.assemble(self.librarian)
-        self.golcore.bootstrap(MockCredential(None, TEST_AGENT1))
+        self.golcore.bootstrap(Account.__fixture__(TEST_AGENT1))
         
         # Our librarian fixturing is a little inadequate, so for now just
         # manually add this stuff.

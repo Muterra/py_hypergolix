@@ -226,6 +226,15 @@ class HypergolixCore(loopa.TaskCommander):
             *args,
             **kwargs
         )
+        
+    async def setup(self):
+        ''' Do all of the post-init-pre-run stuff.
+        '''
+        await self.librarian.restore()
+        
+    async def teardown(self):
+        ''' Do all of the post-run-pre-close stuff.
+        '''
     
     
 def app_core(user_id, password, startup_logger, aengel=None,

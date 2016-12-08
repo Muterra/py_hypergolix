@@ -130,13 +130,9 @@ class GolixCore(metaclass=API):
         # Chicken, meet egg.
         self._librarian = librarian
         
-    def prep_bootstrap(self, identity):
-        # Temporarily set our identity to a generic firstparty for loading.
-        self._identity = identity
-        
-    def bootstrap(self, credential):
+    def bootstrap(self, account):
         # This must be done ASAGDFP. Must be absolute first thing to bootstrap.
-        self._identity = weakref.proxy(credential.identity)
+        self._identity = account._identity
         
     @property
     @public_api

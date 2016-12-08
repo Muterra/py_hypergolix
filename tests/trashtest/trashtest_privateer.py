@@ -43,6 +43,8 @@ import weakref
 from hypergolix.core import GolixCore
 from hypergolix.core import GhidProxier
 
+from hypergolix.accounting import Account
+
 from hypergolix.privateer import Privateer
 from hypergolix.exceptions import ConflictingSecrets
 from hypergolix.exceptions import RatchetError
@@ -73,11 +75,12 @@ class PrivateerTest(unittest.TestCase):
         # Fixtures are helpful
         self.golcore = GolixCore.__fixture__(TEST_AGENT1)
         self.ghidproxy = GhidProxier.__fixture__()
+        self.account = Account.__fixture__(TEST_AGENT1)
         
         # This is obviously necessary for testing.
         self.privateer = Privateer()
         self.privateer.assemble(self.golcore)
-        self.privateer.bootstrap({}, {})
+        self.privateer.bootstrap(self.account)
         # Note that we don't actually need to bootstrap, because prep_bootstrap
         # creates a fully-functional privateer (just without using GAOs)
         

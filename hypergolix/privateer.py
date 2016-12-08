@@ -119,9 +119,19 @@ class Privateer(metaclass=API):
         super(Privateer.__fixture__, self).__init__(*args, **kwargs)
         
         self._identity = identity
-        self.bootstrap(
-            persistent = {},
-            quarantine = {}
+        self._secrets_persistent = {}
+        self._secrets_staging = {}
+        self._secrets_local = {}
+        self._secrets_quarantine = {}
+        self._secrets = collections.ChainMap(
+            self._secrets_persistent,
+            self._secrets_local,
+            self._secrets_staging,
+            self._secrets_quarantine,
+        )
+        self._secrets_committed = collections.ChainMap(
+            self._secrets_persistent,
+            self._secrets_local
         )
         
     @fixture_api
@@ -141,16 +151,16 @@ class Privateer(metaclass=API):
         # Chicken, meet egg.
         self._golcore = golcore
         
-    def bootstrap(self, persistent, quarantine):
+    def bootstrap(self, account):
         ''' Initializes the privateer into a distributed state.
         persistent is a GaoDict
         '''
         # We very obviously need to be able to look up what secrets we have.
         # Lookups: <container ghid>: <container secret>
-        self._secrets_persistent = persistent
+        self._secrets_persistent = account.privateer_persistent
         self._secrets_staging = {}
         self._secrets_local = {}
-        self._secrets_quarantine = quarantine
+        self._secrets_quarantine = account.privateer_quarantine
         self._secrets = collections.ChainMap(
             self._secrets_persistent,
             self._secrets_local,
