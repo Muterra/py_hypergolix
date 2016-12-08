@@ -95,6 +95,7 @@ class Privateer(metaclass=API):
     ''' Lookup system to get secret from ghid. Loopsafe, but NOT
     threadsafe.
     '''
+    _account = weak_property('__account')
     _golcore = weak_property('__golcore')
     
     @public_api
@@ -155,6 +156,8 @@ class Privateer(metaclass=API):
         ''' Initializes the privateer into a distributed state.
         persistent is a GaoDict
         '''
+        self._account = account
+        
         # We very obviously need to be able to look up what secrets we have.
         # Lookups: <container ghid>: <container secret>
         self._secrets_persistent = account.privateer_persistent

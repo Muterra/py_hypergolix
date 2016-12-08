@@ -125,6 +125,7 @@ class Dispatcher(metaclass=API):
     pass on straight to the oracle, but add all of the extra tracking
     stuff (and so on) internally.
     '''
+    _account = weak_property('__account')
     _ipc_protocol = weak_property('__ipc_protocol')
     _oracle = weak_property('__oracle')
     
@@ -209,35 +210,39 @@ class Dispatcher(metaclass=API):
         self._oracle = oracle
         self._ipc_protocol = ipc_protocol
         
-    def bootstrap(self, all_tokens, startup_objs, private_by_ghid, token_lock,
-                  incoming_shares, orphan_acks, orphan_naks):
+    def bootstrap(self, account):
         ''' Initialize distributed state.
         '''
+        self._account = account
+        
         # Now init distributed state.
-        # All known tokens must already contain a key for b'\x00\x00\x00\x00'.
-        if b'\x00\x00\x00\x00' not in all_tokens:
-            all_tokens.add(b'\x00\x00\x00\x00')
             
         # Lookup for all known tokens: set(<tokens>)
-        self._all_known_tokens = all_tokens
+        self._all_known_tokens = account.dispatch_tokens
         # Lookup (set-map-like) for <app token>: set(<startup ghids>)
-        self._startup_by_token = startup_objs
+        self._startup_by_token = account.dispatch_startup
         # Lookup (dict-like) for <obj ghid>: <private owner>
-        self._private_by_ghid = private_by_ghid
+        self._private_by_ghid = account.dispatch_private
         
         # These need to be distributed but aren't yet. TODO!
         # Distributed lock for adding app tokens
-        self._token_lock = token_lock
+        self._token_lock = NoContext()
         
         # Set of incoming shared ghids that had no conn
         # set(<ghid, sender tuples>)
-        self._orphan_incoming_shares = incoming_shares
+        self._orphan_incoming_shares = account.dispatch_incoming
         # Setmap-like lookup for share acks that had no conn
         # <app token>: set(<ghid, recipient tuples>)
-        self._orphan_share_acks = orphan_acks
+        self._orphan_share_acks = account.dispatch_orphan_acks
         # Setmap-like lookup for share naks that had no conn
         # <app token>: set(<ghid, recipient tuples>)
-        self._orphan_share_naks = orphan_naks
+        self._orphan_share_naks = account.dispatch_orphan_naks
+        
+        # All known tokens must already contain a key for b'\x00\x00\x00\x00'.
+        # This is necessary because dispatch uses the zero token to indicate a
+        # lack of a token in an exchange
+        if b'\x00\x00\x00\x00' not in self._all_known_tokens:
+            self._all_known_tokens.add(b'\x00\x00\x00\x00')
             
     @public_api
     def token_lookup(self, connection):

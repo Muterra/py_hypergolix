@@ -31,13 +31,21 @@ hypergolix: A python Golix client.
 '''
 
 # Global dependencies
+import logging
 import traceback
 import loopa
 import concurrent.futures
 
+from golix import Secret
+from golix import Ghid
+
+from Crypto.Protocol.KDF import scrypt
+
 # Intra-package dependencies (that require explicit imports, courtesy of
 # daemonization)
 from hypergolix import logutils
+from hypergolix.accounting import Account
+
 from hypergolix.comms import BasicServer
 from hypergolix.comms import WSConnection
 
@@ -66,7 +74,6 @@ from hypergolix.privateer import Privateer
 # ###############################################
 
 
-import logging
 logger = logging.getLogger(__name__)
 
 # Control * imports.
@@ -80,13 +87,20 @@ __all__ = [
 # ###############################################
 
 
+# Use 2**14 for t<=100ms, 2**20 for t<=5s.
+_DEFAULT_SCRYPT_HARDNESS = 2**15
+
+
 class HypergolixCore(loopa.TaskCommander):
     ''' The core Hypergolix system.
     '''
     
-    def __init__(self, cache_dir, ipc_port, *args, **kwargs):
+    def __init__(self, user_id, root_secret, cache_dir, ipc_port, *args,
+                 **kwargs):
         ''' Create and assemble everything, readying it for a bootstrap
         (etc).
+        
+        user_id may be explicitly None to create a new account.
         '''
         super().__init__(*args, **kwargs)
         
@@ -118,6 +132,20 @@ class HypergolixCore(loopa.TaskCommander):
         self.dispatch = Dispatcher()
         self.ipc_protocol = IPCServerProtocol()
         self.ipc_server = BasicServer(connection_cls=WSConnection)
+        
+        # This bit miiiiight be important
+        self.account = Account(
+            user_id,
+            root_secret,
+            golcore = self.golcore,
+            privateer = self.privateer,
+            oracle = self.oracle,
+            rolodex = self.rolodex,
+            dispatch = self.dispatch,
+            percore = self.percore,
+            librarian = self.librarian,
+            salmonator = self.salmonator
+        )
         
         # Assembly!
         ######################################################################
@@ -235,6 +263,40 @@ class HypergolixCore(loopa.TaskCommander):
     async def teardown(self):
         ''' Do all of the post-run-pre-close stuff.
         '''
+        
+        
+def _expand_password(salt_ghid, password, hardness=None):
+    ''' Expands the author's ghid and password into a master key for
+    use in generating specific keys.
+    
+    Hardness allows you to modify the scrypt inflation parameter. It
+    defaults to something resembling a reasonable general-purpose
+    value for 2016.
+    '''
+    # Use 2**14 for t<=100ms, 2**20 for t<=5s.
+    if hardness is None:
+        hardness = _DEFAULT_SCRYPT_HARDNESS
+    else:
+        hardness = int(hardness)
+    
+    # Scrypt the password. Salt against the author GHID.
+    combined = scrypt(
+        password = password,
+        salt = bytes(salt_ghid),
+        key_len = 48,
+        N = hardness,
+        r = 8,
+        p = 1
+    )
+    key = combined[0:32]
+    seed = combined[32:48]
+    master_secret = Secret(
+        cipher = 1,
+        version = 'latest',
+        key = key,
+        seed = seed
+    )
+    return master_secret
     
     
 def app_core(user_id, password, startup_logger, aengel=None,

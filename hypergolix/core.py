@@ -39,6 +39,7 @@ import weakref
 import threading
 import traceback
 
+from golix import FirstParty
 from golix import SecondParty
 from golix import Ghid
 
@@ -105,7 +106,7 @@ class GolixCore(metaclass=API):
         self._mutex_xbinding = threading.Lock()
         
         # Added during bootstrap
-        self._identity = None
+        self.__identity = None
         
         # Async-specific stuff
         setattr(self, '__executor', executor)
@@ -133,6 +134,22 @@ class GolixCore(metaclass=API):
     def bootstrap(self, account):
         # This must be done ASAGDFP. Must be absolute first thing to bootstrap.
         self._identity = account._identity
+        
+    @property
+    def _identity(self):
+        ''' Wrap our identity in such a way that, if it's not defined,
+        we can fall back on the FirstParty class.
+        '''
+        if self.__identity is None:
+            return FirstParty
+        else:
+            return self.__identity
+            
+    @_identity.setter
+    def _identity(self, identity):
+        ''' Set the identity.
+        '''
+        self.__identity = identity
         
     @property
     @public_api

@@ -49,6 +49,8 @@ from hypergolix.gao import GAOCore
 
 from hypergolix.rolodex import Rolodex
 
+from hypergolix.accounting import Account
+
 from hypergolix.persistence import PersistenceCore
 from hypergolix.core import GolixCore
 from hypergolix.core import GhidProxier
@@ -142,10 +144,9 @@ class RolodexTest(unittest.TestCase):
         self.rolodex.assemble(self.golcore, self.ghidproxy, self.privateer,
                               self.percore, self.librarian, self.salmonator,
                               self.dispatch)
-        self.rolodex.bootstrap(
-            pending_requests = {},
-            outstanding_shares = SetMap()
-        )
+        
+        self.account = Account.__fixture__(TEST_AGENT1)
+        self.rolodex.bootstrap(self.account)
         
     def test_share(self):
         ''' Test share_object.

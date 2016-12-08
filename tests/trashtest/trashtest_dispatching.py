@@ -52,6 +52,8 @@ from hypergolix.utils import SetMap
 from hypergolix.utils import NoContext
 from hypergolix.utils import ApiID
 
+from hypergolix.accounting import Account
+
 from hypergolix.comms import _ConnectionBase
 from hypergolix.core import Oracle
 from hypergolix.ipc import IPCServerProtocol
@@ -69,6 +71,7 @@ from hypergolix.exceptions import ExistantAppError
 
 
 from _fixtures.ghidutils import make_random_ghid
+from _fixtures.identities import TEST_AGENT1
 
 
 # ###############################################
@@ -123,15 +126,9 @@ class TestDispatcher(unittest.TestCase):
         # Some assembly required
         self.dispatch = Dispatcher()
         self.dispatch.assemble(self.oracle, self.ipc_protocol)
-        self.dispatch.bootstrap(
-            all_tokens = set(),
-            startup_objs = {},
-            private_by_ghid = {},
-            token_lock = NoContext(),
-            incoming_shares = set(),
-            orphan_acks = SetMap(),
-            orphan_naks = SetMap()
-        )
+        
+        self.account = Account.__fixture__(TEST_AGENT1)
+        self.dispatch.bootstrap(self.account)
         
     def test_app_start(self):
         ''' Test starting an application, including token creation.

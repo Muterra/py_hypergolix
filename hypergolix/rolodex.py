@@ -90,6 +90,7 @@ class Rolodex(metaclass=API):
     pipelines, negotiated through handshakes, to perform sharing
     symmetrically between contacts.
     '''
+    _account = weak_property('__account')
     _golcore = weak_property('__golcore')
     _ghidproxy = weak_property('__ghidproxy')
     _privateer = weak_property('__privateer')
@@ -126,16 +127,18 @@ class Rolodex(metaclass=API):
         self._pending_requests.clear()
         self._outstanding_shares.clear()
         
-    def bootstrap(self, pending_requests, outstanding_shares):
+    def bootstrap(self, account):
         ''' Initialize distributed state.
         '''
+        self._account = account
+        
         # Persistent dict-like lookup for
         # request_ghid -> (request_target, request recipient)
-        self._pending_requests = pending_requests
+        self._pending_requests = account.rolodex_pending
         
         # These need to be distributed but aren't yet. TODO!
         # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
-        self._outstanding_shares = outstanding_shares
+        self._outstanding_shares = account.rolodex_outstanding
         
     def assemble(self, golcore, ghidproxy, privateer, percore, librarian,
                  salmonator, dispatch):
