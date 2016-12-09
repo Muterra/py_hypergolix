@@ -127,6 +127,8 @@ class Rolodex(metaclass=API):
         self._pending_requests.clear()
         self._outstanding_shares.clear()
         
+    @fixture_noop
+    @public_api
     def bootstrap(self, account):
         ''' Initialize distributed state.
         '''

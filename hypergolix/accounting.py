@@ -46,6 +46,10 @@ from golix import Ghid
 from golix import Secret
 from golix import FirstParty
 
+# These deps are for publishing our identity elsewhere (super awkwardly)
+from golix._getlow import GIDC
+from .persistence import _GidcLite
+
 # Internal deps
 from .hypothetical import API
 from .hypothetical import public_api
@@ -98,18 +102,20 @@ class Account(metaclass=API):
     _identity = immortal_property('__identity')
     _user_id = immortal_property('__user_id')
     
-    golcore = weak_property('_golcore')
-    privateer = weak_property('_privateer')
-    oracle = weak_property('_oracle')
-    rolodex = weak_property('_rolodex')
-    dispatch = weak_property('_dispatch')
-    percore = weak_property('_percore')
-    librarian = weak_property('_librarian')
-    salmonator = weak_property('_salmonator')
+    _golcore = weak_property('__golcore')
+    _ghidproxy = weak_property('__ghidproxy')
+    _privateer = weak_property('__privateer')
+    _oracle = weak_property('__oracle')
+    _rolodex = weak_property('__rolodex')
+    _dispatch = weak_property('__dispatch')
+    _percore = weak_property('__percore')
+    _librarian = weak_property('__librarian')
+    _salmonator = weak_property('__salmonator')
     
     @public_api
-    def __init__(self, user_id, root_secret, *args, golcore, privateer, oracle,
-                 rolodex, dispatch, percore, librarian, salmonator, **kwargs):
+    def __init__(self, user_id, root_secret, *args, golcore, ghidproxy,
+                 privateer, oracle, rolodex, dispatch, percore, librarian,
+                 salmonator, **kwargs):
         ''' Gets everything ready for account bootstrapping.
         
         +   user_id explicitly passed with None means create a new
@@ -128,18 +134,27 @@ class Account(metaclass=API):
             self._user_id = None
             logger.info('Private keys generated.')
         
-        else:
+        elif isinstance(user_id, Ghid):
             self._identity = None
             self._user_id = user_id
+        
+        # This is used exclusively for testing.
+        elif isinstance(user_id, FirstParty):
+            self._identity = user_id
+            self._user_id = None
+        
+        else:
+            raise TypeError('user_id must be an instance of Ghid or None.')
             
-        self.golcore = golcore
-        self.privateer = privateer
-        self.oracle = oracle
-        self.rolodex = rolodex
-        self.dispatch = dispatch
-        self.percore = percore
-        self.librarian = librarian
-        self.salmonator = salmonator
+        self._golcore = golcore
+        self._ghidproxy = ghidproxy
+        self._privateer = privateer
+        self._oracle = oracle
+        self._rolodex = rolodex
+        self._dispatch = dispatch
+        self._percore = percore
+        self._librarian = librarian
+        self._salmonator = salmonator
         
         self._root_secret = root_secret
         
@@ -166,11 +181,11 @@ class Account(metaclass=API):
         ''' Bypass the normal oracle get_object, new_object process and
         create the object directly.
         '''
-        await self.salmonator.register(gao)
-        await self.salmonator.attempt_pull(gao.ghid, quiet=True)
-        self.oracle._lookup[gao.ghid] = gao
+        await self._salmonator.register(gao)
+        await self._salmonator.attempt_pull(gao.ghid, quiet=True)
+        self._oracle._lookup[gao.ghid] = gao
             
-    async def bootstrap_account(self):
+    async def bootstrap(self):
         ''' Used for account creation, to initialize the root node with
         its resource directory.
         '''
@@ -182,6 +197,7 @@ class Account(metaclass=API):
                 author = None,
                 legroom = 7,
                 golcore = self._golcore,
+                ghidproxy = self._ghidproxy,
                 privateer = self._privateer,
                 percore = self._percore,
                 librarian = self._librarian,
@@ -227,6 +243,15 @@ class Account(metaclass=API):
                 root_node[547: 600])
                 
         else:
+            # Note that we first need to push our identity secondparty.
+            packed = self._identity.second_party.packed
+            gidc = _GidcLite.from_golix(GIDC.unpack(packed))
+            logger.info('Publishing public keys.')
+            await self._percore.direct_ingest(gidc, packed, remotable=True)
+            
+            # Now we need to declare the root note. It needs some kind of
+            # useless, garbage data as well, lest it error out because it can't
+            # encrypt nothingness.
             root_node = GAO(
                 ghid = None,
                 dynamic = True,
@@ -234,6 +259,7 @@ class Account(metaclass=API):
                 legroom = 7,
                 state = b'you pass butter',
                 golcore = self._golcore,
+                ghidproxy = self._ghidproxy,
                 privateer = self._privateer,
                 percore = self._percore,
                 librarian = self._librarian,
@@ -269,6 +295,7 @@ class Account(metaclass=API):
             author = None,
             legroom = 7,
             golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             librarian = self._librarian,
@@ -284,6 +311,7 @@ class Account(metaclass=API):
             author = None,
             legroom = 7,
             golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             librarian = self._librarian,
@@ -299,6 +327,7 @@ class Account(metaclass=API):
             author = None,
             legroom = 7,
             golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             librarian = self._librarian,
@@ -315,6 +344,7 @@ class Account(metaclass=API):
             author = None,
             legroom = 7,
             golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             librarian = self._librarian,
@@ -327,7 +357,7 @@ class Account(metaclass=API):
         # Privateer can be bootstrapped with or without pulling, but it won't
         # work until after pulling. So bootstrap first, pull later.
         logger.info('Bootstrapping privateer.')
-        self.privateer.bootstrap(self)
+        self._privateer.bootstrap(self)
         
         # Load existing account
         if self._user_id is not None:
@@ -337,7 +367,7 @@ class Account(metaclass=API):
                 identity_container.state
             )
             logger.info('Bootstrapping golcore.')
-            self.golcore.bootstrap(self)
+            self._golcore.bootstrap(self)
             
             logger.info('Loading persistent keystore.')
             await self.privateer_persistent._pull()
@@ -363,7 +393,7 @@ class Account(metaclass=API):
         else:
             # We need an identity at to golcore before we can do anything
             logger.info('Bootstrapping golcore.')
-            self.golcore.bootstrap(self)
+            self._golcore.bootstrap(self)
             logger.info('Saving identity.')
             identity_container.update(self._identity._serialize())
             await identity_container.push()
@@ -451,6 +481,7 @@ class Account(metaclass=API):
             author = None,
             legroom = 7,
             golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             librarian = self._librarian
@@ -461,6 +492,7 @@ class Account(metaclass=API):
             author = None,
             legroom = 7,
             golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             librarian = self._librarian
@@ -473,6 +505,7 @@ class Account(metaclass=API):
             author = None,
             legroom = 7,
             golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             librarian = self._librarian
@@ -483,6 +516,7 @@ class Account(metaclass=API):
             author = None,
             legroom = 7,
             golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             librarian = self._librarian
@@ -493,6 +527,7 @@ class Account(metaclass=API):
             author = None,
             legroom = 7,
             golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             librarian = self._librarian
@@ -503,6 +538,7 @@ class Account(metaclass=API):
             author = None,
             legroom = 7,
             golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             librarian = self._librarian
@@ -513,6 +549,7 @@ class Account(metaclass=API):
             author = None,
             legroom = 7,
             golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             librarian = self._librarian
@@ -523,14 +560,15 @@ class Account(metaclass=API):
             author = None,
             legroom = 7,
             golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
             privateer = self._privateer,
             percore = self._percore,
             librarian = self._librarian
         )
         
         # These need not have the actual objects pulled yet
-        self.rolodex.bootstrap(self)
-        self.dispatch.bootstrap(self)
+        self._rolodex.bootstrap(self)
+        self._dispatch.bootstrap(self)
         
         if self._user_id is not None:
             logger.info('Restoring sharing subsystem.')

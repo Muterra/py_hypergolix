@@ -146,6 +146,7 @@ class HypergolixCore(loopa.TaskCommander):
             librarian = self.librarian,
             salmonator = self.salmonator
         )
+        del root_secret
         
         # Assembly!
         ######################################################################
@@ -232,15 +233,16 @@ class HypergolixCore(loopa.TaskCommander):
         # Task registration!
         ######################################################################
         
+        # Note that order of these is meaningful.
+        self.register_task(self.undertaker)
+        self.register_task(self.postman)
+        self.register_task(self.salmonator)
         self.register_task(
             self.ipc_server,
             msg_handler = self.ipc_protocol,
             host = 'localhost',
             port = ipc_port
         )
-        self.register_task(self.salmonator)
-        self.register_task(self.postman)
-        self.register_task(self.undertaker)
         
     def add_remote(self, connection_cls, *args, **kwargs):
         ''' Add an upstream remote. Connection using connection_cls; on
@@ -259,10 +261,12 @@ class HypergolixCore(loopa.TaskCommander):
         ''' Do all of the post-init-pre-run stuff.
         '''
         await self.librarian.restore()
+        await self.account.bootstrap()
         
     async def teardown(self):
         ''' Do all of the post-run-pre-close stuff.
         '''
+        await self.account.flush()
         
         
 def _expand_password(salt_ghid, password, hardness=None):

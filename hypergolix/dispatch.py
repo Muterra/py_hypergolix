@@ -210,6 +210,8 @@ class Dispatcher(metaclass=API):
         self._oracle = oracle
         self._ipc_protocol = ipc_protocol
         
+    @fixture_noop
+    @public_api
     def bootstrap(self, account):
         ''' Initialize distributed state.
         '''

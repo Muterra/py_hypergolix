@@ -151,7 +151,9 @@ class Privateer(metaclass=API):
     def assemble(self, golcore):
         # Chicken, meet egg.
         self._golcore = golcore
-        
+    
+    @fixture_noop
+    @public_api
     def bootstrap(self, account):
         ''' Initializes the privateer into a distributed state.
         persistent is a GaoDict
