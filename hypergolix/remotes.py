@@ -469,6 +469,14 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         # Lookup for <registered ghid>
         self._registered = set()
         
+    @fixture_api
+    def RESET(self):
+        ''' Clear stuff out, yo.
+        '''
+        self._upstream_remotes.clear()
+        self._downstream_remotes.clear()
+        self._registered.clear()
+        
     def assemble(self, golcore, percore, librarian, remote_protocol):
         self._golcore = golcore
         self._percore = percore

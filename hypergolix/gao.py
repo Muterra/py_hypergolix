@@ -281,6 +281,13 @@ class GAOCore(metaclass=API):
             self.target_history = collections.deque(self.target_history,
                                                     maxlen=legroom)
             
+    def _inject_msec(self, msec):
+        ''' Forcibly update the master secret. ONLY call this with
+        extreme foresight. Intended only for use when bootstrapping the
+        privateer itself.
+        '''
+        setattr(self, '__msec', msec)
+            
     @property
     def _local_secret(self):
         ''' This determines if the secret will be committed locally only
@@ -740,11 +747,11 @@ class GAOCore(metaclass=API):
         
         offset = new_obj.counter - old_counter
         
-        if offset > len(new_obj.target_vector):
-            maximized = list(new_obj.target_vector)
-        else:
-            maximized = new_obj.target_vector[:offset]
-            maximized.extend(self.target_history)
+        new_len = len(new_obj.target_vector)
+        old_len = len(self.target_history)
+        maximized = list(new_obj.target_vector)
+        for ii in range(new_len - offset, old_len):
+            maximized.append(self.target_history[ii])
             
         return maximized
         

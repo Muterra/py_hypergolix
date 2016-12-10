@@ -189,6 +189,37 @@ class Account(metaclass=API):
         ''' Used for account creation, to initialize the root node with
         its resource directory.
         '''
+        # We need to pre-allocate the privateer stuff so we can bootstrap it
+        # before pulling the root node when reloading.
+        self.privateer_persistent = GAODict(
+            ghid = None,
+            dynamic = True,
+            author = None,
+            legroom = 7,
+            golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
+            privateer = self._privateer,
+            percore = self._percore,
+            librarian = self._librarian
+        )
+        self.privateer_quarantine = GAODict(
+            ghid = None,
+            dynamic = True,
+            author = None,
+            legroom = 7,
+            golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
+            privateer = self._privateer,
+            percore = self._percore,
+            librarian = self._librarian
+        )
+        
+        # Privateer can be bootstrapped with or without pulling. Even though it
+        # won't work *right* before pulling, it won't work AT ALL until it's
+        # bootstrapped, so bootstrap first and pull later.
+        logger.info('Bootstrapping privateer.')
+        self._privateer.bootstrap(self)
+        
         if self._user_id is not None:
             logger.info('Loading the root node.')
             root_node = GAO(
@@ -196,6 +227,7 @@ class Account(metaclass=API):
                 dynamic = True,
                 author = None,
                 legroom = 7,
+                state = b'you pass butter',
                 golcore = self._golcore,
                 ghidproxy = self._ghidproxy,
                 privateer = self._privateer,
@@ -212,9 +244,9 @@ class Account(metaclass=API):
             # TODO: convert all of this into a smartyparser (after rewriting
             # smartyparse, that is)
             password_validator = \
-                root_node[0: 64]
+                root_node.state[0: 64]
             password_comparator = \
-                root_node[64: 128]
+                root_node.state[64: 128]
             
             # This comparison is timing-insensitive; improper generation will
             # be simply comparing noise to noise.
@@ -223,26 +255,30 @@ class Account(metaclass=API):
                 raise ValueError('Incorrect password.')
             
             identity_ghid = Ghid.from_bytes(
-                root_node[128: 193])
+                root_node.state[128: 193])
             identity_master = Secret.from_bytes(
-                root_node[193: 246])
+                root_node.state[193: 246])
             
             privateer_persistent_ghid = Ghid.from_bytes(
-                root_node[246: 311])
+                root_node.state[246: 311])
             privateer_persistent_master = Secret.from_bytes(
-                root_node[311: 364])
+                root_node.state[311: 364])
             
             privateer_quarantine_ghid = Ghid.from_bytes(
-                root_node[364: 429])
+                root_node.state[364: 429])
             privateer_quarantine_master = Secret.from_bytes(
-                root_node[429: 482])
+                root_node.state[429: 482])
             
             secondary_manifest_ghid = Ghid.from_bytes(
-                root_node[482: 547])
+                root_node.state[482: 547])
             secondary_manifest_master = Secret.from_bytes(
-                root_node[547: 600])
+                root_node.state[547: 600])
                 
         else:
+            # We need an identity at to golcore before we can do anything
+            logger.info('Bootstrapping golcore.')
+            self._golcore.bootstrap(self)
+            
             # Note that we first need to push our identity secondparty.
             packed = self._identity.second_party.packed
             gidc = _GidcLite.from_golix(GIDC.unpack(packed))
@@ -269,10 +305,6 @@ class Account(metaclass=API):
             # will make the root_node GAO the only live reference to the root
             # secret from within the Account.
             del self._root_secret
-            # Initializing is needed to prevent losing the first frame while
-            # the secret ratchet initializes
-            logger.info('Allocating the root node.')
-            await root_node._push()
             
             identity_ghid = None
             identity_master = self._identity.new_secret()
@@ -302,37 +334,14 @@ class Account(metaclass=API):
             master_secret = identity_master
         )
         
-        # Allocate the persistent secret store
+        # Jiggery-pokery for the privateer restoration
         #######################################################################
         # This stores persistent secrets
-        self.privateer_persistent = GAODict(
-            ghid = privateer_persistent_ghid,
-            dynamic = True,
-            author = None,
-            legroom = 7,
-            golcore = self._golcore,
-            ghidproxy = self._ghidproxy,
-            privateer = self._privateer,
-            percore = self._percore,
-            librarian = self._librarian,
-            master_secret = privateer_persistent_master
-        )
+        self.privateer_persistent.ghid = privateer_persistent_ghid
+        self.privateer_persistent._inject_msec(privateer_persistent_master)
         
-        # Allocate the quarantined secret store
-        #######################################################################
-        # This stores quarantined secrets
-        self.privateer_quarantine = GAODict(
-            ghid = privateer_quarantine_ghid,
-            dynamic = True,
-            author = None,
-            legroom = 7,
-            golcore = self._golcore,
-            ghidproxy = self._ghidproxy,
-            privateer = self._privateer,
-            percore = self._percore,
-            librarian = self._librarian,
-            master_secret = privateer_quarantine_master
-        )
+        self.privateer_quarantine.ghid = privateer_quarantine_ghid
+        self.privateer_quarantine._inject_msec(privateer_quarantine_master)
         
         # Allocate the secondary manifest
         #######################################################################
@@ -353,11 +362,6 @@ class Account(metaclass=API):
         
         # Save/load the identity container and bootstrap golcore, privateer
         #######################################################################
-        
-        # Privateer can be bootstrapped with or without pulling, but it won't
-        # work until after pulling. So bootstrap first, pull later.
-        logger.info('Bootstrapping privateer.')
-        self._privateer.bootstrap(self)
         
         # Load existing account
         if self._user_id is not None:
@@ -391,12 +395,18 @@ class Account(metaclass=API):
             
         # Save new account
         else:
-            # We need an identity at to golcore before we can do anything
-            logger.info('Bootstrapping golcore.')
-            self._golcore.bootstrap(self)
+            # Initializing is needed to prevent losing the first frame while
+            # the secret ratchet initializes
+            logger.info('Allocating the root node.')
+            await root_node._push()
+            # Don't forget to do this before creating the actual identity
+            # frame, or we'll lose the first frame (and therefore, everything
+            # we care about)
+            logger.info('Allocating identity container.')
+            await identity_container._push()
             logger.info('Saving identity.')
             identity_container.update(self._identity._serialize())
-            await identity_container.push()
+            await identity_container._push()
             
             # Because these use a master secret, they need to be initialized,
             # or the first frame will be unrecoverable.
@@ -428,7 +438,7 @@ class Account(metaclass=API):
             padding_int = random.getrandbits(padding_len * 8)
             padding = padding_int.to_bytes(length=padding_len, byteorder='big')
             
-            logger.info('   Generating validator and comparator.')
+            logger.info('    Generating validator and comparator.')
             # We'll use this upon future logins to verify password correctness
             password_validator = os.urandom(64)
             password_comparator = sha512(password_validator).digest()
@@ -447,7 +457,7 @@ class Account(metaclass=API):
                                padding)
             
             logger.info('Saving root node.')
-            await root_node.push()
+            await root_node._push()
             
             # Rolodex
             rolodex_pending = None
@@ -614,7 +624,13 @@ class Account(metaclass=API):
             secondary_manifest['dispatch.orphan_naks'] = \
                 self.dispatch_orphan_naks.ghid
             
-            await secondary_manifest.push()
+            await secondary_manifest._push()
+            # Note that we have to do this twice, even though the second time
+            # is empty, just so that we can bootstrap the ratchet.
+            await self.privateer_quarantine._push()
+            # TODO: change to self.flush()
+            await self.privateer_persistent._push()
+            await self.privateer_persistent._push()
             self._user_id = root_node.ghid
         
         logger.info('Reticulating sharing subsystem.')
