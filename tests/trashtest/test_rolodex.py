@@ -147,6 +147,7 @@ class RolodexTest(unittest.TestCase):
         
         self.account = Account.__fixture__(TEST_AGENT1)
         self.rolodex.bootstrap(self.account)
+        self.dispatch.bootstrap(self.account)
         
     def test_share(self):
         ''' Test share_object.

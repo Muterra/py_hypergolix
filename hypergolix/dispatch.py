@@ -210,7 +210,6 @@ class Dispatcher(metaclass=API):
         self._oracle = oracle
         self._ipc_protocol = ipc_protocol
         
-    @fixture_noop
     @public_api
     def bootstrap(self, account):
         ''' Initialize distributed state.
@@ -279,7 +278,7 @@ class Dispatcher(metaclass=API):
             return None
     
     @public_api
-    def make_public(self, ghid):
+    async def make_public(self, ghid):
         ''' Makes a private object public.
         '''
         try:
@@ -289,18 +288,38 @@ class Dispatcher(metaclass=API):
             raise ValueError(
                 'Obj w/ passed ghid is unknown or already public: ' + str(ghid)
             ) from exc
+            
+        else:
+            await self._account.flush()
+            
+    @make_public.fixture
+    async def make_public(self, ghid):
+        # Bypass all validation
+        del self._private_by_ghid[ghid]
         
     @public_api
-    def add_api(self, connection, api_id):
+    async def add_api(self, connection, api_id):
         ''' Register the connection as currently tracking the api_id.
         '''
         self._conns_from_api.add(api_id, connection)
+        await self._account.flush()
+        
+    @add_api.fixture
+    async def add_api(self, connection, api_id):
+        # Bypass account flushing
+        self._conns_from_api.add(api_id, connection)
         
     @public_api
-    def remove_api(self, connection, api_id):
+    async def remove_api(self, connection, api_id):
         ''' Remove a connection's registration for the api_id. Happens
         automatically when connections are GC'd.
         '''
+        self._conns_from_api.discard(api_id, connection)
+        await self._account.flush()
+        
+    @remove_api.fixture
+    async def remove_api(self, connection, api_id):
+        # Bypass account flushing
         self._conns_from_api.discard(api_id, connection)
         
     def _make_new_token(self):
@@ -337,6 +356,7 @@ class Dispatcher(metaclass=API):
                 token = self._make_new_token()
                 # Do this right away to prevent race condition
                 self._all_known_tokens.add(token)
+                await self._account.flush()
             
         elif token not in self._all_known_tokens:
             raise UnknownToken('App token unknown to dispatcher.')
@@ -454,6 +474,7 @@ class Dispatcher(metaclass=API):
                 )
             else:
                 self._startup_by_token[token] = ghid
+                await self._account.flush()
                 
     @public_api
     async def deregister_startup(self, connection):
@@ -474,6 +495,7 @@ class Dispatcher(metaclass=API):
                 )
             else:
                 del self._startup_by_token[token]
+                await self._account.flush()
     
     @public_api
     async def get_startup_obj(self, token):
@@ -509,7 +531,8 @@ class Dispatcher(metaclass=API):
             api_id = None,  # Let _pull() apply this.
             state = None,   # Let _pull() apply this.
             dispatch = self,
-            ipc_protocol = self._ipc_protocol
+            ipc_protocol = self._ipc_protocol,
+            account = self._account
         )
         
         callsheet.update(
@@ -546,6 +569,7 @@ class Dispatcher(metaclass=API):
         elif origin is not None:
             sharelog = _ShareLog(ghid, origin)
             self._orphan_incoming_shares.add(sharelog)
+            await self._account.flush()
     
     @fixture_noop
     @public_api
@@ -658,14 +682,17 @@ class _Dispatchable(GAOCore, metaclass=API):
     dispatcher itself, and not within the individual dispatchables.
     '''
     _dispatch = weak_property('__dispatch')
+    _account = weak_property('__account')
     _ipc_protocol = weak_property('__ipc_protocol')
     api_id = immutable_property('_api_id')
     
-    def __init__(self, *args, api_id, state, dispatch, ipc_protocol, **kwargs):
+    def __init__(self, *args, api_id, state, dispatch, ipc_protocol, account,
+                 **kwargs):
         super().__init__(*args, **kwargs)
         
         self._dispatch = dispatch
         self._ipc_protocol = ipc_protocol
+        self._account = account
         
         # These may be explicitly set to None to allow pull() to apply them.
         if state is not None:
@@ -673,6 +700,19 @@ class _Dispatchable(GAOCore, metaclass=API):
             
         if api_id is not None:
             self.api_id = api_id
+            
+    @public_api
+    async def _push(self):
+        ''' Extend GAOCore._push() to flush the account upon completion.
+        '''
+        await super()._push()
+        await self._account.flush()
+        
+    @_push.fixture
+    async def _push(self):
+        ''' Call super() to FIXTURE super instead of dispatchable.
+        '''
+        await super(_Dispatchable, self)._push()
     
     @public_api
     async def _pull(self):

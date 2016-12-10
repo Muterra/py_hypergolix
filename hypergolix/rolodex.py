@@ -33,6 +33,7 @@ hypergolix: A python Golix client.
 # Global dependencies
 import traceback
 import collections
+import asyncio
 
 from golix import Ghid
 
@@ -173,6 +174,7 @@ class Rolodex(metaclass=API):
         
         if requesting_token is not None:
             self._outstanding_shares.add(sharepair, requesting_token)
+            await self._account.flush()
             
     @share_object.fixture
     async def share_object(self, target, recipient, requesting_token):
@@ -277,6 +279,7 @@ class Rolodex(metaclass=API):
         # debinding's target.
         try:
             del self._pending_requests[debinding.target]
+            await self._account.flush()
         except KeyError:
             logger.debug(
                 str(debinding.target) + ' missing in debind w/ traceback ' +
@@ -315,6 +318,9 @@ class Rolodex(metaclass=API):
             # receipt of the share. If the originating app wants to check for
             # availability, well, that's currently on them. In the future, add
             # handle for that in SHARE instead of HANDSHAKE?
+            
+        except asyncio.CancelledError:
+            raise
             
         except Exception as exc:
             logger.error(
@@ -393,6 +399,7 @@ class Rolodex(metaclass=API):
         '''
         sharepair = _SharePair(target, recipient)
         tokens = self._outstanding_shares.pop_any(sharepair)
+        await self._account.flush()
         
         # Distribute the share success in the background
         make_background_future(
@@ -411,6 +418,7 @@ class Rolodex(metaclass=API):
         '''
         sharepair = _SharePair(target, recipient)
         tokens = self._outstanding_shares.pop_any(sharepair)
+        await self._account.flush()
         
         # Distribute the share failure in the background
         make_background_future(

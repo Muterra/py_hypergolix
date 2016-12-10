@@ -211,7 +211,8 @@ class TestDispatcher(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             dispatch = self.dispatch,
-            ipc_protocol = self.ipc_protocol
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
         )
         self.oracle.add_object(obj.ghid, obj)
         
@@ -239,7 +240,8 @@ class TestDispatcher(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             dispatch = self.dispatch,
-            ipc_protocol = self.ipc_protocol
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
         )
         self.oracle.add_object(obj.ghid, obj)
         
@@ -276,7 +278,8 @@ class TestDispatcher(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             dispatch = self.dispatch,
-            ipc_protocol = self.ipc_protocol
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
         )
         self.oracle.add_object(obj.ghid, obj)
         
@@ -323,7 +326,8 @@ class TestDispatcher(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             dispatch = self.dispatch,
-            ipc_protocol = self.ipc_protocol
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
         )
         self.oracle.add_object(obj.ghid, obj)
         self.dispatch._conns_from_api.add(obj.api_id, conn)
@@ -363,7 +367,8 @@ class TestDispatcher(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             dispatch = self.dispatch,
-            ipc_protocol = self.ipc_protocol
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
         )
         self.oracle.add_object(obj.ghid, obj)
         
@@ -401,7 +406,8 @@ class TestDispatcher(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             dispatch = self.dispatch,
-            ipc_protocol = self.ipc_protocol
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
         )
         self.oracle.add_object(obj.ghid, obj)
         self.dispatch._update_listeners.add(obj.ghid, conn)
@@ -440,7 +446,8 @@ class TestDispatcher(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             dispatch = self.dispatch,
-            ipc_protocol = self.ipc_protocol
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
         )
         self.oracle.add_object(obj.ghid, obj)
         
@@ -478,7 +485,8 @@ class TestDispatcher(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             dispatch = self.dispatch,
-            ipc_protocol = self.ipc_protocol
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
         )
         self.oracle.add_object(obj.ghid, obj)
         self.dispatch._update_listeners.add(obj.ghid, conn)
@@ -518,7 +526,8 @@ class TestDispatcher(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             dispatch = self.dispatch,
-            ipc_protocol = self.ipc_protocol
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
         )
         self.oracle.add_object(obj.ghid, obj)
         
@@ -552,7 +561,8 @@ class TestDispatcher(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             dispatch = self.dispatch,
-            ipc_protocol = self.ipc_protocol
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
         )
         self.oracle.add_object(obj.ghid, obj)
         
@@ -589,7 +599,8 @@ class TestDispatcher(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             dispatch = self.dispatch,
-            ipc_protocol = self.ipc_protocol
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
         )
         self.oracle.add_object(obj.ghid, obj)
         
@@ -623,7 +634,8 @@ class TestDispatcher(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             dispatch = self.dispatch,
-            ipc_protocol = self.ipc_protocol
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
         )
         self.oracle.add_object(obj.ghid, obj)
         

@@ -60,6 +60,8 @@ from hypergolix.core import GhidProxier
 from hypergolix.privateer import Privateer
 from hypergolix.librarian import LibrarianCore
 
+from hypergolix.accounting import Account
+
 from hypergolix.ipc import IPCServerProtocol
 from hypergolix.dispatch import Dispatcher
 
@@ -784,6 +786,8 @@ class DispatchableTest(GAOTestingCore, unittest.TestCase):
         self.ghidproxy.assemble(self.librarian)
         self.ipc_protocol = IPCServerProtocol.__fixture__(whoami=None)
         self.dispatch = Dispatcher.__fixture__()
+        self.account = Account.__fixture__(TEST_AGENT1)
+        self.dispatch.bootstrap(self.account)
     
     async def make_gao(self, ghid, dynamic, author, legroom, *args, **kwargs):
         ''' Make a standard GAO.
@@ -803,6 +807,7 @@ class DispatchableTest(GAOTestingCore, unittest.TestCase):
             librarian = self.librarian,
             dispatch = self.dispatch,
             ipc_protocol = self.ipc_protocol,
+            account = self.account,
             **kwargs
         )
         

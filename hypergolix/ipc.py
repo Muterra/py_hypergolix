@@ -350,7 +350,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         ''' Handles API registration requests. Server only.
         '''
         api_id = ApiID.from_bytes(body)
-        self._dispatch.add_api(connection, api_id)
+        await self._dispatch.add_api(connection, api_id)
         
         return b'\x01'
         
@@ -366,7 +366,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         ''' Handles API deregistration requests. Server only.
         '''
         api_id = ApiID.from_bytes(body)
-        self._dispatch.remove_api(connection, api_id)
+        await self._dispatch.remove_api(connection, api_id)
         
         return b'\x01'
         
@@ -454,7 +454,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             gaoclass = _Dispatchable,
             ghid = ghid,
             dispatch = self._dispatch,
-            ipc_core = self
+            ipc_core = self,
+            account = self._dispatch._account
         )
         
         self._dispatch.track_object(connection, ghid)
@@ -518,6 +519,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             dynamic = dynamic,
             legroom = legroom,
             api_id = api_id,
+            account = self._dispatch._account
         )
             
         # Add the endpoint as a listener.
@@ -536,7 +538,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
                 gaoclass = _Dispatchable,
                 ghid = ghid,
                 dispatch = self._dispatch,
-                ipc_protocol = self
+                ipc_protocol = self,
+                account = self._dispatch._account
             )
             
         # No CancelledError catch necessary because we're re-raising any exc
@@ -591,14 +594,15 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             gaoclass = _Dispatchable,
             ghid = ghid,
             dispatch = self._dispatch,
-            ipc_protocol = self
+            ipc_protocol = self,
+            account = self._dispatch._account
         )
         obj.state = state
         
         # Converting a private object to a public one
         if self._dispatch.private_parent_lookup(ghid):
             if not private:
-                self._dispatch.make_public(ghid)
+                await self._dispatch.make_public(ghid)
         
         else:
             if private:
@@ -736,7 +740,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             gaoclass = _Dispatchable,
             ghid = ghid,
             dispatch = self._dispatch,
-            ipc_protocol = self
+            ipc_protocol = self,
+            account = self._dispatch._account
         )
         frozen_address = await obj.freeze()
         
@@ -760,7 +765,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             gaoclass = _Dispatchable,
             ghid = ghid,
             dispatch = self._dispatch,
-            ipc_protocol = self
+            ipc_protocol = self,
+            account = self._dispatch._account
         )
         await obj.hold()
         return b'\x01'
@@ -806,7 +812,8 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             gaoclass = _Dispatchable,
             ghid = ghid,
             dispatch = self._dispatch,
-            ipc_protocol = self
+            ipc_protocol = self,
+            account = self._dispatch._account
         )
         self._dispatch.untrack_object(connection, ghid)
         # TODO: shift to a dispatch.delete_object method that can ignore this
