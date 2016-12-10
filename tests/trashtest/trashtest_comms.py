@@ -266,6 +266,13 @@ class WSBasicTrashTest(unittest.TestCase):
         self.server_commander.start()
         self.client1_commander.start()
         self.client2_commander.start()
+                
+    def tearDown(self):
+        self.client2_commander.stop_threadsafe_nowait()
+        self.client1_commander.stop_threadsafe_nowait()
+        # Wait for the server to stop or we may accidentally try to have an
+        # overlapping binding to the socket.
+        self.server_commander.stop_threadsafe(timeout=.5)
         
     def test_client1(self):
         for ii in range(TEST_ITERATIONS):
@@ -382,11 +389,6 @@ class WSBasicTrashTest(unittest.TestCase):
                 coro = self.client1.make_death(timeout=1),
                 loop = self.client1_commander._loop
             )
-                
-    def tearDown(self):
-        self.client2_commander.stop_threadsafe_nowait()
-        self.client1_commander.stop_threadsafe_nowait()
-        self.server_commander.stop_threadsafe_nowait()
 
 
 def fileno(file_or_fd):
