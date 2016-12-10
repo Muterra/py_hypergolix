@@ -33,12 +33,12 @@ hypergolix: A python Golix client.
 # External deps
 import logging
 import os
+import asyncio
 
 # This is only used for padding **within** encrypted containers
 import random
-# import weakref
-# import traceback
-# import threading
+
+from loopa.utils import make_background_future
 
 # from golix import SecondParty
 from hashlib import sha512
@@ -646,10 +646,25 @@ class Account(metaclass=API):
         await self._inject_gao(self.dispatch_orphan_naks)
         
         logger.info('Account login successful.')
-        
+    
+    @fixture_noop
+    @public_api
     async def flush(self):
         ''' Push changes to any modified account components.
         '''
+        tasks = {
+            make_background_future(self.privateer_persistent._push()),
+            make_background_future(self.privateer_quarantine._push()),
+            make_background_future(self.rolodex_pending._push()),
+            make_background_future(self.rolodex_outstanding._push()),
+            make_background_future(self.dispatch_tokens._push()),
+            make_background_future(self.dispatch_startup._push()),
+            make_background_future(self.dispatch_private._push()),
+            make_background_future(self.dispatch_incoming._push()),
+            make_background_future(self.dispatch_orphan_acks._push()),
+            make_background_future(self.dispatch_orphan_naks._push())
+        }
+        await asyncio.wait(fs=tasks, return_when=asyncio.ALL_COMPLETED)
 
 
 class Accountant:
