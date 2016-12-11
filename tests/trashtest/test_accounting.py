@@ -40,6 +40,7 @@ from loopa import NoopLoop
 
 # These are normal imports
 from hypergolix.accounting import Account
+from hypergolix.app import HypergolixCore
 
 from hypergolix.persistence import PersistenceCore
 from hypergolix.librarian import LibrarianCore
@@ -122,10 +123,7 @@ class AccountTest(unittest.TestCase):
         self.ghidproxy.assemble(self.librarian)
         self.privateer.assemble(self.golcore)
         
-        self.root_secret = TEST_AGENT1.new_secret()
-        self.account = Account(
-            user_id = TEST_AGENT1,
-            root_secret = self.root_secret,
+        self.hgxcore = HypergolixCore.__fixture__(
             golcore = self.golcore,
             ghidproxy = self.ghidproxy,
             privateer = self.privateer,
@@ -135,6 +133,13 @@ class AccountTest(unittest.TestCase):
             percore = self.percore,
             librarian = self.librarian,
             salmonator = self.salmonator
+        )
+        
+        self.root_secret = TEST_AGENT1.new_secret()
+        self.account = Account(
+            user_id = TEST_AGENT1,
+            root_secret = self.root_secret,
+            hgxcore = self.hgxcore
         )
         
     def _get_target(self, ghid):
@@ -211,9 +216,7 @@ class AccountTest(unittest.TestCase):
         percore2 = PersistenceCore.__fixture__(librarian=self.librarian)
         salmonator2 = Salmonator.__fixture__()
         
-        account2 = Account(
-            user_id = self.account._user_id,
-            root_secret = self.root_secret,
+        hgxcore2 = HypergolixCore.__fixture__(
             golcore = golcore2,
             ghidproxy = ghidproxy2,
             privateer = privateer2,
@@ -223,6 +226,12 @@ class AccountTest(unittest.TestCase):
             percore = percore2,
             librarian = self.librarian,
             salmonator = salmonator2
+        )
+        
+        account2 = Account(
+            user_id = self.account._user_id,
+            root_secret = self.root_secret,
+            hgxcore = hgxcore2
         )
         await_coroutine_threadsafe(
             coro = account2.bootstrap(),

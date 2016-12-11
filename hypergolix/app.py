@@ -43,8 +43,15 @@ from Crypto.Protocol.KDF import scrypt
 
 # Intra-package dependencies (that require explicit imports, courtesy of
 # daemonization)
+from hypergolix.hypothetical import API
+from hypergolix.hypothetical import public_api
+from hypergolix.hypothetical import fixture_noop
+from hypergolix.hypothetical import fixture_api
+
 from hypergolix import logutils
 from hypergolix.accounting import Account
+
+from hypergolix.utils import weak_property
 
 from hypergolix.comms import BasicServer
 from hypergolix.comms import WSConnection
@@ -91,12 +98,13 @@ __all__ = [
 _DEFAULT_SCRYPT_HARDNESS = 2**15
 
 
-class HypergolixCore(loopa.TaskCommander):
+class HypergolixCore(loopa.TaskCommander, metaclass=API):
     ''' The core Hypergolix system.
     '''
+    account = weak_property('_account')
     
-    def __init__(self, user_id, root_secret, cache_dir, ipc_port, *args,
-                 **kwargs):
+    @public_api
+    def __init__(self, cache_dir, ipc_port, *args, **kwargs):
         ''' Create and assemble everything, readying it for a bootstrap
         (etc).
         
@@ -132,21 +140,6 @@ class HypergolixCore(loopa.TaskCommander):
         self.dispatch = Dispatcher()
         self.ipc_protocol = IPCServerProtocol()
         self.ipc_server = BasicServer(connection_cls=WSConnection)
-        
-        # This bit miiiiight be important
-        self.account = Account(
-            user_id,
-            root_secret,
-            golcore = self.golcore,
-            privateer = self.privateer,
-            oracle = self.oracle,
-            rolodex = self.rolodex,
-            dispatch = self.dispatch,
-            percore = self.percore,
-            librarian = self.librarian,
-            salmonator = self.salmonator
-        )
-        del root_secret
         
         # Assembly!
         ######################################################################
@@ -185,9 +178,10 @@ class HypergolixCore(loopa.TaskCommander):
             privateer = self.privateer
         )
         self.salmonator.assemble(
+            golcore = self.golcore,
             percore = self.percore,
             librarian = self.librarian,
-            postman = self.postman
+            remote_protocol = self.remote_protocol
         )
         self.remote_protocol.assemble(
             percore = self.percore,
@@ -243,6 +237,12 @@ class HypergolixCore(loopa.TaskCommander):
             host = 'localhost',
             port = ipc_port
         )
+        
+    @__init__.fixture
+    def __init__(self, **kwargs):
+        # As a fixture, just allow us to set kwargs for shit easily.
+        for key, value in kwargs.items():
+            setattr(self, key, value)
         
     def add_remote(self, connection_cls, *args, **kwargs):
         ''' Add an upstream remote. Connection using connection_cls; on

@@ -113,9 +113,7 @@ class Account(metaclass=API):
     _salmonator = weak_property('__salmonator')
     
     @public_api
-    def __init__(self, user_id, root_secret, *args, golcore, ghidproxy,
-                 privateer, oracle, rolodex, dispatch, percore, librarian,
-                 salmonator, **kwargs):
+    def __init__(self, user_id, root_secret, *args, hgxcore, **kwargs):
         ''' Gets everything ready for account bootstrapping.
         
         +   user_id explicitly passed with None means create a new
@@ -146,15 +144,15 @@ class Account(metaclass=API):
         else:
             raise TypeError('user_id must be an instance of Ghid or None.')
             
-        self._golcore = golcore
-        self._ghidproxy = ghidproxy
-        self._privateer = privateer
-        self._oracle = oracle
-        self._rolodex = rolodex
-        self._dispatch = dispatch
-        self._percore = percore
-        self._librarian = librarian
-        self._salmonator = salmonator
+        self._golcore = hgxcore.golcore
+        self._ghidproxy = hgxcore.ghidproxy
+        self._privateer = hgxcore.privateer
+        self._oracle = hgxcore.oracle
+        self._rolodex = hgxcore.rolodex
+        self._dispatch = hgxcore.dispatch
+        self._percore = hgxcore.percore
+        self._librarian = hgxcore.librarian
+        self._salmonator = hgxcore.salmonator
         
         self._root_secret = root_secret
         

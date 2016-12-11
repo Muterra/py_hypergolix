@@ -104,8 +104,8 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
     '''
     
     @public_api
-    def __init__(self, ipc_port=7772, autostart=True, debug=False, aengel=None,
-                 *args, threaded=True, ipc_fixture=None, **kwargs):
+    def __init__(self, ipc_port=7772, autostart=True, aengel=None, *args,
+                 threaded=True, ipc_fixture=None, **kwargs):
         ''' Args:
         ipc_port    is self-explanatory
         autostart   True -> immediately start the link
@@ -116,7 +116,6 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         super().__init__(
             reusable_loop = False,
             threaded = threaded,
-            debug = debug,
             thread_kwargs = {'name': 'hgxlink'},
             *args,
             **kwargs

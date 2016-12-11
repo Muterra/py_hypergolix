@@ -45,17 +45,37 @@ import tempfile
 import shutil
 import logging
 
-from hypergolix.service import _hgx_server
-from hypergolix.app import app_core
+from loopa.utils import await_coroutine_threadsafe
+
+from hypergolix.comms import WSConnection
+from hypergolix.service import RemotePersistenceServer
+from hypergolix.app import HypergolixCore
+from hypergolix.accounting import Account
 from hypergolix.config import Config
-from hypergolix import HGXLink
+from hypergolix.embed import HGXLink
 from hypergolix.utils import Aengel
 
-from hypergolix.objproxy import ProxyBase
+# from hypergolix.objproxy import ProxyBase
+
+from golix._getlow import GIDC
+from hypergolix.persistence import _GidcLite
 
 # ###############################################
 # Fixtures
 # ###############################################
+
+from trashtest._fixtures.identities import TEST_AGENT1
+from trashtest._fixtures.identities import TEST_READER1
+from trashtest._fixtures.identities import TEST_AGENT2
+from trashtest._fixtures.identities import TEST_READER2
+
+gidc1 = TEST_READER1.packed
+gidclite1 = _GidcLite.from_golix(GIDC.unpack(TEST_READER1.packed))
+
+gidc2 = TEST_READER2.packed
+gidclite2 = _GidcLite.from_golix(GIDC.unpack(TEST_READER2.packed))
+
+logger = logging.getLogger(__name__)
 
 
 def make_fixtures(debug, hgx_root_1, hgx_root_2):
@@ -110,6 +130,131 @@ def make_fixtures(debug, hgx_root_1, hgx_root_2):
 # ###############################################
 # Testing
 # ###############################################
+
+
+class TestAppNoRestore(unittest.TestCase):
+    ''' Test a fake application with no account restoration, just with
+    a parrot between two identities.
+    '''
+    
+    def setUp(self):
+        ''' Make a fake application, yo.
+        '''
+        # Set up the SERVER
+        ###########################################
+        self.server_cachedir = tempfile.mkdtemp()
+        self.server = RemotePersistenceServer(
+            cache_dir = self.server_cachedir,
+            host = '127.0.0.1',
+            port = 6022,
+            reusable_loop = False,
+            threaded = True,
+            debug = True,
+            thread_kwargs = {'name': 'server'}
+        )
+        
+        # Set up the FIRST CLIENT
+        ###########################################
+        self.hgxcore1_cachedir = tempfile.mkdtemp()
+        self.hgxcore1 = HypergolixCore(
+            cache_dir = self.hgxcore1_cachedir,
+            ipc_port = 6023,
+            reusable_loop = False,
+            threaded = True,
+            debug = True,
+            thread_kwargs = {'name': 'hgxcore1'}
+        )
+        self.hgxcore1.add_remote(
+            connection_cls = WSConnection,
+            host = '127.0.0.1',
+            port = 6022,
+            tls = False
+        )
+        self.root_secret_1 = TEST_AGENT1.new_secret()
+        self.account1 = Account(
+            user_id = TEST_AGENT1,
+            root_secret = self.root_secret_1,
+            hgxcore = self.hgxcore1
+        )
+        self.hgxcore1.account = self.account1
+        self.hgxlink1 = HGXLink(
+            ipc_port = 6023,
+            autostart = False,
+            debug = True,
+            threaded = True
+        )
+        
+        # Set up the SECOND CLIENT
+        ###########################################
+        self.hgxcore2_cachedir = tempfile.mkdtemp()
+        self.hgxcore2 = HypergolixCore(
+            cache_dir = self.hgxcore2_cachedir,
+            ipc_port = 6025,
+            reusable_loop = False,
+            threaded = True,
+            debug = True,
+            thread_kwargs = {'name': 'hgxcore2'}
+        )
+        self.hgxcore2.add_remote(
+            connection_cls = WSConnection,
+            host = '127.0.0.1',
+            port = 6022,
+            tls = False
+        )
+        self.root_secret_2 = TEST_AGENT2.new_secret()
+        self.account2 = Account(
+            user_id = TEST_AGENT2,
+            root_secret = self.root_secret_2,
+            hgxcore = self.hgxcore2
+        )
+        self.hgxcore2.account = self.account2
+        self.hgxlink2 = HGXLink(
+            ipc_port = 6025,
+            autostart = False,
+            debug = True,
+            threaded = True
+        )
+        
+        # START THE WHOLE SHEBANG
+        ###########################################
+        self.server.start()
+        self.hgxcore1.start()
+        self.hgxlink1.start()
+        self.hgxcore2.start()
+        self.hgxlink2.start()
+        
+    def tearDown(self):
+        ''' Kill errything and then remove the caches.
+        '''
+        try:
+            self.hgxlink2.stop_threadsafe(timeout=.5)
+            self.hgxcore2.stop_threadsafe(timeout=.5)
+            self.hgxlink1.stop_threadsafe(timeout=.5)
+            self.hgxcore1.stop_threadsafe(timeout=.5)
+            self.server.stop_threadsafe(timeout=.5)
+        
+        finally:
+            print('Stopped. Removing cache directories.')
+            shutil.rmtree(self.hgxcore2_cachedir)
+            shutil.rmtree(self.hgxcore1_cachedir)
+            shutil.rmtree(self.server_cachedir)
+            
+    def test_whoami(self):
+        ''' Super simple whoami test to make sure it's working.
+        '''
+        whoami = await_coroutine_threadsafe(
+            coro = self.hgxlink1._ipc_manager.get_whoami(timeout=1),
+            loop = self.hgxlink1._loop
+        )
+        self.assertEqual(whoami, self.hgxlink1.whoami)
+        self.assertEqual(whoami, TEST_AGENT1.ghid)
+        
+        whoami2 = await_coroutine_threadsafe(
+            coro = self.hgxlink2._ipc_manager.get_whoami(timeout=1),
+            loop = self.hgxlink2._loop
+        )
+        self.assertEqual(whoami2, self.hgxlink2.whoami)
+        self.assertEqual(whoami2, TEST_AGENT2.ghid)
 
 
 def make_tests(iterations, debug, raz, des, aengel):
@@ -348,7 +493,7 @@ def configure_unified_logger(args):
         )
 
                 
-if __name__ == '__main__':
+if False:
     args = ingest_args()
     # Dammit unittest using argparse
     sys.argv[1:] = args.unittest_args
@@ -413,3 +558,13 @@ if __name__ == '__main__':
             time.sleep(1)
             shutil.rmtree(hgx_root_a)
             shutil.rmtree(hgx_root_b)
+        
+
+if __name__ == "__main__":
+    from hypergolix import logutils
+    logutils.autoconfig(loglevel='debug')
+    
+    from hypergolix.utils import TraceLogger
+    with TraceLogger(interval=10):
+        unittest.main()
+    # unittest.main()
