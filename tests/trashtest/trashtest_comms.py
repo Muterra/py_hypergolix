@@ -67,6 +67,9 @@ from hypergolix.exceptions import RequestFinished
 # ###############################################
 
 
+logger = logging.getLogger(__name__)
+
+
 ERROR_LOOKUP = {
     b'\x00\x00': Exception,
     b'\x00\x00': ValueError
@@ -236,6 +239,7 @@ class WSBasicTrashTest(unittest.TestCase):
         self.client1 = ConnectionManager(
             connection_cls = WSConnection,
             msg_handler = self.client1_protocol,
+            autoretry = False
         )
         self.client1_commander.register_task(
             self.client1,
@@ -256,6 +260,7 @@ class WSBasicTrashTest(unittest.TestCase):
         self.client2 = ConnectionManager(
             connection_cls = WSConnection,
             msg_handler = self.client2_protocol,
+            autoretry = False
         )
         self.client2_commander.register_task(
             self.client2,
@@ -268,6 +273,7 @@ class WSBasicTrashTest(unittest.TestCase):
         self.client2_commander.start()
                 
     def tearDown(self):
+        logger.critical('Entering test shutdown.')
         self.client2_commander.stop_threadsafe_nowait()
         self.client1_commander.stop_threadsafe_nowait()
         # Wait for the server to stop or we may accidentally try to have an
@@ -275,6 +281,7 @@ class WSBasicTrashTest(unittest.TestCase):
         self.server_commander.stop_threadsafe(timeout=.5)
         
     def test_client1(self):
+        logger.info('Starting client1 test.')
         for ii in range(TEST_ITERATIONS):
             # Generate pseudorandom bytes w/ length 25
             msg = bytes([random.randint(0, 255) for i in range(0, 25)])
@@ -330,10 +337,13 @@ class WSBasicTrashTest(unittest.TestCase):
                 loop = self.client2_commander._loop
             )
             self.assertEqual(response, self.client2_protocol.STATIC_RESPONSE)
+            
+        logger.info('Finished client1 test.')
         
     def test_server(self):
         ''' Test sending messages from the server to the client.
         '''
+        logger.info('Starting server test.')
         # First we need to get the server to record the connections. This is
         # a hack, but, well, we're not intending to have things behave this way
         # normally.
@@ -363,6 +373,8 @@ class WSBasicTrashTest(unittest.TestCase):
                 loop = self.server_commander._loop
             )
             self.assertEqual(msg, self.server_protocol.check_result())
+        
+        logger.info('Exiting server test.')
     
     @unittest.skip('DNX')
     def test_nest(self):
@@ -376,6 +388,7 @@ class WSBasicTrashTest(unittest.TestCase):
         self.assertEqual(result, counter)
             
     def test_failures(self):
+        logger.info('Starting failure test.')
         # This kind of failure has a specific error defined
         with self.assertRaises(ValueError):
             await_coroutine_threadsafe(
@@ -389,6 +402,7 @@ class WSBasicTrashTest(unittest.TestCase):
                 coro = self.client1.make_death(timeout=1),
                 loop = self.client1_commander._loop
             )
+        logger.info('Exiting failure test.')
 
 
 def fileno(file_or_fd):

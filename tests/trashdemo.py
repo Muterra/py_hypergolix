@@ -137,14 +137,15 @@ class TestAppNoRestore(unittest.TestCase):
     a parrot between two identities.
     '''
     
-    def setUp(self):
+    @classmethod
+    def setUpClass(cls):
         ''' Make a fake application, yo.
         '''
         # Set up the SERVER
         ###########################################
-        self.server_cachedir = tempfile.mkdtemp()
-        self.server = RemotePersistenceServer(
-            cache_dir = self.server_cachedir,
+        cls.server_cachedir = tempfile.mkdtemp()
+        cls.server = RemotePersistenceServer(
+            cache_dir = cls.server_cachedir,
             host = '127.0.0.1',
             port = 6022,
             reusable_loop = False,
@@ -155,29 +156,29 @@ class TestAppNoRestore(unittest.TestCase):
         
         # Set up the FIRST CLIENT
         ###########################################
-        self.hgxcore1_cachedir = tempfile.mkdtemp()
-        self.hgxcore1 = HypergolixCore(
-            cache_dir = self.hgxcore1_cachedir,
+        cls.hgxcore1_cachedir = tempfile.mkdtemp()
+        cls.hgxcore1 = HypergolixCore(
+            cache_dir = cls.hgxcore1_cachedir,
             ipc_port = 6023,
             reusable_loop = False,
             threaded = True,
             debug = True,
             thread_kwargs = {'name': 'hgxcore1'}
         )
-        self.hgxcore1.add_remote(
+        cls.hgxcore1.add_remote(
             connection_cls = WSConnection,
             host = '127.0.0.1',
             port = 6022,
             tls = False
         )
-        self.root_secret_1 = TEST_AGENT1.new_secret()
-        self.account1 = Account(
+        cls.root_secret_1 = TEST_AGENT1.new_secret()
+        cls.account1 = Account(
             user_id = TEST_AGENT1,
-            root_secret = self.root_secret_1,
-            hgxcore = self.hgxcore1
+            root_secret = cls.root_secret_1,
+            hgxcore = cls.hgxcore1
         )
-        self.hgxcore1.account = self.account1
-        self.hgxlink1 = HGXLink(
+        cls.hgxcore1.account = cls.account1
+        cls.hgxlink1 = HGXLink(
             ipc_port = 6023,
             autostart = False,
             debug = True,
@@ -187,29 +188,29 @@ class TestAppNoRestore(unittest.TestCase):
         
         # Set up the SECOND CLIENT
         ###########################################
-        self.hgxcore2_cachedir = tempfile.mkdtemp()
-        self.hgxcore2 = HypergolixCore(
-            cache_dir = self.hgxcore2_cachedir,
+        cls.hgxcore2_cachedir = tempfile.mkdtemp()
+        cls.hgxcore2 = HypergolixCore(
+            cache_dir = cls.hgxcore2_cachedir,
             ipc_port = 6025,
             reusable_loop = False,
             threaded = True,
             debug = True,
             thread_kwargs = {'name': 'hgxcore2'}
         )
-        self.hgxcore2.add_remote(
+        cls.hgxcore2.add_remote(
             connection_cls = WSConnection,
             host = '127.0.0.1',
             port = 6022,
             tls = False
         )
-        self.root_secret_2 = TEST_AGENT2.new_secret()
-        self.account2 = Account(
+        cls.root_secret_2 = TEST_AGENT2.new_secret()
+        cls.account2 = Account(
             user_id = TEST_AGENT2,
-            root_secret = self.root_secret_2,
-            hgxcore = self.hgxcore2
+            root_secret = cls.root_secret_2,
+            hgxcore = cls.hgxcore2
         )
-        self.hgxcore2.account = self.account2
-        self.hgxlink2 = HGXLink(
+        cls.hgxcore2.account = cls.account2
+        cls.hgxlink2 = HGXLink(
             ipc_port = 6025,
             autostart = False,
             debug = True,
@@ -219,26 +220,27 @@ class TestAppNoRestore(unittest.TestCase):
         
         # START THE WHOLE SHEBANG
         ###########################################
-        self.server.start()
-        self.hgxcore1.start()
-        self.hgxcore2.start()
-        self.hgxlink1.start()
-        self.hgxlink2.start()
-        
-    def tearDown(self):
+        cls.server.start()
+        cls.hgxcore1.start()
+        cls.hgxcore2.start()
+        cls.hgxlink1.start()
+        cls.hgxlink2.start()
+    
+    @classmethod
+    def tearDownClass(cls):
         ''' Kill errything and then remove the caches.
         '''
         try:
-            self.hgxlink2.stop_threadsafe(timeout=.5)
-            self.hgxlink1.stop_threadsafe(timeout=.5)
-            self.hgxcore2.stop_threadsafe(timeout=.5)
-            self.hgxcore1.stop_threadsafe(timeout=.5)
-            self.server.stop_threadsafe(timeout=.5)
+            cls.hgxlink2.stop_threadsafe(timeout=.5)
+            cls.hgxlink1.stop_threadsafe(timeout=.5)
+            cls.hgxcore2.stop_threadsafe(timeout=.5)
+            cls.hgxcore1.stop_threadsafe(timeout=.5)
+            cls.server.stop_threadsafe(timeout=.5)
         
         finally:
-            shutil.rmtree(self.hgxcore2_cachedir)
-            shutil.rmtree(self.hgxcore1_cachedir)
-            shutil.rmtree(self.server_cachedir)
+            shutil.rmtree(cls.hgxcore2_cachedir)
+            shutil.rmtree(cls.hgxcore1_cachedir)
+            shutil.rmtree(cls.server_cachedir)
             
     def test_whoami(self):
         ''' Super simple whoami test to make sure it's working.
@@ -575,7 +577,7 @@ if __name__ == "__main__":
     from hypergolix import logutils
     logutils.autoconfig(loglevel='debug')
     
-    from hypergolix.utils import TraceLogger
-    with TraceLogger(interval=30):
-        unittest.main()
-    # unittest.main()
+    # from hypergolix.utils import TraceLogger
+    # with TraceLogger(interval=30):
+    #     unittest.main()
+    unittest.main()

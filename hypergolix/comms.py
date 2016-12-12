@@ -226,6 +226,7 @@ class _ConnectionBase(metaclass=API):
                     'CONN ' + str(self) + ' Listener receiver ' +
                     'raised w/ traceback:\n' + ''.join(traceback.format_exc())
                 )
+                raise
                 
     async def listen_forever(self, receiver):
         ''' Listens until the connection terminates.
@@ -341,15 +342,25 @@ class WSConnection(_ConnectionBase):
             # Make sure we don't take a strong reference to the connection!
             await self.listen_forever(msg_handler)
         
-        server = await websockets.server.serve(
-            wrapped_msg_handler,
-            host,
-            port,
-            max_size = 10 * (2 ** 20)    # Max incoming msg size 10 MiB
-        )
-        
         try:
-            await server.wait_closed()
+            server = await websockets.server.serve(
+                wrapped_msg_handler,
+                host,
+                port,
+                max_size = 10 * (2 ** 20)    # Max incoming msg size 10 MiB
+            )
+            
+            try:
+                await server.wait_closed()
+            
+            except Exception:
+                server.close()
+                await server.wait_closed()
+                raise
+                
+        except asyncio.CancelledError:
+            # Don't log being cancelled; it's expected close behavior.
+            raise
             
         except Exception as exc:
             logger.error(
@@ -357,9 +368,6 @@ class WSConnection(_ConnectionBase):
                 ''.join(traceback.format_exc())
             )
             logger.debug('Error args:' + str(exc.args))
-            server.close()
-            await server.wait_closed()
-            raise
         
     @classmethod
     async def new(cls, host, port, tls):
@@ -533,7 +541,7 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
     MAX_RETRY_DELAY = 3600
     
     def __init__(self, connection_cls, msg_handler, conn_init=None,
-                 conn_close=None, *args, **kwargs):
+                 conn_close=None, *args, autoretry=True, **kwargs):
         ''' We need to assign our connection class.
         
         conn_init, if defined, will be awaited (as a background task)
@@ -554,6 +562,9 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
         self._conn_args = None
         self._conn_kwargs = None
         self._consecutive_attempts = 0
+        # This determines whether or not we even try to reestablish the
+        # connection.
+        self.autoretry = autoretry
         
         # Very quick and easy way of injecting all of the handler methods into
         # self. Short of having one queue per method, we need to wrap it
@@ -590,6 +601,7 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
         '''
         # Attempt to connect.
         try:
+            logger.info('Establishing connection: ' + repr(self))
             # Technically this violates the idea that connections should be
             # wholly self-sustained, but we want to be able to explicitly close
             # them and pass some strong references to them later. Maybe. I
@@ -601,11 +613,11 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
             
         # Need to catch this specifically, lest we accidentally do this forever
         except asyncio.CancelledError:
-            logger.debug('MsgBuffer cancelled.')
+            logger.debug('Connection manager cancelled: ' + repr(self))
             raise
             
         # The connection failed. Wait before reattempting it.
-        except Exception:
+        except Exception as exc:
             logger.error(
                 'Failed to establish connection with traceback:\n' +
                 ''.join(traceback.format_exc())
@@ -616,10 +628,15 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
             backoff = random.randrange((2 ** self._consecutive_attempts) - 1)
             backoff = max(self.MIN_RETRY_DELAY, backoff)
             backoff = min(self.MAX_RETRY_DELAY, backoff)
-            await asyncio.sleep(backoff)
+            
+            if self.autoretry:
+                await asyncio.sleep(backoff)
+            else:
+                raise exc
             
         # We successfully connected. Awesome.
         else:
+            logger.debug('Connected: ' + repr(self))
             # Reset the attempts counter and set that a connection is available
             self._consecutive_attempts = 0
             # See note above re: strong/weak references
@@ -636,6 +653,8 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
                         self.conn_init(self, connection)
                     )
                 
+                logger.debug('Listening for messages: ' + repr(self))
+                
                 # We don't expect clients to have a high enough message volume
                 # to justify a buffer, so directly invoke the message handler
                 await connection.listen_forever(receiver=self.protocol_def)
@@ -645,6 +664,7 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
             finally:
                 self._conn_available.clear()
                 await connection.close()
+                logger.debug('Connection closed: ' + repr(self))
                 
                 if self.conn_close is not None:
                     await self.conn_close(self, connection)
