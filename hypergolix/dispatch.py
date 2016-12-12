@@ -672,6 +672,7 @@ class Dispatcher(metaclass=API):
                 )
             
             except asyncio.CancelledError:
+                logger.debug('Cancelling pending distributions.')
                 for distr in distributions:
                     distr.cancel()
                 raise

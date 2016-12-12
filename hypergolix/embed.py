@@ -116,7 +116,6 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         super().__init__(
             reusable_loop = False,
             threaded = threaded,
-            thread_kwargs = {'name': 'hgxlink'},
             *args,
             **kwargs
         )
@@ -496,6 +495,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
                 await handler(*args, **kwargs)
                 
             except asyncio.CancelledError:
+                logger.debug('Share handling cancelled.')
                 raise
                 
             except Exception:

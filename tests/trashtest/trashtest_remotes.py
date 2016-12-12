@@ -398,15 +398,27 @@ class SalmonatorTestStaged(unittest.TestCase):
         self.salmonator.assemble(self.golcore, self.percore, self.librarian,
                                  self.remote_protocol)
         
-    def test_conn_restore_1(self):
-        ''' Test connection restoration with no existing identity at the
-        remote.
+    def test_bootstrap_1(self):
+        ''' Test bootstrap with no existing identity at the remote.
         '''
         conn = _ConnectionBase.__fixture__()
         remote = Reffable()
         
+        async def publish(packed):
+            await self.remote_protocol.publish(conn, packed)
+        
+        async def subscribe(ghid):
+            await self.remote_protocol.subscribe(conn, ghid)
+            
+        remote.publish = publish
+        remote.subscribe = subscribe
+        
+        self.salmonator._upstream_remotes.add(remote)
+        
+        # We can substitute golcore for the account because it also has an
+        # _identity attribute
         await_coroutine_threadsafe(
-            coro = self.salmonator.restore_connection(remote, conn),
+            coro = self.salmonator.bootstrap(self.golcore),
             loop = self.nooploop._loop
         )
         self.assertTrue(
@@ -416,9 +428,8 @@ class SalmonatorTestStaged(unittest.TestCase):
             )
         )
         
-    def test_conn_restore_2(self):
-        ''' Test connection restoration with an existing identity at the
-        remote.
+    def test_bootstrap_2(self):
+        ''' Test bootstrap with an existing identity at the remote.
         '''
         await_coroutine_threadsafe(
             coro = self.librarian_remote.store(gidclite1, gidc1),
@@ -428,12 +439,31 @@ class SalmonatorTestStaged(unittest.TestCase):
         conn = _ConnectionBase.__fixture__()
         remote = Reffable()
         
+        async def publish(packed):
+            await self.remote_protocol.publish(conn, packed)
+        
+        async def subscribe(ghid):
+            await self.remote_protocol.subscribe(conn, ghid)
+            
+        remote.publish = publish
+        remote.subscribe = subscribe
+        
+        self.salmonator._upstream_remotes.add(remote)
+        
+        # We can substitute golcore for the account because it also has an
+        # _identity attribute
         await_coroutine_threadsafe(
-            coro = self.salmonator.restore_connection(remote, conn),
+            coro = self.salmonator.bootstrap(self.golcore),
             loop = self.nooploop._loop
         )
+        self.assertTrue(
+            await_coroutine_threadsafe(
+                coro = self.librarian_remote.contains(gidclite1.ghid),
+                loop = self.nooploop._loop
+            )
+        )
         
-    def test_conn_restore_3(self):
+    def test_conn_restore_1(self):
         ''' Test connection restoration with an existing identity at the
         remote, and subscriptions to add.
         '''
@@ -452,7 +482,7 @@ class SalmonatorTestStaged(unittest.TestCase):
             loop = self.nooploop._loop
         )
         
-    def test_conn_restore_4(self):
+    def test_conn_restore_2(self):
         ''' Test connection restoration with an existing identity at the
         remote, and DEFERRED subscriptions to add.
         '''

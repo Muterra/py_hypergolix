@@ -59,11 +59,6 @@ from .exceptions import RequestUnknown
 from .exceptions import ConnectionClosed
 
 from .utils import _BijectDict
-from .utils import LooperTrooper
-from .utils import run_coroutine_loopsafe
-from .utils import await_sync_future
-from .utils import call_coroutine_threadsafe
-from .utils import _generate_threadnames
 from .utils import ensure_equal_len
 
 
@@ -223,6 +218,7 @@ class _ConnectionBase(metaclass=API):
                 await receiver(self, msg)
                 
             except asyncio.CancelledError:
+                logger.debug('CONN ' + str(self) + ' receive cancelled.')
                 raise
             
             except Exception:
@@ -235,10 +231,16 @@ class _ConnectionBase(metaclass=API):
         ''' Listens until the connection terminates.
         '''
         # Wait until terminate is called.
-        while self:
-            # Juuust in case things go south, add this to help cancellation.
-            await asyncio.sleep(0)
-            await self.listener(receiver)
+        try:
+            while self:
+                # Juuust in case things go south, add this to help
+                # cancellation.
+                await asyncio.sleep(0)
+                await self.listener(receiver)
+        
+        # Catch this so we don't log a huge traceback on it.
+        except ConnectionClosed as exc:
+            logger.debug('CONN ' + str(self) + ' close message: ' + str(exc))
         
     @classmethod
     @fixture_api
@@ -339,17 +341,22 @@ class WSConnection(_ConnectionBase):
             # Make sure we don't take a strong reference to the connection!
             await self.listen_forever(msg_handler)
         
-        server = await websockets.serve(
+        server = await websockets.server.serve(
             wrapped_msg_handler,
             host,
             port,
-            # max_size = 5 * (2 ** 20)    # Max incoming msg size 5 MiB
+            max_size = 10 * (2 ** 20)    # Max incoming msg size 10 MiB
         )
         
         try:
-            await server.wait_closed()
+            await asyncio.shield(server.wait_closed())
             
-        except Exception:
+        except Exception as exc:
+            logger.error(
+                'INTERNAL SERVER ERROR. Closing server w/ traceback:\n' +
+                ''.join(traceback.format_exc())
+            )
+            logger.debug('Error args:' + str(exc.args))
             server.close()
             await server.wait_closed()
             raise
@@ -362,9 +369,9 @@ class WSConnection(_ConnectionBase):
         loc = _WSLoc(host, int(port), bool(tls))
         # If this raises, we don't need to worry about closing, because the
         # websocket won't exist.
-        websocket = await websockets.connect(
+        websocket = await websockets.client.connect(
             str(loc),
-            # max_size = 5 * (2 ** 20)    # Max incoming msg size 5 MiB
+            max_size = 10 * (2 ** 20)    # Max incoming msg size 10 MiB
         )
         return cls(websocket=websocket)
         
@@ -390,7 +397,9 @@ class WSConnection(_ConnectionBase):
         except websockets.exceptions.ConnectionClosed as exc:
             try:
                 # await self.close()
-                raise ConnectionClosed() from exc
+                raise ConnectionClosed(
+                    'code: ' + str(exc.code) + '; reason: ' + exc.reason
+                ) from exc
                 
             finally:
                 self.terminate()
@@ -406,7 +415,9 @@ class WSConnection(_ConnectionBase):
         except websockets.exceptions.ConnectionClosed as exc:
             try:
                 # await self.close()
-                raise ConnectionClosed() from exc
+                raise ConnectionClosed(
+                    'code: ' + str(exc.code) + '; reason: ' + exc.reason
+                ) from exc
                 
             finally:
                 self.terminate()
@@ -469,6 +480,7 @@ class MsgBuffer(loopa.TaskLooper):
         # Immediately cancel all pending, to prevent them finishing in the
         # background and dropping things.
         for task in pending:
+            logger.debug('Msgbuffer cancelling pending.')
             task.cancel()
         
         # Technically, both of these can be finished.
@@ -485,6 +497,7 @@ class MsgBuffer(loopa.TaskLooper):
                 await method(*args, **kwargs)
                 
         except asyncio.CancelledError:
+            logger.debug('MsgBuffer cancelled.')
             raise
         
         except Exception:
@@ -588,6 +601,7 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
             
         # Need to catch this specifically, lest we accidentally do this forever
         except asyncio.CancelledError:
+            logger.debug('MsgBuffer cancelled.')
             raise
             
         # The connection failed. Wait before reattempting it.
@@ -1047,6 +1061,7 @@ class _ReqResMixin:
                 response = await self.packit(self._SUCCESS_CODE, token, result)
                 
             except asyncio.CancelledError:
+                logger.debug(req_id + ' handler cancelled.')
                 raise
             
             # Response attempt failed. Pack a failed response with the
@@ -1075,6 +1090,7 @@ class _ReqResMixin:
             await connection.send(response)
             
         except asyncio.CancelledError:
+            logger.debug(req_id + ' response sending cancelled.')
             raise
             
         # Unsuccessful. Log the failure.
@@ -1246,916 +1262,3 @@ class _ReqResMixin:
         # condition) and return the token
         self._responses[connection][token] = None
         return token
-        
-        
-########################################################################
-# THIS IS ALL OF THE OLD STUFF!!!
-########################################################################
-        
-        
-class Autoresponder(LooperTrooper):
-    ''' Automated Request-Response system built on an event loop.
-    
-    each req_handler will be passed connection, token, body.
-    
-    req_handlers should be a mapping:
-        key(2 bytes): awaitable
-        
-    the request callable should return: res body, res code tuple, OR it 
-    should raise RequestFinished to denote the end of a req/res chain.
-    
-    Note that a request handler will never wait for a reply from its 
-    response (ie, reply recursion is impossible).
-    '''
-    # def __init__(self, req_handlers, failure_code, *args, **kwargs):
-    def __init__(self, req_handlers, success_code, failure_code, 
-    error_lookup=None, *args, **kwargs):
-        # # Use the default executor.
-        # self._receipt_executor = None
-        
-        # Hard-code a version number for now
-        self._version = 0
-        
-        # Assign the error lookup
-        if error_lookup is None:
-            error_lookup = {}
-        if b'\x00\x00' in error_lookup:
-            raise ValueError(
-                'Cannot override generic error code 0x00.'
-            )
-        self._error_lookup = _BijectDict(error_lookup)
-        
-        # Set incoming (request) handlers
-        self.req_handlers = req_handlers
-        # self.req_handlers[success_code] = self.unpack_success
-        # self.req_handlers[failure_code] = self.unpack_failure
-        # Set success/failure handlers and codes
-        self.response_handlers = {
-            success_code: self.pack_success,
-            failure_code: self.pack_failure,
-        }
-        self._success_code = success_code
-        self._failure_code = failure_code
-        
-        # Call a loose LBYL type check on all handlers.
-        self._check_handlers()
-        
-        # Lookup connection -> session
-        # Use a weak key dictionary for automatic cleanup when the connections
-        # have no more strong references.
-        self._session_lookup = weakref.WeakKeyDictionary()
-        self._connection_lookup = weakref.WeakKeyDictionary()
-        self._session_lock = None
-        self._has_session = None
-        
-        # This needs to be called last, otherwise we set up the event loop too
-        # early.
-        super().__init__(*args, **kwargs)
-        
-    def _check_handlers(self):
-        ''' Does duck/type checking for setting request/response codes.
-        '''
-        # We don't need to join req_handlers and response_handlers, because
-        # response_handlers were set with the same failure/success codes.
-        for code in set(self.req_handlers):
-            try:
-                if len(code) != 2:
-                    raise ValueError()
-                # Try turning it into bytes
-                bytes(code)
-            except (TypeError, ValueError) as exc:
-                raise TypeError(
-                    'Codes must be bytes-compatible objects of len 2.'
-                ) from exc
-        for handler in (list(self.req_handlers.values()) + 
-        list(self.response_handlers.values())):
-            if not callable(handler):
-                raise TypeError('Handlers must be callable.')
-        
-    def _check_request_code(self, request_code):
-        # Raise now if req_code unknown; we won't be able to handle a response
-        if (request_code not in self.req_handlers and 
-        request_code != self._success_code and 
-        request_code != self._failure_code):
-            raise RequestUnknown(repr(request_code))
-        # Note that the reqres_codes setter handles checking to make sure the
-        # code is of length 2.
-        
-    @property
-    def error_lookup(self):
-        ''' Error_lookup itself cannot be changed, but its contents
-        absolutely may.
-        '''
-        return self._error_lookup
-        
-    def _pack_request(self, version, token, req_code, body):
-        ''' Extracts version, token, request code, and body from a msg.
-        '''
-        if len(req_code) != 2:
-            raise ValueError('Improper request code while packing request.')
-        
-        # Pull out the version, token, body from msg
-        version = version.to_bytes(length=1, byteorder='big', signed=False)
-        token = token.to_bytes(length=2, byteorder='big', signed=False)
-        
-        return version + token + req_code + body
-        
-    def _unpack_request(self, msg):
-        ''' Extracts version, token, request code, and body from a msg.
-        '''
-        # Pull out the version, token, body from msg
-        version = int.from_bytes(
-            bytes = msg[0:1], 
-            byteorder = 'big', 
-            signed = False
-        )
-        token = int.from_bytes(
-            bytes = msg[1:3], 
-            byteorder = 'big', 
-            signed = False
-        )
-        req_code = msg[3:5]
-        body = msg[5:]
-        
-        return version, token, req_code, body
-                
-    def pack_success(self, their_token, data):
-        ''' Packs data into a "success" response.
-        '''
-        token = their_token.to_bytes(length=2, byteorder='big', signed=False)
-        if not isinstance(data, bytes):
-            data = bytes(data)
-        return token + data
-        
-    def unpack_success(self, data):
-        ''' Unpacks data from a "success" response.
-        Note: Currently inefficient for large responses.
-        '''
-        token = int.from_bytes(data[0:2], byteorder='big', signed=False)
-        data = data[2:]
-        return token, data
-        
-    def pack_failure(self, their_token, exc):
-        ''' Packs an exception into a "failure" response.
-        
-        NOTE: MUST BE CAREFUL NOT TO LEAK LOCAL INFORMATION WHEN SENDING
-        ERRORS AND ERROR CODES. Sending the body of an arbitrary error
-        exposes information!
-        '''
-        exc_msg = ''.join(
-            traceback.format_exception(type(exc), exc, exc.__traceback__)
-        )
-        str_token = str(their_token)
-        token = their_token.to_bytes(length=2, byteorder='big', signed=False)
-        
-        logger.info(
-            'REQUEST FAILED:    ' + str_token +
-            ' Packing exception:\n' + exc_msg
-        )
-        
-        try:
-            code = self.error_lookup[type(exc)]
-            body = exc_msg.encode('utf-8')
-            
-        except KeyError:
-            code = b'\x00\x00'
-            body = exc_msg.encode('utf-8')
-            logger.debug(
-                'Request ' + str_token + ' has no matching response code ' +
-                'for exception.'
-            )
-            
-        except Exception:
-            exc2_msg = ''.join(traceback.format_exc())
-            code = b'\x00\x00'
-            body = (exc_msg + '\n\nFOLLOWED BY\n\n' + exc2_msg).encode('utf-8')
-            logger.debug(
-                'Request ' + str_token + ' failed to pack exc w/traceback:\n' +
-                exc_msg + '\n\nFOLLOWED BY\n\n' + exc2_msg
-            )
-            
-        return token + code + body
-        
-    def unpack_failure(self, data):
-        ''' Unpacks data from a "failure" response and raises the
-        exception that generated it (or something close to it).
-        '''
-        token = int.from_bytes(data[0:2], byteorder='big', signed=False)
-        code = data[2:4]
-        body = data[4:].decode('utf-8')
-        
-        try:
-            exc = self.error_lookup[code]
-        except KeyError:
-            exc = RequestError
-            
-        exc = exc(body)
-        return token, exc
-                       
-    def _get_recv_handler(self, req_code, body):
-        ''' Handles the receipt of a msg from connection without
-        blocking the event loop or the receive task.
-        '''
-        try:
-            res_handler = self.req_handlers[req_code]
-        except KeyError as exc:
-            raise RequestUnknown(repr(req_code)) from exc
-        
-        return res_handler
-                
-    async def loop_init(self, *args, **kwargs):
-        ''' Set a waiter that won't be called until the loop is closed,
-        so that the receivers can spawn handlers, instead of us needing
-        to dynamically add them or something silly.
-        '''
-        self._has_session = asyncio.Event()
-        self._dumblock = asyncio.Event()
-        self._session_lock = asyncio.Lock()
-                
-    async def loop_run(self):
-        ''' Will be run ad infinitum until shutdown. Aka, will do 
-        literally nothing until closed, and let receivers and senders
-        spawn workers.
-        '''
-        await self._dumblock.wait()
-        
-    async def loop_stop(self):
-        ''' Just for good measure, set (and then delete) the dumblock.
-        '''
-        self._dumblock.set()
-        del self._dumblock
-        
-    async def receiver(self, connection, msg):
-        ''' Called from the ConnectorBase to handle incoming messages.
-        Note that this must run in a different event loop.
-        '''
-        await run_coroutine_loopsafe(
-            coro = self.spawn_handler(connection, msg),
-            target_loop = self._loop,
-        )
-        
-    async def spawn_handler(self, connection, msg):
-        ''' Creates a task to handle the message from the connection.
-        '''
-        # We can track these later. For now, just create them, and hope it all
-        # works out in the end. Hahahahahaha right. What about cancellation?
-        fut = asyncio.ensure_future(self.autoresponder(connection, msg))
-        # Todo: consider adding contextual information, like part of (or all)
-        # of the message.
-        fut.add_done_callback(self._handle_autoresponder_complete)
-        
-    def _handle_autoresponder_complete(self, fut):
-        ''' Added to the autoresponder future as a done callback to 
-        handle any autoresponder exceptions.
-        '''
-        # For now, we just need to catch and log any exceptions.
-        if fut.exception():
-            exc = fut.exception()
-            logger.warning(
-                ('Unhandled exception while autoresponding! ' +
-                repr(exc) + '\n') + 
-                ''.join(traceback.format_tb(exc.__traceback__))
-            )
-        
-    async def autoresponder(self, connection, msg):
-        ''' Actually manages responding to or receiving messages from
-        connections.
-        
-        Needs to take care of its own shit totally unsupervised, because
-        it's going to be abandoned immediately by spawn_handler.
-        '''
-        # Just in case we fail to extract a token:
-        their_token = 0
-    
-        # If unpacking the request raises, so be it. We'll get an unhandled
-        # exception warning in asyncio. It won't harm program flow. If they are 
-        # waiting for a response, it's just too bad that they didn't format the 
-        # request correctly. The alternative is that we get stuck in a 
-        # potentially endless loop of bugged-out sending garbage.
-        
-        version, their_token, req_code, body = self._unpack_request(msg)
-        session = self._session_lookup[connection]
-
-        if req_code == self._success_code:
-            token, response = self.unpack_success(body)
-            await self._wake_sender(session, token, response)
-            
-        elif req_code == self._failure_code:
-            token, response = self.unpack_failure(body)
-            await self._wake_sender(session, token, response)
-            
-        else:
-            await self._handle_request(session, req_code, their_token, body)
-        
-    async def _handle_request(self, session, req_code, their_token, body):
-        ''' Handles a request, as opposed to a "success" or "failure" 
-        response.
-        '''
-        try:
-            res_handler = self._get_recv_handler(req_code, body)
-            # Note: we should probably wrap the res_handler into something
-            # that tolerates no return value (probably by wrapping None
-            # into b'')
-            response_msg = await res_handler(session, body)
-            response = self.pack_success(
-                their_token = their_token,
-                data = response_msg,
-            )
-            response_code = self._success_code
-            
-        except asyncio.CancelledError:
-            raise
-            
-        except Exception as exc:
-            # Instrumentation
-            logger.info(
-                'FAILED ' + str(req_code) + ' FROM SESSION ' +
-                hex(id(session)) + ' w/ traceback\n' +
-                ''.join(traceback.format_exc())
-            )
-            response = self.pack_failure(their_token, exc)
-            response_code = self._failure_code
-            # # Should this actually raise? I don't think so?
-            # raise
-        
-        else:
-            logger.debug(
-                'SUCCESS ' + str(req_code) +
-                ' FROM SESSION ' + hex(id(session)) + ' ' +
-                str(body[:25])
-            )
-        
-        finally:
-            await self.send(
-                session = session,
-                msg = response,
-                request_code = response_code,
-                # We're smart enough to know not to wait for a reply on ack/nak
-                # await_reply = False
-            )
-        
-    async def send(self, session, msg, request_code, await_reply=True):
-        ''' Creates a request or response.
-        
-        If await_reply=True, will wait for response and then return its
-            result.
-        If await_reply=False, will immediately return a tuple to access the 
-            result: (asyncio.Task, connection, token)
-        '''
-        version = self._version
-        # Get a token and pack the message.
-        token = await session._gen_req_token()
-        
-        packed_msg = self._pack_request(version, token, request_code, msg)
-        
-        # Create an event to signal response waiting and then put the outgoing
-        # in the send queue
-        session.pending_responses[token] = asyncio.Queue(maxsize=1)
-            
-        # Send the message
-        connection = self._connection_lookup[session]
-        await connection.send_loopsafe(packed_msg)
-        
-        # Start waiting for a response if it isn't an ack or nak
-        is_acknak = request_code == self._success_code
-        is_acknak |= request_code == self._failure_code
-        if not is_acknak:
-            response_future = asyncio.ensure_future(
-                self._await_response(session, token)
-            )
-        
-            # Wait for the response if desired.
-            # Note that this CANNOT be changed to return the future itself, as 
-            # that would break when wrapping with loopsafe or threadsafe calls.
-            if await_reply:
-                await asyncio.wait_for(response_future, timeout=None)
-                
-                if response_future.exception():
-                    raise response_future.exception()
-                else:
-                    return response_future.result()
-                
-            else:
-                logger.debug(
-                    'Response unawaited; returning future for ' + repr(session) + 
-                    ' request: ' + str(request_code) + ' ' + str(msg[:10])
-                )
-                return response_future
-            
-    async def send_loopsafe(self, session, msg, request_code, await_reply=True):
-        ''' Call send, but wait in a different event loop.
-        
-        Note that if await_reply is False, the result will be inaccessible.
-        '''
-        # Problem: if await_reply is False, we'll return a Task from a 
-        # different event loop. That's a problem.
-        # Solution: for now, discard the future and return None.
-        result = await run_coroutine_loopsafe(
-            coro = self.send(session, msg, request_code, await_reply),
-            target_loop = self._loop
-        )
-            
-        if not await_reply:
-            self._loop.call_soon_threadsafe(
-                result.add_done_callback,
-                self._cleanup_ignored_response
-            )
-            result = None
-            
-        return result
-        
-    def send_threadsafe(self, session, msg, request_code, await_reply=True):
-        ''' Calls send, in a synchronous, threadsafe way.
-        '''
-        # See above re: discarding the result if not await_reply.
-        result = call_coroutine_threadsafe(
-            coro = self.send(session, msg, request_code, await_reply),
-            loop = self._loop
-        )
-            
-        if not await_reply:
-            self._loop.call_soon_threadsafe(
-                result.add_done_callback,
-                self._cleanup_ignored_response
-            )
-            result = None
-            
-        return result
-            
-    def _cleanup_ignored_response(self, fut):
-        ''' Called when loopsafe and threadsafe sends don't wait for a 
-        result.
-        '''
-        # For now, we just need to catch and log any exceptions.
-        if fut.exception():
-            exc = fut.exception()
-            logger.warning(
-                ('Unhandled exception in ignored response! ' +
-                repr(exc) + '\n'
-                ) + ''.join(traceback.format_tb(exc.__traceback__))
-            )
-        else:
-            logger.debug('Response received, but ignored.')
-        
-    async def _await_response(self, session, token):
-        ''' Waits for a response and then cleans up the response stuff.
-        '''
-        try:
-            response = await session.pending_responses[token].get()
-
-            # If the response was, in fact, an exception, raise it.
-            if isinstance(response, Exception):
-                raise response
-                
-        except ConnectionClosed as exc:
-            logger.debug(
-                'Session closed while awaiting response: \n' + ''.join(
-                traceback.format_exc())
-            )
-        
-        finally:
-            del session.pending_responses[token]
-            
-        return response
-        
-    async def _wake_sender(self, session, token, response):
-        ''' Attempts to deliver a response to the token at session.
-        '''
-        try:
-            waiter = session.pending_responses[token]
-            await waiter.put(response)
-        except KeyError:
-            # Silence KeyErrors that indicate token was not being waited for.
-            # No cleanup necessary, since it already doesn't exist.
-            logger.info('Received an unexpected or unawaited response.')
-            
-    def session_factory(self):
-        ''' Added for easier subclassing. Returns a session object.
-        '''
-        return _AutoresponderSession()
-        
-    @property
-    def sessions(self):
-        ''' Returns an iterable of all current sessions.
-        '''
-        return iter(self._connection_lookup)
-        
-    @property
-    def any_session(self):
-        ''' Returns an arbitrary session.
-        
-        Mostly useful for Autoresponders that have only one session
-        (for example, any client in a client/server setup).
-        '''
-        # Connection lookup maps session -> connection.
-        # First treat keys like an iterable
-        # Then grab the "first" of those and return it.
-        try:
-            return next(iter(self._connection_lookup))
-        except StopIteration as exc:
-            raise RuntimeError(
-                'No session available. Must first connect to client/server.'
-            ) from exc
-        
-    async def await_session_async(self):
-        ''' Waits for a session to be available.
-        '''
-        await self._has_session.wait()
-        
-    async def await_session_loopsafe(self):
-        ''' Waits for a session to be available (loopsafe).
-        '''
-        await run_coroutine_loopsafe(
-            coro = self.await_session_async(),
-            target_loop = self._loop,
-        )
-        
-    def await_session_threadsafe(self):
-        ''' Waits for a session to be available (threadsafe)
-        '''
-        return call_coroutine_threadsafe(
-            coro = self.await_session_async(),
-            loop = self._loop,
-        )
-        
-    async def _generate_session_loopsafe(self, connection):
-        ''' Loopsafe wrapper for generating sessions.
-        '''
-        await run_coroutine_loopsafe(
-            self._generate_session(connection),
-            target_loop = self._loop
-        )
-            
-    async def _generate_session(self, connection):
-        ''' Gets the session for the passed connection, or creates one
-        if none exists.
-        
-        Might be nice to figure out a way to bypass the lock on lookup,
-        and only use it for setting.
-        '''
-        async with self._session_lock:
-            try:
-                session = self._session_lookup[connection]
-            except KeyError:
-                logger.debug(
-                    'Connection missing in session lookup: ' + str(connection)
-                )
-                session = self.session_factory()
-                self._session_lookup[connection] = session
-                self._connection_lookup[session] = weakref.proxy(connection)
-                
-        # Release anyone waiting for a session
-        self._has_session.set()
-                
-        return session
-        
-    async def _close_session_loopsafe(self, connection):
-        ''' Loopsafe wrapper for closing sessions.
-        '''
-        await run_coroutine_loopsafe(
-            self._close_session(connection),
-            target_loop = self._loop
-        )
-        
-    def _close_session_threadsafe(self, connection):
-        ''' Threadsafe wrapper for closing sessions.
-        '''
-        call_coroutine_threadsafe(
-            coro = self._close_session(connection),
-            loop = self._loop
-        )
-        
-    async def _close_session(self, connection):
-        ''' Loopsafe wrapper for closing sessions.
-        '''
-        try:
-            session = self._session_lookup[connection]
-            del self._session_lookup[connection]
-            del self._connection_lookup[session]
-            await session.close()
-        except KeyError as exc:
-            logger.error(
-                'KeyError while closing session:\n' +
-                ''.join(traceback.format_exc())
-            )
-
-            
-def _args_normalizer(args):
-    if args is None:
-        return []
-    else:
-        return args
-    
-    
-def _kwargs_normalizer(kwargs):
-    if kwargs is None:
-        return {}
-    else:
-        return kwargs
-    
-    
-class AutoresponseConnector:
-    ''' Connects an autoresponder to a connector. Use it by subclassing
-    both the connector and this class, for example:
-    
-    class WSAutoServer(AutoresponseConnector, WSBasicServer):
-        pass
-    '''
-    def __init__(self, autoresponder, *args, **kwargs):
-        # I am actually slightly concerned about future name collisions here
-        self.__autoresponder = autoresponder
-        super().__init__(receiver=autoresponder.receiver, *args, **kwargs)
-        
-    async def new_connection(self, *args, **kwargs):
-        ''' Bridge the connection with a newly created session.
-        '''
-        connection = await super().new_connection(*args, **kwargs)
-        await self.__autoresponder._generate_session_loopsafe(connection)
-        return connection
-    
-    async def _handle_connection(self, *args, **kwargs):
-        ''' Close the session with the connection.
-        '''
-        connection = await super()._handle_connection(*args, **kwargs)
-        await self.__autoresponder._close_session_loopsafe(connection)
-
-
-def Autocomms(autoresponder_class, connector_class, autoresponder_args=None, 
-    autoresponder_kwargs=None, autoresponder_name=None, connector_args=None, 
-    connector_kwargs=None, connector_name=None, aengel=None, debug=False):
-    ''' Marries an autoresponder to a Client/Server. Assigns the client/
-    server as autoresponder.connector attribute, and returns the 
-    autoresponder.
-    
-    Aengel note: stop the connector first, then the autoresponder.
-    ''' 
-    if autoresponder_name is None:
-        autoresponder_name = 'auto:re'
-    if connector_name is None:
-        connector_name = 'connect'
-    autoresponder_name, connector_name = \
-        _generate_threadnames(autoresponder_name, connector_name)
-        
-    autoresponder_args = _args_normalizer(autoresponder_args)
-    autoresponder_kwargs = _kwargs_normalizer(autoresponder_kwargs)
-    connector_args = _args_normalizer(connector_args)
-    connector_kwargs = _kwargs_normalizer(connector_kwargs)
-    
-    # Note that default behavior for LooperTrooper is to prepend the 
-    # cancellation to the Aengel, so we do not need to reorder.
-
-    autoresponder = autoresponder_class(
-        *autoresponder_args,
-        **autoresponder_kwargs,
-        threaded = True,
-        debug = debug,
-        thread_name = autoresponder_name,
-        aengel = aengel,
-    )
-    
-    class LinkedConnector(connector_class):
-        def stop(self):
-            autoresponder.stop_threadsafe_nowait()
-            super().stop()
-        
-        async def new_connection(self, *args, **kwargs):
-            ''' Bridge the connection with a newly created session.
-            '''
-            connection = await super().new_connection(*args, **kwargs)
-            await autoresponder._generate_session_loopsafe(connection)
-            return connection
-        
-        async def _handle_connection(self, *args, **kwargs):
-            ''' Close the session with the connection.
-            '''
-            connection = await super()._handle_connection(*args, **kwargs)
-            await autoresponder._close_session_loopsafe(connection)
-    
-    connector = LinkedConnector(
-        receiver = autoresponder.receiver,
-        threaded = True,
-        debug = debug,
-        thread_name = connector_name,
-        aengel = aengel,
-        *connector_args,
-        **connector_kwargs,
-    )
-    autoresponder.connector = connector
-    
-    return autoresponder
-        
-
-class WSBase:
-    ''' Common stuff for websockets clients and servers.
-    '''
-    
-    def __init__(self, host, port, receiver, tls=True, *args, **kwargs):
-        ''' Yeah, the usual.
-        host -> str: hostname for the server
-        port -> int: port for the server
-        receiver -> coro: handler for incoming objects. Must have async def
-            receiver.receive(), which will be passed the connection, message
-        connection_class -> type: used to create new connections. Defaults to
-            _WSConnection.
-        '''
-        self._ws_port = port
-        self._ws_host = host
-        
-        if tls:
-            self._ws_protocol = 'wss://'
-        else:
-            self._ws_protocol = 'ws://'
-        
-        self._ws_tls = bool(tls)
-        self._receiver = receiver
-            
-        super().__init__(*args, **kwargs)
-            
-    @property
-    def _ws_loc(self):
-        return (
-            self._ws_protocol +
-            self._ws_host + ':' +
-            str(self._ws_port) + '/'
-        )
-        
-    @property
-    def connection_factory(self):
-        ''' Proxy for connection factory to allow saner subclassing.
-        '''
-        return _WSConnection
-    
-    async def new_connection(self, websocket, path, *args, **kwargs):
-        ''' Wrapper for creating a new connection. Mostly here to make
-        subclasses simpler.
-        '''
-        logger.debug('New connection: ' + str(args) + ' ' + str(kwargs))
-        return self.connection_factory(
-            loop = self._loop,
-            websocket = websocket,
-            path = path,
-            *args, **kwargs
-        )
-        
-    async def _handle_connection(self, websocket, path=None):
-        ''' This handles a single websockets connection.
-        '''
-        connection = await self.new_connection(websocket, path)
-        
-        try:
-            while True:
-                await asyncio.sleep(0)
-                msg = await websocket.recv()
-                # Should this be split off into own looper so we can get on
-                # with receiving?
-                await self._receiver(connection, msg)
-                
-        except ConnectionClosed:
-            logger.info('Connection closed: ' + str(connection.connid))
-                    
-        except Exception:
-            logger.error(
-                'Error running connection! Cleanup not called.\n' +
-                ''.join(traceback.format_exc())
-            )
-            raise
-            
-        finally:
-            await connection.close()
-            
-        # In case subclasses want to do any cleanup
-        return connection
-        
-        
-class WSBasicClient(WSBase, loopa.TaskLooper):
-    ''' Generic websockets client.
-    
-    Note that this doesn't block or anything. You're free to continue on
-    in the thread where this was created, and if you don't, it will
-    close down.
-    '''
-    
-    def __init__(self, threaded, *args, **kwargs):
-        super().__init__(threaded=threaded, *args, **kwargs)
-        
-        self._retry_counter = 0
-        self._retry_max = 60
-        
-        # If we're threaded, we need to wait for the clear to transmit flag
-        if threaded:
-            call_coroutine_threadsafe(
-                coro = self._ctx.wait(),
-               loop = self._loop,
-            )
-    
-    async def loop_init(self):
-        self._ctx = asyncio.Event()
-        await super().loop_init()
-        
-    async def loop_stop(self):
-        self._ctx = None
-        await super().loop_stop()
-        
-    async def new_connection(self, *args, **kwargs):
-        ''' Wraps super().new_connection() to store it as
-        self._connection.
-        '''
-        connection = await super().new_connection(*args, **kwargs)
-        self._connection = connection
-        return connection
-        
-    async def loop_run(self):
-        ''' Client coroutine. Initiates a connection with server.
-        '''
-        async with websockets.connect(self._ws_loc) as websocket:
-            try:
-                self._loop.call_soon(self._ctx.set)
-                await self._handle_connection(websocket)
-                
-            except ConnectionClosed as exc:
-                logger.warning('Connection closed!')
-                # For now, if the connection closes, just dumbly retry
-                self._retry_counter += 1
-                
-                if self._retry_counter <= self._retry_max:
-                    await asyncio.sleep(.1)
-                    
-                else:
-                    self.stop()
-        
-    async def send(self, msg):
-        ''' NON THREADSAFE wrapper to send a message. Must be called
-        from the same event loop as the websocket.
-        '''
-        await self._ctx.wait()
-        await self._connection.send(msg)
-        
-    async def send_loopsafe(self, msg):
-        ''' Threadsafe wrapper to send a message from a different event
-        loop.
-        '''
-        await run_coroutine_loopsafe(
-            coro = self.send(msg),
-            target_loop = self._loop
-        )
-        
-    def send_threadsafe(self, msg):
-        ''' Threadsafe wrapper to send a message. Must be called
-        synchronously.
-        '''
-        call_coroutine_threadsafe(
-            coro = self.send(msg),
-            loop = self._loop
-        )
-        
-        
-class _AutoresponderSession:
-    ''' A request/response websockets connection.
-    MUST ONLY BE CREATED INSIDE AN EVENT LOOP.
-    
-    TODO: merge with connections
-    '''
-    def __init__(self):
-        # Lookup for request token -> queue(maxsize=1)
-        self.pending_responses = {}
-        self._req_lock = asyncio.Lock()
-        
-    async def _gen_req_token(self):
-        ''' Gets a new (well, currently unused) request token. Sets it
-        in pending_responses to prevent race conditions.
-        '''
-        async with self._req_lock:
-            token = self._gen_unused_token()
-            # Do this just so we can release the lock ASAP
-            self.pending_responses[token] = None
-            
-        return token
-            
-    def _gen_unused_token(self):
-        ''' Recursive search for unused token. THIS IS NOT THREADSAFE
-        NOR ASYNC SAFE! Must be called from within parent lock.
-        '''
-        # Get a random-ish (no need for CSRNG) 16-bit token
-        token = random.getrandbits(16)
-        if token in self.pending_responses:
-            token = self._gen_unused_token()
-        return token
-        
-    async def close(self):
-        ''' Perform any needed cleanup.
-        '''
-        # Awaken any further pending responses that they're doomed
-        for waiter in self.pending_responses.values():
-            await waiter.put(ConnectionClosed())
-            
-    def __repr__(self):
-        # Example: <_AutoresponderSession 0x52b2978>
-        clsname = type(self).__name__
-        sess_str = str(hex(id(self)))
-        return '<' + clsname + ' ' + sess_str + '>'
-        
-    def __str__(self):
-        # Example: _AutoresponderSession(0x52b2978)
-        clsname = type(self).__name__
-        sess_str = str(hex(id(self)))
-        return clsname + '(' + sess_str + ')'

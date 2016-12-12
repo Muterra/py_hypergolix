@@ -72,10 +72,6 @@ from .exceptions import UnavailableUpstream
 
 from .utils import weak_property
 from .utils import readonly_property
-from .utils import TruthyLock
-from .utils import SetMap
-from .utils import WeakSetMap
-from .utils import _generate_threadnames
 
 
 # ###############################################
@@ -876,8 +872,8 @@ class Enforcer(metaclass=API):
             target = await self._librarian.summarize(obj.target)
         except KeyError:
             logger.debug(
-                str(obj.target) + ' missing from librarian w/ traceback:\n' +
-                ''.join(traceback.format_exc())
+                str(obj.ghid) + ' cannot verify GOBD target; missing from ' +
+                'librarian: ' + str(obj.target)
             )
         else:
             for forbidden in (_GidcLite, _GobsLite, _GdxxLite, _GarqLite):

@@ -90,11 +90,6 @@ from .exceptions import IntegrityError
 from .exceptions import UnavailableUpstream
 
 from .utils import weak_property
-from .utils import readonly_property
-from .utils import TruthyLock
-from .utils import SetMap
-from .utils import WeakSetMap
-from .utils import _generate_threadnames
 
 
 # ###############################################

@@ -281,7 +281,8 @@ class Account(metaclass=API):
             packed = self._identity.second_party.packed
             gidc = _GidcLite.from_golix(GIDC.unpack(packed))
             logger.info('Publishing public keys.')
-            await self._percore.direct_ingest(gidc, packed, remotable=True)
+            # We haven't bootstrapped salmonator yet, so don't remote the keys
+            await self._percore.direct_ingest(gidc, packed, remotable=False)
             
             # Now we need to declare the root note. It needs some kind of
             # useless, garbage data as well, lest it error out because it can't
@@ -370,6 +371,8 @@ class Account(metaclass=API):
             )
             logger.info('Bootstrapping golcore.')
             self._golcore.bootstrap(self)
+            logger.info('Bootstrapping salmonator.')
+            await self._salmonator.bootstrap(self)
             
             logger.info('Loading persistent keystore.')
             await self.privateer_persistent._pull()
@@ -393,6 +396,9 @@ class Account(metaclass=API):
             
         # Save new account
         else:
+            # First, bootstrap salmonator, so that we don't get errors as an
+            # unknown author
+            await self._salmonator.bootstrap(self)
             # Initializing is needed to prevent losing the first frame while
             # the secret ratchet initializes
             logger.info('Allocating the root node.')

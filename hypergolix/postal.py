@@ -154,6 +154,7 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
             await self._deliver(subscription, notification, skip_conn)
             
         except asyncio.CancelledError:
+            logger.debug('PostalCore cancelled.')
             raise
         
         except Exception:

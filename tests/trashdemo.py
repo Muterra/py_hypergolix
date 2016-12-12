@@ -150,7 +150,7 @@ class TestAppNoRestore(unittest.TestCase):
             reusable_loop = False,
             threaded = True,
             debug = True,
-            thread_kwargs = {'name': 'server'}
+            thread_kwargs = {'name': 'pserver'}
         )
         
         # Set up the FIRST CLIENT
@@ -181,7 +181,8 @@ class TestAppNoRestore(unittest.TestCase):
             ipc_port = 6023,
             autostart = False,
             debug = True,
-            threaded = True
+            threaded = True,
+            thread_kwargs = {'name': 'hgxlink1'}
         )
         
         # Set up the SECOND CLIENT
@@ -212,24 +213,26 @@ class TestAppNoRestore(unittest.TestCase):
             ipc_port = 6025,
             autostart = False,
             debug = True,
-            threaded = True
+            threaded = True,
+            thread_kwargs = {'name': 'hgxlink2'}
         )
         
         # START THE WHOLE SHEBANG
         ###########################################
         self.server.start()
         self.hgxcore1.start()
-        self.hgxlink1.start()
         self.hgxcore2.start()
+        self.hgxlink1.start()
         self.hgxlink2.start()
         
     def tearDown(self):
         ''' Kill errything and then remove the caches.
         '''
         try:
+            print('Finished, stopping loops.')
             self.hgxlink2.stop_threadsafe(timeout=.5)
-            self.hgxcore2.stop_threadsafe(timeout=.5)
             self.hgxlink1.stop_threadsafe(timeout=.5)
+            self.hgxcore2.stop_threadsafe(timeout=.5)
             self.hgxcore1.stop_threadsafe(timeout=.5)
             self.server.stop_threadsafe(timeout=.5)
         
@@ -242,6 +245,16 @@ class TestAppNoRestore(unittest.TestCase):
     def test_whoami(self):
         ''' Super simple whoami test to make sure it's working.
         '''
+        # First make sure everything is correctly started up.
+        await_coroutine_threadsafe(
+            coro = self.hgxcore1.await_startup(),
+            loop = self.hgxcore1._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.hgxcore2.await_startup(),
+            loop = self.hgxcore2._loop
+        )
+        
         whoami = await_coroutine_threadsafe(
             coro = self.hgxlink1._ipc_manager.get_whoami(timeout=1),
             loop = self.hgxlink1._loop
@@ -562,9 +575,9 @@ if False:
 
 if __name__ == "__main__":
     from hypergolix import logutils
-    logutils.autoconfig(loglevel='debug')
+    logutils.autoconfig(loglevel='extreme')
     
-    from hypergolix.utils import TraceLogger
-    with TraceLogger(interval=10):
-        unittest.main()
-    # unittest.main()
+    # from hypergolix.utils import TraceLogger
+    # with TraceLogger(interval=10):
+    #     unittest.main()
+    unittest.main()

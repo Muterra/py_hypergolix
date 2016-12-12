@@ -176,27 +176,28 @@ class LawyerCore(metaclass=API):
         '''
         await self._validate_author(obj)
         
-        try:
-            existing = await self._librarian.summarize(obj.ghid)
-        
-        except KeyError:
-            logger.debug(
-                str(obj.ghid) + ' missing from librarian w/ traceback:\n' +
-                ''.join(traceback.format_exc())
-            )
-        
-        else:
-            if existing.author != obj.author:
-                logger.info(
-                    '0x0007: Inconsistent binding author. \n'
-                    '    Existing author:  ' + str(existing.author) +
-                    '\n    Attempted author: ' + str(obj.author)
+        if obj.counter > 0:
+            try:
+                existing = await self._librarian.summarize(obj.ghid)
+            
+            except KeyError:
+                logger.debug(
+                    str(obj.ghid) + ' missing from librarian w/ traceback:\n' +
+                    ''.join(traceback.format_exc())
                 )
-                raise InconsistentAuthor(
-                    '0x0007: Inconsistent binding author. \n'
-                    '    Existing author:  ' + str(existing.author) +
-                    '\n    Attempted author: ' + str(obj.author)
-                )
+            
+            else:
+                if existing.author != obj.author:
+                    logger.info(
+                        '0x0007: Inconsistent binding author. \n'
+                        '    Existing author:  ' + str(existing.author) +
+                        '\n    Attempted author: ' + str(obj.author)
+                    )
+                    raise InconsistentAuthor(
+                        '0x0007: Inconsistent binding author. \n'
+                        '    Existing author:  ' + str(existing.author) +
+                        '\n    Attempted author: ' + str(obj.author)
+                    )
         
         return True
         

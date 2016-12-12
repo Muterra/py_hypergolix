@@ -320,6 +320,7 @@ class Rolodex(metaclass=API):
             # handle for that in SHARE instead of HANDSHAKE?
             
         except asyncio.CancelledError:
+            logger.debug('Handshake handler cancelled.')
             raise
             
         except Exception as exc:

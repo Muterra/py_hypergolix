@@ -33,6 +33,7 @@ hypergolix: A python Golix client.
 # Global dependencies
 import logging
 import traceback
+import asyncio
 import loopa
 import concurrent.futures
 
@@ -111,6 +112,9 @@ class HypergolixCore(loopa.TaskCommander, metaclass=API):
         user_id may be explicitly None to create a new account.
         '''
         super().__init__(*args, **kwargs)
+        # We also want to create an event so things can block on us being
+        # actually, properly available
+        self._ctx = asyncio.Event(loop=self._loop)
         
         # Manufacturing!
         ######################################################################
@@ -262,11 +266,18 @@ class HypergolixCore(loopa.TaskCommander, metaclass=API):
         '''
         await self.librarian.restore()
         await self.account.bootstrap()
+        self._ctx.set()
         
     async def teardown(self):
         ''' Do all of the post-run-pre-close stuff.
         '''
-        await self.account.flush()
+        # Hold off on this until we stop hanging on close
+        # await self.account.flush()
+        
+    async def await_startup(self):
+        ''' Wait for startup to complete.
+        '''
+        await self._ctx.wait()
         
         
 def _expand_password(salt_ghid, password, hardness=None):

@@ -469,6 +469,8 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         # Lookup for <registered ghid>
         self._registered = set()
         
+        self._bootstrapped = False
+        
     @fixture_api
     def RESET(self):
         ''' Clear stuff out, yo.
@@ -585,8 +587,9 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         thread, which it should be (finalizers are called from object
         thread, and all gao must be created within event loop's thread).
         '''
-        # This needs to be a function, not a coro, so use nowait.
-        self._clear_q.put_nowait(ghid)
+        if self._clear_q is not None:
+            # This needs to be a function, not a coro, so use nowait.
+            self._clear_q.put_nowait(ghid)
     
     @fixture_noop
     @public_api
@@ -710,6 +713,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         # We may still have some pending tasks. Cancel them. Note that we have
         # not yielded control to the event loop, so there is no race.
         for task in pending:
+            logger.debug('Cancelling pending pulls.')
             task.cancel()
             
         # Now handle the result.
@@ -775,27 +779,29 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
             return True
         else:
             return obj
+            
+    async def bootstrap(self, account):
+        ''' Bootstrapping publishes our identity upstream.
+        '''
+        for remote in self._upstream_remotes:
+            await remote.publish(account._identity.second_party.packed)
+            await remote.subscribe(account._identity.ghid)
+            
+        self._bootstrapped = True
     
     @fixture_noop
     @public_api
     async def restore_connection(self, remote, connection):
         ''' Start or re-start a connection.
         '''
-        # First check to make sure the remote server actually knows us.
-        known_to_remote = await self._remote_protocol.query_existence(
-            connection,
-            self._golcore.whoami
-        )
-        
-        # If not, we need to publish our actual identity.
-        if not known_to_remote:
-            await self._remote_protocol.publish(
+        # We need to subscribe to our identity if we're restoring a terminated
+        # connection. If we haven't bootstrapped though, that will be handled
+        # there.
+        if self._bootstrapped:
+            await self._remote_protocol.subscribe(
                 connection,
-                self._golcore._identity.second_party.packed
+                self._golcore.whoami
             )
-        
-        # Pass to the salmonator to restore the connection.
-        await self._remote_protocol.subscribe(connection, self._golcore.whoami)
         
         # For every every active (salmonator-registered) GAO's ghid...
         tasks = set()

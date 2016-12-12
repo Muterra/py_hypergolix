@@ -88,7 +88,8 @@ class HGXLinkTrashtest(unittest.TestCase):
             debug = True,
             threaded = True,
             autostart = True,
-            ipc_fixture = cls.ipc_fixture
+            ipc_fixture = cls.ipc_fixture,
+            thread_kwargs = {'name': 'hgxlink'}
         )
         # Normally this is handled by the connection startup. Since we're
         # fixturing the connection manager, we have to do it manually.

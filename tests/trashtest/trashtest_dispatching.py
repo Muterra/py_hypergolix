@@ -46,10 +46,6 @@ from queue import Empty
 
 from golix import Ghid
 
-from hypergolix.utils import LooperTrooper
-from hypergolix.utils import Aengel
-from hypergolix.utils import SetMap
-from hypergolix.utils import NoContext
 from hypergolix.utils import ApiID
 
 from hypergolix.accounting import Account
