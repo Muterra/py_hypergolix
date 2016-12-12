@@ -349,7 +349,7 @@ class WSConnection(_ConnectionBase):
         )
         
         try:
-            await asyncio.shield(server.wait_closed())
+            await server.wait_closed()
             
         except Exception as exc:
             logger.error(

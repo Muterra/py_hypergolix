@@ -669,7 +669,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                 # The task finished, so discard it from the available and reap
                 # any exception
                 tasks_available.discard(task)
-                exc = finished.exception()
+                exc = task.exception()
                 
                 # If there's been an exception, continue waiting for the rest.
                 if exc is not None:
@@ -680,8 +680,8 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                     )
                     pull_complete = None
                 
-                # Completed successfully, but it could be a 404 (or other error),
-                # which would present as result() = False.
+                # Completed successfully, but it could be a 404 (or other
+                # error), which would present as result() = False.
                 # Instead of letting the while loop handle this, since more
                 # than one task can complete simultaneously, make sure we don't
                 # already have a finalized result before blindly assigning the

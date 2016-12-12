@@ -229,7 +229,6 @@ class TestAppNoRestore(unittest.TestCase):
         ''' Kill errything and then remove the caches.
         '''
         try:
-            print('Finished, stopping loops.')
             self.hgxlink2.stop_threadsafe(timeout=.5)
             self.hgxlink1.stop_threadsafe(timeout=.5)
             self.hgxcore2.stop_threadsafe(timeout=.5)
@@ -237,7 +236,6 @@ class TestAppNoRestore(unittest.TestCase):
             self.server.stop_threadsafe(timeout=.5)
         
         finally:
-            print('Stopped. Removing cache directories.')
             shutil.rmtree(self.hgxcore2_cachedir)
             shutil.rmtree(self.hgxcore1_cachedir)
             shutil.rmtree(self.server_cachedir)
@@ -575,9 +573,9 @@ if False:
 
 if __name__ == "__main__":
     from hypergolix import logutils
-    logutils.autoconfig(loglevel='extreme')
+    logutils.autoconfig(loglevel='debug')
     
-    # from hypergolix.utils import TraceLogger
-    # with TraceLogger(interval=10):
-    #     unittest.main()
-    unittest.main()
+    from hypergolix.utils import TraceLogger
+    with TraceLogger(interval=30):
+        unittest.main()
+    # unittest.main()

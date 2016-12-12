@@ -348,4 +348,4 @@ class Ferryman(UndertakerCore):
         self._privateer.abandon(obj.ghid, quiet=True)
         # Don't flush any of the GAOs associated with that; just let it be
         # rolled into the next push-upstream-update
-        await super()._gc_execute(obj)
+        await super()._gc_execute(obj, skip_conn)
