@@ -495,9 +495,11 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         remote = ConnectionManager(
             connection_cls = connection_cls,
             msg_handler = self._remote_protocol,
-            conn_init = self.restore_connection
+            conn_init = self.restore_connection,
         )
-        task_commander.register_task(remote, *args, **kwargs)
+        # We have to insert the remote before us at the commander, or shutdown
+        # will kill the connections before we can clean them up.
+        task_commander.register_task(remote, *args, before_task=self, **kwargs)
         self._upstream_remotes.add(remote)
         
     def add_downstream_remote(self, persister):
