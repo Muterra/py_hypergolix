@@ -119,6 +119,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
             *args,
             **kwargs
         )
+        self._legroom = 7
         
         # Normally we'll need to define the protocol and the connection manager
         if ipc_fixture is None:

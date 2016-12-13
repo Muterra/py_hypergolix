@@ -47,6 +47,9 @@ import logging
 
 from loopa.utils import await_coroutine_threadsafe
 
+from hypergolix.utils import ApiID
+from hypergolix.objproxy import Obj
+
 from hypergolix.comms import WSConnection
 from hypergolix.service import RemotePersistenceServer
 from hypergolix.app import HypergolixCore
@@ -54,8 +57,6 @@ from hypergolix.accounting import Account
 from hypergolix.config import Config
 from hypergolix.embed import HGXLink
 from hypergolix.utils import Aengel
-
-# from hypergolix.objproxy import ProxyBase
 
 from golix._getlow import GIDC
 from hypergolix.persistence import _GidcLite
@@ -191,7 +192,7 @@ class TestAppNoRestore(unittest.TestCase):
         cls.hgxcore2_cachedir = tempfile.mkdtemp()
         cls.hgxcore2 = HypergolixCore(
             cache_dir = cls.hgxcore2_cachedir,
-            ipc_port = 6025,
+            ipc_port = 6024,
             reusable_loop = False,
             threaded = True,
             debug = True,
@@ -211,7 +212,7 @@ class TestAppNoRestore(unittest.TestCase):
         )
         cls.hgxcore2.account = cls.account2
         cls.hgxlink2 = HGXLink(
-            ipc_port = 6025,
+            ipc_port = 6024,
             autostart = False,
             debug = True,
             threaded = True,
@@ -242,6 +243,81 @@ class TestAppNoRestore(unittest.TestCase):
             shutil.rmtree(cls.hgxcore1_cachedir)
             shutil.rmtree(cls.server_cachedir)
             
+    def setUp(self):
+        ''' Do some housekeeping.
+        '''
+        self.iterations = 10
+        
+        self.request_api = ApiID(bytes(63) + b'\x01')
+        self.response_api = ApiID(bytes(63) + b'\x02')
+        
+        self.incoming1 = collections.deque()
+        self.incoming2 = collections.deque()
+        
+        self.returnflag1 = threading.Event()
+        self.updateflag1 = threading.Event()
+        
+        # Set up the timing recorder
+        self.timer = collections.deque([0, 0], maxlen=2)
+        self.times = []
+        
+    def roundtrip_waiter(self, timeout=1.5):
+        ''' Wait for a roundtrip.
+        '''
+        result = self.updateflag1.wait(timeout)
+        self.updateflag1.clear()
+        return result
+        
+    async def roundtrip_notifier(self, mirror_obj):
+        ''' This gets called when we get an update for a response.
+        '''
+        self.timer.appendleft(time.monotonic())
+        self.updateflag1.set()
+        
+    def share_handler(self, ghid, origin, api_id):
+        ''' This handles all shares. It's defined to be used STRICTLY in
+        one direction.
+        '''
+        # The request handler. Requests are only received by hgxlink2.
+        if api_id == self.request_api:
+            # Get the object itself
+            obj = self.hgxlink2.get_threadsafe(
+                cls = Obj,
+                ghid = ghid
+            )
+            # Construct a mirror object
+            mirror = self.hgxlink2.new_threadsafe(
+                cls = Obj,
+                state = obj.state,
+                api_id = self.response_api,
+                dynamic = True,
+                private = False
+            )
+            
+            # Create an update callback
+            async def state_mirror(source_obj, mirror_obj=mirror):
+                mirror_obj.state = source_obj.state
+                await source_obj.push()
+            
+            # Set the update callback and then share the mirror
+            obj.callback = state_mirror
+            self.incoming2.appendleft(obj)
+            mirror.share_threadsafe(origin)
+            
+        # The response handler. Responses are only received by hgxlink1.
+        elif api_id == self.response_api:
+            # Get the object itself
+            mirror = self.hgxlink1.get_threadsafe(
+                cls = Obj,
+                ghid = ghid
+            )
+            mirror.callback = self.roundtrip_notifier
+            self.incoming1.appendleft(mirror)
+            self.returnflag1.set()
+            
+        else:
+            raise ValueError('Bad api.')
+            
     def test_whoami(self):
         ''' Super simple whoami test to make sure it's working.
         '''
@@ -268,21 +344,78 @@ class TestAppNoRestore(unittest.TestCase):
         )
         self.assertEqual(whoami2, self.hgxlink2.whoami)
         self.assertEqual(whoami2, TEST_AGENT2.ghid)
+            
+    def test_roundtrip(self):
+        ''' Super simple whoami test to make sure it's working.
+        '''
+        # First make sure everything is correctly started up.
+        await_coroutine_threadsafe(
+            coro = self.hgxcore1.await_startup(),
+            loop = self.hgxcore1._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.hgxcore2.await_startup(),
+            loop = self.hgxcore2._loop
+        )
+        
+        # First we need to wrap the share handler appropriately
+        handler1 = self.hgxlink1.wrap_threadsafe(self.share_handler)
+        handler2 = self.hgxlink2.wrap_threadsafe(self.share_handler)
+        
+        # Then we need to actually register it with the respective links
+        self.hgxlink1.register_share_handler_threadsafe(
+            self.response_api,
+            handler1
+        )
+        self.hgxlink2.register_share_handler_threadsafe(
+            self.request_api,
+            handler2
+        )
+        
+        # Now let's make the actual request, then share is
+        state = bytes([random.randint(0, 255) for i in range(0, 25)])
+        request = self.hgxlink1.new_threadsafe(
+            cls = Obj,
+            state = state,
+            api_id = self.request_api,
+            dynamic = True,
+            private = False
+        )
+        request.share_threadsafe(self.hgxlink2.whoami)
+        
+        # Now, wait for the response and make sure it matches
+        self.returnflag1.wait(1.5)
+        mirror = self.incoming1.pop()
+        self.assertEqual(request.state, mirror.state)
+        
+        # Notify that we're starting the actual tests
+        logger.info('######### Handshakes complete! Starting tests. #########')
+            
+        for ii in range(self.iterations):
+            with self.subTest(i=ii):
+                # Prep the object with an update
+                state = bytes([random.randint(0, 255) for i in range(0, 25)])
+                request.state = state
+                
+                # Zero out the timer
+                self.timer.extendleft([0, 0, time.monotonic()])
+                
+                # Call an update, wait for the response, and record the time
+                request.push_threadsafe()
+                success = self.roundtrip_waiter()
+                self.times.append(self.timer[0] - self.timer[1])
+                
+                # Check for success
+                self.assertTrue(success)
+                self.assertEqual(mirror.state, state)
+                
+        print('Max time: ', max(self.times))
+        print('Min time: ', min(self.times))
+        print('Mean time:', statistics.mean(self.times))
+        print('Med time: ', statistics.median(self.times))
 
 
 def make_tests(iterations, debug, raz, des, aengel):
-    timer = collections.deque([0,0], maxlen=2)
-
-    # Declare API
-    request_api = bytes(64) + b'\x01'
-    response_api = bytes(64) + b'\x02'
-
-    # Create an object collection
-    requests_outgoing = collections.deque(maxlen=10)
-    requests_incoming = collections.deque(maxlen=10)
-    responses_incoming = collections.deque(maxlen=10)
-    responses_outgoing = collections.deque(maxlen=10)
-    
     # This all handles round-trip responsing.
     roundtrip_flag = threading.Event()
     roundtrip_check = collections.deque()
@@ -335,7 +468,7 @@ def make_tests(iterations, debug, raz, des, aengel):
             return obj
         
         # All responses go from Des -> Raz
-        def request_handler(self, obj):
+        def request_handler(self, ghid, origin, api_id):
             # print('Receiving request.')
             # Just to prevent GC
             requests_incoming.appendleft(obj)
