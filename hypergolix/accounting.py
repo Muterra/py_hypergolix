@@ -243,36 +243,38 @@ class Account(metaclass=API):
                 
             # TODO: convert all of this into a smartyparser (after rewriting
             # smartyparse, that is)
-            password_validator = \
-                root_node.state[0: 64]
-            password_comparator = \
-                root_node.state[64: 128]
             
-            # This comparison is timing-insensitive; improper generation will
-            # be simply comparing noise to noise.
-            if sha512(password_validator).digest() != password_comparator:
+            # The last 64 bytes of the state is a SHA512 checksum for the whole
+            # rest of the state
+            password_validator = root_node.state[-64:]
+            password_comparator = root_node.state[:-64]
+            
+            # This comparison is timing-insensitive: if attempting to brute
+            # force a password, incorrect password attempts cannot extract any
+            # information from the timing of the comparison.
+            if sha512(password_comparator).digest() != password_validator:
                 logger.critical('Incorrect password.')
                 raise ValueError('Incorrect password.')
             
             identity_ghid = Ghid.from_bytes(
-                root_node.state[128: 193])
+                root_node.state[0: 65])     # 65 bytes
             identity_master = Secret.from_bytes(
-                root_node.state[193: 246])
+                root_node.state[65: 118])   # 53 bytes
             
             privateer_persistent_ghid = Ghid.from_bytes(
-                root_node.state[246: 311])
+                root_node.state[118: 183])
             privateer_persistent_master = Secret.from_bytes(
-                root_node.state[311: 364])
+                root_node.state[183: 236])
             
             privateer_quarantine_ghid = Ghid.from_bytes(
-                root_node.state[364: 429])
+                root_node.state[236: 301])
             privateer_quarantine_master = Secret.from_bytes(
-                root_node.state[429: 482])
+                root_node.state[301: 354])
             
             secondary_manifest_ghid = Ghid.from_bytes(
-                root_node.state[482: 547])
+                root_node.state[354: 419])
             secondary_manifest_master = Secret.from_bytes(
-                root_node.state[547: 600])
+                root_node.state[419: 472])
                 
         else:
             # We need an identity at to golcore before we can do anything
@@ -444,15 +446,8 @@ class Account(metaclass=API):
             padding_int = random.getrandbits(padding_len * 8)
             padding = padding_int.to_bytes(length=padding_len, byteorder='big')
             
-            logger.info('    Generating validator and comparator.')
-            # We'll use this upon future logins to verify password correctness
-            password_validator = os.urandom(64)
-            password_comparator = sha512(password_validator).digest()
-            
             logger.info('    Serializing primary manifest.')
-            root_node.state = (password_validator +
-                               password_comparator +
-                               bytes(identity_container.ghid) +
+            root_node.state = (bytes(identity_container.ghid) +
                                bytes(identity_master) +
                                bytes(self.privateer_persistent.ghid) +
                                bytes(privateer_persistent_master) +
@@ -461,6 +456,12 @@ class Account(metaclass=API):
                                bytes(secondary_manifest.ghid) +
                                bytes(secondary_manifest_master) +
                                padding)
+            
+            # We'll use this upon future logins to verify password correctness
+            logger.info('    Generating validator and comparator.')
+            # Just append a SHA512 checksum to the whole thing
+            password_validator = sha512(root_node.state).digest()
+            root_node.state += password_validator
             
             logger.info('Saving root node.')
             await root_node._push()
