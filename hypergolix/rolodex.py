@@ -51,6 +51,8 @@ from .hypothetical import fixture_noop
 
 from .exceptions import UnknownParty
 
+from .persistence import _GeocLite
+from .persistence import _GobdLite
 from .persistence import _GarqLite
 from .persistence import _GdxxLite
 
@@ -282,20 +284,32 @@ class Rolodex(metaclass=API):
             await self._account.flush()
         except KeyError:
             logger.debug(
-                str(debinding.target) + ' missing in debind w/ traceback ' +
-                ''.join(traceback.format_exc())
+                'Request at ' + str(debinding.ghid) + ' target missing ' +
+                'from pending requests: ' + str(debinding.target)
             )
         
     async def _dispatch_payload(self, payload, source_ghid):
         ''' Appropriately handles a request payload.
         '''
         if isinstance(payload, AsymHandshake):
+            logger.debug(
+                'Share handshake received from ' + str(payload.author) +
+                ' at ' + str(source_ghid)
+            )
             await self._handle_handshake(payload, source_ghid)
             
         elif isinstance(payload, AsymAck):
+            logger.debug(
+                'Handshake ACK received from ' + str(payload.author) +
+                ' at ' + str(source_ghid)
+            )
             await self._handle_ack(payload)
             
         elif isinstance(payload, AsymNak):
+            logger.debug(
+                'Handshake NAK received from ' + str(payload.author) +
+                ' at ' + str(source_ghid)
+            )
             await self._handle_nak(payload)
             
         else:
@@ -306,12 +320,36 @@ class Rolodex(metaclass=API):
         '''
         try:
             # First, we need to figure out what the actual container object's
-            # address is, and then stage the secret for it.
-            container_ghid = await self._ghidproxy.resolve(request.target)
-            self._privateer.quarantine(
-                ghid = container_ghid,
-                secret = request.secret
-            )
+            # address is, and then stage the secret for it. But, since this is
+            # coming from somewhere else, chances are good we don't have it
+            # locally, so pull it first.
+            if not (await self._librarian.contains(request.target)):
+                await self._salmonator.attempt_pull(
+                    request.target,
+                    quiet = True
+                )
+            
+            binding_or_obj = await self._librarian.summarize(request.target)
+            if isinstance(binding_or_obj, _GobdLite):
+                container_ghid = binding_or_obj.target
+                self._privateer.quarantine(
+                    ghid = container_ghid,
+                    secret = request.secret
+                )
+                if not (await self._librarian.contains(container_ghid)):
+                    await self._salmonator.attempt_pull(
+                        container_ghid,
+                        quiet = True
+                    )
+            elif isinstance(binding_or_obj, _GeocLite):
+                self._privateer.quarantine(
+                    ghid = binding_or_obj.ghid,
+                    secret = request.secret
+                )
+            else:
+                raise TypeError(
+                    'Invalid handshake target: ' + str(type(binding_or_obj))
+                )
             
             # Note that unless we raise a HandshakeError RIGHT NOW, we'll be
             # sending an ack to the handshake, just to indicate successful
@@ -387,6 +425,10 @@ class Rolodex(metaclass=API):
         future, object sharing will be at least partly handled within
         its own dedicated rolodex pipeline.
         '''
+        # Make sure we actually have the target
+        if not (await self._librarian.contains(target)):
+            await self._salmonator.attempt_pull(target, quiet=True)
+        
         # Distribute the share in the background
         make_background_future(
             self._dispatch.distribute_share(target, sender)

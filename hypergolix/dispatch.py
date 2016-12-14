@@ -549,10 +549,10 @@ class Dispatcher(metaclass=API):
         if callsheet:
             # Discard the skipped connection, if one is defined
             callsheet.discard(skip_conn)
+            str_origin = origin or 'self'
             logger.debug(
-                'Distributing {!s} share from {!s} to {!r}.'.format(
-                    ghid, origin, callsheet
-                )
+                'Distributing ' + str(ghid) + ' shared object from ' +
+                str(str_origin) + ' to ' + repr(callsheet)
             )
             
             # If we still have a callsheet, distribute it.
@@ -751,9 +751,11 @@ class _Dispatchable(GAOCore, metaclass=API):
             raise DispatchError('Object does not appear to be dispatchable.')
         elif version != b'\x00':
             raise DispatchError('Incompatible dispatchable version number.')
-        elif self.api_id is None:
+        elif getattr(self, 'api_id', None) is None:
             self.api_id = api_id
         else:
+            # YES, this does need to be _api_id (with underscore!) because
+            # we may need to override something existing.
             self._api_id = api_id
         # Checking for this from other people isn't really that useful. We'll
         # already error out if you try to change it locally, and if someone

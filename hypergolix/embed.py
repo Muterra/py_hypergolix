@@ -136,6 +136,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
                 port = ipc_port,
                 tls = False
             )
+            ipc_protocol.assemble(hgxlink=self)
             self._ipc_manager = ipc_manager
             self._ipc_protocol = ipc_protocol
         
@@ -360,6 +361,9 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
             )
             # link = Ghid.from_bytes(state)
             # state = await self._get(link)
+            
+        if _legroom is None:
+            _legroom = self._legroom
         
         state = await cls.hgx_unpack(state)
         obj = cls(

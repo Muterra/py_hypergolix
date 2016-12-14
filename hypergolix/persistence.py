@@ -36,6 +36,8 @@ import asyncio
 import threading
 import traceback
 
+from smartyparse.parsers import ParseError
+
 from golix import ThirdParty
 from golix import SecondParty
 from golix import SecurityError
@@ -402,6 +404,9 @@ class PersistenceCore(metaclass=API):
             check_ghid = obj.ghid
         
         if (await self._librarian.contains(check_ghid)):
+            logger.debug(
+                str(check_ghid) + ' not ingested: already exists.'
+            )
             return False
         
         else:
@@ -459,17 +464,19 @@ class PersistenceCore(metaclass=API):
             try:
                 obj = await loader(packed)
             
-            except MalformedGolixPrimitive:
+            except (MalformedGolixPrimitive, ParseError):
                 continue
                 
             else:
                 # Short circuit if anything was found.
-                return obj
+                break
         
         # If no successful loader was found, return None, and allow the parent
         # to raise.
         else:
             return None
+            
+        return obj
         
     @attempt_load.fixture
     async def attempt_load(self, packed):

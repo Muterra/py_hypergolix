@@ -458,7 +458,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             account = self._dispatch._account
         )
         
-        self._dispatch.track_object(connection, ghid)
+        self._dispatch.track_object(connection, obj.ghid)
             
         if isinstance(obj.state, Ghid):
             is_link = True

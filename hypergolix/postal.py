@@ -54,7 +54,7 @@ from .utils import WeakSetMap
 from .utils import WeakKeySetMap
 from .utils import weak_property
 
-from .gao import GAO
+from .gao import GAOCore
 
 from .hypothetical import API
 from .hypothetical import public_api
@@ -335,7 +335,7 @@ class MrPostman(PostalCore, metaclass=API):
         elif subscription in self._oracle:
             # The ingestion pipeline will already have applied any new updates
             # to the ghidproxy.
-            obj = await self._oracle.get_object(GAO, subscription)
+            obj = await self._oracle.get_object(GAOCore, subscription)
             logger.debug(''.join((
                 'SUBSCRIPTION ',
                 str(subscription),
@@ -379,6 +379,10 @@ class PostOffice(PostalCore, metaclass=API):
         ''' Tells the postman that the connection would like to be
         updated about ghid.
         '''
+        logger.debug(
+            'SUBS received for ' + str(ghid) + ' at CONN ' + str(connection)
+        )
+        
         # First add the subscription listeners
         self._connections.add(ghid, connection)
         self._subscriptions.add(connection, ghid)
@@ -410,11 +414,16 @@ class PostOffice(PostalCore, metaclass=API):
         
         NOTE THAT SKIP_CONN is a weakref.ref.
         '''
+        pkg_label = ('SUBS ' + str(subscription) + ', notification: ' +
+                     str(notification))
         # We need to freeze the listeners before we operate on them, but we
         # don't need to lock them while we go through all of the callbacks.
         # Instead, just sacrifice any subs being added concurrently to the
         # current delivery run.
         connections = self._connections.get_any(subscription)
+        logger.debug(
+            pkg_label + ' has ' + str(len(connections)) + ' listeners.'
+        )
         
         # Resolve the weak reference to the connection
         if skip_conn is not None:
@@ -428,6 +437,8 @@ class PostOffice(PostalCore, metaclass=API):
                     subscription,
                     notification
                 )
+            else:
+                logger.debug(pkg_label + ' skipped one connection.')
     
     @fixture_return(frozenset())
     @public_api

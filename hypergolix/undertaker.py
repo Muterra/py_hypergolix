@@ -168,6 +168,13 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
             
             try:
                 collection_check = self._check_lookup[type(obj)]
+            
+            except KeyError as exc:
+                raise TypeError(
+                    'Invalid object type received from librarian.'
+                ) from exc
+                
+            else:
                 removable = await collection_check(obj, skip_conn)
                 if removable:
                     logger.info(
@@ -179,11 +186,7 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
                         'GC ' + str(ghid_to_collect) + ' collection survived.'
                     )
             
-            except KeyError as exc:
-                raise TypeError(
-                    'Invalid object type received from librarian.'
-                ) from exc
-            
+        # except DoesNotExist:
         except KeyError:
             logger.warning(
                 'GC ' + str(ghid_to_collect) +

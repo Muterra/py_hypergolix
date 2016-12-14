@@ -133,11 +133,13 @@ class Account(metaclass=API):
             logger.info('Private keys generated.')
         
         elif isinstance(user_id, Ghid):
+            logger.info('Logging in with existing user ID: ' + str(user_id))
             self._identity = None
             self._user_id = user_id
         
         # This is used exclusively for testing.
         elif isinstance(user_id, FirstParty):
+            logger.critical('Account testing with preexisting Golix identity.')
             self._identity = user_id
             self._user_id = None
         
@@ -656,9 +658,9 @@ class Account(metaclass=API):
     async def flush(self):
         ''' Push changes to any modified account components.
         '''
-        tasks = {
-            make_background_future(self.privateer_persistent._push()),
-            make_background_future(self.privateer_quarantine._push()),
+        # Do the secondary stuff first, so that any changes to privateer as a
+        # result are included in the push.
+        secondaries = {
             make_background_future(self.rolodex_pending._push()),
             make_background_future(self.rolodex_outstanding._push()),
             make_background_future(self.dispatch_tokens._push()),
@@ -668,7 +670,14 @@ class Account(metaclass=API):
             make_background_future(self.dispatch_orphan_acks._push()),
             make_background_future(self.dispatch_orphan_naks._push())
         }
-        await asyncio.wait(fs=tasks, return_when=asyncio.ALL_COMPLETED)
+        await asyncio.wait(fs=secondaries, return_when=asyncio.ALL_COMPLETED)
+        
+        # Now do the privateer flushing.
+        primaries = {
+            make_background_future(self.privateer_persistent._push()),
+            make_background_future(self.privateer_quarantine._push())
+        }
+        await asyncio.wait(fs=primaries, return_when=asyncio.ALL_COMPLETED)
 
 
 class Accountant:

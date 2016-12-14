@@ -773,14 +773,14 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         data = await remote.get(ghid)
         
         # Call as remotable=False to avoid infinite loops.
-        obj = await self._percore.ingest(data, remotable=False)
+        ingested = await self._percore.ingest(data, remotable=False)
         
         # Note that ingest can either return None, if we already have
         # the object, or the object itself, if it's new.
-        if obj is None:
-            return True
+        if ingested:
+            return ingested
         else:
-            return obj
+            return True
             
     async def bootstrap(self, account):
         ''' Bootstrapping publishes our identity upstream.

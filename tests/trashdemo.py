@@ -261,7 +261,7 @@ class TestAppNoRestore(unittest.TestCase):
         self.timer = collections.deque([0, 0], maxlen=2)
         self.times = []
         
-    def roundtrip_waiter(self, timeout=1.5):
+    def roundtrip_waiter(self, timeout=10):
         ''' Wait for a roundtrip.
         '''
         result = self.updateflag1.wait(timeout)
@@ -297,7 +297,7 @@ class TestAppNoRestore(unittest.TestCase):
             # Create an update callback
             async def state_mirror(source_obj, mirror_obj=mirror):
                 mirror_obj.state = source_obj.state
-                await source_obj.push()
+                await mirror_obj.push()
             
             # Set the update callback and then share the mirror
             obj.callback = state_mirror
@@ -332,21 +332,21 @@ class TestAppNoRestore(unittest.TestCase):
         )
         
         whoami = await_coroutine_threadsafe(
-            coro = self.hgxlink1._ipc_manager.get_whoami(timeout=1),
+            coro = self.hgxlink1._ipc_manager.get_whoami(timeout=5),
             loop = self.hgxlink1._loop
         )
         self.assertEqual(whoami, self.hgxlink1.whoami)
         self.assertEqual(whoami, TEST_AGENT1.ghid)
         
         whoami2 = await_coroutine_threadsafe(
-            coro = self.hgxlink2._ipc_manager.get_whoami(timeout=1),
+            coro = self.hgxlink2._ipc_manager.get_whoami(timeout=5),
             loop = self.hgxlink2._loop
         )
         self.assertEqual(whoami2, self.hgxlink2.whoami)
         self.assertEqual(whoami2, TEST_AGENT2.ghid)
             
     def test_roundtrip(self):
-        ''' Super simple whoami test to make sure it's working.
+        ''' Bidirectional communication test.
         '''
         # First make sure everything is correctly started up.
         await_coroutine_threadsafe(
@@ -383,16 +383,24 @@ class TestAppNoRestore(unittest.TestCase):
         )
         request.share_threadsafe(self.hgxlink2.whoami)
         
-        # Now, wait for the response and make sure it matches
-        self.returnflag1.wait(1.5)
+        # Wait for a response. First make sure one comes, then that it matches
+        self.assertTrue(self.returnflag1.wait(30))
         mirror = self.incoming1.pop()
         self.assertEqual(request.state, mirror.state)
         
         # Notify that we're starting the actual tests
-        logger.info('######### Handshakes complete! Starting tests. #########')
+        logger.info(
+            '\n\n########################################################\n' +
+            '######### Handshakes complete! Starting tests. #########\n' +
+            '########################################################\n'
+        )
             
         for ii in range(self.iterations):
             with self.subTest(i=ii):
+                logger.info(
+                    '\n' +
+                    '################ Starting mirror cycle. ################'
+                )
                 # Prep the object with an update
                 state = bytes([random.randint(0, 255) for i in range(0, 25)])
                 request.state = state
