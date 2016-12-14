@@ -38,6 +38,7 @@ import logging
 import weakref
 import threading
 import traceback
+import inspect
 
 from golix import FirstParty
 from golix import SecondParty
@@ -562,6 +563,9 @@ class Oracle(metaclass=API):
         ''' Get an object.
         '''
         if ghid in self._lookup:
+            # TODO: this is bad, because we're suppresing any potential argsig
+            # problems. We should fix the abstraction so that it doesn't break
+            # assumptions like that.
             obj = self._lookup[ghid]
             logger.debug(''.join((
                 'GAO ',
@@ -628,6 +632,22 @@ class Oracle(metaclass=API):
     async def get_object(self, gaoclass, ghid, *args, **kwargs):
         ''' Do the easy thing and just pull it out of lookup.
         '''
+        # We should also check argsig while we're at it
+        signature = inspect.Signature.from_callable(gaoclass)
+        signature.bind(
+            ghid,
+            None,   # dynamic
+            None,   # author
+            7,      # legroom (will be overwritten by pull)
+            *args,
+            golcore = self,     # It's not going to be used and may not exist
+            ghidproxy = self,   # It's not going to be used and may not exist
+            privateer = self,   # It's not going to be used and may not exist
+            percore = self,     # It's not going to be used and may not exist
+            librarian = self,   # It's not going to be used and may not exist
+            **kwargs
+        )
+            
         return self._lookup[ghid]
         
     @public_api
@@ -666,10 +686,26 @@ class Oracle(metaclass=API):
         return obj
             
     @new_object.fixture
-    async def new_object(self, *args, **kwargs):
+    async def new_object(self, gaoclass, dynamic, legroom, *args, **kwargs):
         ''' Relies upon add_object, but otherwise just pops something
         from the lookup.
         '''
+        # We should also check argsig while we're at it
+        signature = inspect.Signature.from_callable(gaoclass)
+        signature.bind(
+            None,               # ghid
+            dynamic,
+            None,               # author (normally assigned through whoami)
+            legroom,
+            *args,
+            golcore = self,     # It's not going to be used and may not exist
+            ghidproxy = self,   # It's not going to be used and may not exist
+            privateer = self,   # It's not going to be used and may not exist
+            percore = self,     # It's not going to be used and may not exist
+            librarian = self,   # It's not going to be used and may not exist
+            **kwargs
+        )
+        
         ghid, obj = self._lookup.popitem()
         self._lookup[ghid] = obj
         return obj
