@@ -556,20 +556,25 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
     
     @fixture_noop
     @public_api
-    async def register(self, gao):
-        ''' Tells the Salmonator to listen upstream for any updates
-        while the gao is retained in memory.
+    async def register(self, ghid):
+        ''' Tells the Salmonator to listen upstream for any updates.
+        Consumers must independently register an object finalizer for
+        salmonator._deregister (not to be called atexit) to remove the
+        subscription when the object leaves local memory. TODO: fix that
+        leaky abstraction.
         '''
-        if gao.dynamic:
+        obj = await self._librarian.summarize(ghid)
+        
+        if isinstance(obj, _GobdLite):
             logger.info(
-                'GAO ' + str(gao.ghid) + ' upstream registration starting.'
+                'GAO ' + str(obj.ghid) + ' upstream registration starting.'
             )
-            self._registered.add(gao.ghid)
+            self._registered.add(obj.ghid)
     
             subscriptions = set()
             for remote in self._upstream_remotes:
                 subscriptions.add(
-                    make_background_future(remote.subscribe(gao.ghid))
+                    make_background_future(remote.subscribe(obj.ghid))
                 )
                 
             # Need to make sure it's not empty
@@ -578,11 +583,15 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                     fs = subscriptions,
                     return_when = asyncio.ALL_COMPLETED
                 )
-                    
-            # Add deregister as a finalizer, but don't call it atexit.
-            finalizer = weakref.finalize(gao, self._deregister, gao.ghid)
-            finalizer.atexit = False
         
+        else:
+            logger.debug(
+                'GAO ' + str(obj.ghid) + ' cannot be registered upstream: ' +
+                'invalid object type: ' + str(type(obj))
+            )
+    
+    @fixture_noop
+    @public_api
     def _deregister(self, ghid):
         ''' Finalizer for GAO objects that executes async deregister()
         from within the event loop. Must be called from within our own

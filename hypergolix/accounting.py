@@ -181,7 +181,7 @@ class Account(metaclass=API):
         ''' Bypass the normal oracle get_object, new_object process and
         create the object directly.
         '''
-        await self._salmonator.register(gao)
+        await self._salmonator.register(gao.ghid)
         await self._salmonator.attempt_pull(gao.ghid, quiet=True)
         self._oracle._lookup[gao.ghid] = gao
             

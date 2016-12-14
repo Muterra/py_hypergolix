@@ -294,21 +294,21 @@ class Rolodex(metaclass=API):
         if isinstance(payload, AsymHandshake):
             logger.debug(
                 'Share handshake received from ' + str(payload.author) +
-                ' at ' + str(source_ghid)
+                ' at ' + str(source_ghid) + ' for ' + str(payload.target)
             )
             await self._handle_handshake(payload, source_ghid)
             
         elif isinstance(payload, AsymAck):
             logger.debug(
                 'Handshake ACK received from ' + str(payload.author) +
-                ' at ' + str(source_ghid)
+                ' at ' + str(source_ghid) + ' for ' + str(payload.target)
             )
             await self._handle_ack(payload)
             
         elif isinstance(payload, AsymNak):
             logger.debug(
                 'Handshake NAK received from ' + str(payload.author) +
-                ' at ' + str(source_ghid)
+                ' at ' + str(source_ghid) + ' for ' + str(payload.target)
             )
             await self._handle_nak(payload)
             

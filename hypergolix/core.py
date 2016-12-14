@@ -601,7 +601,12 @@ class Oracle(metaclass=API):
             
             # Now immediately subscribe to the object upstream, so that there
             # is no race condition getting updates
-            await self._salmonator.register(obj)
+            await self._salmonator.register(ghid)
+            # Add deregister as a finalizer, but don't call it atexit. TODO:
+            # fix leaky abstraction
+            finalizer = weakref.finalize(obj, self._salmonator._deregister,
+                                         ghid)
+            finalizer.atexit = False
             # Explicitly pull the object from salmonator to ensure we have the
             # newest version, and that it is available locally in librarian if
             # also available anywhere else. Note that salmonator handles modal
@@ -651,7 +656,13 @@ class Oracle(metaclass=API):
         
         # Finally, register to receive any concurrent updates from other
         # simultaneous sessions, and then return the object
-        await self._salmonator.register(obj)
+        await self._salmonator.register(obj.ghid)
+        # Add deregister as a finalizer, but don't call it atexit. TODO: fix
+        # leaky abstraction
+        finalizer = weakref.finalize(obj, self._salmonator._deregister,
+                                     obj.ghid)
+        finalizer.atexit = False
+        
         return obj
             
     @new_object.fixture
