@@ -432,19 +432,30 @@ class Privateer(metaclass=API):
         if len(target_vector) < 1:
             raise RatchetError('Target vector has no historical references.')
             
-        max_index = len(target_vector) - 1
-        broken = (not bool(master_secret)) and \
-                 (target_vector[max_index] not in self._secrets)
+        # Master secret ratchets never break, and can alway recover from the
+        # most recent frame.
+        if master_secret:
+            aktueller_index = 1
+            
+        # Other ratchets, on the other hand, have to start somewhere.
+        else:
+            # Go from back to front, finding the most recent target vector that
+            # exists locally.
+            available = [target in self._secrets for target in target_vector]
+            # If we didn't find ANY of them, then we're broken.
+            if not any(available):
+                raise RatchetError('Broken ratchet.')
         
-        if broken:
-            raise RatchetError('Broken ratchet.')
+            # Get the index for the most recent target that we already know a
+            # secret for
+            aktueller_index = available.index(True)
         
         # Go from the oldest to the newest, but start after the first one,
         # because we verified that above.
         # We can't use reversed(enumerate(target_vector)) without re-casting
         # target_vector into a dedicated sequence. We'd like to keep the
         # original iterator, so do it manually.
-        for ii in range(max_index - 1, -1, -1):
+        for ii in range(aktueller_index - 1, -1, -1):
             target = target_vector[ii]
             # Skip the first one (deques don't support slicing)
             # Skip if we already have a secret
