@@ -193,23 +193,29 @@ class WSRemoteProtocolTest(unittest.TestCase):
         self.server_percore = PersistenceCore.__fixture__()
         self.server_librarian = LibrarianCore.__fixture__()
         self.server_postman = PostOffice.__fixture__()
+        self.server_salmonator = Salmonator.__fixture__()
         self.server_protocol.assemble(self.server_percore,
                                       self.server_librarian,
-                                      self.server_postman)
+                                      self.server_postman,
+                                      self.server_salmonator)
         
         self.client1_percore = PersistenceCore.__fixture__()
         self.client1_librarian = LibrarianCore.__fixture__()
         self.client1_postman = PostalCore.__fixture__()
+        self.client1_salmonator = Salmonator.__fixture__()
         self.client1_protocol.assemble(self.client1_percore,
                                        self.client1_librarian,
-                                       self.client1_postman)
+                                       self.client1_postman,
+                                       self.client1_salmonator)
         
         self.client2_percore = PersistenceCore.__fixture__()
         self.client2_librarian = LibrarianCore.__fixture__()
         self.client2_postman = PostalCore.__fixture__()
+        self.client2_salmonator = Salmonator.__fixture__()
         self.client2_protocol.assemble(self.client2_percore,
                                        self.client2_librarian,
-                                       self.client2_postman)
+                                       self.client2_postman,
+                                       self.client2_salmonator)
     
     def test_ping(self):
         logger.info('STARTING REMOTE PING TEST')

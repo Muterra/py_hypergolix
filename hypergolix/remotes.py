@@ -138,6 +138,7 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
     _percore = weak_property('__percore')
     _librarian = weak_property('__librarian')
     _postman = weak_property('__postman')
+    _salmonator = weak_property('__salmonator')
     
     @fixture_api
     def __init__(self, percore=None, librarian=None, *args, **kwargs):
@@ -150,11 +151,14 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
         if librarian is not None:
             self._librarian = librarian
         
-    def assemble(self, percore, librarian, postman):
+    def assemble(self, percore, librarian, postman, salmonator=None):
         # Link to the remote core.
         self._percore = percore
         self._postman = postman
         self._librarian = librarian
+        
+        if salmonator is not None:
+            self._salmonator = salmonator
         
     @request(b'??')
     async def ping(self, connection):
@@ -311,15 +315,22 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
     async def subscription_update(self, connection, body):
         ''' Handles an incoming subscription update.
         '''
-        # subscribed_ghid = Ghid.from_bytes(body[0:65])
+        subscribed_ghid = Ghid.from_bytes(body[0:65])
         notification = body[65:]
         
         # Note that this handles postman scheduling as well.
-        await self._percore.ingest(
+        ingested = await self._percore.ingest(
             notification,
             remotable = False,
             skip_conn = connection
         )
+        
+        # But, if ingested, we need to notify the salmonator, so it can (if
+        # needed) also acquire the target
+        if ingested:
+            make_background_future(
+                self._salmonator.notify(subscribed_ghid)
+            )
         
         return b'\x01'
         
@@ -553,6 +564,18 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         '''
         to_clear = await self._clear_q.get()
         await self.deregister(to_clear)
+        
+    @fixture_noop
+    @public_api
+    async def notify(self, ghid):
+        ''' Notify the salmonator that an upstream subscription
+        notification was just successfully completed.
+        '''
+        # If that was a dynamic object, we also need to pull its target.
+        obj = await self._librarian.summarize(ghid)
+        if isinstance(obj, _GobdLite):
+            if not (await self._librarian.contains(obj.target)):
+                await self.pull(obj.target)
     
     @fixture_noop
     @public_api
@@ -598,6 +621,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         thread, which it should be (finalizers are called from object
         thread, and all gao must be created within event loop's thread).
         '''
+        logger.debug('_deregister finalizer called for ' + str(ghid))
         if self._clear_q is not None:
             # This needs to be a function, not a coro, so use nowait.
             self._clear_q.put_nowait(ghid)
@@ -608,6 +632,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         ''' Tells the salmonator to stop listening for upstream object
         updates.
         '''
+        logger.debug('Deregistering updates for ' + str(ghid))
         # This should maybe use remove instead of discard?
         self._registered.discard(ghid)
     

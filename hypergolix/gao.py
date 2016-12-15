@@ -134,9 +134,10 @@ class ProxiedAPI(API):
                                **kwargs)
 
 
-class DeltaTracking(type):
-    ''' Use this to construct GAOs that use deferred-action methods that
-    can store deltas before flushing.
+class Accountable(ProxiedAPI):
+    ''' Use this metaclass to construct GAOs that use deferred-action
+    methods that can store deltas before flushing. To be used in account
+    GAOs to avoid shitloads of extra upstream pushing.
     
     Some thoughts:
     +   Initial support should simply be a "mutated" flag, which will

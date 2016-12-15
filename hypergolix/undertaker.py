@@ -347,8 +347,8 @@ class Ferryman(UndertakerCore):
     async def _gc_execute(self, obj, skip_conn):
         # Do our stuff first so that there's still access to librarian
         # state, if it ends up being needed
-        self._oracle.forget(obj.ghid)
-        self._privateer.abandon(obj.ghid, quiet=True)
+        # self._oracle.forget(obj.ghid)
+        # self._privateer.abandon(obj.ghid, quiet=True)
         # Don't flush any of the GAOs associated with that; just let it be
         # rolled into the next push-upstream-update
         await super()._gc_execute(obj, skip_conn)

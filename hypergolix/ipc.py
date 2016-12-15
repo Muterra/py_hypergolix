@@ -460,7 +460,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             account = self._dispatch._account
         )
         
-        self._dispatch.track_object(connection, obj.ghid)
+        await self._dispatch.track_object(connection, obj.ghid)
             
         if isinstance(obj.state, Ghid):
             is_link = True
@@ -526,7 +526,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             
         # Add the endpoint as a listener.
         await self._dispatch.register_object(connection, obj.ghid, private)
-        self._dispatch.track_object(connection, obj.ghid)
+        await self._dispatch.track_object(connection, obj.ghid)
         
         return bytes(obj.ghid)
     
@@ -792,7 +792,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         ''' Handles object discarding requests. Server only.
         '''
         ghid = Ghid.from_bytes(body)
-        self._dispatch.untrack_object(connection, ghid)
+        await self._dispatch.untrack_object(connection, ghid)
         return b'\x01'
     
     @public_api
@@ -827,7 +827,7 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             ipc_protocol = self,
             account = self._dispatch._account
         )
-        self._dispatch.untrack_object(connection, ghid)
+        await self._dispatch.untrack_object(connection, ghid)
         # TODO: shift to a dispatch.delete_object method that can ignore this
         # connection when the intevitable "deleted that object!" warning comes
         # back

@@ -166,6 +166,10 @@ class Dispatcher(metaclass=API):
         # This lookup directly tracks who has a copy of the object
         # Lookup <object ghid>: set(<connection/session/conn>)
         self._update_listeners = WeakSetMap()
+        # This lookup preserves a strong reference to the dispatchable **as the
+        # key**, allowing the object to be GC'd from local memory only when no
+        # connections remain that have it
+        self._obj_binding = WeakSetMap()
         
     @__init__.fixture
     def __init__(self, *args, **kwargs):
@@ -382,24 +386,54 @@ class Dispatcher(metaclass=API):
     
     @fixture_noop
     @public_api
-    def track_object(self, connection, ghid):
+    async def track_object(self, connection, ghid):
         ''' Registers a connection as tracking a ghid.
         
         This is necessary so that upstream updates can be properly
         dispatched to any applications with copies of the object.
         '''
+        logger.debug(
+            'CONN ' + str(connection) + ' tracking ' + str(ghid) + '...'
+        )
         self._update_listeners.add(ghid, connection)
+        obj = await self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            ghid = ghid,
+            api_id = None,  # Let _pull() apply this.
+            state = None,   # Let _pull() apply this.
+            dispatch = self,
+            ipc_protocol = self._ipc_protocol,
+            account = self._account
+        )
+        # This keeps the object in memory, allowing it to receive subscriptions
+        # When all apps untrack the object, it gets unsubbed.
+        self._obj_binding.add(obj, connection)
     
     @fixture_noop
     @public_api
-    def untrack_object(self, connection, ghid):
+    async def untrack_object(self, connection, ghid):
         ''' Remove a connection as tracking a ghid.
         
         This indicates an application no longer has a copy of the
         object, therefore silencing any updates it would otherwise have
         received.
         '''
+        logger.debug(
+            'CONN ' + str(connection) + ' untracking ' + str(ghid) + '...'
+        )
         self._update_listeners.discard(ghid, connection)
+        obj = await self._oracle.get_object(
+            gaoclass = _Dispatchable,
+            ghid = ghid,
+            api_id = None,  # Let _pull() apply this.
+            state = None,   # Let _pull() apply this.
+            dispatch = self,
+            ipc_protocol = self._ipc_protocol,
+            account = self._account
+        )
+        # This keeps the object in memory, allowing it to receive subscriptions
+        # When all apps untrack the object, it gets unsubbed.
+        self._obj_binding.discard(obj, connection)
         
     @public_api
     async def register_object(self, connection, ghid, private):
@@ -793,3 +827,28 @@ class _Dispatchable(GAOCore, metaclass=API):
             equal = False
         
         return equal
+        
+    def __hash__(self):
+        ''' Dispatchable hashes should mix the hashes of the api_id, the
+        author, and the ghid together, but only if all of the above are
+        defined.
+        '''
+        defined = self.ghid is not None
+        defined &= self.author is not None
+        defined &= self.api_id is not None
+        
+        if not defined:
+            raise TypeError(
+                'Dispatchable objects may only be hashed after they are ' +
+                'fully defined (with a ghid, an author, and an api_id.'
+            )
+        
+        return hash(self.ghid) ^ hash(self.author) ^ hash(self.api_id)
+        
+    def __del__(self, *args, **kwargs):
+        ''' Log the removal of the dispatchable.
+        '''
+        logger.info(
+            'GAO ' + str(self.ghid) + ' passed out of memory and is being ' +
+            'locally garbage collected by Python.'
+        )

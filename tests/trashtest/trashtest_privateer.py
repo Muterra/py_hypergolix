@@ -320,7 +320,6 @@ class PrivateerTest(unittest.TestCase):
         
         history = [ghid3, ghid2, ghid1]
         self.privateer.heal_chain(proxy, history, master)
-        self.assertIn(ghid2, self.privateer)
         self.assertIn(ghid3, self.privateer)
         self.assertEqual(self.privateer.get(ghid3), secret3)
         

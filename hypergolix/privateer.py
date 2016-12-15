@@ -444,6 +444,10 @@ class Privateer(metaclass=API):
             available = [target in self._secrets for target in target_vector]
             # If we didn't find ANY of them, then we're broken.
             if not any(available):
+                logger.error(
+                    'Broken ratchet. Target vector: ' +
+                    str([str(target) for target in target_vector])
+                )
                 raise RatchetError('Broken ratchet.')
         
             # Get the index for the most recent target that we already know a

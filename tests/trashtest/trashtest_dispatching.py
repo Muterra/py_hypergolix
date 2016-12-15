@@ -181,13 +181,54 @@ class TestDispatcher(unittest.TestCase):
         '''
         # Create a new connection
         conn = _ConnectionBase.__fixture__()
-        ghid1 = make_random_ghid()
-        ghid2 = make_random_ghid()
+        obj1 = _Dispatchable.__fixture__(
+            ghid = make_random_ghid(),
+            dynamic = True,
+            author = make_random_ghid(),
+            legroom = 7,
+            api_id = ApiID(bytes([random.randint(0, 255) for i in range(64)])),
+            state = bytes([random.randint(0, 255) for i in range(4)]),
+            golcore = self.golcore,
+            ghidproxy = self.ghidproxy,
+            privateer = self.privateer,
+            percore = self.percore,
+            librarian = self.librarian,
+            dispatch = self.dispatch,
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
+        )
+        self.oracle.add_object(obj1.ghid, obj1)
+        obj2 = _Dispatchable.__fixture__(
+            ghid = make_random_ghid(),
+            dynamic = True,
+            author = make_random_ghid(),
+            legroom = 7,
+            api_id = ApiID(bytes([random.randint(0, 255) for i in range(64)])),
+            state = bytes([random.randint(0, 255) for i in range(4)]),
+            golcore = self.golcore,
+            ghidproxy = self.ghidproxy,
+            privateer = self.privateer,
+            percore = self.percore,
+            librarian = self.librarian,
+            dispatch = self.dispatch,
+            ipc_protocol = self.ipc_protocol,
+            account = self.account
+        )
+        self.oracle.add_object(obj2.ghid, obj2)
         
-        self.dispatch.track_object(conn, ghid1)
+        await_coroutine_threadsafe(
+            coro = self.dispatch.track_object(conn, obj1.ghid),
+            loop = self.nooploop._loop
+        )
         
-        self.dispatch.untrack_object(conn, ghid1)
-        self.dispatch.untrack_object(conn, ghid2)
+        await_coroutine_threadsafe(
+            coro = self.dispatch.untrack_object(conn, obj1.ghid),
+            loop = self.nooploop._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.dispatch.untrack_object(conn, obj2.ghid),
+            loop = self.nooploop._loop
+        )
         
     def test_obj_registration_nonprivate(self):
         ''' Test registering a new, non-private object.

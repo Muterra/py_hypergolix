@@ -190,7 +190,8 @@ class HypergolixCore(loopa.TaskCommander, metaclass=API):
         self.remote_protocol.assemble(
             percore = self.percore,
             librarian = self.librarian,
-            postman = self.postman
+            postman = self.postman,
+            salmonator = self.salmonator
         )
         
         # Golix assembly

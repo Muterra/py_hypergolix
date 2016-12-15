@@ -332,29 +332,40 @@ class MrPostman(PostalCore, metaclass=API):
         
         # Anything else is an object subscription. Handle those by directly,
         # but only if we have them in memory.
-        elif subscription in self._oracle:
+        # elif subscription in self._oracle:
+        # Note: that was causing issues so I'm holding off on it as premature
+        # optimization / feature creep
+        else:
             # The ingestion pipeline will already have applied any new updates
             # to the ghidproxy.
-            obj = await self._oracle.get_object(GAOCore, subscription)
-            logger.debug(''.join((
-                'SUBSCRIPTION ',
-                str(subscription),
-                ' delivery STARTING. Notification: ',
-                str(notification)
+            try:
+                obj = await self._oracle.get_object(GAOCore, subscription)
+            
+            except KeyError:
+                logger.debug(
+                    'SUBS ' + str(subscription) + ' delivery IGNORED: ' +
+                    'unavailable at oracle. Notification: ' +
+                    str(notification)
+                )
+                await self._salmonator.deregister(subscription)
                 
-            )))
-            await obj.pull(notification)
+            else:
+                logger.debug(
+                    'SUBS ' + str(subscription) +
+                    ' delivery STARTING. Notification: ' + str(notification)
+                )
+                await obj.pull(notification)
                 
-        # We don't have the sub in memory, so we need to remove it.
-        else:
-            logger.debug(''.join((
-                'SUBSCRIPTION ',
-                str(subscription),
-                ' delivery IGNORED: not in memory. Notification: ',
-                str(notification)
+        # # We don't have the sub in memory, so we need to remove it.
+        # else:
+        #     logger.debug(''.join((
+        #         'SUBSCRIPTION ',
+        #         str(subscription),
+        #         ' delivery IGNORED: not in memory. Notification: ',
+        #         str(notification)
                 
-            )))
-            await self._salmonator.deregister(subscription)
+        #     )))
+        #     await self._salmonator.deregister(subscription)
         
         
 class PostOffice(PostalCore, metaclass=API):
