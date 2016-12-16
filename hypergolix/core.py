@@ -39,6 +39,7 @@ import weakref
 import threading
 import traceback
 import inspect
+import asyncio
 
 from golix import FirstParty
 from golix import SecondParty
@@ -567,24 +568,31 @@ class Oracle(metaclass=API):
             # problems. We should fix the abstraction so that it doesn't break
             # assumptions like that.
             obj = self._lookup[ghid]
-            logger.debug(''.join((
-                'GAO ',
-                str(ghid),
-                ' already exists in Oracle memory.'
-            )))
+            logger.debug(
+                'GAO ' + str(ghid) + ' already exists in Oracle memory as: ' +
+                str(type(obj))
+            )
             
             if not isinstance(obj, gaoclass):
                 raise TypeError(
                     'Object has already been resolved, and is not the '
                     'correct GAO class.'
                 )
+            else:
+                logger.debug(
+                    'GAO ' + str(ghid) + ' acceptable for ' + str(gaoclass)
+                )
+                
+            await obj._ctx.wait()
+            if ghid not in self._lookup:
+                raise RuntimeError('Contentious delete while getting object.')
         
         else:
-            logger.info(''.join((
-                'GAO ',
-                str(ghid),
-                ' not currently in Oracle memory. Attempting load.'
-            )))
+            logger.info(
+                'GAO ' + str(ghid) +
+                ' not currently in Oracle memory. Attempting load as: ' +
+                str(gaoclass)
+            )
             
             # First create the actual GAO. We do not need to have the ghid
             # downloaded to do this -- object creation is just making a Python
@@ -603,28 +611,43 @@ class Oracle(metaclass=API):
                 **kwargs
             )
             
-            # Now immediately subscribe to the object upstream, so that there
-            # is no race condition getting updates
-            await self._salmonator.register(ghid)
-            # Add deregister as a finalizer, but don't call it atexit. TODO:
-            # fix leaky abstraction
-            finalizer = weakref.finalize(obj, self._salmonator._deregister,
-                                         ghid)
-            finalizer.atexit = False
-            # Explicitly pull the object from salmonator to ensure we have the
-            # newest version, and that it is available locally in librarian if
-            # also available anywhere else. Note that salmonator handles modal
-            # switching for dynamic/static. It will also (by default, with
-            # skip_refresh=False) pull in any updates that have accumulated in
-            # the meantime.
-            await self._salmonator.attempt_pull(ghid, quiet=True)
+            # TODO: fix leaky abstraction
+            obj._ctx = asyncio.Event()
             
-            # Now actually fetch the object. This may KeyError if the ghid is
-            # still unknown.
-            await obj._pull()
-            
-            # Always do this to make sure we have the most recent version
+            # Always do this first to make sure we have the most recent version
+            # in all subsequent calls, without a race condition.
             self._lookup[ghid] = obj
+            
+            try:
+                # Now immediately subscribe to the object upstream, so that there
+                # is no race condition getting updates
+                await self._salmonator.register(ghid)
+                # Add deregister as a finalizer, but don't call it atexit. TODO:
+                # fix leaky abstraction
+                finalizer = weakref.finalize(obj, self._salmonator._deregister,
+                                             ghid)
+                finalizer.atexit = False
+                # Explicitly pull the object from salmonator to ensure we have
+                # the newest version, and that it is available locally in
+                # librarian if also available anywhere else. Note that
+                # salmonator handles modal switching for dynamic/static. It
+                # will also (by default, with skip_refresh=False) pull in any
+                # updates that have accumulated in the meantime.
+                await self._salmonator.attempt_pull(ghid, quiet=True)
+                
+                # Now actually fetch the object. This may KeyError if the
+                # ghid is still unknown.
+                await obj._pull()
+            
+            # Got an exception? Revert the lookup and reraise
+            except Exception:
+                del self._lookup[ghid]
+                raise
+                
+            # We have to release other waiters regardless
+            finally:
+                # Finally, let future callers unblock
+                obj._ctx.set()
             
         return obj
         
@@ -671,6 +694,9 @@ class Oracle(metaclass=API):
         )
         await obj._push()
         
+        # This is used strictly by oracle. TODO: fix leaky abstraction
+        obj._ctx = asyncio.Event()
+        obj._ctx.set()
         # Do this before registering with salmonator, in case the latter errors
         self._lookup[obj.ghid] = obj
         

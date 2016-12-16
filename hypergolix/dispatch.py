@@ -844,11 +844,3 @@ class _Dispatchable(GAOCore, metaclass=API):
             )
         
         return hash(self.ghid) ^ hash(self.author) ^ hash(self.api_id)
-        
-    def __del__(self, *args, **kwargs):
-        ''' Log the removal of the dispatchable.
-        '''
-        logger.info(
-            'GAO ' + str(self.ghid) + ' passed out of memory and is being ' +
-            'locally garbage collected by Python.'
-        )

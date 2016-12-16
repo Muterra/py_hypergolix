@@ -400,8 +400,10 @@ class PersistenceCore(metaclass=API):
         # Check for a redundant object, which will immediately short-circuit.
         if isinstance(obj, _GobdLite):
             check_ghid = obj.frame_ghid
+            log_frame = True
         else:
             check_ghid = obj.ghid
+            log_frame = False
         
         if (await self._librarian.contains(check_ghid)):
             logger.debug(
@@ -410,6 +412,10 @@ class PersistenceCore(metaclass=API):
             return False
         
         else:
+            logger.info(
+                str(obj.ghid) + ' ingesting' +
+                (' with frame ' + str(check_ghid)) * log_frame + '...'
+            )
             # Calculate "gidc", etc
             suffix = self._ATTR_LOOKUP[type(obj)]
             validation_method = 'validate_' + suffix

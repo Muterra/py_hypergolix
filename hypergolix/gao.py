@@ -850,6 +850,14 @@ class GAOCore(metaclass=API):
         the object.
         '''
         pass
+        
+    def __del__(self, *args, **kwargs):
+        ''' Log the removal of the GAO.
+        '''
+        logger.info(
+            'GAO ' + str(self.ghid) + ' passed out of memory and is being ' +
+            'locally garbage collected by Python.'
+        )
             
             
 class GAO(GAOCore):

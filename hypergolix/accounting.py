@@ -183,6 +183,8 @@ class Account(metaclass=API):
         '''
         await self._salmonator.register(gao.ghid)
         await self._salmonator.attempt_pull(gao.ghid, quiet=True)
+        gao._ctx = asyncio.Event()
+        gao._ctx.set()
         self._oracle._lookup[gao.ghid] = gao
             
     async def bootstrap(self):

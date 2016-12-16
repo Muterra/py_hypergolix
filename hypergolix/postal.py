@@ -400,7 +400,7 @@ class PostOffice(PostalCore, metaclass=API):
         
         # Now manually reinstate any desired notifications for garq requests
         # that have yet to be handled
-        for existing_mail in self._librarian.recipient_status(ghid):
+        for existing_mail in (await self._librarian.recipient_status(ghid)):
             obj = await self._librarian.summarize(existing_mail)
             await self.schedule(obj)
     
