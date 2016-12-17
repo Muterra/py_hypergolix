@@ -53,6 +53,7 @@ from .hypothetical import fixture_noop
 
 from .gao import GAOCore
 
+from .utils import AppToken
 from .utils import ApiID
 from .utils import WeakSetMap
 from .utils import NoContext
@@ -243,11 +244,11 @@ class Dispatcher(metaclass=API):
         # <app token>: set(<ghid, recipient tuples>)
         self._orphan_share_naks = account.dispatch_orphan_naks
         
-        # All known tokens must already contain a key for b'\x00\x00\x00\x00'.
-        # This is necessary because dispatch uses the zero token to indicate a
-        # lack of a token in an exchange
-        if b'\x00\x00\x00\x00' not in self._all_known_tokens:
-            self._all_known_tokens.add(b'\x00\x00\x00\x00')
+        # All known tokens must already contain a key for the null token, which
+        # is used by dispatch to indicate a lack of a token in an exchange. Do
+        # this as LBYL to avoid false positive _mutated flags in the GAO.
+        if AppToken.null() not in self._all_known_tokens:
+            self._all_known_tokens.add(AppToken.null())
             
     @public_api
     def token_lookup(self, connection):
@@ -330,7 +331,7 @@ class Dispatcher(metaclass=API):
         token = None
         # Birthday paradox be damned; we can actually *enforce* uniqueness
         while token is None or token in self._all_known_tokens:
-            token = os.urandom(4)
+            token = AppToken(os.urandom(AppToken.TOKEN_LEN))
         return token
         
     @public_api
@@ -374,7 +375,8 @@ class Dispatcher(metaclass=API):
     @start_application.fixture
     async def start_application(self, connection, token=None):
         if token is None:
-            token = os.urandom(4)
+            # ONLY FOR THE FIXTURE! Do we use a pseudorandom token.
+            token = AppToken.pseudorandom()
         
         # Don't emulate normal dispatcher behavior here; let everything start,
         # regardless of status re: "exists in tokens"

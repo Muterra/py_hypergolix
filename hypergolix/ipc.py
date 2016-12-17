@@ -65,8 +65,6 @@ IPC Apps should not have access to objects that are not _Dispatchable.
 import logging
 import collections
 import traceback
-# These are just used for fixturing.
-import random
 
 from golix import Ghid
 
@@ -98,6 +96,7 @@ from .exceptions import CatOuttaBagError
 from .utils import WeakSetMap
 from .utils import SetMap
 from .utils import ApiID
+from .utils import AppToken
 from .utils import weak_property
 
 from .comms import RequestResponseAPI
@@ -306,10 +305,10 @@ class IPCServerProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
     async def set_token(self, connection, body):
         ''' Handles token-setting requests.
         '''
-        token = body[:4]
+        token = AppToken(body)
         
         # Getting a new token.
-        if token == b'':
+        if token == AppToken.null():
             token = await self._dispatch.start_application(connection)
             logger.info(''.join((
                 'CONN ', str(connection), ' generating new token: ', str(token)
@@ -905,7 +904,7 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
         app of its existing token.
         '''
         if token is None:
-            return b''
+            return AppToken.null()
         else:
             return token
         
@@ -913,14 +912,15 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
     async def set_token(self, connection, body):
         ''' Handles token-setting requests.
         '''
-        self._hgxlink.token = body
+        self._hgxlink.token = AppToken(body)
         
     @set_token.fixture
     async def set_token(self, token):
         ''' Fixture for setting a token (or getting a new one).
         '''
         if token is None:
-            token = bytes([random.randint(0, 255) for i in range(0, 4)])
+            # ONLY use pseudorandom for the fixture
+            token = AppToken.pseudorandom()
             
         self.token = token
         return token

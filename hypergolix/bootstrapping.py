@@ -72,8 +72,8 @@ from .ipc import IPCServerProtocol as IPCCore
 from .privateer import Privateer
 from .rolodex import Rolodex
 
-from .utils import threading_autojoin
 from .utils import SetMap
+from .utils import AppToken
 
 
 # ###############################################
@@ -330,7 +330,7 @@ class AgentBootstrap:
             dynamic = True,
             state = set()
         )
-        all_tokens.add(b'\x00\x00\x00\x00')
+        all_tokens.add(AppToken.null())
         secondary_manifest['dispatch.alltokens'] = all_tokens.ghid
         
         # SetMap of all objects to be sent to an app upon app startup.

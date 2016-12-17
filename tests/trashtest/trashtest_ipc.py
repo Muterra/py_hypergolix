@@ -59,6 +59,7 @@ from hypergolix.utils import Aengel
 from hypergolix.utils import SetMap
 from hypergolix.utils import WeakSetMap
 from hypergolix.utils import ApiID
+from hypergolix.utils import AppToken
 
 # from hypergolix.objproxy import ProxyBase
 

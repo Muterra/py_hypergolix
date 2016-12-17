@@ -60,6 +60,7 @@ from hypergolix.dispatch import Dispatcher
 from hypergolix.remotes import Salmonator
 
 from hypergolix.utils import SetMap
+from hypergolix.utils import AppToken
 
 from hypergolix.persistence import _GidcLite
 from hypergolix.persistence import _GeocLite
@@ -181,7 +182,7 @@ class RolodexTest(unittest.TestCase):
             coro = self.rolodex.share_object(
                 target = obj1.ghid,
                 recipient = gidclite2.ghid,
-                requesting_token = bytes(4)
+                requesting_token = AppToken.pseudorandom()
             ),
             loop = self.nooploop._loop
         )

@@ -47,6 +47,7 @@ from queue import Empty
 from golix import Ghid
 
 from hypergolix.utils import ApiID
+from hypergolix.utils import AppToken
 
 from hypergolix.accounting import Account
 
@@ -135,13 +136,13 @@ class TestDispatcher(unittest.TestCase):
             coro = self.dispatch.start_application(conn),
             loop = self.nooploop._loop
         )
-        self.assertEqual(len(token), 4)
+        self.assertTrue(isinstance(token, AppToken))
         
         # For the same connection, make sure attempting to start a second app
         # fails.
         with self.assertRaises(ExistantAppError):
             await_coroutine_threadsafe(
-                coro = self.dispatch.start_application(conn, bytes(4)),
+                coro = self.dispatch.start_application(conn, AppToken.null()),
                 loop = self.nooploop._loop
             )
             
@@ -158,7 +159,7 @@ class TestDispatcher(unittest.TestCase):
         # connection.
         unk_token = token
         while unk_token == token:
-            unk_token = bytes([random.randint(0, 255) for i in range(4)])
+            unk_token = AppToken.pseudorandom()
         
         with self.assertRaises(UnknownToken):
             await_coroutine_threadsafe(
@@ -290,7 +291,7 @@ class TestDispatcher(unittest.TestCase):
             )
             
         # With token defined, we're good to go.
-        token = bytes([random.randint(0, 255) for i in range(4)])
+        token = AppToken.pseudorandom()
         self.dispatch._token_from_conn[conn] = token
         await_coroutine_threadsafe(
             coro = self.dispatch.register_object(conn, obj.ghid, True),
@@ -603,7 +604,7 @@ class TestDispatcher(unittest.TestCase):
         )
         self.oracle.add_object(obj.ghid, obj)
         
-        token = bytes([random.randint(0, 255) for i in range(4)])
+        token = AppToken.pseudorandom()
         self.dispatch._conn_from_token[token] = conn
         
         await_coroutine_threadsafe(
@@ -676,7 +677,7 @@ class TestDispatcher(unittest.TestCase):
         )
         self.oracle.add_object(obj.ghid, obj)
         
-        token = bytes([random.randint(0, 255) for i in range(4)])
+        token = AppToken.pseudorandom()
         self.dispatch._conn_from_token[token] = conn
         
         await_coroutine_threadsafe(
@@ -697,12 +698,12 @@ class TestDispatcher(unittest.TestCase):
         ghid = make_random_ghid()
         conn = _ConnectionBase.__fixture__()
         conn_2 = _ConnectionBase.__fixture__()
-        token = bytes([random.randint(0, 255) for i in range(4)])
+        token = AppToken.pseudorandom()
         self.dispatch._token_from_conn[conn] = token
         self.dispatch._all_known_tokens.add(token)
         unk_token = token
         while unk_token == token:
-            unk_token = bytes([random.randint(0, 255) for i in range(4)])
+            unk_token = AppToken.pseudorandom()
         
         # With no registered token...
         with self.assertRaises(UnknownToken):

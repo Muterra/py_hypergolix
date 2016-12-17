@@ -43,6 +43,7 @@ from loopa import TaskLooper
 from loopa.utils import await_coroutine_threadsafe
 
 from hypergolix.utils import ApiID
+from hypergolix.utils import AppToken
 from hypergolix.embed import HGXLink
 from hypergolix.objproxy import ObjCore
 from hypergolix.exceptions import HGXLinkError
@@ -128,14 +129,14 @@ class HGXLinkTrashtest(unittest.TestCase):
             self.hgxlink.token
             
         # Set a token
-        token = bytes([random.randint(0, 255) for i in range(0, 4)])
+        token = AppToken.pseudorandom()
         startup = self.hgxlink.register_token_threadsafe(token)
         self.assertEqual(token, self.hgxlink.token)
         self.assertIsNone(startup)
         
         # Ensure re-setting fails
         with self.assertRaises(HGXLinkError):
-            self.hgxlink.register_token_threadsafe(bytes(4))
+            self.hgxlink.register_token_threadsafe(AppToken.null())
         
         # Call again with nothing as token
         self.hgxlink._token = None
@@ -144,7 +145,7 @@ class HGXLinkTrashtest(unittest.TestCase):
         
         # Now set the startup object and run again
         self.hgxlink._token = None
-        token = bytes([random.randint(0, 255) for i in range(0, 4)])
+        token = AppToken.pseudorandom()
         set_startup = make_random_ghid()
         self.ipc_fixture.startup = set_startup
         startup = self.hgxlink.register_token_threadsafe(token)

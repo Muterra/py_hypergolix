@@ -57,6 +57,7 @@ from .hypothetical import fixture_api
 from .utils import SetMap
 from .utils import WeakSetMap
 from .utils import ApiID
+from .utils import AppToken
 from .utils import _reap_wrapped_task
 
 from .exceptions import HGXLinkError
@@ -279,7 +280,11 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         ''' Set the app token, if (and only if) it has yet to be set.
         '''
         if self._token is None:
-            self._token = value
+            if isinstance(value, AppToken):
+                self._token = value
+            else:
+                raise TypeError('Tokens must be of type ' +
+                                'hypergolix.utils.AppToken')
         else:
             raise HGXLinkError(
                 'Token already set. It must be cleared before being re-set.'

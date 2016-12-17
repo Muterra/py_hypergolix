@@ -33,16 +33,14 @@ hypergolix: A python Golix client.
 import logging
 import collections
 import threading
-import abc
 import weakref
 import traceback
 import asyncio
-import warnings
 import signal
 import sys
-import os
 import time
-import threading
+# Used for random token creation
+import random
 
 from concurrent.futures import CancelledError
 
@@ -70,6 +68,44 @@ __all__ = [
 # ###############################################
 # Lib
 # ###############################################
+
+
+class AppToken(bytes):
+    ''' Extend bytes to be a fixed-length thing.
+    '''
+    # The size, in bytes, of an app token
+    TOKEN_LEN = 16
+    
+    def __init__(self, *args, **kwargs):
+        ''' For simplicity, enforce length AFTER performing init.
+        '''
+        if len(self) != self.TOKEN_LEN:
+            raise ValueError('Improper token length.')
+    
+    @classmethod
+    def null(cls):
+        ''' Return the null token (used for passing "no token" in IPC,
+        and not a valid token for app usage.)
+        '''
+        return cls(cls.TOKEN_LEN)
+        
+    @classmethod
+    def pseudorandom(cls):
+        ''' Return a PSEUDOrandom (**NOT** secure) app token, for use in
+        testing.
+        '''
+        return cls([random.randint(0, 255) for __ in range(cls.TOKEN_LEN)])
+        
+    def __repr__(self):
+        ''' Add in the class name to repr.
+        '''
+        return type(self).__name__ + '(' + super().__repr__() + ')'
+        
+    def __str__(self, *args, **kwargs):
+        ''' Add in the class name to repr.
+        '''
+        return type(self).__name__ + '(' + \
+            super().__str__(*args, **kwargs) + ')'
 
 
 class ApiID(Ghid):
