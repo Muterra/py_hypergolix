@@ -610,7 +610,7 @@ class GAODictTest(GAOTestingCore, unittest.TestCase):
     async def modify_gao(self, obj):
         ''' Update state.
         '''
-        obj.state[1] = bytes([random.randint(0, 255) for i in range(32)])
+        obj[1] = bytes([random.randint(0, 255) for i in range(32)])
         
     def test_dict_stuff(self):
         ''' Make sure gaodict acts like, well, a dict.
@@ -676,7 +676,7 @@ class GAOSetTest(GAOTestingCore, unittest.TestCase):
     async def modify_gao(self, obj):
         ''' Update state.
         '''
-        obj.state.add(bytes([random.randint(0, 255) for i in range(32)]))
+        obj.add(bytes([random.randint(0, 255) for i in range(32)]))
         
     def test_set_stuff(self):
         ''' Make sure gaodict acts like, well, a dict.
@@ -739,7 +739,7 @@ class GAOSetMapTest(GAOTestingCore, unittest.TestCase):
     async def modify_gao(self, obj):
         ''' Update state.
         '''
-        obj.state.add(
+        obj.add(
             bytes([random.randint(0, 255) for i in range(4)]),
             bytes([random.randint(0, 255) for i in range(32)])
         )

@@ -98,43 +98,11 @@ __all__ = [
 
 PROXY_CORO = object()
 PROXY_FUNC = object()
+MUTATING_PROXY_CORO = object()
+MUTATING_PROXY_FUNC = object()
 
 
-class ProxiedAPI(API):
-    ''' Use this to construct GAOs that pass along methods to proxied
-    objects.
-    '''
-    
-    def __new__(mcls, clsname, bases, namespace, *args, **kwargs):
-        ''' Modify the existing namespace. Look for anything with a
-        "__is_proxied__" attribute, and use it to create a proxy.
-        '''
-        new_namespace = {}
-        for name, obj in namespace.items():
-            if obj is PROXY_CORO:
-                async def prox(self, *args, __proxname=name, **kwargs):
-                    proxied = getattr(self.state, __proxname)
-                    return (await proxied(*args, **kwargs))
-                
-                prox.__name__ = name
-                new_namespace[name] = prox
-                
-            elif obj is PROXY_FUNC:
-                def prox(self, *args, __proxname=name, **kwargs):
-                    proxied = getattr(self.state, __proxname)
-                    return proxied(*args, **kwargs)
-                        
-                prox.__name__ = name
-                new_namespace[name] = prox
-                
-            else:
-                new_namespace[name] = obj
-                
-        return super().__new__(mcls, clsname, bases, new_namespace, *args,
-                               **kwargs)
-
-
-class Accountable(ProxiedAPI):
+class Accountable(API):
     ''' Use this metaclass to construct GAOs that use deferred-action
     methods that can store deltas before flushing. To be used in account
     GAOs to avoid shitloads of extra upstream pushing.
@@ -159,6 +127,73 @@ class Accountable(ProxiedAPI):
     waiting for contention problems.
     '''
     
+    def __new__(mcls, clsname, bases, namespace, *args, **kwargs):
+        ''' Modify the existing namespace. Look for anything with a
+        "__is_proxied__" attribute, and use it to create a proxy.
+        '''
+        new_namespace = {}
+        for name, obj in namespace.items():
+            if obj is PROXY_CORO:
+                async def prox(self, *args, __proxname=name, **kwargs):
+                    proxied = getattr(self.state, __proxname)
+                    return (await proxied(*args, **kwargs))
+                
+                prox.__name__ = name
+                new_namespace[name] = prox
+                
+            elif obj is PROXY_FUNC:
+                def prox(self, *args, __proxname=name, **kwargs):
+                    proxied = getattr(self.state, __proxname)
+                    return proxied(*args, **kwargs)
+                        
+                prox.__name__ = name
+                new_namespace[name] = prox
+                
+            elif obj is MUTATING_PROXY_CORO:
+                async def prox(self, *args, __proxname=name, **kwargs):
+                    self._mutated = True
+                    proxied = getattr(self.state, __proxname)
+                    return (await proxied(*args, **kwargs))
+                
+                prox.__name__ = name
+                new_namespace[name] = prox
+                
+            elif obj is MUTATING_PROXY_FUNC:
+                def prox(self, *args, __proxname=name, **kwargs):
+                    self._mutated = True
+                    proxied = getattr(self.state, __proxname)
+                    return proxied(*args, **kwargs)
+                        
+                prox.__name__ = name
+                new_namespace[name] = prox
+                
+            else:
+                new_namespace[name] = obj
+        
+        cls = super().__new__(mcls, clsname, bases, new_namespace, *args,
+                              **kwargs)
+        
+        async def _push(self, *args, **kwargs):
+            ''' Only push if we actually changed.
+            '''
+            if self.ghid is None or self._mutated:
+                # Because of the order here, we don't much need to worry about
+                # a race condition. Any subsequent mutating calls will
+                # correctly mark the gao as mutated, allowing the next push to
+                # continue. Though, depending on timing, that may result in
+                # subsequent pushes having an extra, redundant push (if it was
+                # incorporated into the old _push in time).
+                self._mutated = False
+                return (await super(cls, self)._push(*args, **kwargs))
+            
+            else:
+                return
+                
+        cls._mutated = False
+        cls._push = _push
+        
+        return cls
+
 
 def mutating(func):
     ''' Decorator to mark a method as mutating, for use in delta
@@ -953,7 +988,7 @@ class _GAOPickleBase(GAOCore):
     __eq__ = GAO.__eq__
             
             
-class _DictMixin(metaclass=ProxiedAPI):
+class _DictMixin(metaclass=Accountable):
     ''' A golix-aware dictionary.
     '''
     
@@ -975,6 +1010,10 @@ class _DictMixin(metaclass=ProxiedAPI):
     def state(self, value):
         ''' Preserve the actual dictionary object, instead of just
         replacing it.
+        
+        Don't use this to mutate things, or we'll defeat the entire
+        point of delta tracking by constantly marking it as modified
+        while pulling updates from upstream.
         '''
         self._state.clear()
         self._state.update(value)
@@ -983,17 +1022,22 @@ class _DictMixin(metaclass=ProxiedAPI):
     __iter__ = PROXY_FUNC
     __contains__ = PROXY_FUNC
     __getitem__ = PROXY_FUNC
-    __setitem__ = PROXY_FUNC
-    __delitem__ = PROXY_FUNC
-    pop = PROXY_FUNC
+    __setitem__ = MUTATING_PROXY_FUNC
+    __delitem__ = MUTATING_PROXY_FUNC
+    # Note: this is lazy; what if using default and nothing changes?
+    pop = MUTATING_PROXY_FUNC
     items = PROXY_FUNC
     keys = PROXY_FUNC
     values = PROXY_FUNC
-    setdefault = PROXY_FUNC
+    # Note: this is lazy; what if using default and nothing changes?
+    setdefault = MUTATING_PROXY_FUNC
     get = PROXY_FUNC
-    popitem = PROXY_FUNC
-    clear = PROXY_FUNC
-    update = PROXY_FUNC
+    # Note: this is lazy; what if using default and nothing changes?
+    popitem = MUTATING_PROXY_FUNC
+    # Note: this is lazy; what if empty?
+    clear = MUTATING_PROXY_FUNC
+    # Note: this is lazy; what if nothing changes?
+    update = MUTATING_PROXY_FUNC
         
     # def __len__(self):
     #     # Straight pass-through
@@ -1065,7 +1109,7 @@ class GAODict(_GAOPickleBase, _DictMixin):
     pass
             
             
-class _SetMixin(metaclass=ProxiedAPI):
+class _SetMixin(metaclass=Accountable):
     ''' A golix-aware set.
     '''
     
@@ -1087,6 +1131,10 @@ class _SetMixin(metaclass=ProxiedAPI):
     def state(self, value):
         ''' Preserve the actual set object, instead of just replacing
         it.
+        
+        Don't use this to mutate things, or we'll defeat the entire
+        point of delta tracking by constantly marking it as modified
+        while pulling updates from upstream.
         '''
         self._state.clear()
         self._state.update(value)
@@ -1094,15 +1142,19 @@ class _SetMixin(metaclass=ProxiedAPI):
     __len__ = PROXY_FUNC
     __iter__ = PROXY_FUNC
     __contains__ = PROXY_FUNC
-    add = PROXY_FUNC
-    remove = PROXY_FUNC
-    discard = PROXY_FUNC
-    pop = PROXY_FUNC
-    clear = PROXY_FUNC
+    add = MUTATING_PROXY_FUNC
+    remove = MUTATING_PROXY_FUNC
+    # Note: this is lazy; what if nothing changes?
+    discard = MUTATING_PROXY_FUNC
+    # Note: this is lazy; what if empty?
+    pop = MUTATING_PROXY_FUNC
+    # Note: this is lazy; what if empty?
+    clear = MUTATING_PROXY_FUNC
     isdisjoint = PROXY_FUNC
     issubset = PROXY_FUNC
     issuperset = PROXY_FUNC
-    update = PROXY_FUNC
+    # Note: this is lazy; what if nothing changes?
+    update = MUTATING_PROXY_FUNC
     
     # @property
     # def state(self):
@@ -1176,7 +1228,7 @@ class GAOSet(_GAOPickleBase, _SetMixin):
     pass
             
             
-class _SetMapMixin(metaclass=ProxiedAPI):
+class _SetMapMixin(metaclass=Accountable):
     ''' A golix-aware setmap.
     '''
     
@@ -1194,6 +1246,10 @@ class _SetMapMixin(metaclass=ProxiedAPI):
     def state(self, value):
         ''' Preserve the actual setmap object, instead of just
         replacing it.
+        
+        Don't use this to mutate things, or we'll defeat the entire
+        point of delta tracking by constantly marking it as modified
+        while pulling updates from upstream.
         '''
         self._state.clear_all()
         self._state.update_all(value)
@@ -1203,16 +1259,24 @@ class _SetMapMixin(metaclass=ProxiedAPI):
     __contains__ = PROXY_FUNC
     __bool__ = PROXY_FUNC
     get_any = PROXY_FUNC
-    pop_any = PROXY_FUNC
+    # Note: this is lazy; what if nothing changes?
+    pop_any = MUTATING_PROXY_FUNC
     contains_within = PROXY_FUNC
-    add = PROXY_FUNC
-    update = PROXY_FUNC
-    update_all = PROXY_FUNC
-    remove = PROXY_FUNC
-    discard = PROXY_FUNC
-    clear = PROXY_FUNC
-    clear_any = PROXY_FUNC
-    clear_all = PROXY_FUNC
+    # Note: this is lazy; what if nothing changes?
+    add = MUTATING_PROXY_FUNC
+    # Note: this is lazy; what if nothing changes?
+    update = MUTATING_PROXY_FUNC
+    # Note: this is lazy; what if nothing changes?
+    update_all = MUTATING_PROXY_FUNC
+    remove = MUTATING_PROXY_FUNC
+    # Note: this is lazy; what if nothing changes?
+    discard = MUTATING_PROXY_FUNC
+    # Note: this is lazy; what if empty?
+    clear = MUTATING_PROXY_FUNC
+    # Note: this is lazy; what if nothing changes?
+    clear_any = MUTATING_PROXY_FUNC
+    # Note: this is lazy; what if nothing changes?
+    clear_all = MUTATING_PROXY_FUNC
     combine = PROXY_FUNC
             
     # def __contains__(self, key):
