@@ -463,24 +463,27 @@ class PersistenceCore(metaclass=API):
         
         TODO: move into doorman.
         '''
-        # First run through all of the loaders and see if anything catches.
-        for loader in (self._doorman.load_gidc, self._doorman.load_geoc,
-                       self._doorman.load_gobs, self._doorman.load_gobd,
-                       self._doorman.load_gdxx, self._doorman.load_garq):
-            try:
-                obj = await loader(packed)
-            
-            except (MalformedGolixPrimitive, ParseError):
-                continue
-                
-            else:
-                # Short circuit if anything was found.
-                break
+        # This is kinda silly, but instead of spewing off a million different
+        # threads that will immediately die, let's pre-select the loader
+        magic = bytes(packed[:4])
+        loaders = {
+            b'GIDC': self._doorman.load_gidc,
+            b'GEOC': self._doorman.load_geoc,
+            b'GOBS': self._doorman.load_gobs,
+            b'GOBD': self._doorman.load_gobd,
+            b'GDXX': self._doorman.load_gdxx,
+            b'GARQ': self._doorman.load_garq
+        }
         
+        try:
+            loader = loaders[magic]
+            
         # If no successful loader was found, return None, and allow the parent
         # to raise.
-        else:
+        except KeyError:
             return None
+        
+        obj = await loader(packed)
             
         return obj
         

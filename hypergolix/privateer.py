@@ -51,6 +51,7 @@ from cryptography.hazmat.backends import default_backend
 
 # Intra-package dependencies
 from .utils import weak_property
+from .utils import FiniteDict
 
 from .hypothetical import API
 from .hypothetical import public_api
@@ -165,10 +166,12 @@ class Privateer(metaclass=API):
         self._secrets_persistent = account.privateer_persistent
         self._secrets_staging = {}
         self._secrets_local = {}
+        self._secrets_deprecated = FiniteDict(maxlen=100)
         self._secrets_quarantine = account.privateer_quarantine
         self._secrets = collections.ChainMap(
             self._secrets_persistent,
             self._secrets_local,
+            self._secrets_deprecated,
             self._secrets_staging,
             self._secrets_quarantine,
         )
@@ -388,6 +391,28 @@ class Privateer(metaclass=API):
         self._secrets_local.pop(ghid, None)
         self._secrets_quarantine.pop(ghid, None)
         self._secrets_staging.pop(ghid, None)
+        self._secrets_deprecated.pop(ghid, None)
+        
+    @fixture_noop
+    @public_api
+    def deprecate(self, ghid, quiet=True):
+        ''' Deprecate a secret. It will still be available locally, but
+        will be removed from shared nonlocal state.
+        '''
+        # Short circuit any tests if quiet is enabled
+        if not quiet and ghid not in self._secrets:
+            raise UnknownSecret('Secret not found for ' + str(ghid))
+        
+        else:
+            secret1 = self._secrets_persistent.pop(ghid, None)
+            secret2 = self._secrets_local.pop(ghid, None)
+            secret3 = self._secrets_quarantine.pop(ghid, None)
+            secret4 = self._secrets_staging.pop(ghid, None)
+            secret5 = self._secrets_deprecated.pop(ghid, None)
+            
+            secret = secret1 or secret2 or secret3 or secret4 or secret5
+            
+            self._secrets_deprecated[ghid] = secret
         
     def ratchet_chain(self, proxy, current_target, master_secret=None):
         ''' Gets a new secret for the proxy. Returns the secret, and

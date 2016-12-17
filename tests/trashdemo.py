@@ -151,7 +151,7 @@ class TestAppNoRestore(unittest.TestCase):
             port = 6022,
             reusable_loop = False,
             threaded = True,
-            debug = True,
+            # debug = True,
             thread_kwargs = {'name': 'pserver'}
         )
         
@@ -163,7 +163,7 @@ class TestAppNoRestore(unittest.TestCase):
             ipc_port = 6023,
             reusable_loop = False,
             threaded = True,
-            debug = True,
+            # debug = True,
             thread_kwargs = {'name': 'hgxcore1'}
         )
         cls.hgxcore1.add_remote(
@@ -182,7 +182,7 @@ class TestAppNoRestore(unittest.TestCase):
         cls.hgxlink1 = HGXLink(
             ipc_port = 6023,
             autostart = False,
-            debug = True,
+            # debug = True,
             threaded = True,
             thread_kwargs = {'name': 'hgxlink1'}
         )
@@ -195,7 +195,7 @@ class TestAppNoRestore(unittest.TestCase):
             ipc_port = 6024,
             reusable_loop = False,
             threaded = True,
-            debug = True,
+            # debug = True,
             thread_kwargs = {'name': 'hgxcore2'}
         )
         cls.hgxcore2.add_remote(
@@ -214,7 +214,7 @@ class TestAppNoRestore(unittest.TestCase):
         cls.hgxlink2 = HGXLink(
             ipc_port = 6024,
             autostart = False,
-            debug = True,
+            # debug = True,
             threaded = True,
             thread_kwargs = {'name': 'hgxlink2'}
         )
@@ -247,32 +247,28 @@ class TestAppNoRestore(unittest.TestCase):
         ''' Do some housekeeping.
         '''
         self.iterations = 10
+        self.timeout = 10
         
         self.request_api = ApiID(bytes(63) + b'\x01')
         self.response_api = ApiID(bytes(63) + b'\x02')
         
         self.incoming1 = collections.deque()
         self.incoming2 = collections.deque()
+        self.cache2 = collections.deque()
         
         self.returnflag1 = threading.Event()
-        self.updateflag1 = threading.Event()
+        self.updateflags = collections.deque()
         
         # Set up the timing recorder
-        self.timer = collections.deque([0, 0], maxlen=2)
-        self.times = []
-        
-    def roundtrip_waiter(self, timeout=10):
-        ''' Wait for a roundtrip.
-        '''
-        result = self.updateflag1.wait(timeout)
-        self.updateflag1.clear()
-        return result
+        self.timers = collections.deque()
         
     async def roundtrip_notifier(self, mirror_obj):
         ''' This gets called when we get an update for a response.
         '''
-        self.timer.appendleft(time.monotonic())
-        self.updateflag1.set()
+        end_time = time.monotonic()
+        ii = int.from_bytes(mirror_obj.state[:1], 'big')
+        self.timers[ii].appendleft(end_time)
+        self.updateflags[ii].set()
         
     def share_handler(self, ghid, origin, api_id):
         ''' This handles all shares. It's defined to be used STRICTLY in
@@ -302,6 +298,7 @@ class TestAppNoRestore(unittest.TestCase):
             # Set the update callback and then share the mirror
             obj.callback = state_mirror
             self.incoming2.appendleft(obj)
+            self.cache2.appendleft(mirror)
             mirror.share_threadsafe(origin)
             
         # The response handler. Responses are only received by hgxlink1.
@@ -401,26 +398,30 @@ class TestAppNoRestore(unittest.TestCase):
                     '\n' +
                     '################ Starting mirror cycle. ################'
                 )
+                
                 # Prep the object with an update
-                state = bytes([random.randint(0, 255) for i in range(0, 25)])
+                state = ii.to_bytes(1, 'big') + \
+                    bytes([random.randint(0, 255) for i in range(0, 25)])
                 request.state = state
                 
-                # Zero out the timer
-                self.timer.extendleft([0, 0, time.monotonic()])
+                # Clear the update flag and zero out the timer
+                self.updateflags.append(threading.Event())
+                self.timers.append(collections.deque([0, 0], maxlen=2))
+                self.timers[ii].appendleft(time.monotonic())
                 
                 # Call an update, wait for the response, and record the time
                 request.push_threadsafe()
-                success = self.roundtrip_waiter()
-                self.times.append(self.timer[0] - self.timer[1])
+                success = self.updateflags[ii].wait(self.timeout)
                 
                 # Check for success
                 self.assertTrue(success)
                 self.assertEqual(mirror.state, state)
                 
-        print('Max time: ', max(self.times))
-        print('Min time: ', min(self.times))
-        print('Mean time:', statistics.mean(self.times))
-        print('Med time: ', statistics.median(self.times))
+        times = [end - start for end, start in self.timers]
+        print('Max time: ', max(times))
+        print('Min time: ', min(times))
+        print('Mean time:', statistics.mean(times))
+        print('Med time: ', statistics.median(times))
 
 
 def make_tests(iterations, debug, raz, des, aengel):
