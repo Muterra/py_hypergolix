@@ -101,8 +101,8 @@ class _BootstrapFilter(logging.Filter):
         if record.levelno >= logging.WARNING:
             return True
             
-        # Emit everything from bootstrapping
-        elif record.name == 'hypergolix.bootstrapping':
+        # Emit everything from accounting
+        elif record.name == 'hypergolix.accounting':
             return True
             
         # Emit nothing else
