@@ -45,7 +45,7 @@ from hypergolix.config import _CfgDecoder
 from hypergolix.config import _CfgEncoder
 
 from hypergolix.config import _make_blank_cfg
-from hypergolix.config import _get_hgx_rootdir
+from hypergolix.config import get_hgx_rootdir
 from hypergolix.config import _ensure_dir
 from hypergolix.config import _ensure_hgx_homedir
 from hypergolix.config import _ensure_hgx_populated
@@ -86,7 +86,7 @@ vec_userdef = '''
         "__UserDef__": true,
         "fingerprint": "foo",
         "user_id": "bar",
-        "password": null
+        "root_secret": null
     }
 '''
 
@@ -115,7 +115,7 @@ vec_cfg = '''
             "__UserDef__": true,
             "fingerprint": "foo",
             "user_id": "bar",
-            "password": null
+            "root_secret": null
         },
         "instrumentation": {
             "__InstrumentationDef__": true,
@@ -211,7 +211,7 @@ class EtcTest(unittest.TestCase):
         self.assertIn('instrumentation', config)
         
     def test_get_root(self):
-        root = _get_hgx_rootdir()
+        root = get_hgx_rootdir()
         self.assertTrue(root.exists())
         
     def test_ensure_dir(self):
@@ -382,7 +382,7 @@ class ConfigTest(unittest.TestCase):
                 self.assertEqual(config.remotes, tuple())
                 self.assertEqual(config.fingerprint, None)
                 self.assertEqual(config.user_id, None)
-                self.assertEqual(config.password, None)
+                self.assertEqual(config.root_secret, None)
                 self.assertEqual(config.log_verbosity, 'warning')
                 self.assertEqual(config.debug_mode, False)
                 

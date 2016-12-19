@@ -124,22 +124,14 @@ class Account(metaclass=API):
         '''
         super().__init__(*args, **kwargs)
         
-        if user_id is None:
-            logger.info(
-                'Generating a new set of private keys. Please be patient.'
-            )
-            self._identity = FirstParty()
-            self._user_id = None
-            logger.info('Private keys generated.')
-        
-        elif isinstance(user_id, Ghid):
+        if isinstance(user_id, Ghid):
             logger.info('Logging in with existing user ID: ' + str(user_id))
             self._identity = None
             self._user_id = user_id
         
         # This is used exclusively for testing.
         elif isinstance(user_id, FirstParty):
-            logger.critical('Account testing with preexisting Golix identity.')
+            logger.info('Creating a new account.')
             self._identity = user_id
             self._user_id = None
         
@@ -176,6 +168,12 @@ class Account(metaclass=API):
         self.dispatch_incoming = set()
         self.dispatch_orphan_acks = SetMap()
         self.dispatch_orphan_naks = SetMap()
+        
+    @property
+    def _fingerprint(self):
+        ''' Get our fingerprint.
+        '''
+        return self._identity.ghid
         
     async def _inject_gao(self, gao):
         ''' Bypass the normal oracle get_object, new_object process and

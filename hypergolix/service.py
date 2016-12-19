@@ -246,12 +246,12 @@ def start(namespace=None):
         if namespace.logdir is not None:
             log_dir = str(pathlib.Path(namespace.logdir).absolute())
         else:
-            log_dir = namespace.log_dir
+            log_dir = namespace.logdir
         # Convert cache dir to absolute if defined
         if namespace.cachedir is not None:
             cache_dir = str(pathlib.Path(namespace.cachedir).absolute())
         else:
-            cache_dir = namespace.cache_dir
+            cache_dir = namespace.cachedir
         verbosity = namespace.verbosity
         # Convert pid path to absolute (must be defined)
         pid_path = str(pathlib.Path(namespace.pidfile).absolute())

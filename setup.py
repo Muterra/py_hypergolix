@@ -104,7 +104,7 @@ setup(
         'golix>=0.1.4',
         'websockets>=3.2',
         'cryptography>=1.6',
-        'pycryptodome>=3.4',  # waiting for cryptography to include scrypt
+        'pycryptodome>=3.4.3',  # waiting for cryptography to include scrypt
         'daemoniker>=0.2.2',
         'loopa>=0.0.2'
     ],

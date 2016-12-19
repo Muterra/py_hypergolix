@@ -427,6 +427,9 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         if _legroom is None:
             _legroom = self._legroom
             
+        if api_id is None:
+            api_id = cls._hgx_DEFAULT_API
+            
         obj = cls(
             hgxlink = self,
             ipc_manager = self._ipc_manager,

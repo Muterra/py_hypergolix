@@ -48,11 +48,25 @@ from daemoniker import Daemonizer
 from daemoniker import SignalHandler1
 from daemoniker import SIGTERM
 
+from Crypto.Protocol.KDF import scrypt
+
+from golix import FirstParty
+from golix import Secret
+from golix import Ghid
+
 # Intra-package dependencies (that require explicit imports, courtesy of
 # daemonization)
-from hypergolix.config import Config
 
-from hypergolix.app import app_core
+from hypergolix.config import Config
+from hypergolix.config import get_hgx_rootdir
+
+from hypergolix.comms import WSConnection
+from hypergolix.app import HypergolixCore
+from hypergolix.accounting import Account
+
+from hypergolix import logutils
+
+from hypergolix.exceptions import ConfigError
 
 
 # ###############################################
@@ -66,6 +80,10 @@ logger = logging.getLogger(__name__)
 __all__ = [
     'start',
 ]
+
+
+# Use 2**14 for t<=100ms, 2**20 for t<=5s.
+_DEFAULT_SCRYPT_HARDNESS = 2**15
 
 
 # ###############################################
@@ -141,17 +159,20 @@ class _StartupReporter:
     def __init__(self, port, cycle_time=.1, timeout=30):
         ''' port determines what localhost port to contact
         '''
+        self._running = False
         self.port = port
         self.handler = None
         
         self._cycle_time = cycle_time
         self._timeout = timeout
         
-    def __enter__(self):
-        ''' Sets up the logging reporter.
+    def start(self):
+        ''' Direct call to start reporting.
         '''
         # Wait for the server to exist first.
         logging_port = self.port
+        
+        self._running = True
         
         try:
             _await_server(logging_port, self._cycle_time, self._timeout)
@@ -184,7 +205,7 @@ class _StartupReporter:
         self.handler.addFilter(_BootstrapFilter())
         
         # Enable the handler for hypergolix.bootstrapping
-        bootstrap_logger = logging.getLogger('hypergolix.bootstrapping')
+        bootstrap_logger = logging.getLogger('hypergolix.accounting')
         self._bootstrap_revert_level = bootstrap_logger.level
         self._bootstrap_revert_propagation = bootstrap_logger.propagate
         bootstrap_logger.setLevel(logging.INFO)
@@ -206,13 +227,41 @@ class _StartupReporter:
         # Return the bootstrap_logger so it can be used.
         return bootstrap_logger
         
+    def stop(self):
+        ''' Explicit call to close the logger.
+        '''
+        if self._running:
+            try:
+                root_logger = logging.getLogger('')
+                bootstrap_logger = logging.getLogger('hypergolix.accounting')
+                
+                bootstrap_logger.propagate = self._bootstrap_revert_propagation
+                bootstrap_logger.setLevel(self._bootstrap_revert_level)
+                if self._root_revert_level is not None:
+                    root_logger.setLevel(self._root_revert_level)
+                    
+                bootstrap_logger.removeHandler(self.handler)
+                root_logger.removeHandler(self.handler)
+            
+            finally:
+                # Close the handler and, if necessary, the server
+                self.handler.close()
+                if isinstance(self.handler, logging.handlers.SocketHandler):
+                    _close_server(self.port)
+                
+                self._running = False
+        
+    def __enter__(self):
+        ''' Sets up the logging reporter.
+        '''
+        return self.start()
+        
     def __exit__(self, exc_type, exc_value, exc_tb):
         ''' Restores the bootstrap process logging to its previous
         verbosity and removes the handler.
         '''
         try:
             root_logger = logging.getLogger('')
-            bootstrap_logger = logging.getLogger('hypergolix.bootstrapping')
             
             # Well first, if we aren't cleanly exiting, report the error.
             if exc_type is not None:
@@ -221,20 +270,9 @@ class _StartupReporter:
                     str(exc_value) + ') + \n' +
                     ''.join(traceback.format_tb(exc_tb))
                 )
-            
-            bootstrap_logger.propagate = self._bootstrap_revert_propagation
-            bootstrap_logger.setLevel(self._bootstrap_revert_level)
-            if self._root_revert_level is not None:
-                root_logger.setLevel(self._root_revert_level)
-                
-            bootstrap_logger.removeHandler(self.handler)
-            root_logger.removeHandler(self.handler)
         
         finally:
-            # Close the handler and, if necessary, the server
-            self.handler.close()
-            if isinstance(self.handler, logging.handlers.SocketHandler):
-                _close_server(self.port)
+            self.stop()
                 
 
 # Customize what bullet to use for which loglevel
@@ -336,60 +374,246 @@ def _enter_password():
               'while you type. Hit enter when done:')
     password = getpass.getpass(prompt=prompt)
     return password.encode('utf-8')
+        
+        
+def _expand_password(salt_ghid, password, hardness=None):
+    ''' Expands the author's ghid and password into a master key for
+    use in generating specific keys.
     
-    
-def _request_password(user_id):
-    ''' Checks the user_id. If None, creates a password (with the
-    infamous double-prompt). If defined, just gets it normally.
+    Hardness allows you to modify the scrypt inflation parameter. It
+    defaults to something resembling a reasonable general-purpose
+    value for 2016.
     '''
-    # Create an account
-    if user_id is None:
-        password = _create_password()
-        
-    # Log in to existing account
+    # Use 2**14 for t<=100ms, 2**20 for t<=5s.
+    if hardness is None:
+        hardness = _DEFAULT_SCRYPT_HARDNESS
     else:
-        password = _enter_password()
-        
-    return password
+        hardness = int(hardness)
+    
+    # Scrypt the password. Salt against the author GHID.
+    combined = scrypt(
+        password = password,
+        salt = bytes(salt_ghid),
+        key_len = 48,
+        N = hardness,
+        r = 8,
+        p = 1
+    )
+    key = combined[0:32]
+    seed = combined[32:48]
+    master_secret = Secret(
+        cipher = 1,
+        version = 'latest',
+        key = key,
+        seed = seed
+    )
+    return master_secret
 
 
 # ###############################################
 # Actionable intelligence
 # ###############################################
 
+
+class _DaemonCore(HypergolixCore):
+    ''' We just want a tiny addition to HypergolixCore to stop bootup
+    logging and save the config if needed. Also, because I like making
+    references to historical minutiae.
+    '''
+    
+    def __init__(self, *args, hgx_rootdir, save_cfg, boot_logger, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self._hgx_rootdir = hgx_rootdir
+        self._save_cfg = bool(save_cfg)
+        self._boot_logger = boot_logger
+        
+    async def setup(self):
+        ''' Extend setup to also close the boot logger and, if desired,
+        save the config.
+        '''
+        await super().setup()
+        
+        try:
+            if self._save_cfg:
+                user_id = self.account._user_id
+                fingerprint = self.account._fingerprint
+                
+                logger.critical('Account created. Record these values in ' +
+                                'case you need to log in to Hypergolix from ' +
+                                'another machine, or in case your config ' +
+                                'file is corrupted or lost:')
+                logger.critical('User ID:\n' + user_id.as_str())
+                logger.critical('Fingerprint:\n' + fingerprint.as_str())
+                
+                with Config(self._hgx_rootdir) as config:
+                    config.fingerprint = fingerprint
+                    config.user_id = user_id
+                    
+        finally:
+            logger.critical('Hypergolix boot complete.')
+            self._boot_logger.stop()
+
+
+def do_setup():
+    ''' Does initial setup of the daemon BEFORE daemonizing.
+    '''
+    hgx_rootdir = get_hgx_rootdir()
+    
+    with Config(hgx_rootdir) as config:
+        user_id = config.user_id
+        fingerprint = config.fingerprint
+        root_secret = config.root_secret
+        # Convert the path to a str
+        pid_file = str(config.pid_file)
+    
+    if bool(user_id) ^ bool(fingerprint):
+        raise ConfigError('Invalid config. Config must declare both ' +
+                          'user_id and fingerprint, or neither.')
+    
+    # We have no root secret, so we need to get a password and then inflate
+    # it.
+    if not root_secret:
+        
+        # We have an existing account, so do a single prompt.
+        if user_id:
+            account_entity = user_id
+            password = _enter_password()
+        
+        # We have no existing account, so do a double prompt (and then
+        # generate keys) and then inflate the password.
+        else:
+            password = _create_password()
+            print('Generating a new set of private keys. This may take ' +
+                  'a while.')
+            account_entity = FirstParty()
+            fingerprint = account_entity.ghid
+            account_entity = account_entity._serialize()
+            print('Private keys generated.')
+            
+        print('Expanding password using scrypt. This may take a while.')
+        root_secret = _expand_password(
+            salt_ghid = fingerprint,
+            password = password
+        )
+    
+    # We have a root secret...
+    else:
+        print('Using stored secret.')
+        
+        # ...and an existing account
+        if user_id:
+            account_entity = user_id
+            
+        # ...but need a new account
+        else:
+            print('Generating a new set of private keys. This may take ' +
+                  'a while.')
+            account_entity = FirstParty()
+            print('Private keys generated.')
+            account_entity = account_entity._serialize()
+        
+    return hgx_rootdir, pid_file, account_entity, root_secret
+
+
+def run_daemon(hgx_rootdir, pid_file, parent_port, account_entity,
+               root_secret):
+    ''' Start the actual Hypergolix daemon.
+    '''
+    # Start reporting to our parent about how stuff is going.
+    parent_signaller = _StartupReporter(parent_port)
+    startup_logger = parent_signaller.start()
+    
+    try:
+        with Config(hgx_rootdir) as config:
+            # Convert paths to strs
+            cache_dir = str(config.cache_dir)
+            log_dir = str(config.log_dir)
+            debug = config.debug_mode
+            verbosity = config.log_verbosity
+            ipc_port = config.ipc_port
+            remotes = config.remotes
+            # Look to see if we have an existing user_id to determine behavior
+            save_cfg = not bool(config.user_id)
+        
+        hgxcore = _DaemonCore(
+            cache_dir = cache_dir,
+            ipc_port = ipc_port,
+            reusable_loop = False,
+            threaded = False,
+            debug = debug,
+            hgx_rootdir = hgx_rootdir,
+            save_cfg = save_cfg,
+            boot_logger = parent_signaller
+        )
+        
+        for remote in remotes:
+            hgxcore.add_remote(
+                connection_cls = WSConnection,
+                host = remote.host,
+                port = remote.port,
+                tls = remote.tls
+            )
+        
+        account = Account(
+            user_id = account_entity,
+            root_secret = root_secret,
+            hgxcore = hgxcore
+        )
+        hgxcore.account = account
+        
+        logutils.autoconfig(
+            tofile = True,
+            logdirname = log_dir,
+            loglevel = verbosity,
+            logname = 'hgxapp'
+        )
+        
+        # We need a signal handler for that.
+        def signal_handler(signum):
+            logger.info('Caught signal. Exiting.')
+            hgxcore.stop_threadsafe_nowait()
+            
+        # Normally I'd do this within daemonization, but in this case, we need
+        # to wait to have access to the handler.
+        sighandler = SignalHandler1(
+            pid_file,
+            sigint = signal_handler,
+            sigterm = signal_handler,
+            sigabrt = signal_handler
+        )
+        sighandler.start()
+        
+        startup_logger.info('Booting Hypergolix...')
+        hgxcore.start()
+        
+    finally:
+        # This is idempotent, so no worries if we already called it
+        parent_signaller.stop()
+
     
 def start(namespace=None):
     ''' Starts a Hypergolix daemon.
     '''
     with Daemonizer() as (is_setup, daemonizer):
-        # Need these so that the second time around doesn't NameError
-        user_id = None
-        password = None
-        pid_file = None
         parent_port = 7771
-        homedir = None
         
         if is_setup:
-            with Config() as config:
-                user_id = config.user_id
-                password = config.password
-                # Convert the path to a str
-                pid_file = str(config.pid_file)
-                homedir = str(config.home_dir)
-                
-            if password is None:
-                password = _request_password(user_id)
-                
             print('Starting Hypergolix...')
+            hgx_rootdir, pid_file, account_entity, root_secret = do_setup()
+            
+        else:
+            # Need these so that the second time around doesn't NameError
+            hgx_rootdir = None
+            pid_file = None
+            account_entity = None
+            root_secret = None
             
         # Daemonize. Don't strip cmd-line arguments, or we won't know to
         # continue with startup
-        is_parent, user_id, password = daemonizer(
-            pid_file,
-            user_id,
-            password,
-            chdir = homedir
-        )
+        is_parent, hgx_rootdir, pid_file, account_entity, root_secret = \
+            daemonizer(pid_file, hgx_rootdir, pid_file, account_entity,
+                       root_secret, chdir=str(hgx_rootdir))
          
         if is_parent:
             # Set up a logging server that we can print() to the terminal
@@ -400,34 +624,20 @@ def start(namespace=None):
             #####################
             # PARENT EXITS HERE #
             #####################
-                
-    # Daemonized child only from here on out.
-    with _StartupReporter(parent_port) as startup_logger:
-        # We need to set up a signal handler ASAP
-        with Config() as config:
-            pid_file = str(config.pid_file)
-        sighandler = SignalHandler1(pid_file)
-        sighandler.start()
-        
-        core = app_core(user_id, password, startup_logger)
-        
-        startup_logger.info('Hypergolix startup complete.')
-
-    # Wait indefinitely until signal caught.
-    # TODO: literally anything smarter than this.
-    try:
-        while True:
-            time.sleep(.5)
-    except SIGTERM:
-        logger.info('Caught SIGTERM. Exiting.')
-    
-    del core
+            
+        elif not isinstance(account_entity, Ghid):
+            account_entity = FirstParty._from_serialized(account_entity)
+            
+    # Daemonized child only from here on out. So, run the actual daemon!
+    run_daemon(hgx_rootdir, pid_file, parent_port, account_entity, root_secret)
     
     
 def stop(namespace=None):
     ''' Stops the Hypergolix daemon.
     '''
-    with Config() as config:
+    hgx_rootdir = get_hgx_rootdir()
+    
+    with Config(hgx_rootdir) as config:
         pid_file = str(config.pid_file)
         
     daemoniker.send(pid_file, SIGTERM)
