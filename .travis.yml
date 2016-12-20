@@ -7,10 +7,6 @@ matrix:
   include:
     - os: linux
       python: 3.5
-      env: TESTSUITE=lin35 OPENSSL=1.0.1f
-      
-    - os: linux
-      python: 3.5
       env: TESTSUITE=lin35 OPENSSL=1.0.2j
       
     - os: linux
@@ -62,9 +58,13 @@ install: |
   
   fi
   
+  mkdir logs
   pip install . test
 
-script: python tests/trashtest.py
+script: python tests/trashtest.py --logdir logs --verbosity debug
+
+# after_success:
+# - ./.travis/upload_coverage.sh
 
 branches:
   only:
