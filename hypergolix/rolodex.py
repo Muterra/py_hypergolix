@@ -7,7 +7,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -21,35 +21,43 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
 '''
 
 # Global dependencies
-import weakref
 import traceback
-import threading
 import collections
+import asyncio
 
-from golix import SecondParty
 from golix import Ghid
 
 from golix.utils import AsymHandshake
 from golix.utils import AsymAck
 from golix.utils import AsymNak
 
+from loopa.utils import make_background_future
+
 # Local dependencies
+from .hypothetical import API
+from .hypothetical import public_api
+from .hypothetical import fixture_api
+from .hypothetical import fixture_noop
+
 from .exceptions import UnknownParty
 
+from .persistence import _GeocLite
+from .persistence import _GobdLite
 from .persistence import _GarqLite
 from .persistence import _GdxxLite
 
-from .utils import call_coroutine_threadsafe
+from .utils import weak_property
+from .utils import readonly_property
 
 
 # ###############################################
@@ -62,7 +70,7 @@ logger = logging.getLogger(__name__)
 
 # Control * imports.
 __all__ = [
-    'Rolodex', 
+    'Rolodex',
 ]
 
 
@@ -77,55 +85,79 @@ _SharePair = collections.namedtuple(
 )
 
 
-class Rolodex:
+class Rolodex(metaclass=API):
     ''' Handles sharing, requests, etc.
     
-    In the future, will maintain a contacts list to approve/reject 
+    In the future, will maintain a contacts list to approve/reject
     incoming requests. In the further future, will maintain sharing
     pipelines, negotiated through handshakes, to perform sharing
     symmetrically between contacts.
     '''
-    def __init__(self):
-        self._opslock = threading.Lock()
+    _account = weak_property('__account')
+    _golcore = weak_property('__golcore')
+    _ghidproxy = weak_property('__ghidproxy')
+    _privateer = weak_property('__privateer')
+    _percore = weak_property('__percore')
+    _librarian = weak_property('__librarian')
+    _salmonator = weak_property('__salmonator')
+    _dispatch = weak_property('__dispatch')
+    
+    @public_api
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
-        self._golcore = None
-        self._privateer = None
-        self._percore = None
-        self._librarian = None
-        self._ghidproxy = None
-        self._ipccore = None
-        self._salmonator = None
-        
-        # Persistent dict-like lookup for 
+        # Persistent dict-like lookup for
         # request_ghid -> (request_target, request recipient)
         self._pending_requests = None
         # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
         self._outstanding_shares = None
         
-    def bootstrap(self, pending_requests, outstanding_shares):
+    @__init__.fixture
+    def __init__(self, *args, **kwargs):
+        ''' Init the fixture.
+        '''
+        super(Rolodex.__fixture__, self).__init__(*args, **kwargs)
+        
+        self.shared = {}
+        self._pending_requests = {}
+        self._outstanding_shares = {}
+        
+    @fixture_api
+    def RESET(self):
+        ''' Super simple reset alias to __init__.
+        '''
+        self.shared.clear()
+        self._pending_requests.clear()
+        self._outstanding_shares.clear()
+        
+    @fixture_noop
+    @public_api
+    def bootstrap(self, account):
         ''' Initialize distributed state.
         '''
-        # Persistent dict-like lookup for 
+        self._account = account
+        
+        # Persistent dict-like lookup for
         # request_ghid -> (request_target, request recipient)
-        self._pending_requests = pending_requests
+        self._pending_requests = account.rolodex_pending
         
         # These need to be distributed but aren't yet. TODO!
         # Lookup for <target_obj_ghid, recipient> -> set(<app_tokens>)
-        self._outstanding_shares = outstanding_shares
+        self._outstanding_shares = account.rolodex_outstanding
         
-    def assemble(self, golix_core, privateer, dispatch, persistence_core, 
-                librarian, salmonator, ghidproxy, ipc_core):
+    def assemble(self, golcore, ghidproxy, privateer, percore, librarian,
+                 salmonator, dispatch):
         # Chicken, meet egg.
-        self._golcore = weakref.proxy(golix_core)
-        self._privateer = weakref.proxy(privateer)
-        self._dispatch = weakref.proxy(dispatch)
-        self._librarian = weakref.proxy(librarian)
-        self._salmonator = weakref.proxy(salmonator)
-        self._percore = weakref.proxy(persistence_core)
-        self._ghidproxy = weakref.proxy(ghidproxy)
-        self._ipccore = weakref.proxy(ipc_core)
+        self._golcore = golcore
+        self._ghidproxy = ghidproxy
+        self._privateer = privateer
+        self._percore = percore
+        self._librarian = librarian
+        self._salmonator = salmonator
+        self._dispatch = dispatch
         
-    def share_object(self, target, recipient, requesting_token):
+    @public_api
+    async def share_object(self, target, recipient, requesting_token):
         ''' Share a target ghid with the recipient.
         '''
         if not isinstance(target, Ghid):
@@ -140,41 +172,43 @@ class Rolodex:
         sharepair = _SharePair(target, recipient)
             
         # For now, this is just doing a handshake with some typechecking.
-        self._hand_object(*sharepair)
+        await self._hand_object(*sharepair)
         
         if requesting_token is not None:
             self._outstanding_shares.add(sharepair, requesting_token)
+            await self._account.flush()
+            
+    @share_object.fixture
+    async def share_object(self, target, recipient, requesting_token):
+        ''' Pretty basic.
+        '''
+        # Ignore requesting token, because we won't generally set it when
+        # testing this.
+        self.shared[target] = recipient
         
-    def _hand_object(self, target, recipient):
+    async def _hand_object(self, target, recipient):
         ''' Initiates a handshake request with the recipient.
         '''
-        if recipient not in self._librarian:
-            try:
-                self._salmonator.pull(recipient)
-            except Exception as exc:
-                raise UnknownParty(
-                    'Recipient unknown: ' + str(recipient)
-                ) from exc
-            
-        contact = SecondParty.from_packed(
-            self._librarian.retrieve(recipient)
-        )
+        if not (await self._librarian.contains(recipient)):
+            await self._salmonator.attempt_pull(recipient, quiet=True)
+        
+        recipient_identity = \
+            (await self._librarian.summarize(recipient)).identity
         
         # This is guaranteed to resolve the container fully.
-        container_ghid = self._ghidproxy.resolve(target)
+        container_ghid = await self._ghidproxy.resolve(target)
         
-        with self._opslock:
-            # TODO: fix Golix library so this isn't such a shitshow re:
-            # breaking abstraction barriers.
-            handshake = self._golcore._identity.make_handshake(
-                target = target,
-                secret = self._privateer.get(container_ghid)
-            )
-            
-            request = self._golcore._identity.make_request(
-                recipient = contact,
-                request = handshake
-            )
+        # TODO: fix Golix library so this isn't such a shitshow re:
+        # breaking abstraction barriers.
+        handshake = self._golcore._identity.make_handshake(
+            target = target,
+            secret = self._privateer.get(container_ghid)
+        )
+        
+        request = self._golcore._identity.make_request(
+            recipient = recipient_identity,
+            request = handshake
+        )
         
         # Note that this must be called before publishing to the persister, or
         # there's a race condition between them.
@@ -183,97 +217,149 @@ class Rolodex:
         # Note the potential race condition here. Should catch errors with the
         # persister in case we need to resolve pending requests that didn't
         # successfully post.
-        self._percore.ingest_garq(request)
-        
-    def notification_handler(self, subscription, notification):
+        await self._percore.direct_ingest(
+            obj = _GarqLite.from_golix(request),
+            packed = request.packed,
+            remotable = True
+        )
+    
+    @fixture_noop
+    @public_api
+    async def notification_handler(self, subscription, notification):
         ''' Callback to handle any requests.
         '''
-        if notification not in self._librarian:
-            self._salmonator.pull(notification, quiet=True)
+        if not (await self._librarian.contains(notification)):
+            await self._salmonator.attempt_pull(notification, quiet=True)
         
         # Note that the notification could also be a GDXX.
-        request_or_debind = self._librarian.summarize(notification)
+        request_or_debind = await self._librarian.summarize(notification)
         
         if isinstance(request_or_debind, _GarqLite):
-            self._handle_request(notification)
+            await self._handle_request(notification)
             
         elif isinstance(request_or_debind, _GdxxLite):
-            # This case should only be relevant if we have multiple agents 
+            # This case should only be relevant if we have multiple agents
             # logged in at separate locations at the same time, processing the
             # same GARQs.
-            self._handle_debinding(request_or_debind)
+            await self._handle_debinding(request_or_debind)
             
         else:
             raise RuntimeError(
                 'Unexpected Golix primitive while listening for requests.'
             )
             
-    def _handle_request(self, notification):
+    async def _handle_request(self, notification):
         ''' The notification is an asymmetric request. Deal with it.
         '''
         try:
-            packed = self._librarian.retrieve(notification)
-            unpacked = self._golcore.unpack_request(packed)
+            packed = await self._librarian.retrieve(notification)
+            unpacked = await self._golcore.unpack_request(packed)
         
             # TODO: have this filter based on contacts.
-            if unpacked.author not in self._librarian:
-                try:
-                    self._salmonator.pull(unpacked.author)
-                except Exception as exc:
-                    raise UnknownParty(
-                        'Request author unknown: ' + str(unpacked.author)
-                    ) from exc
+            if not (await self._librarian.contains(unpacked.author)):
+                await self._salmonator.attempt_pull(
+                    unpacked.author,
+                    quiet = True
+                )
         
-            payload = self._golcore.open_request(unpacked)
-            self._dispatch_payload(payload, notification)
+            payload = await self._golcore.open_request(unpacked)
+            await self._dispatch_payload(payload, notification)
 
-        # Don't forget to (always) debind.            
+        # Don't forget to (always) debind.
         finally:
-            debinding = self._golcore.make_debinding(notification)
-            self._percore.ingest_gdxx(debinding)
+            debinding = await self._golcore.make_debinding(notification)
+            await self._percore.direct_ingest(
+                obj = _GdxxLite.from_golix(debinding),
+                packed = debinding.packed,
+                remotable = True
+            )
         
-    def _handle_debinding(self, debinding):
+    async def _handle_debinding(self, debinding):
         ''' The notification is a debinding. Deal with it.
         '''
-        # For now we just need to remove any pending requests for the 
+        # For now we just need to remove any pending requests for the
         # debinding's target.
         try:
             del self._pending_requests[debinding.target]
+            await self._account.flush()
         except KeyError:
-            pass
+            logger.debug(
+                'Request at ' + str(debinding.ghid) + ' target missing ' +
+                'from pending requests: ' + str(debinding.target)
+            )
         
-    def _dispatch_payload(self, payload, source_ghid):
+    async def _dispatch_payload(self, payload, source_ghid):
         ''' Appropriately handles a request payload.
         '''
         if isinstance(payload, AsymHandshake):
-            self._handle_handshake(payload, source_ghid)
+            logger.debug(
+                'Share handshake received from ' + str(payload.author) +
+                ' at ' + str(source_ghid) + ' for ' + str(payload.target)
+            )
+            await self._handle_handshake(payload, source_ghid)
             
         elif isinstance(payload, AsymAck):
-            self._handle_ack(payload)
+            logger.debug(
+                'Handshake ACK received from ' + str(payload.author) +
+                ' at ' + str(source_ghid) + ' for ' + str(payload.target)
+            )
+            await self._handle_ack(payload)
             
         elif isinstance(payload, AsymNak):
-            self._handle_nak(payload)
+            logger.debug(
+                'Handshake NAK received from ' + str(payload.author) +
+                ' at ' + str(source_ghid) + ' for ' + str(payload.target)
+            )
+            await self._handle_nak(payload)
             
         else:
             raise RuntimeError('Encountered an unknown request type.')
             
-    def _handle_handshake(self, request, source_ghid):
+    async def _handle_handshake(self, request, source_ghid):
         ''' Handles a handshake request after reception.
         '''
         try:
             # First, we need to figure out what the actual container object's
-            # address is, and then stage the secret for it.
-            container_ghid = self._ghidproxy.resolve(request.target)
-            self._privateer.quarantine(
-                ghid = container_ghid, 
-                secret = request.secret
-            )
+            # address is, and then stage the secret for it. But, since this is
+            # coming from somewhere else, chances are good we don't have it
+            # locally, so pull it first.
+            if not (await self._librarian.contains(request.target)):
+                await self._salmonator.attempt_pull(
+                    request.target,
+                    quiet = True
+                )
+            
+            binding_or_obj = await self._librarian.summarize(request.target)
+            if isinstance(binding_or_obj, _GobdLite):
+                container_ghid = binding_or_obj.target
+                self._privateer.quarantine(
+                    ghid = container_ghid,
+                    secret = request.secret
+                )
+                if not (await self._librarian.contains(container_ghid)):
+                    await self._salmonator.attempt_pull(
+                        container_ghid,
+                        quiet = True
+                    )
+            elif isinstance(binding_or_obj, _GeocLite):
+                self._privateer.quarantine(
+                    ghid = binding_or_obj.ghid,
+                    secret = request.secret
+                )
+            else:
+                raise TypeError(
+                    'Invalid handshake target: ' + str(type(binding_or_obj))
+                )
             
             # Note that unless we raise a HandshakeError RIGHT NOW, we'll be
-            # sending an ack to the handshake, just to indicate successful 
-            # receipt of the share. If the originating app wants to check for 
-            # availability, well, that's currently on them. In the future, add 
+            # sending an ack to the handshake, just to indicate successful
+            # receipt of the share. If the originating app wants to check for
+            # availability, well, that's currently on them. In the future, add
             # handle for that in SHARE instead of HANDSHAKE?
+            
+        except asyncio.CancelledError:
+            logger.debug('Handshake handler cancelled.')
+            raise
             
         except Exception as exc:
             logger.error(
@@ -291,78 +377,97 @@ class Rolodex:
                 target = source_ghid
             )
         
-        response = self._golcore.make_request(request.author, response_obj)
-        self._percore.ingest_garq(response)
+        response = await self._golcore.make_request(
+            request.author,
+            response_obj
+        )
+        await self._percore.direct_ingest(
+            obj = _GarqLite.from_golix(response),
+            packed = response.packed,
+            remotable = True
+        )
             
-        self.share_handler(request.target, request.author)
+        await self.share_handler(request.target, request.author)
             
-    def _handle_ack(self, request):
+    async def _handle_ack(self, request):
         ''' Handles a handshake ack after reception.
         '''
         try:
             target, recipient = self._pending_requests.pop(request.target)
         except KeyError:
             logger.error(
-                'Received an ACK for an unknown origin: ' + 
+                'Received an ACK for an unknown origin: ' +
                 str(request.target)
             )
         else:
-            self.receipt_ack_handler(target, recipient)
+            await self.receipt_ack_handler(target, recipient)
             
-    def _handle_nak(self, request):
+    async def _handle_nak(self, request):
         ''' Handles a handshake nak after reception.
         '''
         try:
             target, recipient = self._pending_requests.pop(request.target)
         except KeyError:
             logger.error(
-                'Received a NAK for an unknown origin: ' + 
+                'Received a NAK for an unknown origin: ' +
                 str(request.target)
             )
         else:
-            self.receipt_nak_handler(target, recipient)
+            await self.receipt_nak_handler(target, recipient)
     
-    def share_handler(self, target, sender):
-        ''' Incoming share targets (well, their ghids anyways) are 
+    @fixture_noop
+    @public_api
+    async def share_handler(self, target, sender):
+        ''' Incoming share targets (well, their ghids anyways) are
         forwarded to the _ipccore.
         
         Only separate from _handle_handshake right now because in the
-        future, object sharing will be at least partly handled within 
+        future, object sharing will be at least partly handled within
         its own dedicated rolodex pipeline.
         '''
-        call_coroutine_threadsafe(
-            coro = self._ipccore.process_share(target, sender),
-            loop = self._ipccore._loop
+        # Make sure we actually have the target
+        if not (await self._librarian.contains(target)):
+            await self._salmonator.attempt_pull(target, quiet=True)
+        
+        # Distribute the share in the background
+        make_background_future(
+            self._dispatch.distribute_share(target, sender)
         )
     
-    def receipt_ack_handler(self, target, recipient):
-        ''' Receives a share ack from the rolodex and passes it on to 
+    @fixture_noop
+    @public_api
+    async def receipt_ack_handler(self, target, recipient):
+        ''' Receives a share ack from the rolodex and passes it on to
         the application that requested the share.
         '''
         sharepair = _SharePair(target, recipient)
         tokens = self._outstanding_shares.pop_any(sharepair)
+        await self._account.flush()
         
-        call_coroutine_threadsafe(
-            coro = self._ipccore.process_share_success(
-                target, 
-                recipient, 
-                tokens
-            ),
-            loop = self._ipccore._loop
-        )
-    
-    def receipt_nak_handler(self, target, recipient):
-        ''' Receives a share nak from the rolodex and passes it on to 
-        the application that requested the share.
-        '''
-        sharepair = _SharePair(target, recipient)
-        tokens = self._outstanding_shares.pop_any(sharepair)
-        
-        call_coroutine_threadsafe(
-            coro = self._ipccore.process_share_failure(
+        # Distribute the share success in the background
+        make_background_future(
+            self._dispatch.distribute_share_success(
                 target,
                 recipient,
                 tokens
-            ),
-            loop = self._ipccore._loop
+            )
+        )
+    
+    @fixture_noop
+    @public_api
+    async def receipt_nak_handler(self, target, recipient):
+        ''' Receives a share nak from the rolodex and passes it on to
+        the application that requested the share.
+        '''
+        sharepair = _SharePair(target, recipient)
+        tokens = self._outstanding_shares.pop_any(sharepair)
+        await self._account.flush()
+        
+        # Distribute the share failure in the background
+        make_background_future(
+            self._dispatch.distribute_share_failure(
+                target,
+                recipient,
+                tokens
+            )
         )

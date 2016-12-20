@@ -9,7 +9,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -23,21 +23,18 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
 
 '''
 import argparse
-import logging
 import unittest
 import sys
-import pathlib
-import datetime
 
 # ###############################################
 # Testing
@@ -46,57 +43,55 @@ import datetime
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Hypergolix trashtest.')
     parser.add_argument(
-        '--traceur', 
+        '--traceur',
         action = 'store_true',
         help = 'Enable thorough analysis, including stack tracing. '
     )
     parser.add_argument(
-        '--debug', 
+        '--debug',
         action = 'store_true',
         help = 'Currently unused.'
     )
     parser.add_argument(
-        '--verbosity', 
+        '--logdir',
         action = 'store',
-        default = 'warning', 
+        default = None,
+        type = str,
+        help = 'Log to a specified directory, relative to current path.'
+    )
+    parser.add_argument(
+        '--verbosity',
+        action = 'store',
+        default = 'warning',
         type = str,
         help = 'Specify the logging level. '
-                '"debug" -> most verbose, '
-                '"info" -> somewhat verbose, '
-                '"warning" -> default python verbosity, '
-                '"error" -> quiet.',
+               '"debug" -> most verbose, '
+               '"info" -> somewhat verbose, '
+               '"warning" -> default python verbosity, '
+               '"error" -> quiet.',
     )
     parser.add_argument('unittest_args', nargs='*')
 
     args, unittest_args = parser.parse_known_args()
     
-    # Override the module-level logger definition to root
-    # logger = logging.getLogger()
-    # For now, log to console
-    # log_handler = logging.StreamHandler()
-    ii = 0
-    prefix = 'logs/full'
-    date = str(datetime.date.today())
-    ext = '.pylog'
-    while pathlib.Path(prefix + '_' + date + '_' + str(ii) + ext).exists():
-        ii += 1
-    fname = prefix + '_' + date + '_' + str(ii) + ext
+    # Do logging config and stuff
+    from hypergolix import logutils
     
-    if args.debug or args.traceur:
-        logging.basicConfig(filename=fname, level=logging.DEBUG)
-        # log_handler.setLevel(logging.DEBUG)
+    if args.logdir:
+        logutils.autoconfig(
+            tofile = True,
+            logdirname = args.logdir,
+            loglevel = args.verbosity
+        )
     else:
-        logging.basicConfig(filename=fname, level=logging.WARNING)
-        # log_handler.setLevel(logging.WARNING)
-    # logger.addHandler(log_handler)
+        logutils.autoconfig(
+            tofile = False,
+            loglevel = args.verbosity
+        )
     
     # Dammit unittest using argparse
     # sys.argv[1:] = args.unittest_args
     from trashtest import *
-    
-    # Silence the froth
-    logging.getLogger('asyncio').setLevel(logging.WARNING)
-    logging.getLogger('websockets').setLevel(logging.WARNING)
     
     if args.traceur:
         # This diagnoses deadlocks

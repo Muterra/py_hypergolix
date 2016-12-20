@@ -31,10 +31,12 @@ hypergolix: A python Golix client.
 '''
 
 # Global dependencies
+import logging
 import threading
 import weakref
 import os
 import random
+import loopa
 
 from Crypto.Protocol.KDF import scrypt
 
@@ -46,33 +48,32 @@ from golix import FirstParty
 from .core import GolixCore
 from .core import Oracle
 from .core import GhidProxier
-from .core import _GAO
-from .core import _GAOSet
-from .core import _GAODict
-from .core import _GAOSetMap
+
+from .gao import GAO
+from .gao import GAOSet
+from .gao import GAODict
+from .gao import GAOSetMap
 
 from .persistence import PersistenceCore
 from .persistence import Doorman
-from .persistence import Enlitener
 from .persistence import Enforcer
-from .persistence import Lawyer
 from .persistence import Bookie
-from .persistence import DiskLibrarian
-from .persistence import MemoryLibrarian
-from .persistence import MrPostman
-from .persistence import Undertaker
-from .persistence import Salmonator
+from .lawyer import LawyerCore
+from .librarian import DiskLibrarian
+from .undertaker import UndertakerCore
+
+from .postal import MrPostman
 
 from .dispatch import Dispatcher
 from .dispatch import _Dispatchable
 
-from .ipc import IPCCore
+from .remotes import Salmonator
+from .ipc import IPCServerProtocol as IPCCore
 from .privateer import Privateer
-from .privateer import Charon
 from .rolodex import Rolodex
 
-from .utils import threading_autojoin
 from .utils import SetMap
+from .utils import AppToken
 
 
 # ###############################################
@@ -87,7 +88,6 @@ __all__ = [
 ]
 
 
-import logging
 logger = logging.getLogger(__name__)
 
 
@@ -108,6 +108,7 @@ class AgentBootstrap:
     
     Also binds everything within a single namespace, etc etc.
     '''
+    
     def __init__(self, cache_dir, aengel=None, debug=False):
         ''' Creates everything and puts it into a singular namespace.
         
@@ -118,16 +119,25 @@ class AgentBootstrap:
         TODO: move entire bootstrap creation process (or as much as
         possible, anyways) into register().
         '''
+        # Before anything, create a global task management system
+        self.taskmanager = loopa.TaskCommander(
+            # threaded = False,
+            # debug = False,
+            # aengel = None,
+            # reusable_loop = False,
+            # start_timeout = None,
+            name = 'taskman'
+        )
+        
         # First we need to create everything.
         self.percore = PersistenceCore()
         self.doorman = Doorman()
         self.enforcer = Enforcer()
-        self.lawyer = Lawyer()
+        self.lawyer = LawyerCore()
         self.bookie = Bookie()
         self.librarian = DiskLibrarian(cache_dir=cache_dir)
         self.postman = MrPostman()
-        self.undertaker = Undertaker()
-        self.salmonator = Salmonator()
+        self.undertaker = UndertakerCore()
         self.golcore = GolixCore()
         self.privateer = Privateer()
         self.oracle = Oracle()
@@ -138,6 +148,12 @@ class AgentBootstrap:
             aengel = aengel,
             threaded = True,
             thread_name = 'ipccore',
+            debug = debug,
+        )
+        self.salmonator = Salmonator(
+            aengel = aengel,
+            threaded = True,
+            thread_name = 'salmon',
             debug = debug,
         )
         self.charon = Charon(
@@ -183,7 +199,7 @@ class AgentBootstrap:
         self.ipccore.assemble(self.golcore, self.oracle, self.dispatch,
                               self.rolodex, self.salmonator)
             
-    def bootstrap_zero(self, password, _scrypt_hardness=None):
+    async def bootstrap_zero(self, password, _scrypt_hardness=None):
         ''' Bootstrap zero is run on the creation of a new account, to
         initialize everything and set it up and stuff.
         
@@ -191,7 +207,7 @@ class AgentBootstrap:
         
         Note: this whole thing is extremely sensitive to order. There's
         definitely a little bit of black magic in here.
-        '''        
+        '''
         # Primary bootstrap (golix core, privateer, and secondary manifest)
         # ----------------------------------------------------------
         
@@ -208,40 +224,40 @@ class AgentBootstrap:
         # Now prep privateer to create the bootstrap objects
         self.privateer.prep_bootstrap()
         
-        # Now we need to create the primary bootstrap objects (those which 
+        # Now we need to create the primary bootstrap objects (those which
         # descend only from the credential's master secrets)
         # DON'T PUBLISH OUR IDENTITY until after we've set up privateer fully!
         logger.info('Creating primary bootstrap objects.')
-        identity_container = self.oracle.new_object(
+        identity_container = await self.oracle.new_object(
             gaoclass = _GAODict,
             dynamic = True,
             state = {}
         )
-        persistent_secrets = self.oracle.new_object(
+        persistent_secrets = await self.oracle.new_object(
             gaoclass = _GAODict,
             dynamic = True,
             state = {}
         )
-        quarantine_secrets = self.oracle.new_object(
+        quarantine_secrets = await self.oracle.new_object(
             gaoclass = _GAODict,
             dynamic = True,
             state = {}
         )
         # Also, preallocate the primary manifest.
-        primary_manifest = self.oracle.new_object(
+        primary_manifest = await self.oracle.new_object(
             gaoclass = _GAO,
             dynamic = True,
             # _GAOs don't like being committed with no content
             state = b'hello world'
         )
         # And the secondary manifest.
-        secondary_manifest = self.oracle.new_object(
+        secondary_manifest = await self.oracle.new_object(
             gaoclass = _GAODict,
             dynamic = True,
             state = {}
         )
         
-        # We also need to update credential about them before we're ready to 
+        # We also need to update credential about them before we're ready to
         # bootstrap the privateer
         credential.declare_primary(
             primary_manifest.ghid,
@@ -261,7 +277,7 @@ class AgentBootstrap:
         # Now that privateer has been bootstrapped, we should forcibly update
         # both secrets lookups so that they cannot possibly have a zero history
         # (which would prevent us from reloading them!)
-        # We don't need to do this with the other containers, because all of 
+        # We don't need to do this with the other containers, because all of
         # them will definitely have changes. Quarantine secrets is particularly
         # susceptible to "not having an extra secret").
         persistent_secrets.push()
@@ -272,7 +288,7 @@ class AgentBootstrap:
         logger.info('Saving private keys to encrypted container.')
         identity_container.update(credential.identity._serialize())
         
-        # Okay, now the credential is completed. We should save it in case 
+        # Okay, now the credential is completed. We should save it in case
         # anything goes awry
         logger.info('Saving credential.')
         credential.save(primary_manifest)
@@ -284,14 +300,14 @@ class AgentBootstrap:
         
         # Dict-like mapping of all pending requests.
         # Used to lookup {<request address>: <target address>}
-        pending_requests = self.oracle.new_object(
+        pending_requests = await self.oracle.new_object(
             gaoclass = _GAODict,
             dynamic = True,
             state = {}
         )
         secondary_manifest['rolodex.pending'] = pending_requests.ghid
         
-        outstanding_shares = self.oracle.new_object(
+        outstanding_shares = await self.oracle.new_object(
             gaoclass = _GAOSetMap,
             dynamic = True,
             state = SetMap()
@@ -299,7 +315,7 @@ class AgentBootstrap:
         secondary_manifest['rolodex.outstanding'] = outstanding_shares.ghid
         
         self.rolodex.bootstrap(
-            pending_requests = pending_requests, 
+            pending_requests = pending_requests,
             outstanding_shares = outstanding_shares
         )
         
@@ -307,18 +323,18 @@ class AgentBootstrap:
         # ----------------------------------------------------------
         logger.info('Bootstrapping object dispatch.')
         
-        # Set of all known tokens. Add b'\x00\x00\x00\x00' to prevent its 
+        # Set of all known tokens. Add b'\x00\x00\x00\x00' to prevent its
         # use. Persistent across all clients for any given agent.
-        all_tokens = self.oracle.new_object(
+        all_tokens = await self.oracle.new_object(
             gaoclass = _GAOSet,
             dynamic = True,
             state = set()
         )
-        all_tokens.add(b'\x00\x00\x00\x00')
+        all_tokens.add(AppToken.null())
         secondary_manifest['dispatch.alltokens'] = all_tokens.ghid
         
         # SetMap of all objects to be sent to an app upon app startup.
-        startup_objs = self.oracle.new_object(
+        startup_objs = await self.oracle.new_object(
             gaoclass = _GAOSetMap,
             dynamic = True,
             state = SetMap()
@@ -326,7 +342,7 @@ class AgentBootstrap:
         secondary_manifest['dispatch.startup'] = startup_objs.ghid
         
         # Dict-like lookup for <private obj ghid>: <parent token>
-        private_by_ghid = self.oracle.new_object(
+        private_by_ghid = await self.oracle.new_object(
             gaoclass = _GAODict,
             dynamic = True,
             state = {}
@@ -335,8 +351,8 @@ class AgentBootstrap:
         
         # And now bootstrap.
         self.dispatch.bootstrap(
-            all_tokens = all_tokens, 
-            startup_objs = startup_objs, 
+            all_tokens = all_tokens,
+            startup_objs = startup_objs,
             private_by_ghid = private_by_ghid,
             # TODO: figure out a distributed lock system
             token_lock = threading.Lock()
@@ -346,21 +362,21 @@ class AgentBootstrap:
         # ----------------------------------------------------------
         logger.info('Bootstrapping inter-process communication core.')
         
-        incoming_shares = self.oracle.new_object(
+        incoming_shares = await self.oracle.new_object(
             gaoclass = _GAOSet,
             dynamic = True,
             state = set()
         )
         secondary_manifest['ipc.incoming'] = incoming_shares.ghid
         
-        orphan_acks = self.oracle.new_object(
+        orphan_acks = await self.oracle.new_object(
             gaoclass = _GAOSetMap,
             dynamic = True,
             state = SetMap()
         )
         secondary_manifest['ipc.orphan_acks'] = orphan_acks.ghid
         
-        orphan_naks = self.oracle.new_object(
+        orphan_naks = await self.oracle.new_object(
             gaoclass = _GAOSetMap,
             dynamic = True,
             state = SetMap()
@@ -378,13 +394,13 @@ class AgentBootstrap:
         # And don't forget to return the user_id
         return primary_manifest.ghid
             
-    def bootstrap(self, user_id, password, _scrypt_hardness=None):
+    async def bootstrap(self, user_id, password, _scrypt_hardness=None):
         ''' Called to reinstate an existing account.
         '''
         # FIRST FIRST, we have to restore the librarian.
         self.librarian.restore()
         
-        # Note that FirstParty digestion methods are all classmethods, so we 
+        # Note that FirstParty digestion methods are all classmethods, so we
         # can prep it to be the class, and then bootstrap it to be the actual
         # credential.
         logger.info('Prepping Hypergolix for login.')
@@ -410,15 +426,15 @@ class AgentBootstrap:
         # Properly bootstrap golcore and then load the privateer objects
         self.golcore.bootstrap(credential)
         
-        persistent_secrets = self.oracle.get_object(
+        persistent_secrets = await self.oracle.get_object(
             gaoclass = _GAODict,
             ghid = credential._persistent_ghid
         )
-        quarantine_secrets = self.oracle.get_object(
+        quarantine_secrets = await self.oracle.get_object(
             gaoclass = _GAODict,
             ghid = credential._quarantine_ghid
         )
-        secondary_manifest = self.oracle.get_object(
+        secondary_manifest = await self.oracle.get_object(
             gaoclass = _GAODict,
             ghid = credential._secondary_manifest
         )
@@ -446,11 +462,11 @@ class AgentBootstrap:
         
         # Reboot rolodex
         logger.info('Restoring sharing subsystem.')
-        pending_requests = self.oracle.get_object(
+        pending_requests = await self.oracle.get_object(
             gaoclass = _GAODict,
             ghid = rolodex_pending
         )
-        outstanding_shares = self.oracle.get_object(
+        outstanding_shares = await self.oracle.get_object(
             gaoclass = _GAOSetMap,
             ghid = rolodex_outstanding
         )
@@ -461,21 +477,21 @@ class AgentBootstrap:
         
         # Reboot dispatch
         logger.info('Restoring object dispatch subsystem.')
-        all_tokens = self.oracle.get_object(
+        all_tokens = await self.oracle.get_object(
             gaoclass = _GAOSet,
             ghid = dispatch_alltokens
         )
-        startup_objs = self.oracle.get_object(
+        startup_objs = await self.oracle.get_object(
             gaoclass = _GAOSetMap,
             ghid = dispatch_startup
         )
-        private_by_ghid = self.oracle.get_object(
+        private_by_ghid = await self.oracle.get_object(
             gaoclass = _GAODict,
             ghid = dispatch_private
         )
         self.dispatch.bootstrap(
-            all_tokens = all_tokens, 
-            startup_objs = startup_objs, 
+            all_tokens = all_tokens,
+            startup_objs = startup_objs,
             private_by_ghid = private_by_ghid,
             # TODO: figure out a distributed lock system
             token_lock = threading.Lock()
@@ -483,15 +499,15 @@ class AgentBootstrap:
         
         # Reboot IPCCore
         logger.info('Restoring inter-process communication core.')
-        incoming_shares = self.oracle.get_object(
+        incoming_shares = await self.oracle.get_object(
             gaoclass = _GAOSet,
             ghid = ipc_incoming
         )
-        orphan_acks = self.oracle.get_object(
+        orphan_acks = await self.oracle.get_object(
             gaoclass = _GAOSetMap,
             ghid = ipc_orphan_acks
         )
-        orphan_naks = self.oracle.get_object(
+        orphan_naks = await self.oracle.get_object(
             gaoclass = _GAOSetMap,
             ghid = ipc_orphan_naks
         )
@@ -635,21 +651,21 @@ class Credential:
         return self
         
     @classmethod
-    def _inject_secret(cls, librarian, privateer, proxy, master_secret):
+    async def _inject_secret(cls, librarian, privateer, proxy, master_secret):
         ''' Injects a container secret into the temporary storage at the
         privateer. Calculates it through the proxy and master.
         '''
-        binding = librarian.summarize(proxy)
+        binding = await librarian.summarize(proxy)
         previous_frame = binding.history[0]
         container_secret = privateer._ratchet(
-            secret = master_secret, 
+            secret = master_secret,
             proxy = proxy,
             salt_ghid = previous_frame
         )
         privateer.stage(binding.target, container_secret)
     
     @classmethod
-    def load(cls, librarian, oracle, privateer, user_id, password,
+    async def load(cls, librarian, oracle, privateer, user_id, password,
             _scrypt_hardness=None):
         ''' Loads a credential container from the <librarian>, with a
         ghid of <user_id>, encrypted with scrypted <password>.
@@ -675,7 +691,7 @@ class Credential:
             'Recovering the primary manifest from the persistence subsystem.'
         )
         
-        primary_manifest = librarian.summarize(user_id)
+        primary_manifest = await librarian.summarize(user_id)
         fingerprint = primary_manifest.author
         logger.info('Expanding password using scrypt. Please be patient.')
         primary_master = cls._password_expansion(

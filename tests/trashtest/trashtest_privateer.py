@@ -9,7 +9,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -23,10 +23,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -40,10 +40,15 @@ import collections
 import logging
 import weakref
 
+from hypergolix.core import GolixCore
+from hypergolix.core import GhidProxier
+
+from hypergolix.accounting import Account
+
 from hypergolix.privateer import Privateer
 from hypergolix.exceptions import ConflictingSecrets
 from hypergolix.exceptions import RatchetError
-from hypergolix.exceptions import SecretUnknown
+from hypergolix.exceptions import UnknownSecret
 
 # These are fixture imports
 from golix import Ghid
@@ -57,21 +62,7 @@ from golix.utils import Secret
 
 from _fixtures.identities import TEST_AGENT1
 from _fixtures.identities import TEST_AGENT2
-        
-        
-class MockOracle:
-    pass
-    
-    
-class MockGhidproxy:
-    def resolve(self, ghid):
-        return ghid
-        
-        
-class MockGolcore:
-    def __init__(self):
-        # This is just being used to call new_secret(), so no worries
-        self._identity = TEST_AGENT1
+from _fixtures.ghidutils import make_random_ghid
 
 
 # ###############################################
@@ -81,155 +72,261 @@ class MockGolcore:
         
 class PrivateerTest(unittest.TestCase):
     def setUp(self):
-        self.golcore = MockGolcore()
-        self.oracle = MockOracle()
-        self.ghidproxy = MockGhidproxy()
-        self.privateer = Privateer()
+        # Fixtures are helpful
+        self.golcore = GolixCore.__fixture__(TEST_AGENT1)
+        self.ghidproxy = GhidProxier.__fixture__()
+        self.account = Account.__fixture__(TEST_AGENT1)
         
-        self.privateer.assemble(self.golcore, self.ghidproxy, self.oracle)
-        self.privateer.prep_bootstrap()
-        # self.privateer.bootstrap(
-        #     persistent_secrets = {}, 
-        #     staged_secrets = {},
-        #     chains = {}
-        # )
-    
-    def test_simple(self):
-        ''' Beep boop, SweetBot1.0 reporting
+        # This is obviously necessary for testing.
+        self.privateer = Privateer()
+        self.privateer.assemble(self.golcore)
+        self.privateer.bootstrap(self.account)
+        # Note that we don't actually need to bootstrap, because prep_bootstrap
+        # creates a fully-functional privateer (just without using GAOs)
+        
+    def test_new_secret(self):
+        ''' Test creating a new secret.
         '''
-        # Not much in the way of verification here, definitely room to improve
+        # Not much in the way of verification here. Room to improve?
         secret = self.privateer.new_secret()
         self.assertTrue(isinstance(secret, Secret))
-        
-        # Okay some of this might be silly but if you got it might as well 
-        # flaunt it, amirite?
+    
+    def test_stage(self):
+        ''' Test staging operations.
+        '''
+        ghid1 = make_random_ghid()
         secret1 = self.privateer.new_secret()
-        from _fixtures.remote_exchanges import cont1_1 as cont1
+        
+        ghid2 = make_random_ghid()
         secret2 = self.privateer.new_secret()
-        from _fixtures.remote_exchanges import cont1_2 as cont2
+        
+        ghid3 = make_random_ghid()
         secret3 = self.privateer.new_secret()
-        from _fixtures.remote_exchanges import cont2_1 as cont3
+        
+        ghid4 = make_random_ghid()
         secret4 = self.privateer.new_secret()
-        from _fixtures.remote_exchanges import cont2_2 as cont4
+        
+        ghid5 = make_random_ghid()
         secret5 = self.privateer.new_secret()
-        from _fixtures.remote_exchanges import cont3_1 as cont5
+        
+        ghid6 = make_random_ghid()
         secret6 = self.privateer.new_secret()
-        from _fixtures.remote_exchanges import cont3_2 as cont6
         
         # First, stage a secret and verify its limited availability.
-        self.privateer.stage(cont1.ghid, secret1)
-        self.assertIn(cont1.ghid, self.privateer)
-        self.assertIn(cont1.ghid, self.privateer._secrets_staging)
-        self.assertNotIn(cont1.ghid, self.privateer._secrets_persistent)
+        self.privateer.stage(ghid1, secret1)
+        self.assertIn(ghid1, self.privateer)
+        self.assertIn(ghid1, self.privateer._secrets_staging)
+        self.assertNotIn(ghid1, self.privateer._secrets_persistent)
+            
+        # And attempt to re-stage the same secret (should be idempotent).
+        self.privateer.stage(ghid1, secret1)
+        self.assertIn(ghid1, self.privateer)
+        self.assertIn(ghid1, self.privateer._secrets_staging)
+        self.assertNotIn(ghid1, self.privateer._secrets_persistent)
         
         # Okay, now attempt to stage a competing secret.
-        with self.assertRaises(ConflictingSecrets, 
-                                msg = 'Allowed conflicting secret to stage.'):
-            self.privateer.stage(cont1.ghid, secret2)
-            
-        # And attempt to re-stage the correct secret.
-        self.privateer.stage(cont1.ghid, secret1)
-        self.assertIn(cont1.ghid, self.privateer)
-        self.assertIn(cont1.ghid, self.privateer._secrets_staging)
-        self.assertNotIn(cont1.ghid, self.privateer._secrets_persistent)
-            
-        # Now actually commit the secret and verify it persistence
-        self.privateer.commit(cont1.ghid)
-        self.assertIn(cont1.ghid, self.privateer)
-        self.assertNotIn(cont1.ghid, self.privateer._secrets_staging)
-        self.assertIn(cont1.ghid, self.privateer._secrets_persistent)
-        
-        # Once again, attempt to stage a competing secret
-        with self.assertRaises(ConflictingSecrets, 
-                                msg = 'Allowed conflicting secret to stage.'):
-            self.privateer.stage(cont1.ghid, secret2)
-            
-        # Again attempt to re-stage the correct secret. Make sure commit's both
-        # indempotent AND doesn't result in garbage within the staging arena.
-        self.privateer.stage(cont1.ghid, secret1)
-        self.assertIn(cont1.ghid, self.privateer)
-        self.assertNotIn(cont1.ghid, self.privateer._secrets_staging)
-        self.assertIn(cont1.ghid, self.privateer._secrets_persistent)
-            
-        # Now test abandonment issues
-        self.privateer.stage(cont2.ghid, secret2)
-        self.assertIn(cont2.ghid, self.privateer)
-        self.assertIn(cont2.ghid, self.privateer._secrets_staging)
-        self.assertNotIn(cont2.ghid, self.privateer._secrets_persistent)
-        self.privateer.abandon(cont2.ghid)
-        self.assertNotIn(cont2.ghid, self.privateer)
-        self.assertNotIn(cont2.ghid, self.privateer._secrets_staging)
-        self.assertNotIn(cont2.ghid, self.privateer._secrets_persistent)
-        
-        # Now same with committed secrets
-        self.privateer.stage(cont2.ghid, secret2)
-        self.privateer.commit(cont2.ghid)
-        self.assertIn(cont2.ghid, self.privateer)
-        self.assertNotIn(cont2.ghid, self.privateer._secrets_staging)
-        self.assertIn(cont2.ghid, self.privateer._secrets_persistent)
-        self.privateer.abandon(cont2.ghid)
-        self.assertNotIn(cont2.ghid, self.privateer)
-        self.assertNotIn(cont2.ghid, self.privateer._secrets_staging)
-        self.assertNotIn(cont2.ghid, self.privateer._secrets_persistent)
-        
-        # And now let's test abandoning an unknown secret, both quiet and loud
-        self.privateer.abandon(cont3.ghid, quiet=True)
-        with self.assertRaises(SecretUnknown, 
-                                msg = 'Allowed abandoning unknown secret.'):
-            self.privateer.abandon(cont3.ghid, quiet=False)
-        
-        # And committing an unknown secret...
-        with self.assertRaises(SecretUnknown, 
-                                msg = 'Allowed abandoning unknown secret.'):
-            self.privateer.commit(cont3.ghid)
-        
-        # And getting an unknown secret...
-        with self.assertRaises(SecretUnknown, 
-                                msg = 'Allowed abandoning unknown secret.'):
-            self.privateer.get(cont3.ghid)
+        with self.assertRaises(ConflictingSecrets,
+                               msg = 'Allowed conflicting secret to stage.'):
+            self.privateer.stage(ghid1, secret2)
         
         # Now stage a bad secret, unstage it, and restage a good one.
-        self.privateer.stage(cont3.ghid, secret2)
-        self.privateer.unstage(cont3.ghid)
-        self.assertNotIn(cont3.ghid, self.privateer)
-        self.assertNotIn(cont3.ghid, self.privateer._secrets_staging)
-        self.assertNotIn(cont3.ghid, self.privateer._secrets_persistent)
-        self.privateer.stage(cont3.ghid, secret3)
-        self.assertIn(cont3.ghid, self.privateer)
-        self.assertIn(cont3.ghid, self.privateer._secrets_staging)
-        self.assertNotIn(cont3.ghid, self.privateer._secrets_persistent)
+        self.privateer.stage(ghid3, secret2)
+        self.privateer.unstage(ghid3)
+        self.assertNotIn(ghid3, self.privateer)
+        self.assertNotIn(ghid3, self.privateer._secrets_staging)
+        self.assertNotIn(ghid3, self.privateer._secrets_persistent)
+        self.privateer.stage(ghid3, secret3)
+        self.assertIn(ghid3, self.privateer)
+        self.assertIn(ghid3, self.privateer._secrets_staging)
+        self.assertNotIn(ghid3, self.privateer._secrets_persistent)
         
         # Also, unstaging something that doesn't exist.
-        with self.assertRaises(SecretUnknown, 
-                                msg = 'Allowed abandoning unknown secret.'):
-            self.privateer.unstage(cont4.ghid)
+        with self.assertRaises(UnknownSecret,
+                               msg = 'Allowed abandoning unknown secret.'):
+            self.privateer.unstage(ghid4)
+            
+            
             
         # And finally, make sure that getting secrets does, in fact, return
         # them correctly, both from staged and committed.
-        self.assertEqual(self.privateer.get(cont1.ghid), secret1)
-        self.assertEqual(self.privateer.get(cont3.ghid), secret3)
-        
-    @unittest.expectedFailure
-    def test_chains_and_ratchets(self):
-        ''' Mostly checking ratchets and healing and stuff for 
-        self-consistency.
-        '''
-        # Okay some of this might be silly but if you got it might as well 
-        # flaunt it, amirite?
+        self.assertEqual(self.privateer.get(ghid1), secret1)
+            
+    def test_commit(self):
+        ghid1 = make_random_ghid()
         secret1 = self.privateer.new_secret()
-        from _fixtures.remote_exchanges import cont1_1 as cont1
-        from _fixtures.remote_exchanges import dyn1_1a as dyn1a
-        from _fixtures.remote_exchanges import cont1_1 as cont2
-        from _fixtures.remote_exchanges import dyn1_1b as dyn1b
         
-        raise NotImplementedError()
+        ghid2 = make_random_ghid()
+        secret2 = self.privateer.new_secret()
         
-        # Note: need better mock for oracle. That won't cut it for ratcheting!
+        ghid3 = make_random_ghid()
+        secret3 = self.privateer.new_secret()
+        
+        ghid4 = make_random_ghid()
+        secret4 = self.privateer.new_secret()
+        
+        ghid5 = make_random_ghid()
+        secret5 = self.privateer.new_secret()
+        
+        ghid6 = make_random_ghid()
+        secret6 = self.privateer.new_secret()
+        
+        # Committing without staging should fail.
+        with self.assertRaises(UnknownSecret,
+                               msg = 'Allowed committing unknown secret.'):
+            self.privateer.commit(ghid3)
+            
+        # Now actually commit the secret and verify it persistence
+        self.privateer.stage(ghid1, secret1)
+        self.privateer.commit(ghid1)
+        self.assertIn(ghid1, self.privateer)
+        self.assertNotIn(ghid1, self.privateer._secrets_staging)
+        self.assertIn(ghid1, self.privateer._secrets_persistent)
+        
+        # Once again, attempt to stage a competing secret
+        with self.assertRaises(ConflictingSecrets,
+                               msg = 'Allowed conflicting secret to stage.'):
+            self.privateer.stage(ghid1, secret2)
+            
+        # Again attempt to re-stage the correct secret. Make sure commit's both
+        # indempotent AND doesn't result in garbage within the staging arena.
+        self.privateer.stage(ghid1, secret1)
+        self.assertIn(ghid1, self.privateer)
+        self.assertNotIn(ghid1, self.privateer._secrets_staging)
+        self.assertIn(ghid1, self.privateer._secrets_persistent)
+        
+        # Okay, now test committing local-only
+        self.privateer.stage(ghid4, secret4)
+        self.privateer.commit(ghid4, localize=True)
+        self.assertIn(ghid4, self.privateer)
+        self.assertNotIn(ghid4, self.privateer._secrets_staging)
+        self.assertNotIn(ghid4, self.privateer._secrets_persistent)
+        self.assertIn(ghid4, self.privateer._secrets_local)
+        
+        # And finally, make sure that getting secrets does, in fact, return
+        # the correct secret
+        self.assertEqual(self.privateer.get(ghid1), secret1)
+        self.assertEqual(self.privateer.get(ghid4), secret4)
+    
+    def test_etc(self):
+        ''' Some extra get tests, abandonment tests, etc.
+        '''
+        ghid1 = make_random_ghid()
+        secret1 = self.privateer.new_secret()
+        
+        ghid2 = make_random_ghid()
+        secret2 = self.privateer.new_secret()
+        
+        ghid3 = make_random_ghid()
+        secret3 = self.privateer.new_secret()
+        
+        ghid4 = make_random_ghid()
+        secret4 = self.privateer.new_secret()
+        
+        ghid5 = make_random_ghid()
+        secret5 = self.privateer.new_secret()
+        
+        ghid6 = make_random_ghid()
+        secret6 = self.privateer.new_secret()
+        
+        # And getting an unknown secret...
+        with self.assertRaises(UnknownSecret,
+                               msg = 'Allowed getting unknown secret.'):
+            self.privateer.get(ghid3)
+            
+        # Now test abandonment issues
+        self.privateer.stage(ghid2, secret2)
+        self.assertIn(ghid2, self.privateer)
+        self.assertIn(ghid2, self.privateer._secrets_staging)
+        self.assertNotIn(ghid2, self.privateer._secrets_persistent)
+        self.privateer.abandon(ghid2)
+        self.assertNotIn(ghid2, self.privateer)
+        self.assertNotIn(ghid2, self.privateer._secrets_staging)
+        self.assertNotIn(ghid2, self.privateer._secrets_persistent)
+        
+        # Now same with committed secrets
+        self.privateer.stage(ghid2, secret2)
+        self.privateer.commit(ghid2)
+        self.assertIn(ghid2, self.privateer)
+        self.assertNotIn(ghid2, self.privateer._secrets_staging)
+        self.assertIn(ghid2, self.privateer._secrets_persistent)
+        self.privateer.abandon(ghid2)
+        self.assertNotIn(ghid2, self.privateer)
+        self.assertNotIn(ghid2, self.privateer._secrets_staging)
+        self.assertNotIn(ghid2, self.privateer._secrets_persistent)
+        
+        # Now same with locally-committed secrets
+        self.privateer.stage(ghid1, secret1)
+        self.privateer.commit(ghid1, localize=True)
+        self.assertIn(ghid1, self.privateer)
+        self.assertNotIn(ghid1, self.privateer._secrets_staging)
+        self.assertIn(ghid1, self.privateer._secrets_local)
+        self.privateer.abandon(ghid1)
+        self.assertNotIn(ghid1, self.privateer)
+        self.assertNotIn(ghid1, self.privateer._secrets_staging)
+        self.assertNotIn(ghid1, self.privateer._secrets_local)
+        
+        # And now let's test abandoning an unknown secret, both quiet and loud
+        self.privateer.abandon(ghid3, quiet=True)
+        with self.assertRaises(UnknownSecret,
+                               msg = 'Allowed abandoning unknown secret.'):
+            self.privateer.abandon(ghid3, quiet=False)
+        
+    def test_standard_ratchet(self):
+        ''' Test standard ratchets and healing.
+        
+        TODO: create vectors for this.
+        '''
+        # Test ratcheting
+        proxy = make_random_ghid()
+        ghid1 = make_random_ghid()
+        ghid2 = make_random_ghid()
+        ghid3 = make_random_ghid()
+        secret1 = self.privateer.new_secret()
+        
+        self.privateer.stage(ghid1, secret1)
+        secret2 = self.privateer.ratchet_chain(proxy, ghid1)
+        self.privateer.stage(ghid2, secret2)
+        secret3 = self.privateer.ratchet_chain(proxy, ghid2)
+        
+        # Test normal healing therefrom
+        self.privateer.abandon(ghid2)
+        
+        history = [ghid3, ghid2, ghid1]
+        self.privateer.heal_chain(proxy, history)
+        self.assertIn(ghid2, self.privateer)
+        self.assertIn(ghid3, self.privateer)
+        self.assertEqual(self.privateer.get(ghid3), secret3)
+        
+    def test_mastered_ratchet(self):
+        ''' Test mastered ratchets and healing.
+        
+        TODO: create vectors for this.
+        '''
+        # Test ratcheting
+        master = self.privateer.new_secret()
+        proxy = make_random_ghid()
+        ghid1 = make_random_ghid()
+        ghid2 = make_random_ghid()
+        ghid3 = make_random_ghid()
+        secret1 = self.privateer.new_secret()
+        
+        self.privateer.stage(ghid1, secret1)
+        secret2 = self.privateer.ratchet_chain(proxy, ghid1, master)
+        self.privateer.stage(ghid2, secret2)
+        secret3 = self.privateer.ratchet_chain(proxy, ghid2, master)
+        
+        # Test normal healing therefrom
+        self.privateer.abandon(ghid2)
+        
+        history = [ghid3, ghid2, ghid1]
+        self.privateer.heal_chain(proxy, history, master)
+        self.assertIn(ghid3, self.privateer)
+        self.assertEqual(self.privateer.get(ghid3), secret3)
         
 
 if __name__ == "__main__":
     from hypergolix import logutils
-    logutils.autoconfig()
+    logutils.autoconfig(loglevel='debug')
     
     # from hypergolix.utils import TraceLogger
     # with TraceLogger(interval=10):

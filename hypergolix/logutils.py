@@ -98,8 +98,8 @@ def autoconfig(tofile=True, logdirname='logs', loglevel='warning', prefix='',
         loghandler = logging.handlers.RotatingFileHandler(
             filename = str(logpath),
             # This determines the max size of each log file, and the number of
-            # log files to keep. To be clear, this is a shitload of logging.
-            maxBytes = 2**20,
+            # log files to keep. 10MiB seems reasonable.
+            maxBytes = 5 * 2**20,
             backupCount = 10,
             # Setting this to True will defer log creation until it's needed
             delay = False
@@ -108,14 +108,14 @@ def autoconfig(tofile=True, logdirname='logs', loglevel='warning', prefix='',
     else:
         loghandler = logging.StreamHandler()
         logname = None
-        
-    loghandler.setFormatter(
-        logging.Formatter(
-            '%(threadName)-10.10s '
-            '%(name)-17.17s  %(levelname)-5.5s  '
-            '%(message)s'
-        )
+    
+    formatter = logging.Formatter(
+        '%(threadName)-10.10s ' +
+        '%(name)-17.17s  %(levelname)-5.5s  ' +
+        '%(asctime)s %(message)s'
     )
+    formatter.default_time_format = '%H:%M:%S'
+    loghandler.setFormatter(formatter)
     
     # Add to root logger
     logging.getLogger('').addHandler(loghandler)
@@ -127,8 +127,8 @@ def autoconfig(tofile=True, logdirname='logs', loglevel='warning', prefix='',
         'info': logging.INFO,
         'warning': logging.WARNING,
         'error': logging.ERROR,
-        'shouty': logging.ERROR,
-        'extreme': logging.ERROR
+        'shouty': logging.DEBUG,
+        'extreme': logging.DEBUG
     }
     try:
         log_setpoint = loglevel_enum[loglevel]

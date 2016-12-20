@@ -39,6 +39,7 @@ import copy
 import webbrowser
 
 from golix import Ghid
+from golix import Secret
 
 # Intra-package dependencies
 from .utils import _BijectDict
@@ -241,7 +242,7 @@ class _UserDef(_NamedList):
     __slots__ = [
         'fingerprint',
         'user_id',
-        'password'
+        'root_secret'
     ]
 
 
@@ -361,12 +362,8 @@ class Config:
     +---(hgx-cfg.json)
     '''
     
-    def __init__(self, root=None):
-        if root is None:
-            self._root = _get_hgx_rootdir()
-        else:
-            self._root = pathlib.Path(root).absolute()
-        
+    def __init__(self, root):
+        self._root = pathlib.Path(root).absolute()
         self._cfg_cache = None
         self._cfg = None
     
@@ -488,7 +485,7 @@ class Config:
             self._cfg['user'] = _UserDef(
                 fingerprint = fingerprint,
                 user_id = None,
-                password = None
+                root_secret = None
             )
         
     @property
@@ -527,19 +524,25 @@ class Config:
             self._cfg['user'] = _UserDef(
                 fingerprint = None,
                 user_id = user_id,
-                password = None
+                root_secret = None
             )
             
     @property
-    def password(self):
-        ''' Read-only property that allows people to set a password for
-        automatic login on startup. Intended for use via sudo on fully-
-        autonomous things (ex: a raspberry pi). Can only be set through
-        manual manipulation of the config file. Really should not be
-        used until hypergolix daemonization supports privilege dropping.
+    def root_secret(self):
+        ''' Read-only property that allows people to set a root secret
+        for automatic login on startup. Intended for use via sudo on
+        fully-autonomous things (ex: a raspberry pi). Can only be set
+        through manual manipulation of the config file. Really should
+        not be used until hypergolix daemonization supports privilege
+        dropping.
         '''
         try:
-            return self._cfg['user'].password
+            cfg_str = self._cfg['user'].root_secret
+            
+            if cfg_str is None:
+                return None
+            else:
+                return Secret.from_str(cfg_str)
         
         except Exception as exc:
             raise ConfigError('Invalid configuration.') from exc
@@ -638,7 +641,7 @@ def _make_blank_cfg():
     return cfg
 
 
-def _get_hgx_rootdir():
+def get_hgx_rootdir():
     ''' Simply returns the path to the hgx home dir. Does not ensure its
     existence or perform any other checks.
     
@@ -805,7 +808,6 @@ def _index_remote(cfg, remote_def):
 
 
 NAMED_REMOTES = {
-    'hgxtest': _readonly_remote('hgxtest.hypergolix.com', 443, True),
     'hgx': _readonly_remote('hgx.hypergolix.com', 443, True)
 }
 
@@ -866,9 +868,9 @@ def _handle_remotes(config, only_remotes, add_remotes, remove_remotes):
         # Do nothing for local only, but add in the named remote otherwise
         for remote in only_remotes:
             config.set_remote(
-                only_remotes.host,
-                only_remotes.port,
-                only_remotes.tls
+                remote.host,
+                remote.port,
+                remote.tls
             )
     
     # Adding and removing remotes normally.
@@ -1025,7 +1027,7 @@ def _handle_register(config, register):
         try:
             webbrowser.open(reg_address, new=2)
             
-        except:
+        except Exception:
             print(
                 'Failed to open web browser for registration.\n' +
                 'Please navigate to this address to register:\n' +
@@ -1044,6 +1046,9 @@ def _handle_register(config, register):
 def _handle_args(args, root=None):
     ''' Performs all needed actions on the passed command args.
     '''
+    if root is None:
+        root = get_hgx_rootdir()
+    
     with Config(root) as config:
         _handle_remotes(
             config,

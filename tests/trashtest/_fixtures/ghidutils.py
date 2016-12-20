@@ -9,7 +9,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -23,10 +23,10 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
@@ -43,13 +43,14 @@ from golix import Ghid
 
 MADE_RANDOM_GHIDS = set([None])
 
+
 def make_random_ghid():
     ''' Pseudorandom ghid generator. Uses a module-level check to ensure
     uniqueness, without needing system entropy.
     '''
     ghid = None
     while ghid in MADE_RANDOM_GHIDS:
-        algo = b'\x01' 
+        algo = b'\x01'
         digest = (random.getrandbits(512)).to_bytes(length=64, byteorder='big')
         ghid = Ghid.from_bytes(algo + digest)
     MADE_RANDOM_GHIDS.add(ghid)

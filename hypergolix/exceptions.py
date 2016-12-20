@@ -57,22 +57,28 @@ __all__ = [
     'UnknownParty',
     # These are dispatch errors
     'DispatchError',
+    'ExistantAppError',
     'UnknownToken',
     'DispatchWarning',
+    'CatOuttaBagError',
     # These are IPC/embed errors
     'IPCError',
-    'DeadObject',
+    'DeadObject',   # Also a local persistence error
     # These are comms errors
     'CommsError',
     'RequestError',
     'RequestFinished',
     'RequestUnknown',
-    'SessionClosed',
+    'ConnectionClosed',
     # These are privateer errors
     'PrivateerError',
+    'ConflictingSecrets',
+    'UnknownSecret',
     'RatchetError',
     # These are configuration errors
     'ConfigError',
+    # These are HGXLink errors
+    'HGXLinkError',
 ]
 
 
@@ -226,6 +232,18 @@ class UnknownToken(DispatchError, ValueError):
     pass
 
 
+class CatOuttaBagError(DispatchError, ValueError):
+    ''' Raised when trying to make a public object private.
+    '''
+    pass
+
+
+class ExistantAppError(DispatchError):
+    ''' Raised when attempting to register a second application for the
+    same connection, or the same token for a different connection.
+    '''
+
+
 class DispatchWarning(HypergolixException, RuntimeWarning):
     ''' Raised when something goes moderately wrong with dispatch.
     '''
@@ -239,7 +257,7 @@ class IPCError(HypergolixException, RuntimeError):
     pass
     
     
-class DeadObject(IPCError, TypeError):
+class DeadObject(IPCError, PersistenceError, TypeError):
     ''' Raised when operations are attempted on a local object that is
     already dead.
     '''
@@ -286,7 +304,7 @@ class RequestUnknown(RequestError):
     pass
     
     
-class SessionClosed(CommsError):
+class ConnectionClosed(CommsError):
     ''' Raised when something goes wrong with IPC (bad commands, etc).
     '''
     pass
@@ -313,7 +331,7 @@ class ConflictingSecrets(PrivateerError):
     pass
     
     
-class SecretUnknown(PrivateerError, KeyError):
+class UnknownSecret(PrivateerError, KeyError):
     ''' This PrivateerError is raised when a request is made for an
     unknown secret.
     '''
@@ -323,5 +341,12 @@ class SecretUnknown(PrivateerError, KeyError):
 class ConfigError(HypergolixException, RuntimeError):
     ''' This exception (or a subclass thereof) is raised for all failed
     operations with configuration.
+    '''
+    pass
+
+
+class HGXLinkError(HypergolixException, RuntimeError):
+    ''' This exception (or a subclass thereof) is raised for errors
+    originating in the HGXLink itself.
     '''
     pass

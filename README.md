@@ -1,15 +1,13 @@
 [![Hypergolix logo](/assets/hypergolix-logo.png)](https://www.hypergolix.com)
 
-Hypergolix is a local background service that makes IoT development effortless and secure. It uses the [Golix protocol](https://github.com/Muterra/doc-golix) to provide all data with strong, end-to-end encryption. Usage:
+Hypergolix is programmable cloud sync -- like Dropbox, but you integrate it into your applications instead of using it from the filesystem. It runs as a local background service and was originally created to ease development of embedded/IoT/Raspberry Pi applications and devices. Hypergolix data is encrypted at all times (except in-memory) using the [Golix protocol](https://github.com/Muterra/doc-golix).
 
-1. Download Hypergolix client
-2. Start Hypergolix client in the background
-3. Log in to Hypergolix
-4. Applications communicate with Hypergolix via IPC
+[See the Hypergolix docs for more info](https://pyhgx.readthedocs.io/en/latest/index.html), including installation instructions and usage. The general gist is:
 
-All secret material is handled by Hypergolix, as is network delivery. **Hypergolix itself requires ```python >= 3.5.1```,** but applications can also communicate with Hypergolix via websockets on localhost port 7772. An application link is included with Hypergolix that supports two entry points:
-
-[See docs for usage.](/docs)
+1. Download Hypergolix
+2. Start Hypergolix client and log in
+3. Communicate with Hypergolix via IPC
+4. Create, store, and share objects directly from your application
 
 # Contributing
 

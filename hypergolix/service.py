@@ -34,26 +34,39 @@ hypergolix: A python Golix client.
 '''
 
 # Global dependencies
-import time
-import argparse
 import logging
+import loopa
+import concurrent.futures
+import argparse
 import socket
 import pathlib
+import threading
+import http.server
+from http import HTTPStatus
 
 import daemoniker
 from daemoniker import Daemonizer
 from daemoniker import SignalHandler1
 from daemoniker import SIGTERM
-from daemoniker.exceptions import ReceivedSignal
 
 # Intra-package dependencies (that require explicit imports, courtesy of
 # daemonization)
 from hypergolix import logutils
-from hypergolix.utils import Aengel
-from hypergolix.comms import Autocomms
-from hypergolix.comms import WSBasicServer
-from hypergolix.remotes import PersisterBridgeServer
-from hypergolix.remotes import RemotePersistenceServer
+from hypergolix.comms import BasicServer
+from hypergolix.comms import WSConnection
+
+from hypergolix.persistence import PersistenceCore
+from hypergolix.persistence import Doorman
+from hypergolix.persistence import Enforcer
+from hypergolix.persistence import Bookie
+
+from hypergolix.lawyer import LawyerCore
+from hypergolix.undertaker import UndertakerCore
+from hypergolix.librarian import LibrarianCore
+from hypergolix.librarian import DiskLibrarian
+from hypergolix.postal import PostOffice
+from hypergolix.remotes import Salmonator
+from hypergolix.remotes import RemotePersistenceProtocol
 
 
 # ###############################################
@@ -72,6 +85,34 @@ logger = logging.getLogger(__name__)
 # ###############################################
 # Lib
 # ###############################################
+
+
+class _HealthHandler(http.server.BaseHTTPRequestHandler):
+    ''' Handles healthcheck requests.
+    '''
+    
+    def do_GET(self):
+        # Send it a 200 with headers and GTFO
+        self.send_response(HTTPStatus.OK)
+        self.send_header('Content-type', 'text/plain')
+        self.send_header("Content-Length", 0)
+        self.end_headers()
+
+
+def _serve_healthcheck(port=7777):
+    ''' Sets up an http server in a different thread to be a health
+    check.
+    '''
+    server_address = ('', port)
+    server = http.server.HTTPServer(server_address, _HealthHandler)
+    worker = threading.Thread(
+        # Do it in a daemon thread so that application exits are reflected as
+        # unavailable, instead of persisting everything
+        daemon = True,
+        target = server.serve_forever,
+        name = 'hlthchk'
+    )
+    return server, worker
     
     
 def _cast_verbosity(verbosity, debug, traceur):
@@ -112,52 +153,83 @@ def _cast_host(host):
     
     # Otherwise, host stays the same
     return host
-    
-    
-def _shielded_server(host, port, cache_dir, debug, traceur, aengel=None):
-    ''' Wraps an _hgx_server in a run-forever while loop, catching and
-    logging all RuntimeErrors but otherwise restarting immediately.
-    
-    Ahhhhh shit, unfortunately because everything is happening in its
-    own thread this won't really work.
-    '''
-    while True:
-        try:
-            _hgx_server(host, port, cache_dir, debug, traceur, aengel)
-            
-        except ReceivedSignal:
-            raise
-            
-        except SystemExit:
-            raise
 
 
-def _hgx_server(host, port, cache_dir, debug, traceur, aengel=None):
-    ''' Simple remote persistence server over websockets.
-    Explicitly pass None to cache_dir to use in-memory only.
+class RemotePersistenceServer(loopa.TaskCommander):
+    ''' Simple persistence server.
+    Expected defaults:
+    host:       'localhost'
+    port:       7770
+    logfile:    None
+    verbosity:  'warning'
+    debug:      False
+    traceur:    False
     '''
-    if not aengel:
-        aengel = Aengel()
+    
+    def __init__(self, cache_dir, host, port, *args, **kwargs):
+        ''' Do all of that other smart setup while we're at it.
+        '''
+        super().__init__(*args, **kwargs)
         
-    remote = RemotePersistenceServer(cache_dir)
-    server = Autocomms(
-        autoresponder_name = 'reremser',
-        autoresponder_class = PersisterBridgeServer,
-        connector_name = 'wsremser',
-        connector_class = WSBasicServer,
-        connector_kwargs = {
-            'host': host,
-            'port': port,
-            'tls': False,
-            # 48 bits = 1% collisions at 2.4 e 10^6 connections
-            'birthday_bits': 48,
-        },
-        debug = debug,
-        aengel = aengel,
-    )
-    remote.assemble(server)
-    
-    return remote, server
+        self.executor = concurrent.futures.ThreadPoolExecutor()
+        
+        # Persistence stuff
+        self.percore = PersistenceCore()
+        self.doorman = Doorman(self.executor, self._loop)
+        self.enforcer = Enforcer()
+        self.bookie = Bookie()
+        self.lawyer = LawyerCore()
+        self.librarian = DiskLibrarian(cache_dir, self.executor, self._loop)
+        self.postman = PostOffice()
+        self.undertaker = UndertakerCore()
+        # I mean, this won't be used unless we set up peering, but it saves us
+        # needing to do a modal switch for remote persistence servers
+        self.salmonator = Salmonator.__fixture__()
+        self.remote_protocol = RemotePersistenceProtocol()
+        
+        self.percore.assemble(
+            doorman = self.doorman,
+            enforcer = self.enforcer,
+            lawyer = self.lawyer,
+            bookie = self.bookie,
+            librarian = self.librarian,
+            postman = self.postman,
+            undertaker = self.undertaker,
+            salmonator = self.salmonator
+        )
+        self.doorman.assemble(librarian=self.librarian)
+        self.enforcer.assemble(librarian=self.librarian)
+        self.bookie.assemble(librarian=self.librarian)
+        self.lawyer.assemble(librarian=self.librarian)
+        self.librarian.assemble(
+            enforcer = self.enforcer,
+            lawyer = self.lawyer,
+            percore = self.percore
+        )
+        self.postman.assemble(
+            librarian = self.librarian,
+            remote_protocol = self.remote_protocol
+        )
+        self.undertaker.assemble(
+            librarian = self.librarian,
+            postman = self.postman
+        )
+        self.remote_protocol.assemble(
+            percore = self.percore,
+            librarian = self.librarian,
+            postman = self.postman
+        )
+        
+        self.server = BasicServer(connection_cls=WSConnection)
+        self.register_task(
+            self.server,
+            msg_handler = self.remote_protocol,
+            host = host,
+            port = port,
+            tls = False
+        )
+        self.register_task(self.postman)
+        self.register_task(self.undertaker)
 
     
 def start(namespace=None):
@@ -174,12 +246,12 @@ def start(namespace=None):
         if namespace.logdir is not None:
             log_dir = str(pathlib.Path(namespace.logdir).absolute())
         else:
-            log_dir = namespace.log_dir
+            log_dir = namespace.logdir
         # Convert cache dir to absolute if defined
         if namespace.cachedir is not None:
             cache_dir = str(pathlib.Path(namespace.cachedir).absolute())
         else:
-            cache_dir = namespace.cache_dir
+            cache_dir = namespace.cachedir
         verbosity = namespace.verbosity
         # Convert pid path to absolute (must be defined)
         pid_path = str(pathlib.Path(namespace.pidfile).absolute())
@@ -216,12 +288,6 @@ def start(namespace=None):
             strip_cmd_args = False
         )
         
-        if not is_parent:
-            # Do signal handling within the Daemonizer so that the parent knows
-            # it was correctly init'd
-            sighandler = SignalHandler1(pid_path)
-            sighandler.start()
-        
         #####################
         # PARENT EXITS HERE #
         #####################
@@ -236,21 +302,41 @@ def start(namespace=None):
             loglevel = verbosity
         )
         
-    logger.debug('Starting remote persistence server...')
+    logger.debug('Parsing config...')
     host = _cast_host(host)
-    remote, server = _hgx_server(host, port, cache_dir, debug, traceur)
-    logger.info('Remote persistence server successfully started.')
-
-    # Wait indefinitely until signal caught.
-    # TODO: literally anything smarter than this.
-    try:
-        while True:
-            time.sleep(.5)
-    except SIGTERM:
-        logger.info('Caught SIGTERM. Exiting.')
+    rps = RemotePersistenceServer(
+        cache_dir,
+        host,
+        port,
+        reusable_loop = False,
+        threaded = False,
+        debug = debug
+    )
     
-    del remote
-    del server
+    logger.debug('Starting health check...')
+    # Start a health check
+    healthcheck_server, healthcheck_thread = _serve_healthcheck()
+    healthcheck_thread.start()
+        
+    logger.debug('Starting signal handler...')
+    
+    def signal_handler(signum):
+        logger.info('Caught signal. Exiting.')
+        healthcheck_server.shutdown()
+        rps.stop_threadsafe_nowait()
+        
+    # Normally I'd do this within daemonization, but in this case, we need to
+    # wait to have access to the handler.
+    sighandler = SignalHandler1(
+        pid_path,
+        sigint = signal_handler,
+        sigterm = signal_handler,
+        sigabrt = signal_handler
+    )
+    sighandler.start()
+    
+    logger.info('Starting remote persistence server...')
+    rps.start()
     
     
 def stop(namespace=None):

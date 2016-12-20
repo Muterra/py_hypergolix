@@ -36,6 +36,44 @@ hypergolix: A python Golix client.
 # ipc.IPCEmbed.register_share_handler_loopsafe as an example of proper safety.
 
 
+# Submodules
+from . import accounting
+from . import app
+from . import bootstrapping
+from . import comms
+from . import core
+from . import dispatch
+from . import embed
+from . import exceptions
+from . import hypothetical
+from . import inquisition
+from . import ipc
+from . import lawyer
+from . import librarian
+from . import logutils
+from . import objproxy
+from . import persistence
+from . import postal
+from . import privateer
+from . import remotes
+from . import rolodex
+from . import service
+from . import utils
+from . import undertaker
+
+# Add in toplevel stuff
+from golix import Ghid
+
+from .objproxy import Obj
+from .objproxy import Proxy
+from .objproxy import PickleObj
+from .objproxy import PickleProxy
+from .objproxy import JsonObj
+from .objproxy import JsonProxy
+
+from .embed import HGXLink
+
+
 # ###############################################
 # Boilerplate
 # ###############################################
@@ -47,74 +85,15 @@ import logging
 from logging import NullHandler
 logging.getLogger(__name__).addHandler(NullHandler())
 
+
 # Control * imports.
 __all__ = [
     'HGXLink',
     'Ghid',
-    'ObjBase',
-    'ProxyBase',
+    'Obj',
+    'Proxy',
     'PickleObj',
     'PickleProxy',
     'JsonObj',
     'JsonProxy',
 ]
-
-
-# ###############################################
-# Library
-# ###############################################
-
-# Submodules
-from . import accounting
-from . import app
-from . import bootstrapping
-from . import comms
-from . import core
-from . import dispatch
-from . import exceptions
-from . import inquisition
-from . import ipc
-from . import logutils
-from . import objproxy
-from . import persistence
-from . import privateer
-from . import remotes
-from . import rolodex
-from . import service
-from . import utils
-
-# Add in toplevel stuff
-from golix import Ghid
-
-from .objproxy import ObjBase
-from .objproxy import ProxyBase
-from .objproxy import PickleObj
-from .objproxy import PickleProxy
-from .objproxy import JsonObj
-from .objproxy import JsonProxy
-
-
-def HGXLink(ipc_port=7772, debug=False, aengel=None):
-    if not aengel:
-        aengel = utils.Aengel()
-        
-    embed = ipc.IPCEmbed(
-        aengel = aengel,
-        threaded = True,
-        thread_name = utils._generate_threadnames('em-aure')[0],
-        debug = debug,
-    )
-    
-    embed.add_ipc_threadsafe(
-        client_class = comms.WSBasicClient,
-        host = 'localhost',
-        port = ipc_port,
-        debug = debug,
-        aengel = aengel,
-        threaded = True,
-        thread_name = utils._generate_threadnames('emb-ws')[0],
-        tls = False
-    )
-        
-    embed.aengel = aengel
-    return embed

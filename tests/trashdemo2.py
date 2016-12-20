@@ -114,8 +114,8 @@ def make_fixtures(debug, hgx_root_1, hgx_root_2):
 
 
 def make_tests(iterations, debug, raz, des, aengel):
-    inner_profiler = cProfile.Profile()
-    outer_profiler = cProfile.Profile()
+    # inner_profiler = cProfile.Profile()
+    # outer_profiler = cProfile.Profile()
     timer = collections.deque([0,0], maxlen=2)
 
     # Declare API
@@ -135,7 +135,7 @@ def make_tests(iterations, debug, raz, des, aengel):
         timer.appendleft(time.monotonic())
         roundtrip_flag.set()
         roundtrip_check.append(obj._proxy_3141592)
-    def rt_waiter(timeout=1):
+    def rt_waiter(timeout=1.5):
         result = roundtrip_flag.wait(timeout)
         roundtrip_flag.clear()
         return result
@@ -194,9 +194,12 @@ def make_tests(iterations, debug, raz, des, aengel):
             def state_mirror(source_obj):
                 # print('Mirroring state.')
                 reply.hgx_state = source_obj
-                inner_profiler.enable()
-                reply.hgx_push_threadsafe()
-                inner_profiler.disable()
+                # inner_profiler.enable()
+                try:
+                    reply.hgx_push_threadsafe()
+                finally:
+                    # inner_profiler.disable()
+                    pass
             obj.hgx_register_callback_threadsafe(state_mirror)
             
             reply.hgx_share_threadsafe(recipient=self.raz)
@@ -232,7 +235,10 @@ def make_tests(iterations, debug, raz, des, aengel):
             time.sleep(1.5)
             times = []
             
-            outer_profiler.enable()
+            logging.getLogger('').critical(
+                '########## Handshakes complete! Starting tests. ##########'
+            )
+            
             for ii in range(iterations):
                 with self.subTest(i=ii):
                     msg = ''.join([chr(random.randint(0,255)) for i in range(0,25)])
@@ -242,17 +248,20 @@ def make_tests(iterations, debug, raz, des, aengel):
                     obj.hgx_state = msg
                     
                     # Zero out the timer and enable the profiler
-                    inner_profiler.enable()
-                    self.timer.extendleft([0,0,time.monotonic()])
-                    
-                    # Call an update
-                    obj.hgx_push_threadsafe()
-                    # Wait for response
-                    success = rt_waiter()
-                    # Stop the timer
-                    times.append(self.timer[0] - self.timer[1])
-                    # Stop the profiler
-                    inner_profiler.disable()
+                    # inner_profiler.enable()
+                    try:
+                        self.timer.extendleft([0,0,time.monotonic()])
+                        
+                        # Call an update
+                        obj.hgx_push_threadsafe()
+                        # Wait for response
+                        success = rt_waiter()
+                        # Stop the timer
+                        times.append(self.timer[0] - self.timer[1])
+                    finally:
+                        # Stop the profiler
+                        # inner_profiler.disable()
+                        pass
                     
                     # Check for success
                     self.assertTrue(success)
@@ -260,7 +269,6 @@ def make_tests(iterations, debug, raz, des, aengel):
                     
                     # Max update frequencies can cause problems yo
                     time.sleep(.1)
-            outer_profiler.disable()
                     
             print('---------------------------------------------------')
             print('Max time: ', max(times))
@@ -269,15 +277,10 @@ def make_tests(iterations, debug, raz, des, aengel):
             print('Med time: ', statistics.median(times))
             print('\n')
             
-            print('---------------------------------------------------')
-            print('Cropped profile')
-            inner_profiler.print_stats('cumulative')
-            print('\n')
-            
-            print('---------------------------------------------------')
-            print('Wide-angle profile')
-            outer_profiler.print_stats('cumulative')
-            print('\n')
+            # print('---------------------------------------------------')
+            # print('Cropped profile')
+            # inner_profiler.print_stats('cumulative')
+            # print('\n')
     
     return DemoReplicatorTest
     
@@ -323,19 +326,19 @@ def ingest_args():
         default = 'warning',
         type = str,
         help = 'Specify the logging level. '
-                '"debug" -> most verbose, '
-                '"info" -> somewhat verbose, '
-                '"warning" -> default python verbosity, '
-                '"error" -> quiet.',
+               '"debug" -> most verbose, '
+               '"info" -> somewhat verbose, '
+               '"warning" -> default python verbosity, '
+               '"error" -> quiet.',
     )
     parser.add_argument(
         '--traceur',
         action = 'store',
-        default = False,
+        default = None,
         type = float,
         help = 'Set traceur mode, using the passed float as a stack tracing '
-                'interval for deadlock detection. Must be a positive number, '
-                'or it will be ignored.'
+               'interval for deadlock detection. Must be a positive number, '
+               'or it will be ignored.'
     )
     parser.add_argument('unittest_args', nargs='*')
     args = parser.parse_args()
@@ -386,8 +389,9 @@ if __name__ == '__main__':
         suite = unittest.TestSuite()
         suite.addTest(apptest('test_app'))
         unittest.TextTestRunner().run(suite)
-        
-        logging.getLogger('').critical('Test suite complete; closing down.')
+        logging.getLogger('').critical(
+            '########## Test suite complete; closing down. ##########'
+        )
         
         raz[1].wait_close_safe()
         des[1].wait_close_safe()
@@ -403,8 +407,9 @@ if __name__ == '__main__':
         shutil.copytree(args.hgxroot[1], cache_dir_b)
     
         # Clip negative numbers
-        trace_interval = max([args.traceur, .1])
-        if trace_interval:
+        if args.traceur is not None:
+            trace_interval = max([args.traceur, 0.1])
+            print('Running with trace.')
             from hypergolix.utils import TraceLogger
             with TraceLogger(trace_interval):
                 do_test(cache_dir_a, cache_dir_b)

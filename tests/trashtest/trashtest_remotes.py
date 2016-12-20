@@ -9,7 +9,7 @@ hypergolix: A python Golix client.
     
     Contributors
     ------------
-    Nick Badger 
+    Nick Badger
         badg@muterra.io | badg@nickbadger.com | nickbadger.com
 
     This library is free software; you can redistribute it and/or
@@ -23,36 +23,45 @@ hypergolix: A python Golix client.
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the 
+    License along with this library; if not, write to the
     Free Software Foundation, Inc.,
-    51 Franklin Street, 
-    Fifth Floor, 
+    51 Franklin Street,
+    Fifth Floor,
     Boston, MA  02110-1301 USA
 
 ------------------------------------------------------
 
 '''
 
-import IPython
 import unittest
-import warnings
-import time
 import threading
-import logging
 import pathlib
+import logging
+# Just used for fixture
+import random
+
+from loopa.utils import await_coroutine_threadsafe
+from loopa import TaskCommander
+from loopa import NoopLoop
 
 # These are normal imports
-from hypergolix.remotes import MemoryPersister
-from hypergolix.remotes import DiskCachePersister
-from hypergolix.remotes import PersisterBridgeServer
-from hypergolix.remotes import PersisterBridgeClient
-from hypergolix.remotes import RemotePersistenceServer
+from hypergolix.remotes import RemotePersistenceProtocol
+from hypergolix.remotes import Salmonator
+
+from hypergolix.comms import BasicServer
+from hypergolix.comms import WSConnection
+from hypergolix.comms import ConnectionManager
+from hypergolix.comms import _ConnectionBase
 
 from hypergolix.utils import Aengel
 
-from hypergolix.comms import Autocomms
-from hypergolix.comms import WSBasicServer
-from hypergolix.comms import WSBasicClient
+from golix._getlow import GIDC
+from hypergolix.persistence import _GidcLite
+from hypergolix.persistence import PersistenceCore
+from hypergolix.librarian import LibrarianCore
+from hypergolix.postal import PostalCore
+from hypergolix.postal import PostOffice
+from hypergolix.core import GolixCore
 
 from hypergolix.exceptions import RemoteNak
 from hypergolix.exceptions import StillBoundWarning
@@ -68,6 +77,7 @@ from golix import SecondParty
 
 # logging.basicConfig(filename='persister_refactor.py', level=logging.INFO)
 
+from _fixtures.ghidutils import make_random_ghid
 from _fixtures.identities import TEST_AGENT1
 from _fixtures.identities import TEST_AGENT2
 from _fixtures.identities import TEST_AGENT3
@@ -76,415 +86,448 @@ from _fixtures.identities import TEST_READER1
 from _fixtures.identities import TEST_READER2
 from _fixtures.identities import TEST_READER3
 
-from _fixtures.remote_exchanges import *
+from _fixtures.remote_exchanges import gidc1
+from _fixtures.remote_exchanges import gidc2
 
-SUBS_NOTIFIER_alice = threading.Event()
-SUBS_NOTIFIER_bob = threading.Event()
+gidclite1 = _GidcLite.from_golix(GIDC.unpack(gidc1))
+gidclite2 = _GidcLite.from_golix(GIDC.unpack(gidc2))
 
-
-def clear_notifiers():
-    SUBS_NOTIFIER_bob.clear()
-    SUBS_NOTIFIER_alice.clear()
-    
+logger = logging.getLogger(__name__)
 
 
-def subs_notification_checker(timeout=5):
-    result_bob = SUBS_NOTIFIER_bob.wait(timeout)
-    result_alice = SUBS_NOTIFIER_alice.wait(.1)
-    clear_notifiers()
-    
-    if (result_bob and not result_alice):
-        return True
-    else:
-        return False
-    
-    
-def clear_ghidcache(cache_dir):
-    dirpath = pathlib.Path(cache_dir)
-    for fpath in [f for f in dirpath.iterdir() if f.is_file()]:
-        fpath.unlink()
+def msg_generator(code, body):
+    ''' For now, hard-code in a fixtured connection message generator.
+    '''
+    while True:
+        version = b'\x00\x00'
+        token = bytes([random.randint(0, 255) for i in range(2)])
+        yield version + code + token + body
 
 
-# ###############################################
-# Unified persister testing (bad division of concerns)
-# ###############################################
-    
-    
-class _GenericPersisterTest:
-    def dummy_callback_alice(self, subs_ghid, notify_ghid):
-        # Note that we can't necessarily simply look for notify_ghid in the
-        # vault, because for dynamic objects, the notify_ghid is the frame_ghid
-        # (which is not tracked by the vault).
-        self.assertIn(notify_ghid, self.vault)
-        SUBS_NOTIFIER_alice.set()
-        
-    def dummy_callback_bob(self, subs_ghid, notify_ghid):
-        # Note that we can't necessarily simply look for notify_ghid in the
-        # vault, because for dynamic objects, the notify_ghid is the frame_ghid
-        # (which is not tracked by the vault).
-        self.assertIn(notify_ghid, self.vault)
-        SUBS_NOTIFIER_bob.set()
-        
-    def test_trash(self):
-        self.remote1.publish(gidc1)
-        self.remote1.publish(gidc2)
-        
-        self.assertIn(TEST_READER1.ghid, self.vault)
-        self.assertIn(TEST_READER2.ghid, self.vault)
-        # Don't publish the third, we want to test refusal
-        
-        # ---------------------------------------
-        # Publish bindings and then containers
-        self.remote1.publish(bind1_1.packed)
-        self.remote1.publish(bind1_2.packed)
-        self.remote1.publish(bind2_1.packed)
-        self.remote1.publish(bind2_2.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed unknown binder.'):
-            self.remote1.publish(bind3_1.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed unknown binder.'):
-            self.remote1.publish(bind3_2.packed)
-            
-        self.remote1.publish(cont1_1.packed)
-        self.remote1.publish(cont1_2.packed)
-        self.remote1.publish(cont2_1.packed)
-        self.remote1.publish(cont2_2.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed unknown author.'):
-            self.remote1.publish(cont3_1.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed unknown author.'):
-            self.remote1.publish(cont3_2.packed)
-        
-        # ---------------------------------------
-        # Publish impersonation debindings for the second identity
-        with self.assertRaises(RemoteNak, msg='Server allowed wrong author debind.'):
-            self.remote1.publish(debind2_1_bad.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed wrong author debind.'):
-            self.remote1.publish(debind2_2_bad.packed)
-        
-        # ---------------------------------------
-        # Publish debindings for the second identity
-        self.remote1.publish(debind2_1.packed)
-        self.remote1.publish(debind2_2.packed)
-            
-        self.assertIn(debind2_1.ghid, self.vault)
-        self.assertNotIn(bind2_1.ghid, self.vault)
-        self.assertNotIn(cont2_1.ghid, self.vault)
-        
-        with self.assertRaises(RemoteNak, msg='Server allowed binding replay.'):
-            self.remote1.publish(bind2_1.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed binding replay.'):
-            self.remote1.publish(bind2_2.packed)
-        
-        # ---------------------------------------
-        # Now our impersonation debindings should work
-        self.remote1.publish(debind2_1_bad.packed)
-        self.remote1.publish(debind2_2_bad.packed)
-        
-        # ---------------------------------------
-        # Publish debindings for the valid debindings
-        self.remote1.publish(dedebind2_1.packed)
-        self.remote1.publish(dedebind2_2.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed debinding replay.'):
-            self.remote1.publish(debind2_1.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed debinding replay.'):
-            self.remote1.publish(debind2_2.packed)
-            
-        self.assertNotIn(bind2_1.ghid, self.debound_by_ghid)
-        self.assertNotIn(bind2_2.ghid, self.debound_by_ghid)
-            
-        self.assertIn(dedebind2_1.ghid, self.vault)
-        self.assertNotIn(debind2_1.ghid, self.vault)
-        self.assertNotIn(bind2_1.ghid, self.vault)
-        self.assertNotIn(cont2_1.ghid, self.vault)
-        
-        # ---------------------------------------
-        # Now rebind the original objects. Should succeed, and remove the 
-        # illegal impersonation bindings while we're at it.
-        self.remote1.publish(bind2_1.packed)
-        self.remote1.publish(bind2_2.packed)
-        self.remote1.publish(cont2_1.packed)
-        self.remote1.publish(cont2_2.packed)
-        
-        self.assertIn(bind2_1.ghid, self.vault)
-        self.assertIn(cont2_1.ghid, self.vault)
-        self.assertNotIn(debind2_1_bad.ghid, self.vault)
-        self.assertNotIn(debind2_2_bad.ghid, self.vault)
-        
-        # ---------------------------------------
-        # Publish debindings for those debindings' debindings (... fer srlsy?) 
-        # and then redebind them
-        self.remote1.publish(dededebind2_1.packed)
-        self.remote1.publish(dededebind2_2.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed dedebinding replay.'):
-            self.remote1.publish(dedebind2_1.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed dedebinding replay.'):
-            self.remote1.publish(dedebind2_2.packed)
-            
-        self.assertNotIn(debind2_1.ghid, self.debound_by_ghid)
-        self.assertNotIn(debind2_2.ghid, self.debound_by_ghid)
-        
-        self.remote1.publish(debind2_1.packed)
-        self.remote1.publish(debind2_2.packed)
-        
-        self.assertIn(debind2_1.ghid, self.vault)
-        self.assertIn(debind2_2.ghid, self.vault)
-        
-        # ---------------------------------------
-        # Subscribe to requests.
-        
-        self.remote1.subscribe(TEST_AGENT1.ghid, self.dummy_callback_alice)
-        self.remote1.subscribe(TEST_AGENT2.ghid, self.dummy_callback_alice)
-        self.remote2.subscribe(TEST_AGENT1.ghid, self.dummy_callback_bob)
-        self.remote2.subscribe(TEST_AGENT2.ghid, self.dummy_callback_bob)
-        
-        # ---------------------------------------
-        # Publish requests.
-        clear_notifiers()
-        self.remote1.publish(handshake1_1.packed)
-        self.assertTrue(subs_notification_checker())
-        
-        clear_notifiers()
-        self.remote1.publish(handshake2_1.packed)
-        self.assertTrue(subs_notification_checker())
-        
-        with self.assertRaises(RemoteNak, msg='Server allowed unknown recipient.'):
-            self.remote1.publish(handshake3_1.packed)
-            
-        self.assertIn(handshake1_1.ghid, self.vault)
-        self.assertIn(handshake2_1.ghid, self.vault)
-        
-        # ---------------------------------------
-        # Debind those requests.
-        self.remote1.publish(degloveshake1_1.packed)
-        self.remote1.publish(degloveshake2_1.packed)
-            
-        self.assertNotIn(handshake1_1.ghid, self.vault)
-        self.assertNotIn(handshake2_1.ghid, self.vault)
-        
-        with self.assertRaises(RemoteNak, msg='Server allowed request replay.'):
-            self.remote1.publish(handshake1_1.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed request replay.'):
-            self.remote1.publish(handshake2_1.packed)
-            
-        self.assertNotIn(handshake1_1.ghid, self.vault)
-        self.assertNotIn(handshake2_1.ghid, self.vault)
-        
-        # ---------------------------------------
-        # Test some dynamic bindings.
-        # First make sure the container is actually not there.
-        self.assertNotIn(cont2_1.ghid, self.vault)
-        self.assertNotIn(cont2_2.ghid, self.vault)
-        # Now let's see what happens if we upload stuff
-        self.remote1.publish(dyn1_1a.packed)
-        self.remote1.publish(dyn2_1a.packed)
-        self.remote1.publish(cont2_1.packed)
-        d11a = self.vault.summarize(dyn1_1a.ghid_dynamic)
-        d21a = self.vault.summarize(dyn2_1a.ghid_dynamic)
-        self.assertEqual(dyn1_1a.ghid, d11a.frame_ghid)
-        self.assertEqual(dyn2_1a.ghid, d21a.frame_ghid)
-        self.assertIn(cont2_1.ghid, self.vault)
-        # And make sure that the container is retained if we remove the static
-        self.remote1.publish(debind1_1.packed)
-        self.assertNotIn(bind1_1.ghid, self.vault)
-        self.assertIn(cont1_1.ghid, self.vault)
-        self.assertIn(cont2_1.ghid, self.vault)
-        # Now let's try some fraudulent updates
-        with self.assertRaises(RemoteNak, msg='Server allowed fraudulent dynamic.'):
-            self.remote1.publish(dynF_1b.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed fraudulent dynamic.'):
-            self.remote1.publish(dynF_2b.packed)
-            
-        # Subscribe to updates before actually sending the real ones.
-        self.remote1.subscribe(dyn1_1a.ghid_dynamic, self.dummy_callback_alice)
-        self.remote1.subscribe(dyn2_1a.ghid_dynamic, self.dummy_callback_alice)
-        self.remote2.subscribe(dyn1_1a.ghid_dynamic, self.dummy_callback_bob)
-        self.remote2.subscribe(dyn2_1a.ghid_dynamic, self.dummy_callback_bob)
-            
-        # Now the real updates.
-        # Since we already have an object for this binding, it should immediately
-        # notify.
-        clear_notifiers()
-        self.remote1.publish(dyn1_1b.packed)
-        self.assertTrue(subs_notification_checker())
-        
-        # Since we need to upload the object for this binding, it should not notify
-        # until we've uploaded the container itself.
-        clear_notifiers()
-        self.remote1.publish(dyn2_1b.packed)
-        self.remote1.publish(cont2_2.packed)
-        self.assertTrue(subs_notification_checker())
-        
-        # And now test that containers were actually GC'd
-        self.assertNotIn(cont1_1.ghid, self.vault)
-        self.assertNotIn(cont2_1.ghid, self.vault)
-        # And that the previous frame (but not its references) were as well
-        d11b = self.vault.summarize(dyn1_1b.ghid_dynamic)
-        d21b = self.vault.summarize(dyn2_1b.ghid_dynamic)
-        self.assertEqual(dyn1_1b.ghid, d11b.frame_ghid)
-        self.assertEqual(dyn2_1b.ghid, d21b.frame_ghid)
-        self.assertIn(cont2_2.ghid, self.vault)
-        
-        # Make sure we cannot replay old frames.
-        with self.assertRaises(RemoteNak, msg='Server allowed dyn frame replay.'):
-            self.remote1.publish(dyn1_1a.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed dyn frame replay.'):
-            self.remote1.publish(dyn2_1a.packed)
-        
-        # Now let's try debinding the dynamics.
-        clear_notifiers()
-        self.remote1.publish(dyndebind1_1.packed)
-        self.assertTrue(subs_notification_checker())
-        
-        clear_notifiers()
-        self.remote1.publish(dyndebind2_1.packed)
-        self.assertTrue(subs_notification_checker())
-        
-        with self.assertRaises(RemoteNak, msg='Server allowed debound dyn replay.'):
-            self.remote1.publish(dyn1_1a.packed)
-        with self.assertRaises(RemoteNak, msg='Server allowed debound dyn replay.'):
-            self.remote1.publish(dyn2_1a.packed)
-        # And check their state.
-        self.assertIn(dyndebind1_1.ghid, self.vault)
-        self.assertIn(dyndebind2_1.ghid, self.vault)
-        
-        self.assertNotIn(dyn1_1a.ghid_dynamic, self.vault)
-        self.assertNotIn(dyn2_1a.ghid_dynamic, self.vault)
-        # self.assertNotIn(dyn1_1a.ghid, self.vault)
-        # self.assertNotIn(dyn1_1b.ghid, self.vault)
-        # self.assertNotIn(dyn2_1a.ghid, self.vault)
-        # self.assertNotIn(dyn2_1b.ghid, self.vault)
-        self.assertIn(cont1_2.ghid, self.vault)
-        self.assertNotIn(cont2_2.ghid, self.vault)
-        
-        # ----------------------------------------
-        # Test remaining subscription methods
-        self.remote1.list_subs()
-        self.remote1.unsubscribe(TEST_AGENT1.ghid, self.dummy_callback_bob)
-        self.remote1.disconnect()
-        
-        # Test listing bindings
-        holdings_cont1_2 = set(self.remote1.list_bindings(cont1_2.ghid))
-        self.assertEqual(holdings_cont1_2, {bind1_2.ghid})
-        
-        # Test querying debindings
-        debindings_cont1_1 = self.remote1.list_debindings(bind1_1.ghid)
-        self.assertIn(debind1_1.ghid, debindings_cont1_1)
-        debindings_cont1_2 = self.remote1.list_debindings(bind1_2.ghid)
-        self.assertFalse(debindings_cont1_2)
-        
-        # --------------------------------------------------------------------
-        # Comment this out if no interactivity desired
-            
-        # # Start an interactive IPython interpreter with local namespace, but
-        # # suppress all IPython-related warnings.
-        # with warnings.catch_warnings():
-        #     warnings.simplefilter('ignore')
-        #     IPython.embed()
+class Reffable:
+    ''' Noop class that supports being weakreffed.
+    '''
 
 
 # ###############################################
 # Testing
 # ###############################################
 
-    
-# class MemoryPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
-#     @classmethod
-#     def setUpClass(cls):
-#         cls.remote1 = MemoryPersister()
-#         cls.remote2 = cls.remote1
-#         cls.vault = cls.remote1.librarian
-#         cls.debound_by_ghid = cls.remote1.bookie._debound_by_ghid
 
+class WSRemoteProtocolTest(unittest.TestCase):
+    ''' Test the remote persistence protocol using websockets.
+    '''
     
-# class DiskPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
-#     @classmethod
-#     def setUp(self):
-#         # Do this on a per-test basis so we have a clean ghidcache for the 
-#         # restoration test
-#         clear_ghidcache('/ghidcache_test')
-#         self.remote1 = DiskCachePersister('/ghidcache_test')
-#         self.remote2 = self.remote1
-#         self.vault = self.remote1.librarian
-#         self.debound_by_ghid = self.remote1.bookie._debound_by_ghid
-        
-#     def test_restoration(self):
-#         ''' This is really an indirect test for 
-#         persistence.DiskCachePersister, and therefore should really be
-#         in trashtest_persistence.
-        
-#         '''
-#         self.test_trash()
-#         persister2 = DiskCachePersister('/ghidcache_test')
-#         vault2 = persister2.librarian
-#         debound_by_ghid2 = persister2.bookie._debound_by_ghid
-#         vault2.restore()
-        
-#         self.assertEqual(self.vault._catalog, vault2._catalog)
-        
-#         all_debound = self.remote1.bookie._debound_by_ghid.combine(
-#             self.remote1.bookie._debound_by_ghid_staged
-#         )
-#         all_debound2 = persister2.bookie._debound_by_ghid.combine(
-#             persister2.bookie._debound_by_ghid_staged
-#         )
-        
-#         self.assertEqual(all_debound, all_debound2)
-        
-    
-class WSPersisterTrashtest(unittest.TestCase, _GenericPersisterTest):
     @classmethod
     def setUpClass(cls):
-        cls.aengel = Aengel()
-        cls.remote_server = RemotePersistenceServer()
-        cls.vault = cls.remote_server.librarian
-        cls.debound_by_ghid = cls.remote_server.bookie._debound_by_ghid
+        ''' Set up all of the various stuff. And things.
+        '''
+        # Set up the remote server.
+        cls.server_commander = TaskCommander(
+            reusable_loop = False,
+            threaded = True,
+            debug = True,
+            thread_kwargs = {'name': 'server'}
+        )
+        cls.server_protocol = RemotePersistenceProtocol()
+        cls.server = BasicServer(connection_cls=WSConnection)
+        cls.server_commander.register_task(
+            cls.server,
+            msg_handler = cls.server_protocol,
+            host = 'localhost',
+            port = 5358,
+            # debug = True
+        )
         
-        cls.server = Autocomms(
-            autoresponder_class = PersisterBridgeServer,
-            # autoresponder_kwargs = { 'persister': cls.backend, },
-            connector_class = WSBasicServer,
-            connector_kwargs = {
-                'host': 'localhost',
-                'port': 5358,
-                # 48 bits = 1% collisions at 2.4 e 10^6 connections
-                'birthday_bits': 48,
-                'tls': False
-            },
+        # Set up a remote client.
+        cls.client1_commander = TaskCommander(
+            reusable_loop = False,
+            threaded = True,
             debug = True,
-            aengel = cls.aengel,
+            thread_kwargs = {'name': 'client1'}
         )
-        cls.remote_server.assemble(cls.server)
+        cls.client1_protocol = RemotePersistenceProtocol()
+        cls.client1 = ConnectionManager(
+            connection_cls = WSConnection,
+            msg_handler = cls.client1_protocol
+        )
+        cls.client1_commander.register_task(
+            cls.client1,
+            host = 'localhost',
+            port = 5358,
+            tls = False
+        )
         
-        cls.remote1 = Autocomms(
-            autoresponder_class = PersisterBridgeClient,
-            connector_class = WSBasicClient,
-            connector_kwargs = {
-                'host': 'localhost',
-                'port': 5358,
-                'tls': False,
-            },
+        # Set up a second remote client.
+        cls.client2_commander = TaskCommander(
+            reusable_loop = False,
+            threaded = True,
             debug = True,
-            aengel = cls.aengel,
+            thread_kwargs = {'name': 'client2'}
         )
-        cls.remote2 = Autocomms(
-            autoresponder_class = PersisterBridgeClient,
-            connector_class = WSBasicClient,
-            connector_kwargs = {
-                'host': 'localhost',
-                'port': 5358,
-                'tls': False,
-            },
-            debug = True,
-            aengel = cls.aengel,
+        cls.client2_protocol = RemotePersistenceProtocol()
+        cls.client2 = ConnectionManager(
+            connection_cls = WSConnection,
+            msg_handler = cls.client2_protocol
         )
+        cls.client2_commander.register_task(
+            cls.client2,
+            host = 'localhost',
+            port = 5358,
+            tls = False
+        )
+        
+        cls.server_commander.start()
+        cls.client1_commander.start()
+        cls.client2_commander.start()
         
     @classmethod
     def tearDownClass(cls):
-        cls.aengel.stop()
+        cls.client1_commander.stop_threadsafe_nowait()
+        cls.client2_commander.stop_threadsafe_nowait()
+        cls.server_commander.stop_threadsafe_nowait()
+        
+    def setUp(self):
+        ''' Do any per-test fixturing.
+        '''
+        self.server_percore = PersistenceCore.__fixture__()
+        self.server_librarian = LibrarianCore.__fixture__()
+        self.server_postman = PostOffice.__fixture__()
+        self.server_salmonator = Salmonator.__fixture__()
+        self.server_protocol.assemble(self.server_percore,
+                                      self.server_librarian,
+                                      self.server_postman,
+                                      self.server_salmonator)
+        
+        self.client1_percore = PersistenceCore.__fixture__()
+        self.client1_librarian = LibrarianCore.__fixture__()
+        self.client1_postman = PostalCore.__fixture__()
+        self.client1_salmonator = Salmonator.__fixture__()
+        self.client1_protocol.assemble(self.client1_percore,
+                                       self.client1_librarian,
+                                       self.client1_postman,
+                                       self.client1_salmonator)
+        
+        self.client2_percore = PersistenceCore.__fixture__()
+        self.client2_librarian = LibrarianCore.__fixture__()
+        self.client2_postman = PostalCore.__fixture__()
+        self.client2_salmonator = Salmonator.__fixture__()
+        self.client2_protocol.assemble(self.client2_percore,
+                                       self.client2_librarian,
+                                       self.client2_postman,
+                                       self.client2_salmonator)
+    
+    def test_ping(self):
+        logger.info('STARTING REMOTE PING TEST')
+        await_coroutine_threadsafe(
+            coro = self.client1.ping(timeout=1),
+            loop = self.client1_commander._loop
+        )
+        
+    def test_publish(self):
+        logger.info('STARTING REMOTE PUBLISH TEST')
+        await_coroutine_threadsafe(
+            coro = self.client1.publish(gidc1, timeout=1),
+            loop = self.client1_commander._loop
+        )
+        
+    def test_get(self):
+        logger.info('STARTING REMOTE GET TEST')
+        await_coroutine_threadsafe(
+            coro = self.server_librarian.store(gidclite1, gidc1),
+            loop = self.server_commander._loop
+        )
+        
+        self.assertEqual(
+            await_coroutine_threadsafe(
+                coro = self.client1.get(gidclite1.ghid, timeout=1),
+                loop = self.client1_commander._loop
+            ),
+            gidc1
+        )
+        
+    def test_subscribe(self):
+        logger.info('STARTING REMOTE SUBSCRIBE TEST')
+        ghid = make_random_ghid()
+        await_coroutine_threadsafe(
+            coro = self.client1.subscribe(ghid, timeout=1),
+            loop = self.client1_commander._loop
+        )
+        
+        await_coroutine_threadsafe(
+            coro = self.client1.unsubscribe(ghid, timeout=1),
+            loop = self.client1_commander._loop
+        )
+        
+        # Also test with not-subscribed ghid
+        await_coroutine_threadsafe(
+            coro = self.client1.unsubscribe(make_random_ghid(), timeout=1),
+            loop = self.client1_commander._loop
+        )
+    
+    def test_subs_update(self):
+        logger.info('STARTING REMOTE SUBS UPDATE TEST')
+        await_coroutine_threadsafe(
+            coro = self.client1_librarian.store(gidclite1, gidc1),
+            loop = self.client1_commander._loop
+        )
+        
+        subscription_ghid = make_random_ghid()
+        # Normally this would come from the server, but it doesn't actually
+        # make a difference, and this way we don't have to worry about figuring
+        # out which connection is which or anything.
+        await_coroutine_threadsafe(
+            coro = self.client1.subscription_update(
+                subscription_ghid,
+                gidclite1.ghid,
+                timeout = 1
+            ),
+            loop = self.client1_commander._loop
+        )
+        
+    def test_subs_query(self):
+        logger.info('STARTING REMOTE SUBS QUERY TEST')
+        await_coroutine_threadsafe(
+            coro = self.client1.query_subscriptions(timeout=1),
+            loop = self.client1_commander._loop
+        )
+        
+    def test_bindings_query(self):
+        logger.info('STARTING REMOTE BINDINGS TEST')
+        await_coroutine_threadsafe(
+            coro = self.client1.query_bindings(make_random_ghid(), timeout=1),
+            loop = self.client1_commander._loop
+        )
+        
+    def test_debindings_query(self):
+        logger.info('STARTING REMOTE DEBINDINGS TEST')
+        await_coroutine_threadsafe(
+            coro = self.client1.query_debindings(
+                make_random_ghid(),
+                timeout = 1
+            ),
+            loop = self.client1_commander._loop
+        )
+        
+    def test_existence_query(self):
+        logger.info('STARTING REMOTE EXISTENCE TEST')
+        await_coroutine_threadsafe(
+            coro = self.client1.query_existence(make_random_ghid(), timeout=1),
+            loop = self.client1_commander._loop
+        )
+        
+    def test_disconnect(self):
+        logger.info('STARTING REMOTE DISCONNECT TEST')
+        await_coroutine_threadsafe(
+            coro = self.client1.disconnect(timeout=1),
+            loop = self.client1_commander._loop
+        )
+
+
+@unittest.skip('DNX')
+class SalmonatorTestIRL(unittest.TestCase):
+    ''' Test the salmonator, running real, live code.
+    '''
+    
+    @classmethod
+    def setUpClass(cls):
+        ''' Set up all of the various stuff. And things.
+        '''
+        cls.cmd = TaskCommander(
+            reusable_loop = False,
+            threaded = True,
+            debug = True,
+            thread_kwargs = {'name': 'salmon'}
+        )
+        cls.golcore = GolixCore.__fixture__(TEST_AGENT1)
+        cls.percore = PersistenceCore.__fixture__()
+        cls.librarian = LibrarianCore.__fixture__()
+        cls.remote_protocol = RemotePersistenceProtocol.__fixture__(
+            cls.percore,
+            cls.librarian
+        )
+        
+        # Some assembly required!
+        cls.salmonator = Salmonator()
+        cls.salmonator.add_upstream_remote(
+            task_commander = cls.cmd,
+            connection_cls = _ConnectionBase.__fixture__,
+            msg_iterator = msg_generator(code=b'??', body=b'')
+        )
+        cls.cmd.register_task(cls.salmonator)
+        cls.salmonator.assemble(cls.golcore, cls.percore, cls.librarian,
+                                cls.remote_protocol)
+        
+        # Fire it up
+        cls.cmd.start()
+        
+    @classmethod
+    def tearDownClass(cls):
+        # Kill the commander
+        cls.cmd.stop_threadsafe_nowait()
+        
+    def setUp(self):
+        ''' Reset all of the stuff that needs resetting.
+        '''
+        self.librarian.RESET()
+        
+        
+class SalmonatorTestStaged(unittest.TestCase):
+    ''' Test the salmonator using a nooploop.
+    '''
+    
+    @classmethod
+    def setUpClass(cls):
+        cls.nooploop = NoopLoop(
+            debug = True,
+            threaded = True
+        )
+        cls.nooploop.start()
+        
+    @classmethod
+    def tearDownClass(cls):
+        # Kill the running loop.
+        cls.nooploop.stop_threadsafe_nowait()
+        
+    def setUp(self):
+        self.golcore = GolixCore.__fixture__(TEST_AGENT1)
+        self.percore = PersistenceCore.__fixture__()
+        self.librarian = LibrarianCore.__fixture__()
+        self.librarian_remote = LibrarianCore.__fixture__()
+        self.remote_protocol = RemotePersistenceProtocol.__fixture__(
+            self.percore,
+            self.librarian_remote
+        )
+        
+        # Some assembly required!
+        self.salmonator = Salmonator()
+        self.salmonator.assemble(self.golcore, self.percore, self.librarian,
+                                 self.remote_protocol)
+        
+    def test_bootstrap_1(self):
+        ''' Test bootstrap with no existing identity at the remote.
+        '''
+        conn = _ConnectionBase.__fixture__()
+        remote = Reffable()
+        
+        async def publish(packed):
+            await self.remote_protocol.publish(conn, packed)
+        
+        async def subscribe(ghid):
+            await self.remote_protocol.subscribe(conn, ghid)
+            
+        remote.publish = publish
+        remote.subscribe = subscribe
+        
+        self.salmonator._upstream_remotes.add(remote)
+        
+        # We can substitute golcore for the account because it also has an
+        # _identity attribute
+        await_coroutine_threadsafe(
+            coro = self.salmonator.bootstrap(self.golcore),
+            loop = self.nooploop._loop
+        )
+        self.assertTrue(
+            await_coroutine_threadsafe(
+                coro = self.librarian_remote.contains(gidclite1.ghid),
+                loop = self.nooploop._loop
+            )
+        )
+        
+    def test_bootstrap_2(self):
+        ''' Test bootstrap with an existing identity at the remote.
+        '''
+        await_coroutine_threadsafe(
+            coro = self.librarian_remote.store(gidclite1, gidc1),
+            loop = self.nooploop._loop
+        )
+        
+        conn = _ConnectionBase.__fixture__()
+        remote = Reffable()
+        
+        async def publish(packed):
+            await self.remote_protocol.publish(conn, packed)
+        
+        async def subscribe(ghid):
+            await self.remote_protocol.subscribe(conn, ghid)
+            
+        remote.publish = publish
+        remote.subscribe = subscribe
+        
+        self.salmonator._upstream_remotes.add(remote)
+        
+        # We can substitute golcore for the account because it also has an
+        # _identity attribute
+        await_coroutine_threadsafe(
+            coro = self.salmonator.bootstrap(self.golcore),
+            loop = self.nooploop._loop
+        )
+        self.assertTrue(
+            await_coroutine_threadsafe(
+                coro = self.librarian_remote.contains(gidclite1.ghid),
+                loop = self.nooploop._loop
+            )
+        )
+        
+    def test_conn_restore_1(self):
+        ''' Test connection restoration with an existing identity at the
+        remote, and subscriptions to add.
+        '''
+        await_coroutine_threadsafe(
+            coro = self.librarian_remote.store(gidclite1, gidc1),
+            loop = self.nooploop._loop
+        )
+        self.salmonator._registered.add(make_random_ghid())
+        self.salmonator._registered.add(make_random_ghid())
+        
+        conn = _ConnectionBase.__fixture__()
+        remote = Reffable()
+        
+        await_coroutine_threadsafe(
+            coro = self.salmonator.restore_connection(remote, conn),
+            loop = self.nooploop._loop
+        )
+        
+    def test_conn_restore_2(self):
+        ''' Test connection restoration with an existing identity at the
+        remote, and DEFERRED subscriptions to add.
+        '''
+        await_coroutine_threadsafe(
+            coro = self.librarian_remote.store(gidclite1, gidc1),
+            loop = self.nooploop._loop
+        )
+        self.salmonator._registered.add(make_random_ghid())
+        self.salmonator._registered.add(make_random_ghid())
+        
+        conn = _ConnectionBase.__fixture__()
+        remote = Reffable()
+        
+        # Just tell it to upload both gidcs.
+        self.salmonator._deferred.append(remote, gidc1)
+        self.salmonator._deferred.append(remote, gidc2)
+        
+        await_coroutine_threadsafe(
+            coro = self.salmonator.restore_connection(remote, conn),
+            loop = self.nooploop._loop
+        )
+        
+        self.assertTrue(
+            await_coroutine_threadsafe(
+                coro = self.librarian_remote.contains(gidclite1.ghid),
+                loop = self.nooploop._loop
+            )
+        )
+        self.assertTrue(
+            await_coroutine_threadsafe(
+                coro = self.librarian_remote.contains(gidclite2.ghid),
+                loop = self.nooploop._loop
+            )
+        )
         
 
 if __name__ == "__main__":
     from hypergolix import logutils
-    logutils.autoconfig()
+    logutils.autoconfig(loglevel='debug')
     
     # from hypergolix.utils import TraceLogger
     # with TraceLogger(interval=10):
