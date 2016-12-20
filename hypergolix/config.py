@@ -808,7 +808,6 @@ def _index_remote(cfg, remote_def):
 
 
 NAMED_REMOTES = {
-    'hgxtest': _readonly_remote('hgxtest.hypergolix.com', 443, True),
     'hgx': _readonly_remote('hgx.hypergolix.com', 443, True)
 }
 
@@ -1047,6 +1046,9 @@ def _handle_register(config, register):
 def _handle_args(args, root=None):
     ''' Performs all needed actions on the passed command args.
     '''
+    if root is None:
+        root = get_hgx_rootdir()
+    
     with Config(root) as config:
         _handle_remotes(
             config,
