@@ -41,6 +41,7 @@ install: |
           make install
       fi
 
+      cd $TRAVIS_BUILD_DIR
   fi
   
   if [[ $TESTSUITE == 'osx35' ]]; then
