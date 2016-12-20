@@ -433,9 +433,9 @@ class CommandingTest(unittest.TestCase):
         loud['instrumentation'].verbosity = 'info'
         host1 = _make_blank_cfg()
         host1['remotes'].append(('host1', 123, True))
-        host1hgxtest = _make_blank_cfg()
-        host1hgxtest['remotes'].append(('host1', 123, True))
-        host1hgxtest['remotes'].append(('hgxtest.hypergolix.com', 443, True))
+        host1hgx = _make_blank_cfg()
+        host1hgx['remotes'].append(('host1', 123, True))
+        host1hgx['remotes'].append(('hgx.hypergolix.com', 443, True))
         host1host2f = _make_blank_cfg()
         host1host2f['remotes'].append(('host1', 123, True))
         host1host2f['remotes'].append(('host2', 123, False))
@@ -451,10 +451,10 @@ class CommandingTest(unittest.TestCase):
             ('--verbosity normal', blank),
             ('-ah host1 123 t', host1),
             ('--addhost host1 123 t', host1),
-            ('-a hgxtest', host1hgxtest),
-            ('--add hgxtest', host1hgxtest),
-            ('-r hgxtest', host1),
-            ('--remove hgxtest', host1),
+            ('-a hgx', host1hgx),
+            ('--add hgx', host1hgx),
+            ('-r hgx', host1),
+            ('--remove hgx', host1),
             # Note switch of TLS flag
             ('-ah host2 123 f', host1host2f),
             # Note return of TLS flag
@@ -470,7 +470,7 @@ class CommandingTest(unittest.TestCase):
             '-zz top',
             '--verbosity XXXTREEEEEEEME',
             '--debug --no-debug',
-            '-o local -a hgxtest',
+            '-o local -a hgx',
         ]
         
         with tempfile.TemporaryDirectory() as root:

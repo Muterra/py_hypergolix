@@ -39,6 +39,12 @@ install: |
           sed -i "s/^SHLIB_VERSION_NUMBER=.*/SHLIB_VERSION_NUMBER=100.0.0/" Makefile
           make depend
           make install
+          
+          # Add new openssl to path
+          export PATH="$HOME/$OPENSSL_DIR/bin:$PATH"
+          export CFLAGS="-I$HOME/$OPENSSL_DIR/include"
+          # rpath on linux will cause it to use an absolute path so we don't need to do LD_LIBRARY_PATH
+          export LDFLAGS="-L$HOME/$OPENSSL_DIR/lib -Wl,-rpath=$HOME/$OPENSSL_DIR/lib"
       fi
 
       cd $TRAVIS_BUILD_DIR
@@ -51,6 +57,8 @@ install: |
       brew install python3;
       python3 -m venv venv;
       source venv/bin/activate;
+      # Some openssl infos re: linking
+      otool -L $(find .tox -name "_openssl*.so")
   
   fi
   
