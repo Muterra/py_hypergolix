@@ -33,7 +33,6 @@ hypergolix: A python Golix client.
 
 '''
 
-import IPython
 import unittest
 import warnings
 import collections
