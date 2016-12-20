@@ -1,19 +1,50 @@
 language: python
-python:
-  - "3.3"
-  - "3.4"
-  - "3.5"
 env:
   global:
     - CI=true
-addons:
-  apt_packages:
-    - pandoc
-# command to install dependencies
-install:
-  - pip install pypandoc
-  - pip install .
-script: python tests/supervisor.py
+
+matrix:
+  include:
+    - os: linux
+      python: 3.5
+      env: TESTSUITE=lin35
+    
+    - os: osx
+      sudo: required
+      language: generic
+      env: TESTSUITE=osx35
+
+#  Manually install python on osx
+install: |
+  if [[ $TESTSUITE == 'osx35' ]]; then
+
+      brew update;
+      brew install python3;
+      python3 -m venv venv;
+      source venv/bin/activate;
+      pip install . test
+      
+  elif [[ $TESTSUITE == 'osx34' ]]; then
+  
+      git clone --depth 1 https://github.com/yyuu/pyenv.git ~/.pyenv
+      PYENV_ROOT="$HOME/.pyenv"
+      PATH="$PYENV_ROOT/bin:$PATH"
+      eval "$(pyenv init -)"
+      pyenv install 3.4.5
+      pyenv global 3.4.5
+      pyenv rehash
+      python -m pip install --user virtualenv
+      python -m virtualenv ~/.venv
+      source ~/.venv/bin/activate
+      pip install . test
+      
+  else
+      pip install . test
+  
+  fi
+
+script: python tests/trashtest.py
+
 branches:
   only:
     - master
