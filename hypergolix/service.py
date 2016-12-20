@@ -179,7 +179,7 @@ class RemotePersistenceServer(loopa.TaskCommander):
         self.enforcer = Enforcer()
         self.bookie = Bookie()
         self.lawyer = LawyerCore()
-        self.librarian = DiskLibrarian(cache_dir)
+        self.librarian = DiskLibrarian(cache_dir, self.executor, self._loop)
         self.postman = PostOffice()
         self.undertaker = UndertakerCore()
         # I mean, this won't be used unless we set up peering, but it saves us

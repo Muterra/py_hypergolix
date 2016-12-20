@@ -36,6 +36,7 @@ hypergolix: A python Golix client.
 import unittest
 import tempfile
 import shutil
+import concurrent.futures
 
 from loopa import NoopLoop
 from loopa.utils import await_coroutine_threadsafe
@@ -90,6 +91,7 @@ class GenericLibrarianTest:
     
     @classmethod
     def setUpClass(cls):
+        cls.executor = concurrent.futures.ThreadPoolExecutor(max_workers=15)
         cls.nooploop = NoopLoop(
             debug = True,
             threaded = True
@@ -512,7 +514,8 @@ class DiskLibrarianTest(GenericLibrarianTest, unittest.TestCase):
         
         # Do actually use the fixture, because we need to test the in-memory
         # version (plus otherwise, we simply cannot test LibrarianCore).
-        self.librarian = DiskLibrarian(self.ghidcache)
+        self.librarian = DiskLibrarian(self.ghidcache, self.executor,
+                                       self.nooploop._loop)
         
         self.enforcer = Enforcer.__fixture__(self.librarian)
         self.lawyer = LawyerCore.__fixture__(self.librarian)
@@ -547,7 +550,8 @@ class DiskLibrarianTest(GenericLibrarianTest, unittest.TestCase):
         )
         
         # Create and assemble a duplicate librarian
-        librarian2 = DiskLibrarian(self.ghidcache)
+        librarian2 = DiskLibrarian(self.ghidcache, self.executor,
+                                   self.nooploop._loop)
         librarian2.assemble(self.enforcer, self.lawyer, self.percore)
         
         # Restore it

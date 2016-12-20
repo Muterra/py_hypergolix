@@ -480,7 +480,7 @@ class DiskLibrarian(LibrarianCore):
     in memory.
     '''
     
-    def __init__(self, cache_dir, *args, **kwargs):
+    def __init__(self, cache_dir, executor, loop, *args, **kwargs):
         ''' cache_dir should be relative to current.
         '''
         super().__init__(*args, **kwargs)
@@ -495,6 +495,8 @@ class DiskLibrarian(LibrarianCore):
                 'Path is not an available directory: ' + cache_dir.as_posix()
             )
         
+        self._loop = loop
+        self._executor = executor
         self._cachedir = cache_dir
         
         # This allows us to be lazy when restoring things, without rewriting
@@ -523,7 +525,10 @@ class DiskLibrarian(LibrarianCore):
         
         fpath = self._make_path(ghid)
         try:
-            return fpath.read_bytes()
+            result = await self._loop.run_in_executor(self._executor,
+                                                      fpath.read_bytes)
+            return result
+        
         except FileNotFoundError as exc:
             raise DoesNotExist(
                 'Ghid does not exist at persister: ' + str(ghid)
@@ -563,7 +568,9 @@ class DiskLibrarian(LibrarianCore):
             
         if not self._restoration_flag:
             fpath = self._make_path(reference_ghid)
-            fpath.write_bytes(data)
+            
+            await self._loop.run_in_executor(self._executor, fpath.write_bytes,
+                                             data)
     
     async def remove_from_cache(self, ghid):
         ''' Removes the data associated with the passed ghid from the
@@ -595,7 +602,7 @@ class DiskLibrarian(LibrarianCore):
             
         try:
             fpath = self._make_path(reference_ghid)
-            fpath.unlink()
+            await self._loop.run_in_executor(self._executor, fpath.unlink)
         except FileNotFoundError as exc:
             raise DoesNotExist(
                 'Ghid does not exist at persister: ' + str(ghid)
@@ -610,7 +617,7 @@ class DiskLibrarian(LibrarianCore):
             pass
         
         fpath = self._make_path(ghid)
-        return fpath.exists()
+        return (await self._loop.run_in_executor(self._executor, fpath.exists))
     
     async def resolve_frame(self, ghid):
         ''' Get the current frame ghid from the dynamic ghid.
@@ -653,12 +660,19 @@ class DiskLibrarian(LibrarianCore):
         '''
         self._restoration_flag = True
         try:
-            # Iterate over each file within the cache
-            for data in self._walk_cache():
-                obj = await self._percore.attempt_load(data)
-                # Lazily just use store to re-load our previous bookkeeping
-                # state
-                await self.store(obj, data)
+            # Get all available files (this is a massive contention problem
+            # and race condition waiting to happen. DON'T use concurrent copies
+            # of the librarian.)
+            # Iterate over each file within the cache. We're doing this one
+            # time only, so don't bother doing the iterdir in an executor
+            for child in self._cachedir.iterdir():
+                if child.is_file():
+                    data = await self._loop.run_in_executor(self._executor,
+                                                            child.read_bytes)
+                    obj = await self._percore.attempt_load(data)
+                    # Lazily just use store to re-load our previous bookkeeping
+                    # state
+                    await self.store(obj, data)
                 
         # Reset the restoration flag
         finally:
@@ -670,12 +684,3 @@ class DiskLibrarian(LibrarianCore):
         fname = ghid.as_str() + '.ghid'
         fpath = self._cachedir / fname
         return fpath
-        
-    def _walk_cache(self):
-        ''' Iterator to go through the entire cache, returning possible
-        candidates for loading. Loading will handle malformed primitives
-        without error.
-        '''
-        for child in self._cachedir.iterdir():
-            if child.is_file():
-                yield child.read_bytes()
