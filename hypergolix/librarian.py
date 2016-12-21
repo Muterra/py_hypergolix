@@ -473,6 +473,13 @@ class LibrarianCore(metaclass=API):
         ''' Returns the raw data associated with the ghid.
         '''
         return self._shelf[ghid]
+        
+        
+def _load_path(path):
+    ''' Return bytes from path. Trying to get rid of a bug in the rug.
+    '''
+    with path.open('rb') as f:
+        return f.read()
     
     
 class DiskLibrarian(LibrarianCore):
@@ -526,7 +533,7 @@ class DiskLibrarian(LibrarianCore):
         fpath = self._make_path(ghid)
         try:
             result = await self._loop.run_in_executor(self._executor,
-                                                      fpath.read_bytes)
+                                                      _load_path, fpath)
             return result
         
         except FileNotFoundError as exc:
