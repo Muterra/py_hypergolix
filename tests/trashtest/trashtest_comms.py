@@ -266,9 +266,24 @@ class WSBasicTrashTest(unittest.TestCase):
             port = 9318,
             tls = False
         )
+        
         self.server_commander.start()
+        await_coroutine_threadsafe(
+            coro = self.server_commander.await_init(),
+            loop = self.server_commander._loop
+        )
+        
         self.client1_commander.start()
+        await_coroutine_threadsafe(
+            coro = self.client1_commander.await_init(),
+            loop = self.client1_commander._loop
+        )
+        
         self.client2_commander.start()
+        await_coroutine_threadsafe(
+            coro = self.client2_commander.await_init(),
+            loop = self.client2_commander._loop
+        )
                 
     def tearDown(self):
         logger.critical('Entering test shutdown.')

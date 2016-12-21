@@ -170,9 +170,28 @@ class TestAppNoRestore(unittest.TestCase):
         
         # START THE WHOLE SHEBANG
         ###########################################
+        # Start the server and wait until it's ready to serve connections
         cls.server.start()
+        await_coroutine_threadsafe(
+            coro = cls.server.await_init(),
+            loop = cls.server._loop
+        )
+        
+        # Start the first core and wait until it's ready to serve connections
         cls.hgxcore1.start()
+        await_coroutine_threadsafe(
+            coro = cls.hgxcore1.await_init(),
+            loop = cls.hgxcore1._loop
+        )
+        
+        # Start the second core and wait until it's ready to serve connections
         cls.hgxcore2.start()
+        await_coroutine_threadsafe(
+            coro = cls.hgxcore2.await_init(),
+            loop = cls.hgxcore2._loop
+        )
+        
+        # These don't need to wait though.
         cls.hgxlink1.start()
         cls.hgxlink2.start()
     
