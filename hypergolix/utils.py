@@ -161,6 +161,22 @@ class ApiID(Ghid):
         self._address = address
         
         
+class KeyedAsyncioLock:
+    
+    def __init__(self, loop, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._loop = loop
+        self._lookup = weakref.WeakValueDictionary()
+    
+    def __call__(self, key):
+        try:
+            return self._lookup[key]
+        except KeyError:
+            lock = asyncio.Lock(loop=self._loop)
+            self._lookup[key] = lock
+            return lock
+        
+        
 class FiniteDict:
     ''' A dict-like bounded cache. Beyond max_size, object inserts will
     remove older elements. Element "freshness" is reset upon any and all

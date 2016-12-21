@@ -458,8 +458,9 @@ class PersistenceCore(metaclass=API):
             await librarian.store(obj, packed)
     
     @public_api
-    async def attempt_load(self, packed):
-        ''' Attempt to load a packed golix object.
+    async def attempt_load(self, packed, quiet=True):
+        ''' Attempt to load a packed golix object. If quiet=False, it
+        will raise if there is no loader.
         
         TODO: move into doorman.
         '''
@@ -480,8 +481,12 @@ class PersistenceCore(metaclass=API):
             
         # If no successful loader was found, return None, and allow the parent
         # to raise.
-        except KeyError:
-            return None
+        except KeyError as exc:
+            if quiet:
+                return None
+            else:
+                raise MalformedGolixPrimitive('No loader found for magic: ' +
+                                              str(magic)) from exc
         
         obj = await loader(packed)
             

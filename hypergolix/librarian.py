@@ -98,6 +98,7 @@ from .utils import SetMap
 from .utils import WeakSetMap
 from .utils import _generate_threadnames
 from .utils import FiniteDict
+from .utils import KeyedAsyncioLock
 
 
 # ###############################################
@@ -311,7 +312,7 @@ class LibrarianCore(metaclass=API):
             # This will raise DoesNotExist if missing.
             data = await self.get_from_cache(ghid)
             # This does NOT ingest the data into the persistence system!
-            obj = await self._percore.attempt_load(data)
+            obj = await self._percore.attempt_load(data, quiet=False)
             self._catalog[ghid] = obj
             
         return obj
@@ -473,13 +474,6 @@ class LibrarianCore(metaclass=API):
         ''' Returns the raw data associated with the ghid.
         '''
         return self._shelf[ghid]
-        
-        
-def _load_path(path):
-    ''' Return bytes from path. Trying to get rid of a bug in the rug.
-    '''
-    with path.open('rb') as f:
-        return f.read()
     
     
 class DiskLibrarian(LibrarianCore):
@@ -522,6 +516,13 @@ class DiskLibrarian(LibrarianCore):
         # Lookup <recipient>: set(<request ghid>)
         self._requests_for_recipient = SetMap()
         
+        # Make sure we don't do concurrent write/reads into the cache, which
+        # could potentially create contention issues for stuff.
+        # TODO: make this keyed, so that we can do simultaneous read/write of
+        # different things at the same time (just not the same thing at the
+        # same time)
+        self._cache_lock = KeyedAsyncioLock(loop=self._loop)
+        
     async def get_from_cache(self, ghid):
         ''' Returns the raw data associated with the ghid.
         '''
@@ -532,14 +533,16 @@ class DiskLibrarian(LibrarianCore):
         
         fpath = self._make_path(ghid)
         try:
-            result = await self._loop.run_in_executor(self._executor,
-                                                      _load_path, fpath)
-            return result
+            async with self._cache_lock(ghid):
+                result = await self._loop.run_in_executor(self._executor,
+                                                          fpath.read_bytes)
         
         except FileNotFoundError as exc:
             raise DoesNotExist(
                 'Ghid does not exist at persister: ' + str(ghid)
             ) from exc
+            
+        return result
             
     async def add_to_cache(self, obj, data):
         ''' Adds the passed raw data to the cache.
@@ -576,8 +579,9 @@ class DiskLibrarian(LibrarianCore):
         if not self._restoration_flag:
             fpath = self._make_path(reference_ghid)
             
-            await self._loop.run_in_executor(self._executor, fpath.write_bytes,
-                                             data)
+            async with self._cache_lock(reference_ghid):
+                await self._loop.run_in_executor(self._executor,
+                                                 fpath.write_bytes, data)
     
     async def remove_from_cache(self, ghid):
         ''' Removes the data associated with the passed ghid from the
@@ -609,7 +613,10 @@ class DiskLibrarian(LibrarianCore):
             
         try:
             fpath = self._make_path(reference_ghid)
-            await self._loop.run_in_executor(self._executor, fpath.unlink)
+            
+            async with self._cache_lock(reference_ghid):
+                await self._loop.run_in_executor(self._executor, fpath.unlink)
+            
         except FileNotFoundError as exc:
             raise DoesNotExist(
                 'Ghid does not exist at persister: ' + str(ghid)
