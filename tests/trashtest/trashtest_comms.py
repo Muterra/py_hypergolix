@@ -213,7 +213,7 @@ class WSBasicTrashTest(unittest.TestCase):
             # We do need this to be threaded so we can handle testing stuff
             # independently
             threaded = True,
-            debug = True,
+            # debug = True,
             thread_kwargs = {'name': 'server'}
         )
         self.server_protocol = TestParrot()
@@ -222,8 +222,7 @@ class WSBasicTrashTest(unittest.TestCase):
             self.server,
             msg_handler = self.server_protocol,
             host = 'localhost',
-            port = 9318,
-            # debug = True
+            port = 9318
         )
         
         self.client1_commander = TaskCommander(
@@ -231,7 +230,7 @@ class WSBasicTrashTest(unittest.TestCase):
             # We do need this to be threaded so we can handle testing stuff
             # independently
             threaded = True,
-            debug = True,
+            # debug = True,
             thread_kwargs = {'name': 'client1'}
         )
         self.client1_protocol = TestParrot()
@@ -252,7 +251,7 @@ class WSBasicTrashTest(unittest.TestCase):
             # We do need this to be threaded so we can handle testing stuff
             # independently
             threaded = True,
-            debug = True,
+            # debug = True,
             thread_kwargs = {'name': 'client2'}
         )
         self.client2_protocol = TestParrot()
@@ -273,8 +272,8 @@ class WSBasicTrashTest(unittest.TestCase):
                 
     def tearDown(self):
         logger.critical('Entering test shutdown.')
-        self.client2_commander.stop_threadsafe_nowait()
-        self.client1_commander.stop_threadsafe_nowait()
+        self.client2_commander.stop_threadsafe(timeout=.5)
+        self.client1_commander.stop_threadsafe(timeout=.5)
         # Wait for the server to stop or we may accidentally try to have an
         # overlapping binding to the socket.
         self.server_commander.stop_threadsafe(timeout=.5)
