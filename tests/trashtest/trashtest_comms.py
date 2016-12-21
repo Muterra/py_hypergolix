@@ -277,6 +277,7 @@ class WSBasicTrashTest(unittest.TestCase):
         # Wait for the server to stop or we may accidentally try to have an
         # overlapping binding to the socket.
         self.server_commander.stop_threadsafe(timeout=.5)
+        time.sleep(.1)
         
     def test_client1(self):
         logger.info('Starting client1 test.')
