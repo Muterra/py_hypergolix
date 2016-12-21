@@ -418,6 +418,7 @@ class SalmonatorTestStaged(unittest.TestCase):
             
         remote.publish = publish
         remote.subscribe = subscribe
+        remote.has_connection = True
         
         self.salmonator._upstream_remotes.add(remote)
         
@@ -453,6 +454,7 @@ class SalmonatorTestStaged(unittest.TestCase):
             
         remote.publish = publish
         remote.subscribe = subscribe
+        remote.has_connection = True
         
         self.salmonator._upstream_remotes.add(remote)
         

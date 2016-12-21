@@ -547,9 +547,10 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         
         disconnections = set()
         for remote in self._upstream_remotes:
-            disconnections.add(
-                make_background_future(remote.disconnect())
-            )
+            if remote.has_connection:
+                disconnections.add(
+                    make_background_future(remote.disconnect())
+                )
         
         # Need to make sure it's not empty
         if disconnections:
@@ -596,9 +597,10 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
     
             subscriptions = set()
             for remote in self._upstream_remotes:
-                subscriptions.add(
-                    make_background_future(remote.subscribe(obj.ghid))
-                )
+                if remote.has_connection:
+                    subscriptions.add(
+                        make_background_future(remote.subscribe(obj.ghid))
+                    )
                 
             # Need to make sure it's not empty
             if subscriptions:
@@ -686,11 +688,12 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         pull_complete = None
         tasks_available = set()
         for remote in self._upstream_remotes:
-            tasks_available.add(
-                asyncio.ensure_future(
-                    self._attempt_pull_single(ghid, remote)
+            if remote.has_connection:
+                tasks_available.add(
+                    asyncio.ensure_future(
+                        self._attempt_pull_single(ghid, remote)
+                    )
                 )
-            )
             
         # Wait until the first successful task completion
         # Note that this also shields us against having no tasks
@@ -708,8 +711,11 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                 exc = task.exception()
                 
                 # If there's been an exception, continue waiting for the rest.
+                # Downgrade this to info, since things may be missing from
+                # persisters all the time. Let the parent log if, for example,
+                # it's missing everywhere.
                 if exc is not None:
-                    logger.error(
+                    logger.info(
                         'Error while pulling from remote:\n' +
                         ''.join(traceback.format_tb(exc.__traceback__)) +
                         repr(exc)
@@ -818,10 +824,14 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
             
     async def bootstrap(self, account):
         ''' Bootstrapping publishes our identity upstream.
+        
+        ONLY do this if we already have a connection available there, or
+        we will hang.
         '''
         for remote in self._upstream_remotes:
-            await remote.publish(account._identity.second_party.packed)
-            await remote.subscribe(account._identity.ghid)
+            if remote.has_connection:
+                await remote.publish(account._identity.second_party.packed)
+                await remote.subscribe(account._identity.ghid)
             
         self._bootstrapped = True
     
@@ -834,6 +844,7 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         # connection. If we haven't bootstrapped though, that will be handled
         # there.
         if self._bootstrapped:
+            await remote.publish(self._golcore._identity.second_party.packed)
             await self._remote_protocol.subscribe(
                 connection,
                 self._golcore.whoami

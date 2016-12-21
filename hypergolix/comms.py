@@ -194,6 +194,15 @@ class _ConnectionBase(metaclass=API):
         id, as a constant-length base64 string.
         '''
         return self._str
+            
+    @classmethod
+    def desc_str(cls, *args, **kwargs):
+        ''' Override this to explain where the connection is supposed to
+        go, for use in debug scenarios.
+        
+        *args and **kwargs should match those used in cls.new()
+        '''
+        return cls.__name__ + '(*' + str(args) + ', **' + str(kwargs) + ')'
         
     async def listener(self, receiver):
         ''' Once a connection has been created, call this to listen for
@@ -328,6 +337,14 @@ class WSConnection(_ConnectionBase):
         
         self.websocket = websocket
         self.path = path
+            
+    @classmethod
+    def desc_str(cls, host, port, tls):
+        ''' Override this to explain where the connection is supposed to
+        go, for use in debug scenarios.
+        '''
+        loc = _WSLoc(host, int(port), bool(tls))
+        return cls.__name__ + '(' + str(loc) + ')'
         
     @classmethod
     async def serve_forever(cls, msg_handler, host, port, tls=False):
@@ -618,10 +635,11 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
             
         # The connection failed. Wait before reattempting it.
         except Exception as exc:
-            logger.error(
-                'Failed to establish connection with traceback:\n' +
-                ''.join(traceback.format_exc())
-            )
+            logger.error('Failed to establish connection at ' +
+                         self.connection_cls.desc_str(*self._conn_args,
+                                                      **self._conn_kwargs))
+            logger.info('Failed connection traceback:\n' +
+                        ''.join(traceback.format_exc()))
             # Do this first, because otherwise randrange errors (and also
             # otherwise it isn't technically binary exponential backoff)
             self._consecutive_attempts += 1
@@ -677,7 +695,8 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
         method = getattr(self.protocol_def, request_name)
         await self.await_connection()
         return (await method(self._connection, *args, **kwargs))
-        
+    
+    @property
     def has_connection(self):
         # Hmmm
         return self._conn_available.is_set()
