@@ -593,6 +593,19 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
                 return (await self.perform_request(_method, args, kwargs))
             
             setattr(self, name, wrap_request)
+            
+    @property
+    def _conn_desc(self):
+        ''' Make (and cache) a description of the connection.
+        '''
+        conn_desc = getattr(self, '__conn_desc', None)
+        
+        if conn_desc is None:
+            conn_desc = self.connection_cls.desc_str(*self._conn_args,
+                                                     **self._conn_kwargs)
+            setattr(self, '__conn_desc', conn_desc)
+            
+        return conn_desc
     
     async def loop_init(self, *args, **kwargs):
         ''' *args and **kwargs will be passed to the connection class.
@@ -618,7 +631,7 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
         '''
         # Attempt to connect.
         try:
-            logger.info('Establishing connection: ' + repr(self))
+            logger.debug('Establishing connection to ' + self._conn_desc)
             # Technically this violates the idea that connections should be
             # wholly self-sustained, but we want to be able to explicitly close
             # them and pass some strong references to them later. Maybe. I
@@ -630,14 +643,13 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
             
         # Need to catch this specifically, lest we accidentally do this forever
         except asyncio.CancelledError:
-            logger.debug('Connection manager cancelled: ' + repr(self))
+            logger.debug('Connection manager cancelled to ' + self._conn_desc)
             raise
             
         # The connection failed. Wait before reattempting it.
         except Exception as exc:
             logger.error('Failed to establish connection at ' +
-                         self.connection_cls.desc_str(*self._conn_args,
-                                                      **self._conn_kwargs))
+                         self._conn_desc)
             logger.info('Failed connection traceback:\n' +
                         ''.join(traceback.format_exc()))
             # Do this first, because otherwise randrange errors (and also
@@ -654,7 +666,7 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
             
         # We successfully connected. Awesome.
         else:
-            logger.debug('Connected: ' + repr(self))
+            logger.info('Connected to ' + self._conn_desc)
             # Reset the attempts counter and set that a connection is available
             self._consecutive_attempts = 0
             # See note above re: strong/weak references
@@ -671,21 +683,33 @@ class ConnectionManager(loopa.TaskLooper, metaclass=loopa.utils.Triplicate):
                         self.conn_init(self, connection)
                     )
                 
-                logger.debug('Listening for messages: ' + repr(self))
+                logger.debug('Listening for messages at ' + self._conn_desc)
                 
                 # We don't expect clients to have a high enough message volume
                 # to justify a buffer, so directly invoke the message handler
                 await connection.listen_forever(receiver=self.protocol_def)
+                
+            # We want to log, but swallow-and-attempt-reconnect, errors in
+            # connections.
+            except ConnectionError:
+                logger.warning('Connection errored: ' + self._conn_desc +
+                               ' w/ traceback:\n' +
+                               ''.join(traceback.format_exc()))
             
             # No matter what happens, when this dies we need to clean up the
             # connection and tell downstream that we cannot send anymore.
             finally:
                 self._conn_available.clear()
                 await connection.close()
-                logger.debug('Connection closed: ' + repr(self))
+                logger.info('Connection closed: ' + self._conn_desc)
                 
                 if self.conn_close is not None:
                     await self.conn_close(self, connection)
+                    
+    def __str__(self):
+        ''' Make a better, compact representation of self.
+        '''
+        return type(self).__name__ + '(' + self._conn_desc + ')'
             
     async def perform_request(self, request_name, args, kwargs):
         ''' Make the given request using the protocol_def, but wait
