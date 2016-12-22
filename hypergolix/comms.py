@@ -332,12 +332,14 @@ class WSConnection(_ConnectionBase):
     This should definitely use slots, to save on server memory usage.
     '''
     
-    def __init__(self, websocket, path=None, *args, **kwargs):
+    def __init__(self, websocket, path=None, heartbeat_interval=57, *args,
+                 **kwargs):
         super().__init__(*args, **kwargs)
         
         self.websocket = websocket
         self.path = path
-            
+        self.heartbeat_interval = heartbeat_interval
+    
     @classmethod
     def desc_str(cls, host, port, tls):
         ''' Override this to explain where the connection is supposed to
@@ -446,6 +448,59 @@ class WSConnection(_ConnectionBase):
                 
             finally:
                 self.terminate()
+                
+    async def listen_forever(self, receiver):
+        ''' Override standard connection listen_forever to pong every
+        self.heartbeat_interval to prevent connections from being
+        artificially terminated.
+        '''
+        # Wait until terminate is called.
+        listener = None
+        try:
+            while self:
+                # Reuse the same listener from loop iteration to iteration
+                if listener is None:
+                    listener = asyncio.ensure_future(self.listener(receiver))
+                
+                # No matter what, we need a new heartbeat
+                heartbeat = asyncio.ensure_future(
+                    asyncio.sleep(self.heartbeat_interval))
+                
+                done, pending = await asyncio.wait(
+                    fs = {listener, heartbeat},
+                    return_when = asyncio.FIRST_COMPLETED
+                )
+                
+                # The listener finished before the heartbeat
+                if listener in done:
+                    # We don't need this heartbeat anymore
+                    heartbeat.cancel()
+                    # Get the listener result / raise its exception so asyncio
+                    # keeps quiet
+                    listener.result()
+                    # Reset the listener to None so the next loop iteration
+                    # makes a new listener
+                    listener = None
+                
+                # We haven't gotten a message since the heartbeat_interval, so
+                # we need to send a keepalive
+                else:
+                    logger.debug('CONN ' + str(self) + ' sending heartbeat.')
+                    # Don't want asyncio to yell at us for not collecting our
+                    # debts / results
+                    heartbeat.result()
+                    # But don't cancel the listener - we can reuse it next loop
+                    # around. Instead, just send the pong.
+                    await self.websocket.pong()
+                    
+                # Juuust in case things go south, add this to help
+                # cancellation.
+                await asyncio.sleep(0)
+                await self.listener(receiver)
+        
+        # Catch this so we don't log a huge traceback on it.
+        except ConnectionClosed as exc:
+            logger.debug('CONN ' + str(self) + ' close message: ' + str(exc))
     
     
 class MsgBuffer(loopa.TaskLooper):
