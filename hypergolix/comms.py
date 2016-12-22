@@ -477,6 +477,7 @@ class WSConnection(_ConnectionBase):
                     heartbeat.cancel()
                     # Get the listener result / raise its exception so asyncio
                     # keeps quiet
+                    listener.exception()
                     listener.result()
                     # Reset the listener to None so the next loop iteration
                     # makes a new listener
@@ -492,11 +493,6 @@ class WSConnection(_ConnectionBase):
                     # But don't cancel the listener - we can reuse it next loop
                     # around. Instead, just send the pong.
                     await self.websocket.pong()
-                    
-                # Juuust in case things go south, add this to help
-                # cancellation.
-                await asyncio.sleep(0)
-                await self.listener(receiver)
         
         # Catch this so we don't log a huge traceback on it.
         except ConnectionClosed as exc:
