@@ -438,7 +438,7 @@ class WSHeartbeatTest(unittest.TestCase):
             self.server,
             msg_handler = self.server_protocol,
             host = 'localhost',
-            port = 9318
+            port = 9319
         )
         
         self.client1_commander = TaskCommander(
@@ -458,7 +458,7 @@ class WSHeartbeatTest(unittest.TestCase):
         self.client1_commander.register_task(
             self.client1,
             host = 'localhost',
-            port = 9318,
+            port = 9319,
             tls = False
         )
         
@@ -479,7 +479,7 @@ class WSHeartbeatTest(unittest.TestCase):
         self.client2_commander.register_task(
             self.client2,
             host = 'localhost',
-            port = 9318,
+            port = 9319,
             tls = False
         )
         
