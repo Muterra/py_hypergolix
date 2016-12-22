@@ -786,8 +786,15 @@ class GAOCore(metaclass=API):
         new_len = len(new_obj.target_vector)
         old_len = len(self.target_history)
         maximized = list(new_obj.target_vector)
-        for ii in range(new_len - offset, old_len):
-            maximized.append(self.target_history[ii])
+        
+        # If the new target vector is smaller than the offset, then the
+        # old target vector is "buried" history (there are missing frames
+        # between the newest old target and the oldest new target) and
+        # therefore useless. Short-circuit so we don't accidentally try to
+        # do something with a negative index and then IndexError.
+        if new_len - offset > 0:
+            for ii in range(new_len - offset, old_len):
+                maximized.append(self.target_history[ii])
             
         return maximized
         
