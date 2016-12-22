@@ -51,6 +51,7 @@ from hypergolix.utils import ApiID
 from hypergolix.objproxy import Obj
 
 from hypergolix.comms import WSConnection
+from hypergolix.comms import WSBeatingConn
 from hypergolix.service import RemotePersistenceServer
 from hypergolix.app import HypergolixCore
 from hypergolix.accounting import Account
@@ -116,7 +117,7 @@ class TestAppNoRestore(unittest.TestCase):
             thread_kwargs = {'name': 'hgxcore1'}
         )
         cls.hgxcore1.add_remote(
-            connection_cls = WSConnection,
+            connection_cls = WSBeatingConn,
             host = '127.0.0.1',
             port = 6022,
             tls = False
@@ -148,7 +149,7 @@ class TestAppNoRestore(unittest.TestCase):
             thread_kwargs = {'name': 'hgxcore2'}
         )
         cls.hgxcore2.add_remote(
-            connection_cls = WSConnection,
+            connection_cls = WSBeatingConn,
             host = '127.0.0.1',
             port = 6022,
             tls = False
@@ -386,6 +387,8 @@ class TestAppNoRestore(unittest.TestCase):
                 self.assertEqual(mirror.state, state)
                 
         times = [end - start for end, start in self.timers]
+        # Get a newline for tidyness when being run within the whole test suite
+        print('')
         print('Max time: ', max(times))
         print('Min time: ', min(times))
         print('Mean time:', statistics.mean(times))

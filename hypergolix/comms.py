@@ -332,13 +332,11 @@ class WSConnection(_ConnectionBase):
     This should definitely use slots, to save on server memory usage.
     '''
     
-    def __init__(self, websocket, path=None, heartbeat_interval=57, *args,
-                 **kwargs):
+    def __init__(self, websocket, path=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
         self.websocket = websocket
         self.path = path
-        self.heartbeat_interval = heartbeat_interval
     
     @classmethod
     def desc_str(cls, host, port, tls):
@@ -448,7 +446,17 @@ class WSConnection(_ConnectionBase):
                 
             finally:
                 self.terminate()
-                
+
+
+class WSBeatingConn(WSConnection):
+    ''' A Websockets connection that overrides standard listen_forever
+    to pong on a regular heartbeat interval.
+    '''
+    
+    def __init__(self, *args, heartbeat_interval=57, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.heartbeat_interval = heartbeat_interval
+    
     async def listen_forever(self, receiver):
         ''' Override standard connection listen_forever to pong every
         self.heartbeat_interval to prevent connections from being

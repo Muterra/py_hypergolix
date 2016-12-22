@@ -56,6 +56,7 @@ from hypergolix.comms import request
 from hypergolix.comms import BasicServer
 from hypergolix.comms import MsgBuffer
 from hypergolix.comms import WSConnection
+from hypergolix.comms import WSBeatingConn
 from hypergolix.comms import ConnectionManager
 
 from hypergolix.exceptions import RequestFinished
@@ -389,17 +390,6 @@ class WSBasicTrashTest(unittest.TestCase):
             self.assertEqual(msg, self.server_protocol.check_result())
         
         logger.info('Exiting server test.')
-    
-    @unittest.skip('DNX')
-    def test_nest(self):
-        counter = random.randint(0, 255)
-        
-        result = await_coroutine_threadsafe(
-            coro = self.client1.make_nest_1(counter, timeout=1),
-            loop = self.client1_commander._loop
-        )
-        self.assertEqual(self.server_protocol.nested_counter, counter)
-        self.assertEqual(result, counter)
             
     def test_failures(self):
         logger.info('Starting failure test.')
@@ -417,6 +407,204 @@ class WSBasicTrashTest(unittest.TestCase):
                 loop = self.client1_commander._loop
             )
         logger.info('Exiting failure test.')
+    
+    @unittest.skip('DNX')
+    def test_nest(self):
+        counter = random.randint(0, 255)
+        
+        result = await_coroutine_threadsafe(
+            coro = self.client1.make_nest_1(counter, timeout=1),
+            loop = self.client1_commander._loop
+        )
+        self.assertEqual(self.server_protocol.nested_counter, counter)
+        self.assertEqual(result, counter)
+        
+        
+class WSHeartbeatTest(unittest.TestCase):
+        
+    def setUp(self):
+        # Use a different thread for each of the clients/server
+        self.server_commander = TaskCommander(
+            reusable_loop = False,
+            # We do need this to be threaded so we can handle testing stuff
+            # independently
+            threaded = True,
+            # debug = True,
+            thread_kwargs = {'name': 'server'}
+        )
+        self.server_protocol = TestParrot()
+        self.server = BasicServer(connection_cls=WSConnection)
+        self.server_commander.register_task(
+            self.server,
+            msg_handler = self.server_protocol,
+            host = 'localhost',
+            port = 9318
+        )
+        
+        self.client1_commander = TaskCommander(
+            reusable_loop = False,
+            # We do need this to be threaded so we can handle testing stuff
+            # independently
+            threaded = True,
+            # debug = True,
+            thread_kwargs = {'name': 'client1'}
+        )
+        self.client1_protocol = TestParrot()
+        self.client1 = ConnectionManager(
+            connection_cls = WSBeatingConn,
+            msg_handler = self.client1_protocol,
+            autoretry = False
+        )
+        self.client1_commander.register_task(
+            self.client1,
+            host = 'localhost',
+            port = 9318,
+            tls = False
+        )
+        
+        self.client2_commander = TaskCommander(
+            reusable_loop = False,
+            # We do need this to be threaded so we can handle testing stuff
+            # independently
+            threaded = True,
+            # debug = True,
+            thread_kwargs = {'name': 'client2'}
+        )
+        self.client2_protocol = TestParrot()
+        self.client2 = ConnectionManager(
+            connection_cls = WSBeatingConn,
+            msg_handler = self.client2_protocol,
+            autoretry = False
+        )
+        self.client2_commander.register_task(
+            self.client2,
+            host = 'localhost',
+            port = 9318,
+            tls = False
+        )
+        
+        self.server_commander.start()
+        await_coroutine_threadsafe(
+            coro = self.server_commander.await_init(),
+            loop = self.server_commander._loop
+        )
+        
+        self.client1_commander.start()
+        await_coroutine_threadsafe(
+            coro = self.client1_commander.await_init(),
+            loop = self.client1_commander._loop
+        )
+        
+        self.client2_commander.start()
+        await_coroutine_threadsafe(
+            coro = self.client2_commander.await_init(),
+            loop = self.client2_commander._loop
+        )
+                
+    def tearDown(self):
+        logger.critical('Entering test shutdown.')
+        self.client2_commander.stop_threadsafe(timeout=.5)
+        self.client1_commander.stop_threadsafe(timeout=.5)
+        # Wait for the server to stop or we may accidentally try to have an
+        # overlapping binding to the socket.
+        self.server_commander.stop_threadsafe(timeout=.5)
+        time.sleep(.1)
+        
+    def test_client1(self):
+        logger.info('Starting client1 test.')
+        for ii in range(TEST_ITERATIONS):
+            # Generate pseudorandom bytes w/ length 25
+            msg = bytes([random.randint(0, 255) for i in range(0, 25)])
+            
+            # Test a standart parrot
+            await_coroutine_threadsafe(
+                coro = self.client1.parrot(msg, timeout=1),
+                loop = self.client1_commander._loop
+            )
+            self.assertEqual(msg, self.client1_protocol.check_result())
+            
+            # Test a version of parrot that modifies the input
+            await_coroutine_threadsafe(
+                coro = self.client1.incr_parrot(msg, timeout=1),
+                loop = self.client1_commander._loop
+            )
+            self.assertEqual(
+                self.client1_protocol.STATIC_RESPONSE + msg,
+                self.client1_protocol.check_result()
+            )
+            
+            # Test a static response
+            response = await_coroutine_threadsafe(
+                coro = self.client1.static(timeout=1),
+                loop = self.client1_commander._loop
+            )
+            self.assertEqual(response, self.client1_protocol.STATIC_RESPONSE)
+            
+        for ii in range(TEST_ITERATIONS):
+            # Generate pseudorandom bytes w/ length 25
+            msg = bytes([random.randint(0, 255) for i in range(0, 25)])
+            
+            # Test a standart parrot
+            await_coroutine_threadsafe(
+                coro = self.client2.parrot(msg, timeout=1),
+                loop = self.client2_commander._loop
+            )
+            self.assertEqual(msg, self.client2_protocol.check_result())
+            
+            # Test a version of parrot that modifies the input
+            await_coroutine_threadsafe(
+                coro = self.client2.incr_parrot(msg, timeout=1),
+                loop = self.client2_commander._loop
+            )
+            self.assertEqual(
+                self.client2_protocol.STATIC_RESPONSE + msg,
+                self.client2_protocol.check_result()
+            )
+            
+            # Test a static response
+            response = await_coroutine_threadsafe(
+                coro = self.client2.static(timeout=1),
+                loop = self.client2_commander._loop
+            )
+            self.assertEqual(response, self.client2_protocol.STATIC_RESPONSE)
+            
+        logger.info('Finished client1 test.')
+        
+    def test_server(self):
+        ''' Test sending messages from the server to the client.
+        '''
+        logger.info('Starting server test.')
+        # First we need to get the server to record the connections. This is
+        # a hack, but, well, we're not intending to have things behave this way
+        # normally.
+        await_coroutine_threadsafe(
+            coro = self.client1.announce(timeout=1),
+            loop = self.client1_commander._loop
+        )
+        await_coroutine_threadsafe(
+            coro = self.client2.announce(timeout=1),
+            loop = self.client2_commander._loop
+        )
+        
+        # Pick a connection at random for each iteration. Double the test
+        # iterations so that we get approximately that many iterations for each
+        # connection.
+        for ii in range(TEST_ITERATIONS * 2):
+            connection = random.choice(self.server_protocol.connections)
+            # Generate pseudorandom bytes w/ length 25
+            msg = bytes([random.randint(0, 255) for i in range(0, 25)])
+            
+            await_coroutine_threadsafe(
+                coro = self.server_protocol.parrot(
+                    connection,
+                    msg,
+                    timeout = 1
+                ),
+                loop = self.server_commander._loop
+            )
+            self.assertEqual(msg, self.server_protocol.check_result())
+        
+        logger.info('Exiting server test.')
 
 
 def fileno(file_or_fd):

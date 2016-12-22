@@ -61,6 +61,7 @@ from hypergolix.config import Config
 from hypergolix.config import get_hgx_rootdir
 
 from hypergolix.comms import WSConnection
+from hypergolix.comms import WSBeatingConn
 from hypergolix.app import HypergolixCore
 from hypergolix.accounting import Account
 
@@ -549,7 +550,7 @@ def run_daemon(hgx_rootdir, pid_file, parent_port, account_entity,
         
         for remote in remotes:
             hgxcore.add_remote(
-                connection_cls = WSConnection,
+                connection_cls = WSBeatingConn,
                 host = remote.host,
                 port = remote.port,
                 tls = remote.tls
