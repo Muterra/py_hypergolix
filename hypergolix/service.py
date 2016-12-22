@@ -230,6 +230,11 @@ class RemotePersistenceServer(loopa.TaskCommander):
         )
         self.register_task(self.postman)
         self.register_task(self.undertaker)
+        
+    async def setup(self):
+        ''' Once booted, restore the librarian.
+        '''
+        await self.librarian.restore()
 
     
 def start(namespace=None):
