@@ -106,7 +106,8 @@ setup(
         'cryptography>=1.6',
         'pycryptodome>=3.4.3',  # blocking on cryptography .whl openssl version
         'daemoniker>=0.2.2',
-        'loopa>=0.0.2'
+        'loopa>=0.0.2',
+        'certifi'
     ],
 
     # List additional groups of dependencies here (e.g. development

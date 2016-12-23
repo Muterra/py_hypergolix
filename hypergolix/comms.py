@@ -37,6 +37,8 @@ import traceback
 import weakref
 import base64
 import loopa
+import certifi
+import ssl
 # Note that time is only used for request timing
 import time
 # Note that random is only used for:
@@ -77,6 +79,16 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+
+try:
+    SSL_VERIFICATION_CONTEXT = ssl.SSLContext(protocol=ssl.PROTOCOL_TLS)
+except AttributeError:
+    SSL_VERIFICATION_CONTEXT = ssl.SSLContext(protocol=ssl.PROTOCOL_SSLv23)
+
+SSL_VERIFICATION_CONTEXT.load_verify_locations(cafile=certifi.where())
+SSL_VERIFICATION_CONTEXT.verify_mode = ssl.CERT_REQUIRED
+SSL_VERIFICATION_CONTEXT.check_hostname = True
+    
 
 # ###############################################
 # Globals
@@ -392,12 +404,22 @@ class WSConnection(_ConnectionBase):
         by clients; servers may call __init__ directly.
         '''
         loc = _WSLoc(host, int(port), bool(tls))
+        
         # If this raises, we don't need to worry about closing, because the
         # websocket won't exist.
-        websocket = await websockets.client.connect(
-            str(loc),
-            max_size = 10 * (2 ** 20)    # Max incoming msg size 10 MiB
-        )
+        if tls:
+            websocket = await websockets.client.connect(
+                str(loc),
+                ssl = SSL_VERIFICATION_CONTEXT,
+                max_size = 10 * (2 ** 20)    # Max incoming msg size 10 MiB
+            )
+        
+        else:
+            websocket = await websockets.client.connect(
+                str(loc),
+                max_size = 10 * (2 ** 20)    # Max incoming msg size 10 MiB
+            )
+        
         return cls(websocket=websocket)
         
     async def close(self):

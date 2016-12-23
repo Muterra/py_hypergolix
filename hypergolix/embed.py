@@ -325,6 +325,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         ''' Pass to connection manager. Also, turn the object into the
         specified class. If obj is not None, re-cast it as such.
         '''
+        # Obj_def is passed in when recasting.
         if obj_def is not None:
             (address,
              author,
@@ -335,6 +336,8 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
              dynamic,
              _legroom) = obj_def
             
+        # This is bypassed during recasting, but otherwise pulls an existing
+        # object from our local cache
         elif ghid in self._objs_by_ghid:
             obj = self._objs_by_ghid[ghid]
             if type(obj) != cls:
@@ -345,6 +348,8 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
             else:
                 return obj
         
+        # We don't have the object in our cache, nor are we recasting, so we
+        # must get it directly from the hypergolix service
         else:
             (address,
              author,
@@ -406,6 +411,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
              private,
              dynamic,
              _legroom) = obj_def
+            state = await cls.hgx_unpack(state)
             new_obj = cls(
                 hgxlink = self,
                 ipc_manager = self._ipc_manager,

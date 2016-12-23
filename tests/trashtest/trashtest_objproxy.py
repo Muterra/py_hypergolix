@@ -490,8 +490,15 @@ class SerializationTest(GenericObjTest, unittest.TestCase):
         '''
         obj = self.make_dummy_object(PickleObj, 1)
         reprox = obj.recast_threadsafe(Proxy)
-        redobj = reprox.hgx_recast_threadsafe(PickleObj)
         
+        # Interestingly, this fails with a proxy object, but below doesn't
+        proxunpack = await_coroutine_threadsafe(
+            coro = PickleObj.hgx_unpack(reprox._hgx_state),
+            loop = self.hgxlink._loop
+        )
+        self.assertEqual(proxunpack, 1)
+        
+        redobj = reprox.hgx_recast_threadsafe(PickleObj)
         self.assertEqual(redobj._hgx_state, 1)
         
     def test_json(self):
@@ -499,8 +506,15 @@ class SerializationTest(GenericObjTest, unittest.TestCase):
         '''
         obj = self.make_dummy_object(JsonObj, 1)
         reprox = obj.recast_threadsafe(Proxy)
-        redobj = reprox.hgx_recast_threadsafe(JsonObj)
         
+        # Interestingly, this works with a proxy object, but above doesn't
+        proxunpack = await_coroutine_threadsafe(
+            coro = JsonObj.hgx_unpack(reprox),
+            loop = self.hgxlink._loop
+        )
+        self.assertEqual(proxunpack, 1)
+        
+        redobj = reprox.hgx_recast_threadsafe(JsonObj)
         self.assertEqual(redobj._hgx_state, 1)
         
 

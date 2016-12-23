@@ -636,6 +636,7 @@ class ObjCore(metaclass=TriplicateAPI):
     async def _hgx_force_pull(self, state):
         ''' Fixturing this actually requires a small degree of effort.
         '''
+        state = await self.hgx_unpack(state)
         self._hgx_state = state
         
     def __render_inop(self):
@@ -2024,7 +2025,7 @@ class PickleSerializer:
     _hgx_DEFAULT_API = ApiID(bytes(63) + b'\x02')
     
     @staticmethod
-    async def _hgx_pack(state):
+    async def hgx_pack(state):
         ''' Packs the object into bytes. For the base proxy, treat the
         input as bytes and return immediately.
         '''
@@ -2039,7 +2040,7 @@ class PickleSerializer:
             raise
     
     @staticmethod
-    async def _hgx_unpack(packed):
+    async def hgx_unpack(packed):
         ''' Unpacks the object from bytes. For the base proxy, treat the
         input as bytes and return immediately.
         '''
@@ -2072,7 +2073,7 @@ class JsonSerializer:
     _hgx_DEFAULT_API = ApiID(bytes(63) + b'\x03')
     
     @staticmethod
-    async def _hgx_pack(state):
+    async def hgx_pack(state):
         ''' Packs the object into bytes. For the base proxy, treat the
         input as bytes and return immediately.
         '''
@@ -2088,7 +2089,7 @@ class JsonSerializer:
             raise
     
     @staticmethod
-    async def _hgx_unpack(packed):
+    async def hgx_unpack(packed):
         ''' Unpacks the object from bytes. For the base proxy, treat the
         input as bytes and return immediately.
         '''
