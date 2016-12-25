@@ -544,73 +544,82 @@ class GAOCore(metaclass=API):
         packed = await self.pack_gao()
         container = await self._golcore.make_container(packed, secret)
         
-        # We have a secret. Now we need a container and a binding frame.
+        # Dynamic object
+        if self.dynamic:
+            binding = await self._golcore.make_binding_dyn(
+                target = container.ghid,
+                ghid = self.ghid,
+                history = self.target_history
+            )
+            binding_obj = _GobdLite.from_golix(binding)
+            counter = binding.counter
+            reference_ghid = binding.ghid_dynamic
+            
+        # Static object.
+        else:
+            binding = await self._golcore.make_binding_stat(container.ghid)
+            binding_obj = _GobsLite.from_golix(binding)
+            counter = 0
+            reference_ghid = container.ghid
+        
+        # Okay, up until now, we haven't changed any state. But now we need to
+        # update state, which needs to be atomic-ish, so we're going to do some
+        # funny business here.
+        
+        # If this gets cancelled, we don't need to worry about anything.
+        await self._percore.direct_ingest(
+            obj = binding_obj,
+            packed = binding.packed,
+            remotable = True
+        )
+        
+        # But if we get here, we've changed state, so we need to protect stuff.
         try:
-            self._privateer.stage(container.ghid, secret)
-            
-            if self.dynamic:
-                binding = await self._golcore.make_binding_dyn(
-                    target = container.ghid,
-                    ghid = self.ghid,
-                    history = self.target_history
-                )
-                counter = binding.counter
-                # Update ghid if it was not defined (new object)
-                self._conditional_init(
-                    binding.ghid_dynamic,
-                    True,
-                    self._golcore.whoami
-                )
-                
-                # Publish to persister
-                await self._percore.direct_ingest(
-                    obj = _GobdLite.from_golix(binding),
-                    packed = binding.packed,
+            # It we ingested the binding, we *must* also ingest the container
+            # (if **at all** possible), or the binding will effectively be
+            # unrecoverable
+            container_ingester = asyncio.ensure_future(
+                self._percore.direct_ingest(
+                    obj = _GeocLite.from_golix(container),
+                    packed = container.packed,
                     remotable = True
                 )
-            
-            # Static object.
-            else:
-                binding = await self._golcore.make_binding_stat(container.ghid)
-                
-                # Update ghid if it was not defined (new object)
-                self._conditional_init(
-                    container.ghid,
-                    False,
-                    self._golcore.whoami
-                )
-                await self._percore.direct_ingest(
-                    obj = _GobsLite.from_golix(binding),
-                    packed = binding.packed,
-                    remotable = True
-                )
-                counter = 0
-                
-            # Finally, ingest the object itself.
-            await self._percore.direct_ingest(
-                obj = _GeocLite.from_golix(container),
-                packed = container.packed,
-                remotable = True
             )
         
-        # Necessary for else clause (grumble grumble)
-        except:
-            # Anything that got here means that the container hasn't been
-            # ingested (that was the last thing above), so abandon its secret.
-            self._privateer.abandon(container.ghid, quiet=True)
-            raise
+            await asyncio.shield(container_ingester)
+        
+        # That container ingestion is the only remaining async call within this
+        # coro, so this is the only thing we need to defer cancellation on.
+        # While we're at it, defer any other exceptions, too, though they will
+        # likely break the object anyways.
+        except Exception as exc:
+            deferred_raise = exc
+            
+        else:
+            deferred_raise = None
             
         # We created a container and binding frame, and then we successfully
         # uploaded them. Update our frame and target history accordingly and
         # commit the container secret.
-        else:
-            self._privateer.commit(container.ghid, localize=self._local_secret)
-            # NOTE THE DISCREPANCY between the Golix dynamic binding version
-            # of ghid and ours! This is recording the frame ghid.
-            # I mean, for static stuff this isn't (strictly speaking) relevant,
-            # but it also doesn't really hurt anything, sooo...
-            self.target_history.appendleft(container.ghid)
-            self._counter = counter
+        self._privateer.stage(container.ghid, secret)
+        self._privateer.commit(container.ghid, localize=self._local_secret)
+        # NOTE THE DISCREPANCY between the Golix dynamic binding version
+        # of ghid and ours! This is recording the frame ghid.
+        # I mean, for static stuff this isn't (strictly speaking) relevant,
+        # but it also doesn't really hurt anything, sooo...
+        self.target_history.appendleft(container.ghid)
+        self._counter = counter
+        
+        # Do this last!
+        # Update ghid if it was not defined (new object)
+        self._conditional_init(
+            reference_ghid,
+            False,
+            self._golcore.whoami
+        )
+        
+        if deferred_raise is not None:
+            raise deferred_raise
             
     @_push.fixture
     async def _push(self):
