@@ -173,10 +173,10 @@ class Accountable(API):
         cls = super().__new__(mcls, clsname, bases, new_namespace, *args,
                               **kwargs)
         
-        async def _push(self, *args, **kwargs):
+        async def _push(self, *args, force=False, **kwargs):
             ''' Only push if we actually changed.
             '''
-            if self.ghid is None or self._mutated:
+            if force or self.ghid is None or self._mutated:
                 # Because of the order here, we don't much need to worry about
                 # a race condition. Any subsequent mutating calls will
                 # correctly mark the gao as mutated, allowing the next push to

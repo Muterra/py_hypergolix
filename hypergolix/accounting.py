@@ -256,11 +256,13 @@ class Account(metaclass=API):
                 logger.critical('Incorrect password.')
                 raise ValueError('Incorrect password.')
             
+            # Identity
             identity_ghid = Ghid.from_bytes(
                 root_node.state[0: 65])     # 65 bytes
             identity_master = Secret.from_bytes(
                 root_node.state[65: 118])   # 53 bytes
             
+            # Privateer
             privateer_persistent_ghid = Ghid.from_bytes(
                 root_node.state[118: 183])
             privateer_persistent_master = Secret.from_bytes(
@@ -271,11 +273,48 @@ class Account(metaclass=API):
             privateer_quarantine_master = Secret.from_bytes(
                 root_node.state[301: 354])
             
-            secondary_manifest_ghid = Ghid.from_bytes(
+            # Rolodex stuff
+            rolodex_pending_ghid = Ghid.from_bytes(
                 root_node.state[354: 419])
-            secondary_manifest_master = Secret.from_bytes(
+            rolodex_pending_master = Secret.from_bytes(
                 root_node.state[419: 472])
-                
+            
+            rolodex_outstanding_ghid = Ghid.from_bytes(
+                root_node.state[472: 537])
+            rolodex_outstanding_master = Secret.from_bytes(
+                root_node.state[537: 590])
+            
+            # Dispatch stuff
+            dispatch_tokens_ghid = Ghid.from_bytes(
+                root_node.state[590: 655])
+            dispatch_tokens_master = Secret.from_bytes(
+                root_node.state[655: 708])
+            
+            dispatch_startup_ghid = Ghid.from_bytes(
+                root_node.state[708: 773])
+            dispatch_startup_master = Secret.from_bytes(
+                root_node.state[773: 826])
+            
+            dispatch_private_ghid = Ghid.from_bytes(
+                root_node.state[826: 891])
+            dispatch_private_master = Secret.from_bytes(
+                root_node.state[891: 944])
+            
+            dispatch_incoming_ghid = Ghid.from_bytes(
+                root_node.state[944: 1009])
+            dispatch_incoming_master = Secret.from_bytes(
+                root_node.state[1009: 1062])
+            
+            dispatch_orphan_acks_ghid = Ghid.from_bytes(
+                root_node.state[1062: 1127])
+            dispatch_orphan_acks_master = Secret.from_bytes(
+                root_node.state[1127: 1180])
+            
+            dispatch_orphan_naks_ghid = Ghid.from_bytes(
+                root_node.state[1180: 1245])
+            dispatch_orphan_naks_master = Secret.from_bytes(
+                root_node.state[1245: 1298])
+        
         else:
             # We need an identity at to golcore before we can do anything
             logger.info('Bootstrapping golcore.')
@@ -318,8 +357,31 @@ class Account(metaclass=API):
             privateer_quarantine_ghid = None
             privateer_quarantine_master = self._identity.new_secret()
             
-            secondary_manifest_ghid = None
-            secondary_manifest_master = self._identity.new_secret()
+            # Rolodex stuff
+            rolodex_pending_ghid = None
+            rolodex_pending_master = self._identity.new_secret()
+            
+            rolodex_outstanding_ghid = None
+            rolodex_outstanding_master = self._identity.new_secret()
+            
+            # Dispatch stuff
+            dispatch_tokens_ghid = None
+            dispatch_tokens_master = self._identity.new_secret()
+            
+            dispatch_startup_ghid = None
+            dispatch_startup_master = self._identity.new_secret()
+            
+            dispatch_private_ghid = None
+            dispatch_private_master = self._identity.new_secret()
+            
+            dispatch_incoming_ghid = None
+            dispatch_incoming_master = self._identity.new_secret()
+            
+            dispatch_orphan_acks_ghid = None
+            dispatch_orphan_acks_master = self._identity.new_secret()
+            
+            dispatch_orphan_naks_ghid = None
+            dispatch_orphan_naks_master = self._identity.new_secret()
         
         # Allocate the identity container
         #######################################################################
@@ -346,23 +408,6 @@ class Account(metaclass=API):
         self.privateer_quarantine.ghid = privateer_quarantine_ghid
         self.privateer_quarantine._inject_msec(privateer_quarantine_master)
         
-        # Allocate the secondary manifest
-        #######################################################################
-        # This contains references to all of the remaining account GAO objects.
-        # Their secrets are stored within the persistent lookup.
-        secondary_manifest = GAODict(
-            ghid = secondary_manifest_ghid,
-            dynamic = True,
-            author = None,
-            legroom = 7,
-            golcore = self._golcore,
-            ghidproxy = self._ghidproxy,
-            privateer = self._privateer,
-            percore = self._percore,
-            librarian = self._librarian,
-            master_secret = secondary_manifest_master
-        )
-        
         # Save/load the identity container and bootstrap golcore, privateer
         #######################################################################
         
@@ -384,20 +429,6 @@ class Account(metaclass=API):
             logger.info('Loading quarantined keystore.')
             await self.privateer_quarantine._pull()
             
-            logger.info('Loading secondary manifest.')
-            await secondary_manifest._pull()
-            
-            # Rolodex
-            rolodex_pending = secondary_manifest['rolodex.pending']
-            rolodex_outstanding = secondary_manifest['rolodex.outstanding']
-            # Dispatch
-            dispatch_tokens = secondary_manifest['dispatch.tokens']
-            dispatch_startup = secondary_manifest['dispatch.startup']
-            dispatch_private = secondary_manifest['dispatch.private']
-            dispatch_incoming = secondary_manifest['dispatch.incoming']
-            dispatch_orphan_acks = secondary_manifest['dispatch.orphan_acks']
-            dispatch_orphan_naks = secondary_manifest['dispatch.orphan_naks']
-            
         # Save new account
         else:
             # First, bootstrap salmonator, so that we don't get errors as an
@@ -411,21 +442,168 @@ class Account(metaclass=API):
             # frame, or we'll lose the first frame (and therefore, everything
             # we care about)
             logger.info('Allocating identity container.')
-            await identity_container._push()
+            await identity_container._push(force=True)
             logger.info('Saving identity.')
             identity_container.update(self._identity._serialize())
-            await identity_container._push()
+            await identity_container._push(force=True)
             
             # Because these use a master secret, they need to be initialized,
             # or the first frame will be unrecoverable.
             logger.info('Allocating persistent keystore.')
-            await self.privateer_persistent._push()
+            await self.privateer_persistent._push(force=True)
+            await self.privateer_persistent._push(force=True)
             
             logger.info('Allocating quarantined keystore.')
-            await self.privateer_quarantine._push()
+            await self.privateer_quarantine._push(force=True)
+            await self.privateer_quarantine._push(force=True)
             
-            logger.info('Allocating secondary manifest.')
-            await secondary_manifest._push()
+        # Establish the rest of the above at the various tracking agencies
+        logger.info('Reticulating keystores.')
+        await self._inject_gao(self.privateer_persistent)
+        await self._inject_gao(self.privateer_quarantine)
+        # We don't need to do this with the secondary manifest (unless we're
+        # planning on adding things to it while already running, which would
+        # imply an ad-hoc, on-the-fly upgrade process)
+        
+        # Rolodex gaos:
+        self.rolodex_pending = GAODict(
+            ghid = rolodex_pending_ghid,
+            dynamic = True,
+            author = None,
+            legroom = 7,
+            golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
+            privateer = self._privateer,
+            percore = self._percore,
+            librarian = self._librarian,
+            master_secret = rolodex_pending_master
+        )
+        self.rolodex_outstanding = GAOSetMap(
+            ghid = rolodex_outstanding_ghid,
+            dynamic = True,
+            author = None,
+            legroom = 7,
+            golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
+            privateer = self._privateer,
+            percore = self._percore,
+            librarian = self._librarian,
+            master_secret = rolodex_outstanding_master
+        )
+        
+        # Dispatch gaos:
+        self.dispatch_tokens = GAOSet(
+            ghid = dispatch_tokens_ghid,
+            dynamic = True,
+            author = None,
+            legroom = 7,
+            golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
+            privateer = self._privateer,
+            percore = self._percore,
+            librarian = self._librarian,
+            master_secret = dispatch_tokens_master
+        )
+        self.dispatch_startup = GAODict(
+            ghid = dispatch_startup_ghid,
+            dynamic = True,
+            author = None,
+            legroom = 7,
+            golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
+            privateer = self._privateer,
+            percore = self._percore,
+            librarian = self._librarian,
+            master_secret = dispatch_startup_master
+        )
+        self.dispatch_private = GAODict(
+            ghid = dispatch_private_ghid,
+            dynamic = True,
+            author = None,
+            legroom = 7,
+            golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
+            privateer = self._privateer,
+            percore = self._percore,
+            librarian = self._librarian,
+            master_secret = dispatch_private_master
+        )
+        self.dispatch_incoming = GAOSet(
+            ghid = dispatch_incoming_ghid,
+            dynamic = True,
+            author = None,
+            legroom = 7,
+            golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
+            privateer = self._privateer,
+            percore = self._percore,
+            librarian = self._librarian,
+            master_secret = dispatch_incoming_master
+        )
+        self.dispatch_orphan_acks = GAOSetMap(
+            ghid = dispatch_orphan_acks_ghid,
+            dynamic = True,
+            author = None,
+            legroom = 7,
+            golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
+            privateer = self._privateer,
+            percore = self._percore,
+            librarian = self._librarian,
+            master_secret = dispatch_orphan_acks_master
+        )
+        self.dispatch_orphan_naks = GAOSetMap(
+            ghid = dispatch_orphan_naks_ghid,
+            dynamic = True,
+            author = None,
+            legroom = 7,
+            golcore = self._golcore,
+            ghidproxy = self._ghidproxy,
+            privateer = self._privateer,
+            percore = self._percore,
+            librarian = self._librarian,
+            master_secret = dispatch_orphan_naks_master
+        )
+        
+        # These need not have the actual objects pulled yet
+        self._rolodex.bootstrap(self)
+        self._dispatch.bootstrap(self)
+        
+        if self._user_id is not None:
+            logger.info('Restoring sharing subsystem.')
+            await self.rolodex_pending._pull()
+            await self.rolodex_outstanding._pull()
+            
+            logger.info('Restoring object dispatch.')
+            await self.dispatch_tokens._pull()
+            await self.dispatch_startup._pull()
+            await self.dispatch_private._pull()
+            await self.dispatch_incoming._pull()
+            await self.dispatch_orphan_acks._pull()
+            await self.dispatch_orphan_naks._pull()
+        
+        else:
+            logger.info('Building sharing subsystem.')
+            await self.rolodex_pending._push(force=True)
+            await self.rolodex_pending._push(force=True)
+            await self.rolodex_outstanding._push(force=True)
+            await self.rolodex_outstanding._push(force=True)
+            
+            logger.info('Building object dispatch.')
+            await self.dispatch_tokens._push(force=True)
+            await self.dispatch_tokens._push(force=True)
+            await self.dispatch_startup._push(force=True)
+            await self.dispatch_startup._push(force=True)
+            await self.dispatch_private._push(force=True)
+            await self.dispatch_private._push(force=True)
+            await self.dispatch_incoming._push(force=True)
+            await self.dispatch_incoming._push(force=True)
+            await self.dispatch_orphan_acks._push(force=True)
+            await self.dispatch_orphan_acks._push(force=True)
+            await self.dispatch_orphan_naks._push(force=True)
+            await self.dispatch_orphan_naks._push(force=True)
+            
+            self._user_id = root_node.ghid
         
             logger.info('Building root node...')
             # Generate secure-random-length, pseudorandom-content padding
@@ -453,8 +631,22 @@ class Account(metaclass=API):
                                bytes(privateer_persistent_master) +
                                bytes(self.privateer_quarantine.ghid) +
                                bytes(privateer_quarantine_master) +
-                               bytes(secondary_manifest.ghid) +
-                               bytes(secondary_manifest_master) +
+                               bytes(self.rolodex_pending.ghid) +
+                               bytes(rolodex_pending_master) +
+                               bytes(self.rolodex_outstanding.ghid) +
+                               bytes(rolodex_outstanding_master) +
+                               bytes(self.dispatch_tokens.ghid) +
+                               bytes(dispatch_tokens_master) +
+                               bytes(self.dispatch_startup.ghid) +
+                               bytes(dispatch_startup_master) +
+                               bytes(self.dispatch_private.ghid) +
+                               bytes(dispatch_private_master) +
+                               bytes(self.dispatch_incoming.ghid) +
+                               bytes(dispatch_incoming_master) +
+                               bytes(self.dispatch_orphan_acks.ghid) +
+                               bytes(dispatch_orphan_acks_master) +
+                               bytes(self.dispatch_orphan_naks.ghid) +
+                               bytes(dispatch_orphan_naks_master) +
                                padding)
             
             # We'll use this upon future logins to verify password correctness
@@ -465,180 +657,12 @@ class Account(metaclass=API):
             
             logger.info('Saving root node.')
             await root_node._push()
-            
-            # Rolodex
-            rolodex_pending = None
-            rolodex_outstanding = None
-            # Dispatch
-            dispatch_tokens = None
-            dispatch_startup = None
-            dispatch_private = None
-            dispatch_incoming = None
-            dispatch_orphan_acks = None
-            dispatch_orphan_naks = None
-            
-        # Establish the rest of the above at the various tracking agencies
-        logger.info('Reticulating keystores.')
-        await self._inject_gao(self.privateer_persistent)
-        await self._inject_gao(self.privateer_quarantine)
-        # We don't need to do this with the secondary manifest (unless we're
-        # planning on adding things to it while already running, which would
-        # imply an ad-hoc, on-the-fly upgrade process)
         
         #######################################################################
         #######################################################################
         # ROOT NODE CREATION (PRIMARY BOOTSTRAP) COMPLETE!
         #######################################################################
         #######################################################################
-        
-        # Rolodex gaos:
-        self.rolodex_pending = GAODict(
-            ghid = rolodex_pending,
-            dynamic = True,
-            author = None,
-            legroom = 7,
-            golcore = self._golcore,
-            ghidproxy = self._ghidproxy,
-            privateer = self._privateer,
-            percore = self._percore,
-            librarian = self._librarian
-        )
-        self.rolodex_outstanding = GAOSetMap(
-            ghid = rolodex_outstanding,
-            dynamic = True,
-            author = None,
-            legroom = 7,
-            golcore = self._golcore,
-            ghidproxy = self._ghidproxy,
-            privateer = self._privateer,
-            percore = self._percore,
-            librarian = self._librarian
-        )
-        
-        # Dispatch gaos:
-        self.dispatch_tokens = GAOSet(
-            ghid = dispatch_tokens,
-            dynamic = True,
-            author = None,
-            legroom = 7,
-            golcore = self._golcore,
-            ghidproxy = self._ghidproxy,
-            privateer = self._privateer,
-            percore = self._percore,
-            librarian = self._librarian
-        )
-        self.dispatch_startup = GAODict(
-            ghid = dispatch_startup,
-            dynamic = True,
-            author = None,
-            legroom = 7,
-            golcore = self._golcore,
-            ghidproxy = self._ghidproxy,
-            privateer = self._privateer,
-            percore = self._percore,
-            librarian = self._librarian
-        )
-        self.dispatch_private = GAODict(
-            ghid = dispatch_private,
-            dynamic = True,
-            author = None,
-            legroom = 7,
-            golcore = self._golcore,
-            ghidproxy = self._ghidproxy,
-            privateer = self._privateer,
-            percore = self._percore,
-            librarian = self._librarian
-        )
-        self.dispatch_incoming = GAOSet(
-            ghid = dispatch_incoming,
-            dynamic = True,
-            author = None,
-            legroom = 7,
-            golcore = self._golcore,
-            ghidproxy = self._ghidproxy,
-            privateer = self._privateer,
-            percore = self._percore,
-            librarian = self._librarian
-        )
-        self.dispatch_orphan_acks = GAOSetMap(
-            ghid = dispatch_orphan_acks,
-            dynamic = True,
-            author = None,
-            legroom = 7,
-            golcore = self._golcore,
-            ghidproxy = self._ghidproxy,
-            privateer = self._privateer,
-            percore = self._percore,
-            librarian = self._librarian
-        )
-        self.dispatch_orphan_naks = GAOSetMap(
-            ghid = dispatch_orphan_naks,
-            dynamic = True,
-            author = None,
-            legroom = 7,
-            golcore = self._golcore,
-            ghidproxy = self._ghidproxy,
-            privateer = self._privateer,
-            percore = self._percore,
-            librarian = self._librarian
-        )
-        
-        # These need not have the actual objects pulled yet
-        self._rolodex.bootstrap(self)
-        self._dispatch.bootstrap(self)
-        
-        if self._user_id is not None:
-            logger.info('Restoring sharing subsystem.')
-            await self.rolodex_pending._pull()
-            await self.rolodex_outstanding._pull()
-            
-            logger.info('Restoring object dispatch.')
-            await self.dispatch_tokens._pull()
-            await self.dispatch_startup._pull()
-            await self.dispatch_private._pull()
-            await self.dispatch_incoming._pull()
-            await self.dispatch_orphan_acks._pull()
-            await self.dispatch_orphan_naks._pull()
-        
-        else:
-            logger.info('Building sharing subsystem.')
-            await self.rolodex_pending._push()
-            await self.rolodex_outstanding._push()
-            
-            logger.info('Building object dispatch.')
-            await self.dispatch_tokens._push()
-            await self.dispatch_startup._push()
-            await self.dispatch_private._push()
-            await self.dispatch_incoming._push()
-            await self.dispatch_orphan_acks._push()
-            await self.dispatch_orphan_naks._push()
-        
-            logger.info('Building secondary manifest.')
-            secondary_manifest['rolodex.pending'] = \
-                self.rolodex_pending.ghid
-            secondary_manifest['rolodex.outstanding'] = \
-                self.rolodex_outstanding.ghid
-            secondary_manifest['dispatch.tokens'] = \
-                self.dispatch_tokens.ghid
-            secondary_manifest['dispatch.startup'] = \
-                self.dispatch_startup.ghid
-            secondary_manifest['dispatch.private'] = \
-                self.dispatch_private.ghid
-            secondary_manifest['dispatch.incoming'] = \
-                self.dispatch_incoming.ghid
-            secondary_manifest['dispatch.orphan_acks'] = \
-                self.dispatch_orphan_acks.ghid
-            secondary_manifest['dispatch.orphan_naks'] = \
-                self.dispatch_orphan_naks.ghid
-            
-            await secondary_manifest._push()
-            # Note that we have to do this twice, even though the second time
-            # is empty, just so that we can bootstrap the ratchet.
-            await self.privateer_quarantine._push()
-            # TODO: change to self.flush()
-            await self.privateer_persistent._push()
-            await self.privateer_persistent._push()
-            self._user_id = root_node.ghid
         
         logger.info('Reticulating sharing subsystem.')
         await self._inject_gao(self.rolodex_pending)
