@@ -67,6 +67,7 @@ from .exceptions import HGXLinkError
 from .exceptions import DeadObject
 from .exceptions import RatchetError
 from .exceptions import UnknownSecret
+from .exceptions import UnrecoverableState
 
 from .persistence import _GobdLite
 from .persistence import _GdxxLite
@@ -699,45 +700,117 @@ class GAOCore(metaclass=API):
         # Okay, if this is calling _pull from oracle._get_object, we may be
         # going for either a dynamic binding or a static object (container).
         if isinstance(binding, _GobdLite):
-            # Also don't forget to update history. Do this first, because it
-            # will create a canonical update, regardless of success in
-            # unpacking.
-            try:
-                # Recover the new secret for the chain.
-                self._privateer.heal_chain(
-                    proxy = self.ghid,
-                    target_vector = self._maximize_target_vector(binding),
-                    master_secret = self._master_secret
-                )
-                
-            except RatchetError as exc:
-                if binding.target not in self._privateer:
-                    raise UnknownSecret(binding.target) from exc
+            self._recover_target_secret(binding)
             
-            # Now, we need to be sure our local history doesn't forget about
-            # our current-most-recent frame when making an update.
-            finally:
-                # Finally, update our target_history accordingly.
-                self.target_history = collections.deque(
-                    binding.target_vector,
-                    # Make sure we have at least one historical target
-                    maxlen = max(2, len(binding.target_vector))
-                )
-                
-            # Okay, now let's actually do the thing with the new copy.
-            container_ghid = binding.target
+            target_vector = binding.target_vector
             dynamic = True
                     
         # Static object, so this is the actual container (and not the binding).
         elif isinstance(binding, _GeocLite):
-            container_ghid = binding.ghid
+            target_vector = [binding.ghid]
             dynamic = False
             
         # None of the above. TypeError.
         else:
             raise TypeError('Update failed pull; mismatched Golix primitive.')
         
+        try:
+            # Do this before the state update so it has access to self.ghid
+            # If this was just pulled for the first time, init the dynamic and
+            # author attributes.
+            self._conditional_init(
+                ghid = binding.ghid,    # For GOBS, actually the container ghid
+                dynamic = dynamic,
+                author = binding.author
+            )
+            
+            state_update = asyncio.ensure_future(
+                self._update_state(target_vector)
+            )
+            await asyncio.shield(state_update)
+        
+        # Ensure the state update cannot be cancelled partway through
+        except asyncio.CancelledError:
+            await state_update
+            raise
+            
+    @_pull.fixture
+    async def _pull(self):
+        ''' Do a conditional init if we haven't had stuff fully defined.
+        '''
+        self._conditional_init(
+            ghid = Ghid.from_bytes(
+                b'\x01' + bytes([random.randint(0, 255) for i in range(0, 64)])
+            ),
+            author = Ghid.from_bytes(
+                b'\x01' + bytes([random.randint(0, 255) for i in range(0, 64)])
+            ),
+            dynamic = bool(random.randint(0, 1))
+        )
+        
+    async def _update_state(self, target_vector):
+        ''' Does a failure-resistant, semi-atomic setate update.
+        '''
+        for target_ghid in target_vector:
+            try:
+                packed_state = await self._recover_container(target_ghid)
+                
+                # Finally, with all of the administrative stuff handled, unpack
+                # the actual payload.
+                await self.unpack_gao(packed_state)
+                
+            except asyncio.CancelledError:
+                raise
+                
+            except Exception:
+                logger.error('Exception updating GAO state. Attempting to ' +
+                             'failback to stale frame w/ traceback:\n' +
+                             ''.join(traceback.format_exc()))
+            
+            # On the first success, stop looking for a failback container.
+            else:
+                break
+                
+        # Hitting this means we failed to find a valid state. We need to raise.
+        else:
+            raise UnrecoverableState('No valid state found for ' +
+                                     str(self.ghid))
+        
+    def _recover_target_secret(self, binding):
+        ''' For the passed binding, ratchet the secret chain (if
+        possible), staging all intermediate secrets in the process. If
+        the ratchet is broken and the secret also missing, raise.
+        '''
+        # Also don't forget to update history. Do this first, because it
+        # will create a canonical update, regardless of success in
+        # unpacking.
+        try:
+            # Recover the new secret for the chain.
+            self._privateer.heal_chain(
+                proxy = self.ghid,
+                target_vector = self._maximize_target_vector(binding),
+                master_secret = self._master_secret
+            )
+            
+        except RatchetError as exc:
+            if binding.target not in self._privateer:
+                raise UnknownSecret(binding.target) from exc
+        
+        # Now, we need to be sure our local history doesn't forget about
+        # our current-most-recent frame when making an update.
+        finally:
+            # Finally, update our target_history accordingly.
+            self.target_history = collections.deque(
+                binding.target_vector,
+                # Make sure we have at least one historical target
+                maxlen = max(2, len(binding.target_vector))
+            )
+            
+    async def _recover_container(self, container_ghid):
+        ''' From the container ghid, recover the packed state.
+        '''
         secret = self._privateer.get(container_ghid)
+        
         packed = await self._librarian.retrieve(container_ghid)
         
         try:
@@ -755,31 +828,7 @@ class GAOCore(metaclass=API):
         else:
             self._privateer.commit(container_ghid, localize=self._local_secret)
         
-        # If this was just pulled for the first time, init the dynamic and
-        # author attributes.
-        self._conditional_init(
-            ghid = binding.ghid,    # Not actually the binding ghid for static
-            dynamic = dynamic,
-            author = binding.author
-        )
-        
-        # Finally, with all of the administrative stuff handled, unpack the
-        # actual payload.
-        await self.unpack_gao(packed_state)
-            
-    @_pull.fixture
-    async def _pull(self):
-        ''' Do a conditional init if we haven't had stuff fully defined.
-        '''
-        self._conditional_init(
-            ghid = Ghid.from_bytes(
-                b'\x01' + bytes([random.randint(0, 255) for i in range(0, 64)])
-            ),
-            author = Ghid.from_bytes(
-                b'\x01' + bytes([random.randint(0, 255) for i in range(0, 64)])
-            ),
-            dynamic = bool(random.randint(0, 1))
-        )
+        return packed_state
         
     def _maximize_target_vector(self, new_obj):
         ''' Construct the longest possible target vector, given the

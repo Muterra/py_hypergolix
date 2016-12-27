@@ -55,6 +55,7 @@ __all__ = [
     'HandshakeWarning',
     'Inaccessible',
     'UnknownParty',
+    'UnrecoverableState',
     # These are dispatch errors
     'DispatchError',
     'ExistantAppError',
@@ -209,6 +210,12 @@ class Inaccessible(HypergolixException, RuntimeError):
 class UnknownParty(HypergolixException, RuntimeError):
     ''' Raised when an Agent cannot find an identity definition for an
     author and therefore cannot verify anything.
+    '''
+    pass
+    
+    
+class UnrecoverableState(HypergolixException, RuntimeError):
+    ''' Raised when an Agent cannot find an acceptable state for a GAO.
     '''
     pass
 
