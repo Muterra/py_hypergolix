@@ -458,9 +458,11 @@ class Privateer(metaclass=API):
             raise RatchetError('Target vector has no historical references.')
             
         # Master secret ratchets never break, and can alway recover from the
-        # most recent frame.
+        # most recent frame. BUT, to increase failure tolerance, we are going
+        # to stage any and all missing secrets, in case we need to load an
+        # earlier container.
         if master_secret:
-            aktueller_index = 1
+            aktueller_index = len(target_vector) - 1
             
         # Other ratchets, on the other hand, have to start somewhere.
         else:
