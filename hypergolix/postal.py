@@ -41,6 +41,8 @@ import traceback
 import asyncio
 import loopa
 
+from loopa.utils import make_background_future
+
 # Local dependencies
 from .persistence import _GidcLite
 from .persistence import _GeocLite
@@ -373,12 +375,14 @@ class PostOffice(PostalCore, metaclass=API):
     '''
     _remote_protocol = weak_property('__remote_protocol')
     
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, subs_timeout=30, **kwargs):
         super().__init__(*args, **kwargs)
         # By using WeakSetMap we can automatically handle dropped connections
         # Lookup <subscribed ghid>: set(<subscribed callbacks>)
         self._connections = WeakSetMap()
         self._subscriptions = WeakKeySetMap()
+        
+        self._subs_timeout = subs_timeout
         
     def assemble(self, librarian, remote_protocol):
         super().assemble(librarian)
@@ -443,10 +447,15 @@ class PostOffice(PostalCore, metaclass=API):
             
         for connection in connections:
             if connection is not skip_conn:
-                await self._remote_protocol.subscription_update(
-                    connection,
-                    subscription,
-                    notification
+                # Make this a background task, or one blocking connection can
+                # hold up the entire subscription queue
+                make_background_future(
+                    self._remote_protocol.subscription_update(
+                        connection,
+                        subscription,
+                        notification,
+                        timeout = self._subs_timeout
+                    )
                 )
             else:
                 logger.debug(pkg_label + ' skipped one connection.')

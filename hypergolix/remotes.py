@@ -306,9 +306,10 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
         
     @subscription_update.fixture
     async def subscription_update(self, connection, subscription_ghid,
-                                  notification_ghid):
+                                  notification_ghid, timeout=None):
         ''' Make a manual no-op fixture, since inspect signatures
-        apparently don't from_callable on a descriptor... (grrr)
+        apparently don't from_callable on a descriptor... (grrr). Also,
+        because timeout isn't appropriately wrapped.
         '''
         
     @subscription_update.request_handler
