@@ -688,13 +688,14 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
         '''
         pull_complete = None
         tasks_available = set()
+        task_to_remote = {}
         for remote in self._upstream_remotes:
             if remote.has_connection:
-                tasks_available.add(
-                    asyncio.ensure_future(
-                        self._attempt_pull_single(ghid, remote)
-                    )
+                task = asyncio.ensure_future(
+                    self._attempt_pull_single(ghid, remote)
                 )
+                tasks_available.add(task)
+                task_to_remote[task] = remote
             
         # Wait until the first successful task completion
         # Note that this also shields us against having no tasks
@@ -716,8 +717,10 @@ class Salmonator(loopa.TaskLooper, metaclass=API):
                 # persisters all the time. Let the parent log if, for example,
                 # it's missing everywhere.
                 if exc is not None:
+                    remote = task_to_remote[task]
                     logger.info(
-                        'Error while pulling from remote:\n' +
+                        'Error while pulling from remote at ' +
+                        remote._conn_desc + ':\n' +
                         ''.join(traceback.format_tb(exc.__traceback__)) +
                         repr(exc)
                     )

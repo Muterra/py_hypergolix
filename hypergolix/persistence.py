@@ -401,9 +401,13 @@ class PersistenceCore(metaclass=API):
         if isinstance(obj, _GobdLite):
             check_ghid = obj.frame_ghid
             log_frame = True
+            counter = obj.counter
+            target = obj.target
         else:
             check_ghid = obj.ghid
             log_frame = False
+            counter = 0
+            target = None
         
         if (await self._librarian.contains(check_ghid)):
             logger.debug(
@@ -414,7 +418,10 @@ class PersistenceCore(metaclass=API):
         else:
             logger.info(
                 str(obj.ghid) + ' ingesting' +
-                (' with frame ' + str(check_ghid)) * log_frame + '...'
+                (
+                    ' frame #' + str(counter) + ': ' + str(check_ghid) +
+                    ', target: ' + str(target)
+                ) * log_frame + '...'
             )
             # Calculate "gidc", etc
             suffix = self._ATTR_LOOKUP[type(obj)]

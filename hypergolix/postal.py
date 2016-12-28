@@ -327,6 +327,8 @@ class MrPostman(PostalCore, metaclass=API):
         '''
         # We just got a garq for our identity. Rolodex handles these.
         if subscription == self._golcore.whoami:
+            logger.debug('SUBS ' + str(subscription) + ' (self) ' +
+                         'notification being handed off to rolodex.')
             await self._rolodex.notification_handler(
                 subscription,
                 notification

@@ -472,7 +472,7 @@ class Privateer(metaclass=API):
             # If we didn't find ANY of them, then we're broken.
             if not any(available):
                 logger.error(
-                    'Broken ratchet. Target vector: ' +
+                    'Broken ratchet for ' + str(proxy) + '. Target vector: ' +
                     str([str(target) for target in target_vector])
                 )
                 raise RatchetError('Broken ratchet.')
