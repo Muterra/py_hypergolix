@@ -683,26 +683,19 @@ class Account(metaclass=API):
     async def flush(self):
         ''' Push changes to any modified account components.
         '''
-        # Do the secondary stuff first, so that any changes to privateer as a
-        # result are included in the push.
-        secondaries = {
-            make_background_future(self.rolodex_pending._push()),
-            make_background_future(self.rolodex_outstanding._push()),
-            make_background_future(self.dispatch_tokens._push()),
-            make_background_future(self.dispatch_startup._push()),
-            make_background_future(self.dispatch_private._push()),
-            make_background_future(self.dispatch_incoming._push()),
-            make_background_future(self.dispatch_orphan_acks._push()),
-            make_background_future(self.dispatch_orphan_naks._push())
+        tasks = {
+            make_background_future(self.privateer_persistent.push()),
+            make_background_future(self.privateer_quarantine.push()),
+            make_background_future(self.rolodex_pending.push()),
+            make_background_future(self.rolodex_outstanding.push()),
+            make_background_future(self.dispatch_tokens.push()),
+            make_background_future(self.dispatch_startup.push()),
+            make_background_future(self.dispatch_private.push()),
+            make_background_future(self.dispatch_incoming.push()),
+            make_background_future(self.dispatch_orphan_acks.push()),
+            make_background_future(self.dispatch_orphan_naks.push())
         }
-        await asyncio.wait(fs=secondaries, return_when=asyncio.ALL_COMPLETED)
-        
-        # Now do the privateer flushing.
-        primaries = {
-            make_background_future(self.privateer_persistent._push()),
-            make_background_future(self.privateer_quarantine._push())
-        }
-        await asyncio.wait(fs=primaries, return_when=asyncio.ALL_COMPLETED)
+        await asyncio.wait(fs=tasks, return_when=asyncio.ALL_COMPLETED)
 
 
 class Accountant:
