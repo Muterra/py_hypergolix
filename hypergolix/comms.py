@@ -283,6 +283,8 @@ class _ConnectionBase(metaclass=API):
     async def close(self):
         ''' Closes the existing connection, performing any necessary
         cleanup.
+        
+        Close MUST be idempotent.
         '''
         self._isalive = False
     
@@ -426,9 +428,12 @@ class WSConnection(_ConnectionBase):
         ''' Wraps websocket.close and calls self.terminate().
         '''
         try:
-            # This call is idempotent, so we don't need to worry about
-            # accidentally calling it twice.
-            await self.websocket.close()
+            # The close() call is idempotent, but it will raise (for example) a
+            # ConnectionResetError if something went screwy. So check for
+            # availability first.
+            if self.websocket.open:
+                await self.websocket.close()
+            
         finally:
             # And force us to be GC'd
             self.terminate()
@@ -1125,7 +1130,9 @@ class _ReqResMixin:
         try:
             await self._responses[connection][token].put(response)
         except KeyError:
-            logger.warning(msg_id + ' token unknown.')
+            logger.warning(msg_id + ' request token unknown.')
+            logger.debug(msg_id + ' code: ' + str(code))
+            logger.debug(msg_id + ' body: ' + str(body))
         except Exception:
             logger.error(
                 msg_id + ' FAILED TO AWAKEN SENDER:\n' +
