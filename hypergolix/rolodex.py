@@ -320,14 +320,14 @@ class Rolodex(metaclass=API):
         '''
         try:
             # First, we need to figure out what the actual container object's
-            # address is, and then stage the secret for it. But, since this is
-            # coming from somewhere else, chances are good we don't have it
-            # locally, so pull it first.
-            if not (await self._librarian.contains(request.target)):
-                await self._salmonator.attempt_pull(
-                    request.target,
-                    quiet = True
-                )
+            # address is, and then stage the secret for it.
+            # ALWAYS attempt to pull it first, or we may have a stale frame
+            # locally, and attempt to stage a new secret for a long-expired
+            # frame
+            await self._salmonator.attempt_pull(
+                request.target,
+                quiet = True
+            )
             
             binding_or_obj = await self._librarian.summarize(request.target)
             if isinstance(binding_or_obj, _GobdLite):
