@@ -141,17 +141,12 @@ class LawyerCore(metaclass=API):
             author = await self._librarian.summarize(obj.author)
         
         except KeyError as exc:
-            logger.info('0x0003: Unknown author / recipient.')
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.author)
-            ) from exc
+            raise InvalidIdentity('Unknown author: ' +
+                                  str(obj.author)) from exc
         
         else:
             if not isinstance(author, _GidcLite):
-                logger.info('0x0003: Invalid author / recipient.')
-                raise InvalidIdentity(
-                    '0x0003: Invalid author / recipient.'
-                )
+                raise InvalidIdentity('Invalid author: ' + str(author))
                 
         return True
         
@@ -181,23 +176,16 @@ class LawyerCore(metaclass=API):
                 existing = await self._librarian.summarize(obj.ghid)
             
             except KeyError:
-                logger.debug(
-                    str(obj.ghid) + ' missing from librarian w/ traceback:\n' +
-                    ''.join(traceback.format_exc())
-                )
+                logger.warning(str(obj) + ' previous binding missing; ' +
+                               'cannot validate author self-consistency.')
             
             else:
                 if existing.author != obj.author:
-                    logger.info(
-                        '0x0007: Inconsistent binding author. \n'
-                        '    Existing author:  ' + str(existing.author) +
-                        '\n    Attempted author: ' + str(obj.author)
-                    )
-                    raise InconsistentAuthor(
-                        '0x0007: Inconsistent binding author. \n'
-                        '    Existing author:  ' + str(existing.author) +
-                        '\n    Attempted author: ' + str(obj.author)
-                    )
+                    raise InconsistentAuthor('Existing author for ' +
+                                             str(obj) + ': ' +
+                                             str(existing.author) +
+                                             ' (existing) vs ' +
+                                             str(obj.author) + ' (attempted)')
         
         return True
         
@@ -217,37 +205,26 @@ class LawyerCore(metaclass=API):
                 existing = target_obj
                 
         except KeyError:
-            logger.debug(
-                str(obj.target) + ' missing from librarian w/ traceback:\n' +
-                ''.join(traceback.format_exc())
-            )
+            logger.debug(str(obj) + ' target missing from librarian; ' +
+                         'cannot validate author self-consistency: ' +
+                         str(obj.target))
             
         else:
             if isinstance(existing, _GarqLite):
                 if existing.recipient != obj.author:
-                    logger.info(
-                        '0x0007: Inconsistent debinding author. \n'
-                        '    Existing recipient:  ' + str(existing.recipient) +
-                        '\n    Attempted debinder: ' + str(obj.author)
-                    )
-                    raise InconsistentAuthor(
-                        '0x0007: Inconsistent debinding author. \n'
-                        '    Existing recipient:  ' + str(existing.recipient) +
-                        '\n    Attempted debinder: ' + str(obj.author)
-                    )
+                    raise InconsistentAuthor('Existing author for ' +
+                                             str(obj) + ': ' +
+                                             str(existing.recipient) +
+                                             ' (existing) vs ' +
+                                             str(obj.author) + ' (attempted)')
                 
             else:
                 if existing.author != obj.author:
-                    logger.info(
-                        '0x0007: Inconsistent debinding author. \n'
-                        '    Existing binder:   ' + str(existing.author) +
-                        '\n    Attempted debinder: ' + str(obj.author)
-                    )
-                    raise InconsistentAuthor(
-                        '0x0007: Inconsistent debinding author. \n'
-                        '    Existing binder:   ' + str(existing.author) +
-                        '\n    Attempted debinder: ' + str(obj.author)
-                    )
+                    raise InconsistentAuthor('Existing author for ' +
+                                             str(obj) + ': ' +
+                                             str(existing.author) +
+                                             ' (existing) vs ' +
+                                             str(obj.author) + ' (attempted)')
         return True
         
     async def validate_garq(self, obj):
@@ -257,18 +234,11 @@ class LawyerCore(metaclass=API):
             recipient = await self._librarian.summarize(obj.recipient)
         
         except KeyError as exc:
-            logger.info(
-                '0x0003: Unknown author / recipient: ' + str(obj.recipient)
-            )
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.recipient)
-            ) from exc
+            raise InvalidIdentity('Unknown recipient: ' +
+                                  str(obj.recipient)) from exc
         
         else:
             if not isinstance(recipient, _GidcLite):
-                logger.info('0x0003: Invalid author / recipient.')
-                raise InvalidIdentity(
-                    '0x0003: Invalid author / recipient.'
-                )
+                raise InvalidIdentity('Invalid recipient: ' + str(recipient))
                 
         return True

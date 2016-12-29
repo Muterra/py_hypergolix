@@ -109,6 +109,11 @@ class _BaseLite:
             return self.ghid == other.ghid
         except AttributeError as exc:
             raise TypeError('Incomparable types.') from exc
+            
+    def __str__(self):
+        ''' The string format should tell the type name and the ghid.
+        '''
+        return type(self).__name__ + '(' + str(self.ghid) + ')'
         
         
 class _GidcLite(_BaseLite):
@@ -417,7 +422,7 @@ class PersistenceCore(metaclass=API):
         
         else:
             logger.info(
-                str(obj.ghid) + ' ingesting' +
+                'Ingesting ' + str(obj) +
                 (
                     ' frame #' + str(counter) + ': ' + str(check_ghid) +
                     ', target: ' + str(target)
@@ -538,9 +543,8 @@ class PersistenceCore(metaclass=API):
             await self._postman.schedule(obj, skip_conn=skip_conn)
             
         else:
-            logger.debug(
-                str(obj.ghid) + ' scheduling aborted on unchanged object.'
-            )
+            logger.debug(str(obj.ghid) + ' postal scheduling aborted on ' +
+                         'unchanged object.')
         
         # Note: this is not the place for salmonator pushing! Locally
         # created/updated objects call the individual ingest methods
@@ -599,9 +603,7 @@ class Doorman(metaclass=API):
                 obj = obj,
             )
         except SecurityError as exc:
-            raise VerificationFailure(
-                '0x0002: Failed to verify object.'
-            ) from exc
+            raise VerificationFailure(str(obj)) from exc
         
     @public_api
     async def load_gidc(self, packed):
@@ -629,9 +631,8 @@ class Doorman(metaclass=API):
                 return GIDC.unpack(packed)
         
         except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GIDC object.'
-            ) from exc
+            raise MalformedGolixPrimitive('Invalid formatting for GIDC ' +
+                                          'object.') from exc
     
     @public_api
     async def load_geoc(self, packed):
@@ -647,9 +648,8 @@ class Doorman(metaclass=API):
             author = await self._librarian.summarize(obj.author)
         
         except KeyError as exc:
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.author)
-            ) from exc
+            raise InvalidIdentity('Unknown author: ' +
+                                  str(obj.author)) from exc
         
         # Finally, verify the Golix signature
         await self._loop.run_in_executor(
@@ -675,9 +675,8 @@ class Doorman(metaclass=API):
                 return GEOC.unpack(packed)
         
         except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GEOC object.'
-            ) from exc
+            raise MalformedGolixPrimitive('Invalid formatting for GEOC ' +
+                                          'object.') from exc
     
     @public_api
     async def load_gobs(self, packed):
@@ -692,9 +691,8 @@ class Doorman(metaclass=API):
         try:
             author = await self._librarian.summarize(obj.binder)
         except KeyError as exc:
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.binder)
-            ) from exc
+            raise InvalidIdentity('Unknown author: ' +
+                                  str(obj.binder)) from exc
         
         # Finally, verify the Golix signature
         await self._loop.run_in_executor(
@@ -720,9 +718,8 @@ class Doorman(metaclass=API):
                 return GOBS.unpack(packed)
         
         except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GOBS object.'
-            ) from exc
+            raise MalformedGolixPrimitive('Invalid formatting for GOBS ' +
+                                          'object.') from exc
     
     @public_api
     async def load_gobd(self, packed):
@@ -737,9 +734,8 @@ class Doorman(metaclass=API):
         try:
             author = await self._librarian.summarize(obj.binder)
         except KeyError as exc:
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.binder)
-            ) from exc
+            raise InvalidIdentity('Unknown author: ' +
+                                  str(obj.binder)) from exc
         
         # Finally, verify the Golix signature
         await self._loop.run_in_executor(
@@ -765,9 +761,8 @@ class Doorman(metaclass=API):
                 return GOBD.unpack(packed)
         
         except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GOBD object.'
-            ) from exc
+            raise MalformedGolixPrimitive('Invalid formatting for GOBD '
+                                          'object.') from exc
     
     @public_api
     async def load_gdxx(self, packed):
@@ -782,9 +777,8 @@ class Doorman(metaclass=API):
         try:
             author = await self._librarian.summarize(obj.debinder)
         except KeyError as exc:
-            raise InvalidIdentity(
-                '0x0003: Unknown author / recipient: ' + str(obj.debinder)
-            ) from exc
+            raise InvalidIdentity('Unknown author: ' +
+                                  str(obj.debinder)) from exc
         
         # Finally, verify the Golix signature
         await self._loop.run_in_executor(
@@ -810,9 +804,8 @@ class Doorman(metaclass=API):
                 return GDXX.unpack(packed)
         
         except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GDXX object.'
-            ) from exc
+            raise MalformedGolixPrimitive('Invalid formatting for GDXX ' +
+                                          'object.') from exc
     
     @public_api
     async def load_garq(self, packed):
@@ -840,9 +833,8 @@ class Doorman(metaclass=API):
                 return GARQ.unpack(packed)
         
         except Exception as exc:
-            raise MalformedGolixPrimitive(
-                '0x0001: Invalid formatting for GARQ object.'
-            ) from exc
+            raise MalformedGolixPrimitive('Invalid formatting for GARQ ' +
+                                          'object.') from exc
 
 
 class Enforcer(metaclass=API):
@@ -878,17 +870,13 @@ class Enforcer(metaclass=API):
         # appropriately to raise a DoesNotExist instead of a KeyError.
         # This could be more specific and say DoesNotExist
         except KeyError:
-            logger.debug(
-                str(obj.target) + ' missing from librarian w/ traceback:\n' +
-                ''.join(traceback.format_exc())
-            )
+            logger.debug(str(obj) + ' target missing from librarian: ' +
+                         str(obj.target))
         else:
             for forbidden in (_GidcLite, _GobsLite, _GdxxLite, _GarqLite):
                 if isinstance(target, forbidden):
-                    logger.info('0x0006: Invalid static binding target.')
-                    raise InvalidTarget(
-                        '0x0006: Invalid static binding target.'
-                    )
+                    raise InvalidTarget(str(obj) + ' target invalid: ' +
+                                        str(target))
         return True
         
     async def validate_gobd(self, obj):
@@ -899,17 +887,13 @@ class Enforcer(metaclass=API):
         try:
             target = await self._librarian.summarize(obj.target)
         except KeyError:
-            logger.debug(
-                str(obj.ghid) + ' cannot verify GOBD target; missing from ' +
-                'librarian: ' + str(obj.target)
-            )
+            logger.debug(str(obj) + ' target missing from librarian: ' +
+                         str(obj.target))
         else:
             for forbidden in (_GidcLite, _GobsLite, _GdxxLite, _GarqLite):
                 if isinstance(target, forbidden):
-                    logger.info('0x0006: Invalid dynamic binding target.')
-                    raise InvalidTarget(
-                        '0x0006: Invalid dynamic binding target.'
-                    )
+                    raise InvalidTarget(str(obj) + ' target invalid: ' +
+                                        str(target))
                     
         await self._validate_dynamic_history(obj)
                     
@@ -924,29 +908,17 @@ class Enforcer(metaclass=API):
             else:
                 target = target_obj
         except KeyError:
-            logger.warning(
-                'GDXX was validated by Enforcer, but its target was unknown '
-                'to the librarian. May indicated targeted attack.\n'
-                '    GDXX ghid:   ' + str(obj.ghid) + '\n'
-                '    Target ghid: ' + str(obj.target)
-            )
-            logger.debug(
-                'Traceback for missing ' + str(obj.ghid) + ':\n' +
-                ''.join(traceback.format_exc())
-            )
-            # raise InvalidTarget(
-            #     '0x0006: Unknown debinding target. Cannot debind an unknown '
-            #     'resource, to prevent a malicious party from preemptively '
-            #     'uploading a debinding for a resource s/he did not bind.'
-            # )
+            logger.warning(str(obj) + ' validated by Enforcer, but its ' +
+                           'target was unknown: ' + str(obj.target))
+            logger.debug(str(obj) + ' missing target traceback:\n' +
+                         ''.join(traceback.format_exc()))
+            
         else:
             # NOTE: if this changes, will need to modify place_gdxx in _Bookie
             for forbidden in (_GidcLite, _GeocLite):
                 if isinstance(target, forbidden):
-                    logger.info('0x0006: Invalid debinding target.')
-                    raise InvalidTarget(
-                        '0x0006: Invalid debinding target.'
-                    )
+                    raise InvalidTarget(str(obj) + ' target invalid: ' +
+                                        str(target))
         return True
         
     async def validate_garq(self, obj):
@@ -956,43 +928,32 @@ class Enforcer(metaclass=API):
         
     async def _validate_dynamic_history(self, obj):
         ''' Enforces state flow / progression for dynamic objects. In
-        other words, prevents zeroth bindings with history, makes sure
-        future bindings contain previous ones in history, etc.
-        
-        NOTE: the "zeroth binding must not have history" requirement has
-        been relaxed, since it will be superseded in the next version of
-        the golix protocol, and it causes SERIOUS problems with the
-        operational flow of, like, literally everything.
+        other words, ensures monotonic counter.
         '''
         # Try getting an existing binding.
         try:
             existing = await self._librarian.summarize(obj.ghid)
-            
+        
+        # TOFU (trust on first upload lulz)
         except KeyError:
-            # if obj.history:
-            #     raise IllegalDynamicFrame(
-            #         '0x0009: Illegal frame. Cannot upload a frame with '
-            #         'history as the first frame in a persistence provider.'
-            #     )
-            logger.debug(
-                str(obj.ghid) + ' uploaded zeroth frame WITH history.'
-            )
+            pass
                 
         else:
             if existing.counter >= obj.counter:
-                logger.debug(
-                    'New obj frame:     ' + str(obj.frame_ghid))
-                logger.debug(
-                    'New obj tarvec:    ' + str(obj.target_vector))
-                logger.debug(
-                    'Existing frame:    ' + str(existing.frame_ghid))
-                logger.debug(
-                    'Existing tarvec:   ' + str(existing.target_vector))
-                raise IllegalDynamicFrame(
-                    '0x0009: Illegal frame. Frame counter did not increase.'
-                )
-            
-            
+                logger.debug('New obj frame:     ' +
+                             str(obj.frame_ghid))
+                logger.debug('New obj tarvec:    ' +
+                             str(obj.target_vector))
+                logger.debug('Existing frame:    ' +
+                             str(existing.frame_ghid))
+                logger.debug('Existing tarvec:   ' +
+                             str(existing.target_vector))
+                raise IllegalDynamicFrame(str(obj.ghid) + ' counter ' +
+                                          'decreased from ' +
+                                          str(existing.counter) + ' to ' +
+                                          str(obj.counter))
+
+
 class Bookie(metaclass=API):
     ''' Tracks state relationships between objects using **only weak
     references** to them. ONLY CONCERNED WITH LIFETIMES! Does not check
@@ -1013,19 +974,13 @@ class Bookie(metaclass=API):
         ''' GEOC must verify that they are bound.
         '''
         if not (await self._librarian.is_bound(obj)):
-            raise UnboundContainer(
-                '0x0004: Attempt to upload unbound GEOC; object immediately '
-                'garbage collected.'
-            )
+            raise UnboundContainer(str(obj))
         
         return True
         
     async def validate_gobs(self, obj):
         if (await self._librarian.is_debound(obj)):
-            raise AlreadyDebound(
-                '0x0005: Attempt to upload a binding for which a debinding '
-                'already exists. Remove the debinding first.'
-            )
+            raise AlreadyDebound(str(obj))
             
         return True
         
@@ -1033,27 +988,18 @@ class Bookie(metaclass=API):
         # A deliberate binding can override a debinding for GOBD.
         if (await self._librarian.is_debound(obj)):
             if not (await self._librarian.is_bound(obj)):
-                raise AlreadyDebound(
-                    '0x0005: Attempt to upload a binding for which a ' +
-                    'debinding already exists. Remove the debinding first.'
-                )
+                raise AlreadyDebound(str(obj))
                 
         return True
         
     async def validate_gdxx(self, obj):
         if (await self._librarian.is_debound(obj)):
-            raise AlreadyDebound(
-                '0x0005: Attempt to upload a binding for which a debinding '
-                'already exists. Remove the debinding first.'
-            )
+            raise AlreadyDebound(str(obj))
             
         return True
         
     async def validate_garq(self, obj):
         if (await self._librarian.is_debound(obj)):
-            raise AlreadyDebound(
-                '0x0005: Attempt to upload a binding for which a debinding '
-                'already exists. Remove the debinding first.'
-            )
+            raise AlreadyDebound(str(obj))
             
         return True

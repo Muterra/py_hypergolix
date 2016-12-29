@@ -162,7 +162,7 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
         it.
         '''
         ghid_to_collect, skip_conn = await self._triage.get()
-        logger.debug('GC ' + str(ghid_to_collect) + ' check starting.')
+        logger.debug(str(ghid_to_collect) + ' GC check starting.')
         try:
             obj = await self._librarian.summarize(ghid_to_collect)
             
@@ -170,28 +170,21 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
                 collection_check = self._check_lookup[type(obj)]
             
             except KeyError as exc:
-                raise TypeError(
-                    'Invalid object type received from librarian.'
-                ) from exc
+                raise TypeError('Invalid object type received from ' +
+                                'librarian.') from exc
                 
             else:
                 removable = await collection_check(obj, skip_conn)
                 if removable:
-                    logger.info(
-                        'GC ' + str(ghid_to_collect) + ' collection starting.'
-                    )
+                    logger.info(str(obj) + ' garbage collection starting.')
                     await self._gc_execute(obj, skip_conn)
                 else:
-                    logger.debug(
-                        'GC ' + str(ghid_to_collect) + ' collection survived.'
-                    )
+                    logger.debug(str(obj) + ' garbage collection unneeded.')
             
         # except DoesNotExist:
         except KeyError:
-            logger.warning(
-                'GC ' + str(ghid_to_collect) +
-                ' missing in librarian. Already collected?'
-            )
+            logger.warning(str(ghid_to_collect) + ' missing; could not ' +
+                           'garbage collect it.')
             
         finally:
             self._triage.task_done()
@@ -292,19 +285,23 @@ class UndertakerCore(loopa.TaskLooper, metaclass=API):
     async def alert_gobd(self, obj, skip_conn=None):
         ''' GOBD require triage for previous targets.
         '''
-        try:
-            existing = await self._librarian.summarize(obj.ghid)
-        
-        except KeyError:
-            # This will always happen if it's the first frame, so let's be sure
-            # to ignore that for logging.
-            if len(obj.target_vector) > 1:
-                logger.warning('Could not find gobd to check existing target.')
-            triaged = None
+        # This will always happen if it's the first frame, so let's be sure
+        # to ignore that for logging (also, performance).
+        if len(obj.target_vector) > 1:
+            try:
+                existing = await self._librarian.summarize(obj.ghid)
+            
+            except KeyError:
+                logger.warning(str(obj) + ' existing binding missing; could ' +
+                               'not triage old target.')
+                triaged = None
+            
+            else:
+                triaged = existing.target
+                await self._triage.put((triaged, skip_conn))
         
         else:
-            triaged = existing.target
-            await self._triage.put((triaged, skip_conn))
+            triaged = None
             
         return triaged
         

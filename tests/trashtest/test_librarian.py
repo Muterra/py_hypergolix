@@ -344,6 +344,7 @@ class LibrarianCoreTest(GenericLibrarianTest, unittest.TestCase):
         )
         self.librarian._debound_by_ghid.add(binding.ghid, illegal_author.ghid)
         self.librarian._catalog[illegal_author.ghid] = illegal_author
+        self.librarian._shelf[illegal_author.ghid] = None
         
         self.assertFalse(
             await_coroutine_threadsafe(
@@ -370,6 +371,7 @@ class LibrarianCoreTest(GenericLibrarianTest, unittest.TestCase):
         )
         self.librarian._debound_by_ghid.add(obj.ghid, illegal_target.ghid)
         self.librarian._catalog[illegal_target.ghid] = illegal_target
+        self.librarian._shelf[illegal_target.ghid] = None
         
         self.assertFalse(
             await_coroutine_threadsafe(

@@ -465,7 +465,11 @@ class LibrarianCore(metaclass=API):
         else:
             reference_ghid = obj.ghid
         
-        self._shelf.pop(reference_ghid, None)
+        try:
+            self._shelf.pop(reference_ghid)
+        except KeyError as exc:
+            # Protect the full GHID from accidental exposure
+            raise DoesNotExist(str(ghid)) from None
         
     # Subclasses MUST define this to work!
     # @abc.abstractmethod
@@ -473,7 +477,11 @@ class LibrarianCore(metaclass=API):
     async def get_from_cache(self, ghid):
         ''' Returns the raw data associated with the ghid.
         '''
-        return self._shelf[ghid]
+        try:
+            return self._shelf[ghid]
+        except KeyError as exc:
+            # Protect the full GHID from accidental exposure
+            raise DoesNotExist(str(ghid)) from None
     
     
 class DiskLibrarian(LibrarianCore):
@@ -488,13 +496,10 @@ class DiskLibrarian(LibrarianCore):
         
         cache_dir = pathlib.Path(cache_dir)
         if not cache_dir.exists():
-            raise ValueError(
-                'Path does not exist: ' + cache_dir.as_posix()
-            )
+            raise ValueError('Path does not exist: ' + cache_dir.as_posix())
         elif not cache_dir.is_dir():
-            raise ValueError(
-                'Path is not an available directory: ' + cache_dir.as_posix()
-            )
+            raise ValueError('Path is not an available directory: ' +
+                             cache_dir.as_posix())
         
         self._loop = loop
         self._executor = executor
@@ -538,9 +543,9 @@ class DiskLibrarian(LibrarianCore):
                                                           fpath.read_bytes)
         
         except FileNotFoundError as exc:
-            raise DoesNotExist(
-                'Ghid does not exist at persister: ' + str(ghid)
-            ) from exc
+            # Remove the filename from the exception context so as not to
+            # disclose the full GHID
+            raise DoesNotExist(str(ghid)) from None
             
         return result
             
@@ -617,10 +622,10 @@ class DiskLibrarian(LibrarianCore):
             async with self._cache_lock(reference_ghid):
                 await self._loop.run_in_executor(self._executor, fpath.unlink)
             
-        except FileNotFoundError as exc:
-            raise DoesNotExist(
-                'Ghid does not exist at persister: ' + str(ghid)
-            ) from exc
+        except FileNotFoundError:
+            # Suppress the full name of the file to prevent knowing its whole
+            # GHID
+            raise DoesNotExist(str(ghid)) from None
         
     async def contains(self, ghid):
         ''' Checks the ghidcache for the ghid.

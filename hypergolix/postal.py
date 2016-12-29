@@ -150,7 +150,7 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
         subscription, notification, skip_conn = await self._scheduled.get()
         
         try:
-            logger.info('SUBS ' + str(subscription) + ' out for delivery.')
+            logger.info(str(subscription) + ' subscription out for delivery.')
             # We can't spin this out into a thread because some of our
             # delivery mechanisms want this to have an event loop.
             await self._deliver(subscription, notification, skip_conn)
@@ -160,11 +160,10 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
             raise
         
         except Exception:
-            logger.error(
-                'SUBS ' + str(subscription) + ' FAILED for notification ' +
-                str(notification) + ' w/ traceback:\n' +
-                ''.join(traceback.format_exc())
-            )
+            logger.error(str(subscription) + ' subscription FAILED for ' +
+                         'notification ' + str(notification) +
+                         ' w/ traceback:\n' +
+                         ''.join(traceback.format_exc()))
             
         finally:
             self._scheduled.task_done()
@@ -190,10 +189,8 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
                 scheduler = self._scheduler_lookup[type(obj)]
             
             except KeyError:
-                raise TypeError(
-                    'Could not schedule: does not appear to be a Golix ' +
-                    'primitive.'
-                ) from None
+                raise TypeError('Postman scheduling failed for ' +
+                                type(obj).__name__) from None
             
             else:
                 await scheduler(obj, removed, skip_conn)
@@ -224,13 +221,8 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
             # Check to see that there are the proper number of debindings
             num_debindings = len(debinding_ghids)
             if num_debindings != 1:
-                logger.error(''.join((
-                    str(obj.ghid),
-                    ' (gobd) flagged as removed, but has ',
-                    str(num_debindings),
-                    ' debindings, when it should have exactly one.'
-                )))
-                raise ValueError('Improper debinding number.')
+                raise ValueError('Improper debinding number: ' +
+                                 str(num_debindings) + ' for ' + str(obj))
                 
             # Debinding_ghids is a frozenset; this is the fastest way of
             # getting the single element from it.
@@ -242,19 +234,16 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
         else:
             notifier = _SubsUpdate(obj.ghid, obj.frame_ghid, skip_conn)
             if (await self._librarian.contains(obj.target)):
-                logger.debug(''.join((
-                    str(obj.ghid),
-                    ' subscription notification scheduled for ',
-                    str(obj.target)
-                )))
+                logger.debug(str(obj) +
+                             ' subscription notification scheduled for: ' +
+                             str(obj.target))
                 await self._scheduled.put(notifier)
+            
             else:
                 self._deferred.add(obj.target, notifier)
-                logger.debug(''.join((
-                    str(obj.ghid),
-                    ' subscription notification deferred; waiting on ',
-                    str(obj.target)
-                )))
+                logger.debug(str(obj) +
+                             ' subscription notification deferred for: ' +
+                             str(obj.target))
         
     async def _schedule_gdxx(self, obj, removed, skip_conn):
         # GDXX will never directly trigger a subscription. If they are removing
@@ -270,13 +259,8 @@ class PostalCore(loopa.TaskLooper, metaclass=API):
             # Check to see that there are the proper number of debindings
             num_debindings = len(debinding_ghids)
             if num_debindings != 1:
-                logger.error(''.join((
-                    str(obj.ghid),
-                    ' (garq) flagged as removed, but has ',
-                    str(num_debindings),
-                    ' debindings, when it should have exactly one.'
-                )))
-                raise RuntimeError('Imporoper debinding number.')
+                raise ValueError('Improper debinding number: ' +
+                                 str(num_debindings) + ' for ' + str(obj))
                 
             # Debinding_ghids is a frozenset; this is the fastest way of
             # getting the single element from it.
@@ -327,8 +311,8 @@ class MrPostman(PostalCore, metaclass=API):
         '''
         # We just got a garq for our identity. Rolodex handles these.
         if subscription == self._golcore.whoami:
-            logger.debug('SUBS ' + str(subscription) + ' (self) ' +
-                         'notification being handed off to rolodex.')
+            logger.debug(str(subscription) +
+                         'subscription notification handed off to rolodex...')
             await self._rolodex.notification_handler(
                 subscription,
                 notification
@@ -346,30 +330,15 @@ class MrPostman(PostalCore, metaclass=API):
                 obj = await self._oracle.get_object(GAOCore, subscription)
             
             except KeyError:
-                logger.debug(
-                    'SUBS ' + str(subscription) + ' delivery IGNORED: ' +
-                    'unavailable at oracle. Notification: ' +
-                    str(notification)
-                )
+                logger.debug(str(subscription) + ' subscription delivery ' +
+                             'ignored: unavailable at oracle: ' +
+                             str(notification))
                 await self._salmonator.deregister(subscription)
                 
             else:
-                logger.debug(
-                    'SUBS ' + str(subscription) +
-                    ' delivery STARTING. Notification: ' + str(notification)
-                )
+                logger.debug(str(subscription) + ' subscription delivery ' +
+                             'starting for ' + str(notification))
                 await obj.pull(notification)
-                
-        # # We don't have the sub in memory, so we need to remove it.
-        # else:
-        #     logger.debug(''.join((
-        #         'SUBSCRIPTION ',
-        #         str(subscription),
-        #         ' delivery IGNORED: not in memory. Notification: ',
-        #         str(notification)
-                
-        #     )))
-        #     await self._salmonator.deregister(subscription)
         
         
 class PostOffice(PostalCore, metaclass=API):
@@ -396,9 +365,7 @@ class PostOffice(PostalCore, metaclass=API):
         ''' Tells the postman that the connection would like to be
         updated about ghid.
         '''
-        logger.debug(
-            'SUBS received for ' + str(ghid) + ' at CONN ' + str(connection)
-        )
+        logger.debug('CONN ' + str(connection) + ' subscribed to ' + str(ghid))
         
         # First add the subscription listeners
         self._connections.add(ghid, connection)
@@ -421,9 +388,15 @@ class PostOffice(PostalCore, metaclass=API):
             self._subscriptions.discard(connection, ghid)
             # Remove the connection (allowing it to raise if missing)
             self._connections.remove(ghid, connection)
+            
         except KeyError:
+            logger.debug('CONN ' + str(connection) + ' never subscribed to ' +
+                         str(ghid))
             return False
+            
         else:
+            logger.debug('CONN ' + str(connection) + ' unsubscribed to ' +
+                         str(ghid))
             return True
             
     async def _deliver(self, subscription, notification, skip_conn):
@@ -431,7 +404,7 @@ class PostOffice(PostalCore, metaclass=API):
         
         NOTE THAT SKIP_CONN is a weakref.ref.
         '''
-        pkg_label = ('SUBS ' + str(subscription) + ', notification: ' +
+        pkg_label = (str(subscription) + ' subscription, notification ' +
                      str(notification))
         # We need to freeze the listeners before we operate on them, but we
         # don't need to lock them while we go through all of the callbacks.

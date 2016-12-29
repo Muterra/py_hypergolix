@@ -796,7 +796,7 @@ class GAOCore(metaclass=API):
             
         except RatchetError as exc:
             if binding.target not in self._privateer:
-                raise UnknownSecret(binding.target) from exc
+                raise UnknownSecret(str(binding.target)) from exc
         
         # Now, we need to be sure our local history doesn't forget about
         # our current-most-recent frame when making an update.
