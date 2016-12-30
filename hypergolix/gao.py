@@ -786,7 +786,7 @@ class GAOCore(metaclass=API):
         # unpacking.
         try:
             # Recover the new secret for the chain.
-            logger.debug('Healing ratchet for ' + str(self.ghid) + ' frame #' +
+            logger.debug('Healing ratchet for ' + str(self.ghid) + ' frame ' +
                          str(binding.counter) + '...')
             self._privateer.heal_chain(
                 proxy = self.ghid,

@@ -319,19 +319,34 @@ class RemotePersistenceProtocol(metaclass=RequestResponseAPI,
         subscribed_ghid = Ghid.from_bytes(body[0:65])
         notification = body[65:]
         
-        # Note that this handles postman scheduling as well.
-        ingested = await self._percore.ingest(
-            notification,
-            remotable = False,
-            skip_conn = connection
-        )
-        
-        # But, if ingested, we need to notify the salmonator, so it can (if
-        # needed) also acquire the target
-        if ingested:
-            make_background_future(
-                self._salmonator.notify(subscribed_ghid)
+        try:
+            # Note that this handles postman scheduling as well.
+            ingested = await self._percore.ingest(
+                notification,
+                remotable = False,
+                skip_conn = connection
             )
+            
+        except AlreadyDebound as exc:
+            vomitus = exc.ghid
+            debindings = await self._librarian.debind_status(vomitus)
+            debinding_ghid = next(debinding for debinding in debindings)
+            logger.info(str(subscribed_ghid) +
+                        ' subscription update already debound: ' +
+                        str(vomitus) + '. Pushing debinding upstream: ' +
+                        str(debinding_ghid))
+            
+            make_background_future(
+                self._salmonator.push(debinding_ghid)
+            )
+            
+        else:
+            # But, if ingested, we need to notify the salmonator, so it can (if
+            # needed) also acquire the target
+            if ingested:
+                make_background_future(
+                    self._salmonator.notify(subscribed_ghid)
+                )
         
         return b'\x01'
         

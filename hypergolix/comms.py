@@ -1132,7 +1132,7 @@ class _ReqResMixin:
         except KeyError:
             logger.warning(msg_id + ' request token unknown.')
             logger.debug(msg_id + ' code: ' + str(code))
-            logger.debug(msg_id + ' body: ' + str(body))
+            logger.debug(msg_id + ' body: ' + str(body[:50]))
         except Exception:
             logger.error(
                 msg_id + ' FAILED TO AWAKEN SENDER:\n' +

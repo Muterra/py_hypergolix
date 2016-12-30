@@ -43,6 +43,7 @@ import asyncio
 import loopa
 
 from golix import Ghid
+from golix import Secret
 
 # These are used for secret ratcheting only.
 from cryptography.hazmat.primitives import hashes
@@ -202,8 +203,9 @@ class Privateer(metaclass=API):
         '''
         try:
             return self._secrets[ghid]
-        except KeyError as exc:
-            raise UnknownSecret('Secret not found for ' + str(ghid)) from exc
+        
+        except KeyError:
+            raise UnknownSecret(str(ghid)) from None
         
     def stage(self, ghid, secret):
         ''' Preliminarily set a secret for a ghid.
@@ -223,6 +225,9 @@ class Privateer(metaclass=API):
         ''' Raw staging, bypassing modlock. Only accessed directly
         during bootstrapping.
         '''
+        if not isinstance(secret, Secret):
+            raise TypeError('Invalid secret type: ' + type(secret).__name__)
+        
         if ghid in self._secrets:
             if self._secrets[ghid] != secret:
                 self._calc_and_log_diff(self._secrets[ghid], secret)
@@ -420,26 +425,38 @@ class Privateer(metaclass=API):
         
         If master_secret is supplied, we will use the bootstrap ratchet.
         '''
-        # Without a master_secret, perform a ratchet with the existing secret
-        # for the current target.
-        if master_secret is None:
-            existing_secret = self.get(current_target)
-            ratcheted = self._ratchet(
-                secret = existing_secret,
-                proxy = proxy,
-                salt_ghid = current_target
-            )
-        
-        # With a master_secret, perform a ratchet with the master as a static
-        # "seed" secret.
-        else:
-            ratcheted = self._ratchet(
-                secret = master_secret,
-                proxy = proxy,
-                salt_ghid = current_target
-            )
+        try:
+            # Without a master_secret, perform a ratchet with the existing
+            # secret for the current target.
+            if master_secret is None:
+                existing_secret = self.get(current_target)
+                ratcheted = self._ratchet(
+                    secret = existing_secret,
+                    proxy = proxy,
+                    salt_ghid = current_target
+                )
             
-        return ratcheted
+            # With a master_secret, perform a ratchet with the master as a
+            # static "seed" secret.
+            else:
+                existing_secret = None
+                ratcheted = self._ratchet(
+                    secret = master_secret,
+                    proxy = proxy,
+                    salt_ghid = current_target
+                )
+                
+            return ratcheted
+            
+        except Exception:
+            msec_str = (' with master secret of type ' +
+                        type(master_secret).__name__) * bool(master_secret)
+            xsec_str = (' with existing secret of type ' +
+                        type(existing_secret).__name__) * (not master_secret)
+            
+            raise RatchetError('Failed ratchet for unknown reasons: ' +
+                               str(proxy) + ' from ' + str(current_target) +
+                               msec_str + xsec_str) from None
             
     def heal_chain(self, proxy, target_vector, master_secret=None):
         ''' Heals the ratchet for a binding using the gao. Call this any
@@ -471,11 +488,7 @@ class Privateer(metaclass=API):
             available = [target in self._secrets for target in target_vector]
             # If we didn't find ANY of them, then we're broken.
             if not any(available):
-                logger.error(
-                    'Broken ratchet for ' + str(proxy) + '. Target vector: ' +
-                    str([str(target) for target in target_vector])
-                )
-                raise RatchetError('Broken ratchet.')
+                raise RatchetError('Broken ratchet: ' + str(proxy))
         
             # Get the index for the most recent target that we already know a
             # secret for

@@ -116,7 +116,7 @@ class HypergolixCore(loopa.TaskCommander, metaclass=API):
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=25)
         
         # Persistence stuff
-        self.percore = PersistenceCore()
+        self.percore = PersistenceCore(self._loop)
         self.doorman = Doorman(self.executor, self._loop)
         self.enforcer = Enforcer()
         self.bookie = Bookie()

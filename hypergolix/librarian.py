@@ -528,6 +528,33 @@ class DiskLibrarian(LibrarianCore):
         # same time)
         self._cache_lock = KeyedAsyncioLock(loop=self._loop)
         
+    def __read_from_disk(self, ghid):
+        ''' Gets a file path from the disk cache, wrapping misses in
+        DoesNotExist.
+        '''
+        fpath = self._make_path(ghid)
+        
+        try:
+            return fpath.read_bytes()
+        
+        except FileNotFoundError as exc:
+            # Remove the filename from the exception context so as not to
+            # disclose the full GHID
+            raise DoesNotExist(str(ghid)) from None
+            
+    def __remove_from_disk(self, ghid):
+        ''' Removes a ghid from the disk cache, wrapping misses in
+        DoesNotExist.
+        '''
+        try:
+            fpath = self._make_path(ghid)
+            fpath.unlink()
+            
+        except FileNotFoundError:
+            # Suppress the full name of the file to prevent knowing its whole
+            # GHID
+            raise DoesNotExist(str(ghid)) from None
+        
     async def get_from_cache(self, ghid):
         ''' Returns the raw data associated with the ghid.
         '''
@@ -536,18 +563,10 @@ class DiskLibrarian(LibrarianCore):
         except KeyError:
             pass
         
-        fpath = self._make_path(ghid)
-        try:
-            async with self._cache_lock(ghid):
-                result = await self._loop.run_in_executor(self._executor,
-                                                          fpath.read_bytes)
-        
-        except FileNotFoundError as exc:
-            # Remove the filename from the exception context so as not to
-            # disclose the full GHID
-            raise DoesNotExist(str(ghid)) from None
-            
-        return result
+        async with self._cache_lock(ghid):
+            return (await self._loop.run_in_executor(self._executor,
+                                                     self.__read_from_disk,
+                                                     ghid))
             
     async def add_to_cache(self, obj, data):
         ''' Adds the passed raw data to the cache.
@@ -615,17 +634,11 @@ class DiskLibrarian(LibrarianCore):
             
         else:
             reference_ghid = obj.ghid
-            
-        try:
-            fpath = self._make_path(reference_ghid)
-            
-            async with self._cache_lock(reference_ghid):
-                await self._loop.run_in_executor(self._executor, fpath.unlink)
-            
-        except FileNotFoundError:
-            # Suppress the full name of the file to prevent knowing its whole
-            # GHID
-            raise DoesNotExist(str(ghid)) from None
+        
+        async with self._cache_lock(reference_ghid):
+            await self._loop.run_in_executor(self._executor,
+                                             self.__remove_from_disk,
+                                             reference_ghid)
         
     async def contains(self, ghid):
         ''' Checks the ghidcache for the ghid.

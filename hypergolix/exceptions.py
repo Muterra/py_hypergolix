@@ -160,7 +160,12 @@ class AlreadyDebound(RemoteNak):
     ''' This RemoteNak is raised when a persistence provider has already
     received a debinding for the primitive being published.
     '''
-    pass
+    
+    def __init__(self, *args, ghid=None, **kwargs):
+        ''' If passed, set the ghid that was rejected.
+        '''
+        super().__init__(*args, **kwargs)
+        self.ghid = ghid
     
     
 class InconsistentAuthor(RemoteNak):

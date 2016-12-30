@@ -74,6 +74,7 @@ from .exceptions import UnavailableUpstream
 
 from .utils import weak_property
 from .utils import readonly_property
+from .utils import KeyedAsyncioLock
 
 
 # ###############################################
@@ -372,8 +373,14 @@ class PersistenceCore(metaclass=API):
         _GdxxLite: 'gdxx',
         _GarqLite: 'garq'
     }
+    
+    @public_api
+    def __init__(self, loop=None, *args, **kwargs):
+        ''' Create a KeyedAsyncioLock for ingestion.
+        '''
+        self._ingestion_mutex = KeyedAsyncioLock(loop)
         
-    @fixture_api
+    @__init__.fixture
     def __init__(self, librarian=None, *args, **kwargs):
         ''' Right now, well, this is basically a noop. Anticipating
         substantial changes!
@@ -414,47 +421,48 @@ class PersistenceCore(metaclass=API):
             counter = 0
             target = None
         
-        if (await self._librarian.contains(check_ghid)):
-            logger.debug(
-                str(check_ghid) + ' not ingested: already exists.'
-            )
-            return False
-        
-        else:
-            logger.info(
-                'Ingesting ' + str(obj) +
-                (
-                    ' frame #' + str(counter) + ': ' + str(check_ghid) +
-                    ', target: ' + str(target)
-                ) * log_frame + '...'
-            )
-            # Calculate "gidc", etc
-            suffix = self._ATTR_LOOKUP[type(obj)]
-            validation_method = 'validate_' + suffix
+        async with self._ingestion_mutex(check_ghid):
+            if (await self._librarian.contains(check_ghid)):
+                logger.debug(
+                    str(check_ghid) + ' not ingested: already exists.'
+                )
+                return False
             
-            # Validate the object...
-            # If any of the validators find an invalid object, they will raise.
-            # ########################
-            # Enforce target selection
-            await getattr(self._enforcer, validation_method)(obj)
-            # Now make sure authorship requirements are satisfied
-            await getattr(self._lawyer, validation_method)(obj)
-            # Finally make sure persistence rules are followed
-            await getattr(self._bookie, validation_method)(obj)
+            else:
+                logger.info(
+                    'Ingesting ' + str(obj) +
+                    (
+                        ' frame ' + str(counter) + ': ' + str(check_ghid) +
+                        ', target: ' + str(target)
+                    ) * log_frame + '...'
+                )
+                # Calculate "gidc", etc
+                suffix = self._ATTR_LOOKUP[type(obj)]
+                validation_method = 'validate_' + suffix
+                
+                # Validate the object... (will raise for invalid)
+                # ########################
+                # Enforce target selection
+                await getattr(self._enforcer, validation_method)(obj)
+                # Now make sure authorship requirements are satisfied
+                await getattr(self._lawyer, validation_method)(obj)
+                # Finally make sure persistence rules are followed
+                await getattr(self._bookie, validation_method)(obj)
+                
+                # Ingest the object
+                # ########################
+                # Alert the undertaker for any necessary GC of targets, etc. Do
+                # that before storing at the librarian, so that the undertaker
+                # has access to the old state.
+                await getattr(self._undertaker, 'alert_' + suffix)(obj,
+                                                                   skip_conn)
+                # Finally, add it to the librarian.
+                await self._librarian.store(obj, packed)
+                
+                if remotable:
+                    await self._salmonator.push(obj.ghid)
             
-            # This is a valid object; let's start to ingest it.
-            # ########################
-            # Alert the undertaker for any necessary GC of targets, etc. Do
-            # that before storing at the librarian, so that the undertaker has
-            # access to the old state.
-            await getattr(self._undertaker, 'alert_' + suffix)(obj, skip_conn)
-            # Finally, add it to the librarian.
-            await self._librarian.store(obj, packed)
-            
-            if remotable:
-                await self._salmonator.push(obj.ghid)
-        
-            return True
+                return True
     
     @direct_ingest.fixture
     async def direct_ingest(self, obj, packed, remotable, skip_conn=None):
@@ -980,7 +988,7 @@ class Bookie(metaclass=API):
         
     async def validate_gobs(self, obj):
         if (await self._librarian.is_debound(obj)):
-            raise AlreadyDebound(str(obj))
+            raise AlreadyDebound(str(obj), ghid=obj.ghid)
             
         return True
         
@@ -988,18 +996,18 @@ class Bookie(metaclass=API):
         # A deliberate binding can override a debinding for GOBD.
         if (await self._librarian.is_debound(obj)):
             if not (await self._librarian.is_bound(obj)):
-                raise AlreadyDebound(str(obj))
+                raise AlreadyDebound(str(obj), ghid=obj.ghid)
                 
         return True
         
     async def validate_gdxx(self, obj):
         if (await self._librarian.is_debound(obj)):
-            raise AlreadyDebound(str(obj))
+            raise AlreadyDebound(str(obj), ghid=obj.ghid)
             
         return True
         
     async def validate_garq(self, obj):
         if (await self._librarian.is_debound(obj)):
-            raise AlreadyDebound(str(obj))
+            raise AlreadyDebound(str(obj), ghid=obj.ghid)
             
         return True
