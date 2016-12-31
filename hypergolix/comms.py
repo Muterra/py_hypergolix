@@ -1127,20 +1127,18 @@ class _ReqResMixin:
         # We arrive here only by way of a response (and not a request), so we
         # need to awaken the requestor.
         self._ensure_responseable(connection)
-        try:
-            await self._responses[connection][token].put(response)
-        except KeyError:
+        
+        # Always remove the token from connections, if it exists
+        waiter = self._responses[connection].pop(token, None)
+        
+        if waiter is None:
             logger.warning(msg_id + ' request token unknown.')
             logger.debug(msg_id + ' code: ' + str(code))
             logger.debug(msg_id + ' body: ' + str(body[:50]))
-        except Exception:
-            logger.error(
-                msg_id + ' FAILED TO AWAKEN SENDER:\n' +
-                traceback.format_exc()
-            )
-            raise
+        
         else:
-            logger.debug(msg_id + ' sender awoken.')
+            logger.debug(msg_id + ' waking sender...')
+            await waiter.put(response)
         
     async def packit(self, code, token, body):
         ''' Serialize a message.
@@ -1353,7 +1351,17 @@ class _ReqResMixin:
             logger.debug(msg_id + ' sent. Awaiting response.')
             
             # Wait for the response
-            response, exc = await asyncio.wait_for(waiter.get(), timeout)
+            try:
+                response, exc = await asyncio.wait_for(waiter.get(), timeout)
+                
+            except asyncio.TimeoutError:
+                logger.warning(msg_id + ' timed out.')
+                # A timeout is the only situation where we remove the waiter
+                # *from the sender*. In all other cases, let the sender clean
+                # up the mess.
+                del self._responses[connection][token]
+                raise
+            
             end = time.monotonic()
             
             logger.info(
@@ -1396,8 +1404,6 @@ class _ReqResMixin:
         finally:
             # Log exit from wrap requestor.
             logger.info(msg_id + ' exiting request ' + str(code))
-            del waiter
-            del self._responses[connection][token]
             
     def _new_request_token(self, connection):
         ''' Generates a request token for the connection.
