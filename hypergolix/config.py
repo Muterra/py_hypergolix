@@ -1019,10 +1019,7 @@ def _handle_register(config, register):
     '''
     if register:
         fingerprint = config.fingerprint.as_str()
-        reg_address = (
-            'https://www.hypergolix.com/register.html?fingerprint=' +
-            fingerprint
-        )
+        reg_address = 'https://www.hypergolix.com/register.html?' + fingerprint
         
         try:
             webbrowser.open(reg_address, new=2)
