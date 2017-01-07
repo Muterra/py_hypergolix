@@ -75,6 +75,7 @@ from .persistence import _GobdLite
 from .persistence import _GdxxLite
 from .persistence import _GarqLite
 
+from .exceptions import HypergolixException
 from .exceptions import RemoteNak
 from .exceptions import MalformedGolixPrimitive
 from .exceptions import VerificationFailure
@@ -87,6 +88,11 @@ from .exceptions import InconsistentAuthor
 from .exceptions import IllegalDynamicFrame
 from .exceptions import IntegrityError
 from .exceptions import UnavailableUpstream
+from .exceptions import UnknownToken
+from .exceptions import DispatchError
+from .exceptions import UnknownSecret
+from .exceptions import CommsError
+from .exceptions import IPCError
 
 from .utils import weak_property
 from .utils import readonly_property
@@ -116,7 +122,7 @@ __all__ = [
 
 
 ERROR_CODES = {
-    b'\x00\x00': Exception,
+    b'\x00\x00': HypergolixException,
     b'\x00\x01': MalformedGolixPrimitive,
     b'\x00\x02': VerificationFailure,
     b'\x00\x03': InvalidIdentity,
@@ -126,7 +132,14 @@ ERROR_CODES = {
     b'\x00\x07': InconsistentAuthor,
     b'\x00\x08': DoesNotExist,
     b'\x00\x09': IllegalDynamicFrame,
-    b'\xFF\xFF': RemoteNak,
+    b'\x00\x0A': RemoteNak,
+    b'\x00\x0B': UnknownToken,
+    b'\x00\x0C': DispatchError,
+    b'\x00\x0D': UnknownSecret,
+    b'\x00\x0E': CommsError,
+    b'\x00\x0F': IPCError,
+    b'\xFF\xFE': ValueError,
+    b'\xFF\xFF': Exception
 }
 
 

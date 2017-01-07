@@ -924,6 +924,15 @@ class IPCClientProtocol(_IPCSerializer, metaclass=RequestResponseAPI,
             
         self.token = token
         return token
+        
+    @set_token.response_handler
+    async def set_token(self, connection, response, exc):
+        ''' Converts the response into an AppToken.
+        '''
+        if exc is not None:
+            raise exc
+        else:
+            return AppToken(response)
     
     @public_api
     @request(b'+A')

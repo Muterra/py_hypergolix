@@ -71,6 +71,7 @@ __all__ = [
     'RequestFinished',
     'RequestUnknown',
     'ConnectionClosed',
+    'ProtocolVersionError',
     # These are privateer errors
     'PrivateerError',
     'ConflictingSecrets',
@@ -318,6 +319,13 @@ class RequestUnknown(RequestError):
     
 class ConnectionClosed(CommsError):
     ''' Raised when something goes wrong with IPC (bad commands, etc).
+    '''
+    pass
+    
+    
+class ProtocolVersionError(CommsError):
+    ''' Raised when a client/server sends an unsupported version to the
+    server/client, respectively.
     '''
     pass
 

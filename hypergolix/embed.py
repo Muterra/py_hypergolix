@@ -42,6 +42,7 @@ import traceback
 import asyncio
 import loopa
 import concurrent.futures
+import functools
 
 from golix import Ghid
 from loopa.utils import await_coroutine_threadsafe
@@ -105,7 +106,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
     '''
     
     @public_api
-    def __init__(self, ipc_port=7772, autostart=True, aengel=None, *args,
+    def __init__(self, ipc_port=7772, autostart=True, *args, aengel=None,
                  threaded=True, ipc_fixture=None, **kwargs):
         ''' Args:
         ipc_port    is self-explanatory
@@ -308,13 +309,13 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         return self._startup_obj
         
     @triplicated
-    async def register_startup_obj(self, obj):
+    async def register_startup(self, obj):
         ''' Registers the object as the startup object.
         '''
         await self._ipc_manager.register_startup_obj(obj._hgx_ghid)
         
     @triplicated
-    async def deregister_startup_obj(self):
+    async def deregister_startup(self):
         ''' Inverse of the above.
         '''
         await self._ipc_manager.deregister_startup_obj()
@@ -556,6 +557,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         '''
         # For simplicity, wrap the handler, so that any shares can be called
         # normally from our own event loop.
+        @functools.wraps(callback)
         async def wrapped_handler(*args, self_weakref=weakref.ref(self),
                                   func=callback):
             ''' Wrap the handler in run_in_executor.
@@ -570,7 +572,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         
         return wrapped_handler
     
-    def wrap_loopsafe(self, callback, *, target_loop=None):
+    def wrap_loopsafe(self, callback=None, *, target_loop):
         ''' Call this to register a handler for an object shared by a
         different hypergolix identity, or the same hypergolix identity
         but a different application. Any api_id can have at most one
@@ -588,13 +590,14 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         need not be wrapped by run_coroutine_loopsafe.
         '''
         # This can be used as a decorator, or directly as a function. If used
-        # as a decorator, it will be called with a single argument -- the
-        # target loop -- which must then be used to construct a decorator that
+        # as a decorator, it will be called with a single kwarg -- the
+        # target_loop -- which must then be used to construct a decorator that
         # can then be invoked to make the actual wrapped function.
-        # No target loop, so this is a decorator generation call.
-        if target_loop is None:
+        
+        # No callback, so this is a decorator generation call.
+        if callback is None:
             def decorator_closure(func, self_weakref=weakref.ref(self),
-                                  target_loop=callback):
+                                  target_loop=target_loop):
                 ''' Returns a decorator that can be used to wrap things
                 in loop safety.
                 '''
@@ -614,6 +617,7 @@ class HGXLink(loopa.TaskCommander, metaclass=TriplicateAPI):
         else:
             # For simplicity, wrap the handler, so that any shares can be
             # called normally from our own event loop.
+            @functools.wraps(callback)
             async def wrapped_handler(*args, target_loop=target_loop,
                                       coro=callback):
                 ''' Wrap the handler in await_coroutine_loopsafe.

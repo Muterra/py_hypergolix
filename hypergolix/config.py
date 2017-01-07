@@ -1027,15 +1027,15 @@ def _handle_register(config, register):
         except Exception:
             print(
                 'Failed to open web browser for registration.\n' +
-                'Please navigate to this address to register:\n' +
+                'Please navigate to this address and click "register":\n' +
                 _format_blockstr(reg_address)
             )
             
         else:
             print(
                 'Please complete registration in your browser window.\n' +
-                'If no page was opened, navigate to this address to\n' +
-                'register:\n' +
+                'If no page was opened, navigate to this address and\n' +
+                'click "register":\n' +
                 _format_blockstr(reg_address)
             )
     

@@ -156,10 +156,10 @@ class HGXLinkTrashtest(unittest.TestCase):
         '''
         self.ipc_fixture.RESET()
         dummy_obj = self.make_dummy_object()
-        self.hgxlink.register_startup_obj_threadsafe(dummy_obj)
+        self.hgxlink.register_startup_threadsafe(dummy_obj)
         self.assertEqual(dummy_obj._hgx_ghid, self.ipc_fixture.startup)
         
-        self.hgxlink.deregister_startup_obj_threadsafe()
+        self.hgxlink.deregister_startup_threadsafe()
         self.assertIsNone(self.ipc_fixture.startup)
         
     def test_get(self):
@@ -287,7 +287,7 @@ class HGXLinkTrashtest(unittest.TestCase):
         deliveries = queue.Queue()
         
         # This is the actual loopsafe handler we'll test
-        @self.hgxlink.wrap_loopsafe(looper._loop)
+        @self.hgxlink.wrap_loopsafe(target_loop=looper._loop)
         async def loopsafe_handler(ghid, origin, api_id):
             await asyncio.sleep(.01)
             deliveries.put((ghid, origin, api_id))

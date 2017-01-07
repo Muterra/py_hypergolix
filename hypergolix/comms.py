@@ -59,6 +59,7 @@ from .exceptions import RequestError
 from .exceptions import RequestFinished
 from .exceptions import RequestUnknown
 from .exceptions import ConnectionClosed
+from .exceptions import ProtocolVersionError
 
 from .utils import _BijectDict
 from .utils import ensure_equal_len
@@ -1170,7 +1171,9 @@ class _ReqResMixin:
         
         # Raise if bad version.
         if version != self._VERSION_STR:
-            raise ValueError('Incorrect version.')
+            raise ProtocolVersionError(type(self).__name__ +
+                                       ' received unsupported version: ' +
+                                       str(version))
             
         token = _RequestToken.from_bytes(token)
         

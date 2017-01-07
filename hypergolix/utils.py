@@ -133,12 +133,7 @@ class ApiID(Ghid):
     def __repr__(self):
         ''' Hide that this is a ghid.
         '''
-        return ''.join(
-            type(self).__name__,
-            '(',
-            self.address,
-            ')'
-        )
+        return type(self).__name__ + '(' + repr(self.address) + ')'
         
     @property
     def algo(self):
@@ -159,6 +154,10 @@ class ApiID(Ghid):
     @address.setter
     def address(self, address):
         self._address = address
+        
+    @classmethod
+    def pseudorandom(cls):
+        return super().pseudorandom(0)
         
         
 class KeyedAsyncioLock:
