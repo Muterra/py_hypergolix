@@ -67,6 +67,13 @@ install: |
   fi
   
   mkdir logs
+  
+  # First we want to install hypergolix proper
+  git checkout master
+  pip install .
+  
+  # Now switch back to hgx and install it
+  git checkout hgx
   pip install .
 
 script: python tests/trashtest.py --logdir logs --verbosity debug

@@ -37,9 +37,9 @@ import asyncio
 
 from golix import Ghid
 
-from golix.utils import AsymHandshake
-from golix.utils import AsymAck
-from golix.utils import AsymNak
+from golix.crypto_utils import AsymHandshake
+from golix.crypto_utils import AsymAck
+from golix.crypto_utils import AsymNak
 
 from loopa.utils import make_background_future
 

@@ -4,7 +4,7 @@ Scratchpad for test-based development.
 LICENSING
 -------------------------------------------------
 
-hypergolix: A python Golix client.
+hgx: A python Golix client.
     Copyright (C) 2016 Muterra, Inc.
     
     Contributors
@@ -40,9 +40,9 @@ import logging
 from loopa import TaskCommander
 from loopa.utils import await_coroutine_threadsafe
 
-from hypergolix.comms import BasicServer
-from hypergolix.comms import WSConnection
-from hypergolix.comms import ConnectionManager
+from hgx.comms import BasicServer
+from hgx.comms import WSConnection
+from hgx.comms import ConnectionManager
 
 from hypergolix.core import GolixCore
 from hypergolix.core import Oracle
@@ -55,25 +55,25 @@ from hypergolix.rolodex import Rolodex
 
 from hypergolix.accounting import Account
 
-from hypergolix.utils import Aengel
-from hypergolix.utils import SetMap
-from hypergolix.utils import WeakSetMap
-from hypergolix.utils import ApiID
-from hypergolix.utils import AppToken
+from hgx.utils import Aengel
+from hgx.utils import SetMap
+from hgx.utils import WeakSetMap
+from hgx.utils import ApiID
+from hgx.utils import AppToken
 
-# from hypergolix.objproxy import ProxyBase
+# from hgx.objproxy import ProxyBase
 
-from hypergolix.embed import HGXLink
+from hgx.embed import HGXLink
 
 from golix import Ghid
 
-from hypergolix.exceptions import HypergolixException
-from hypergolix.exceptions import IPCError
+from hgx.exceptions import HypergolixException
+from hgx.exceptions import IPCError
 
 # Imports within the scope of tests
 
-from hypergolix.ipc import IPCServerProtocol
-from hypergolix.ipc import IPCClientProtocol
+from hgx.ipc import IPCServerProtocol
+from hgx.ipc import IPCClientProtocol
 
 
 # ###############################################
@@ -629,11 +629,11 @@ class WSIPCTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    from hypergolix import logutils
+    from hgx import logutils
     logutils.autoconfig(loglevel='debug')
     
     unittest.main()
     
-    # from hypergolix.utils import TraceLogger
+    # from hgx.utils import TraceLogger
     # with TraceLogger(interval=10):
     #     unittest.main()

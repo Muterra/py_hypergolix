@@ -2,7 +2,7 @@
 LICENSING
 -------------------------------------------------
 
-hypergolix: A python Golix client.
+hgx: A python Golix client.
     Copyright (C) 2016 Muterra, Inc.
     
     Contributors
@@ -36,11 +36,11 @@ import unittest
 
 
 # Testing imports
-from hypergolix.hypothetical import API
-from hypergolix.hypothetical import public_api
-from hypergolix.hypothetical import fixture_api
-from hypergolix.hypothetical import fixture_noop
-from hypergolix.hypothetical import fixture_return
+from hgx.hypothetical import API
+from hgx.hypothetical import public_api
+from hgx.hypothetical import fixture_api
+from hgx.hypothetical import fixture_noop
+from hgx.hypothetical import fixture_return
 
 
 # ###############################################
@@ -140,11 +140,11 @@ class APITest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    from hypergolix import logutils
+    from hgx import logutils
     logutils.autoconfig(loglevel='debug')
     
     unittest.main()
     
-    # from hypergolix.utils import TraceLogger
+    # from hgx.utils import TraceLogger
     # with TraceLogger(interval=10):
     #     unittest.main()

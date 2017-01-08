@@ -65,10 +65,6 @@ from .gao import GAOSet
 from .gao import GAODict
 from .gao import GAOSetMap
 
-# from golix.utils import AsymHandshake
-# from golix.utils import AsymAck
-# from golix.utils import AsymNak
-
 # Local dependencies
 # from .persistence import _GarqLite
 # from .persistence import _GdxxLite

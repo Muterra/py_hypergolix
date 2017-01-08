@@ -4,7 +4,7 @@ Scratchpad for test-based development.
 LICENSING
 -------------------------------------------------
 
-hypergolix: A python Golix client.
+hgx: A python Golix client.
     Copyright (C) 2016 Muterra, Inc.
     
     Contributors
@@ -46,20 +46,20 @@ import os
 import sys
 from contextlib import contextmanager
 
-from hypergolix.utils import Aengel
+from hgx.utils import Aengel
 
 from loopa import TaskCommander
 from loopa.utils import await_coroutine_threadsafe
 
-from hypergolix.comms import RequestResponseProtocol
-from hypergolix.comms import request
-from hypergolix.comms import BasicServer
-from hypergolix.comms import MsgBuffer
-from hypergolix.comms import WSConnection
-from hypergolix.comms import WSBeatingConn
-from hypergolix.comms import ConnectionManager
+from hgx.comms import RequestResponseProtocol
+from hgx.comms import request
+from hgx.comms import BasicServer
+from hgx.comms import MsgBuffer
+from hgx.comms import WSConnection
+from hgx.comms import WSBeatingConn
+from hgx.comms import ConnectionManager
 
-from hypergolix.exceptions import RequestFinished
+from hgx.exceptions import RequestFinished
 
 
 # ###############################################
@@ -644,10 +644,10 @@ def merged_stderr_stdout():  # $ exec 2>&1
 
 
 if __name__ == "__main__":
-    from hypergolix import logutils
+    from hgx import logutils
     logutils.autoconfig(loglevel='debug')
     
-    # from hypergolix.utils import TraceLogger
+    # from hgx.utils import TraceLogger
     # with TraceLogger(interval=10):
     #     unittest.main()
     unittest.main()

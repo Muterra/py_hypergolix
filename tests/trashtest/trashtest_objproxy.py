@@ -4,7 +4,7 @@ Scratchpad for test-based development.
 LICENSING
 -------------------------------------------------
 
-hypergolix: A python Golix client.
+hgx: A python Golix client.
     Copyright (C) 2016 Muterra, Inc.
     
     Contributors
@@ -42,16 +42,16 @@ import threading
 from loopa.utils import await_coroutine_threadsafe
 from loopa import NoopLoop as DummyLoop
 
-from hypergolix.utils import ApiID
-from hypergolix.embed import HGXLink
-from hypergolix.exceptions import HGXLinkError
-from hypergolix.ipc import IPCClientProtocol
+from hgx.utils import ApiID
+from hgx.embed import HGXLink
+from hgx.exceptions import HGXLinkError
+from hgx.ipc import IPCClientProtocol
 
-from hypergolix.objproxy import ObjCore
-from hypergolix.objproxy import Proxy
-from hypergolix.objproxy import Obj
-from hypergolix.objproxy import PickleObj
-from hypergolix.objproxy import JsonObj
+from hgx.objproxy import ObjCore
+from hgx.objproxy import Proxy
+from hgx.objproxy import Obj
+from hgx.objproxy import PickleObj
+from hgx.objproxy import JsonObj
 
 from golix import Ghid
 
@@ -519,10 +519,10 @@ class SerializationTest(GenericObjTest, unittest.TestCase):
         
 
 if __name__ == "__main__":
-    from hypergolix import logutils
+    from hgx import logutils
     logutils.autoconfig(loglevel='debug')
     
-    # from hypergolix.utils import TraceLogger
+    # from hgx.utils import TraceLogger
     # with TraceLogger(interval=10):
     #     unittest.main()
     unittest.main()

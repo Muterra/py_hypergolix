@@ -2,7 +2,7 @@
 LICENSING
 -------------------------------------------------
 
-hypergolix: A python Golix client.
+hgx: Lightweight integration library for Hypergolix.
     Copyright (C) 2016 Muterra, Inc.
     
     Contributors
@@ -29,7 +29,6 @@ hypergolix: A python Golix client.
 
 ------------------------------------------------------
 '''
-
 # Always prefer setuptools over distutils
 from setuptools import setup, find_packages
 # To use a consistent encoding
@@ -37,19 +36,19 @@ from os import path
 
 here = path.abspath(path.dirname(__file__))
 
-long_description = ('Hypergolix is a python Golix service. It makes ' +
-                    'cloud persistence (think Dropbox) and sharing of ' +
-                    'Python objects easy, reliable, and secure.')
+long_description = \
+    '''Hypergolix is "programmable Dropbox". Run it as adaemonized background
+    process, and use hgx to integrate it with apps.'''
 
 setup(
-    name='hypergolix',
+    name='hgx',
 
     # Versions should comply with PEP440.  For a discussion on single-sourcing
     # the version across setup.py and the project code, see
     # https://packaging.python.org/en/latest/single_source_version.html
     version='0.0.1',
 
-    description='A python Golix client.',
+    description='Lightweight integration library for Hypergolix.',
     long_description=long_description,
 
     # The project's main homepage.
@@ -101,23 +100,16 @@ setup(
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
     install_requires=[
-        'golix[full]>=0.1.6',
         'websockets>=3.2',
-        'cryptography>=1.6',
-        'pycryptodome>=3.4.3',  # blocking on cryptography .whl openssl version
-        'daemoniker>=0.2.2',
         'loopa>=0.0.2',
-        'certifi'
+        'golix>=0.1.6'
     ],
 
     # List additional groups of dependencies here (e.g. development
     # dependencies). You can install these using the following syntax,
     # for example:
     # $ pip install -e .[dev,test]
-    extras_require={
-        'dev': [],
-        'test': [],
-    },
+    extras_require={},
 
     # If there are data files included in your packages that need to be
     # installed, specify them here.  If using Python 2.6 or less, then these

@@ -37,29 +37,14 @@ hypergolix: A python Golix client.
 
 
 # Submodules
-from . import accounting
-from . import app
-from . import bootstrapping
-from . import comms
-from . import core
-from . import dispatch
-from . import embed
 from . import exceptions
-from . import hypothetical
-from . import inquisition
-from . import ipc
-from . import lawyer
-from . import librarian
-from . import logutils
-from . import objproxy
-from . import persistence
-from . import postal
-from . import privateer
-from . import remotes
-from . import rolodex
-from . import service
 from . import utils
-from . import undertaker
+from . import embed
+from . import objproxy
+from . import ipc
+from . import logutils
+from . import hypothetical
+from . import comms
 
 # Add in toplevel stuff
 from golix import Ghid

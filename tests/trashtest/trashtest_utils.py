@@ -4,7 +4,7 @@ Scratchpad for test-based development.
 LICENSING
 -------------------------------------------------
 
-hypergolix: A python Golix client.
+hgx: A python Golix client.
     Copyright (C) 2016 Muterra, Inc.
     
     Contributors
@@ -39,11 +39,11 @@ import gc
 import random
 
 # These imports fall within the scope of testing.
-from hypergolix.utils import _WeakSet
-# from hypergolix.utils import _WeakerSet
-from hypergolix.utils import SetMap
-from hypergolix.utils import WeakSetMap
-from hypergolix.utils import FiniteDict
+from hgx.utils import _WeakSet
+# from hgx.utils import _WeakerSet
+from hgx.utils import SetMap
+from hgx.utils import WeakSetMap
+from hgx.utils import FiniteDict
 
 
 # ###############################################
@@ -452,10 +452,10 @@ class WeakSetMapTest(SetMapTest):
 
 
 if __name__ == "__main__":
-    from hypergolix import logutils
+    from hgx import logutils
     logutils.autoconfig(loglevel='debug')
     
-    # from hypergolix.utils import TraceLogger
+    # from hgx.utils import TraceLogger
     # with TraceLogger(interval=10):
     #     unittest.main()
     unittest.main()

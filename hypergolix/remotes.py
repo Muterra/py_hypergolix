@@ -59,7 +59,7 @@ from loopa.utils import make_background_future
 from golix import Ghid
 from golix import SecurityError
 
-from golix.utils import generate_ghidlist_parser
+from golix.crypto_utils import generate_ghidlist_parser
 
 # Local dependencies
 from .hypothetical import API
