@@ -101,7 +101,7 @@ setup(
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
     install_requires=[
-        'golix>=0.1.5',
+        'golix[full]>=0.1.6',
         'websockets>=3.2',
         'cryptography>=1.6',
         'pycryptodome>=3.4.3',  # blocking on cryptography .whl openssl version

@@ -6,6 +6,14 @@ env:
 matrix:
   include:
     - os: linux
+      python: 3.6
+      env: TESTSUITE=lin35 OPENSSL=1.0.2j
+      
+    - os: linux
+      python: 3.6
+      env: TESTSUITE=lin35 OPENSSL=1.1.0c
+      
+    - os: linux
       python: 3.5
       env: TESTSUITE=lin35 OPENSSL=1.0.2j
       
@@ -59,7 +67,7 @@ install: |
   fi
   
   mkdir logs
-  pip install . test
+  pip install .
 
 script: python tests/trashtest.py --logdir logs --verbosity debug
 
@@ -69,3 +77,4 @@ script: python tests/trashtest.py --logdir logs --verbosity debug
 branches:
   only:
     - master
+    - hgx
