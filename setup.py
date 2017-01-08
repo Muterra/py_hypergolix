@@ -102,7 +102,8 @@ setup(
     install_requires=[
         'websockets>=3.2',
         'loopa>=0.0.2',
-        'golix>=0.1.6'
+        'golix>=0.1.6',
+        'certifi'
     ],
 
     # List additional groups of dependencies here (e.g. development
