@@ -69,6 +69,7 @@ install: |
   mkdir logs
   
   # First we want to install hypergolix proper
+  git fetch
   git checkout master
   pip install .
   

@@ -32,12 +32,23 @@ hgx: Lightweight integration library for Hypergolix.
 # Always prefer setuptools over distutils
 from setuptools import setup, find_packages
 # To use a consistent encoding
-from os import path
+from pathlib import Path
+import os
+import sys
 
-here = path.abspath(path.dirname(__file__))
+
+# This is very gross, but we need to conditionally rename the source directory
+# to hgx so that we don't conflict with hypergolix itself (also, so that the
+# hgx package is available under a different namespace)
+if sys.argv[1] == 'install':
+    thisdir = Path(os.path.dirname(__file__))
+    packagedir_hypergolix = thisdir / 'hypergolix'
+    packagedir_hgx = thisdir / 'hgx'
+    
+    packagedir_hypergolix.rename(packagedir_hgx)
 
 long_description = \
-    '''Hypergolix is "programmable Dropbox". Run it as adaemonized background
+    '''Hypergolix is "programmable Dropbox". Run it as a daemonized background
     process, and use hgx to integrate it with apps.'''
 
 setup(
