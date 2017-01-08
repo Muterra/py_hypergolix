@@ -66,15 +66,16 @@ install: |
   
   fi
   
-  mkdir logs
-  
   # First we want to install hypergolix proper
-  git remote update
-  git fetch origin/master
-  git checkout -b master origin/master
-  pip install .
+  # Get the remote directory for the repo
+  REPOURL=`git config --get remote.origin.url`
+  cd ../
+  git clone --depth=5 --branch=master $REPOURL hypergolix_master
+  pip install ./hypergolix_master
   
   # Now switch back to hgx and install it
+  cd $TRAVIS_BUILD_DIR
+  mkdir logs
   git checkout hgx
   pip install .
 
