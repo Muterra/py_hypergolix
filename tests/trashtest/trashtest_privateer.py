@@ -51,7 +51,7 @@ from hypergolix.exceptions import UnknownSecret
 
 # These are fixture imports
 from golix import Ghid
-from golix.utils import Secret
+from golix.crypto_utils import Secret
 
 
 # ###############################################

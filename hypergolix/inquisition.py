@@ -38,10 +38,6 @@ hypergolix: A python Golix client.
 # from golix import SecondParty
 from golix import Ghid
 
-# from golix.utils import AsymHandshake
-# from golix.utils import AsymAck
-# from golix.utils import AsymNak
-
 # Local dependencies
 # from .persistence import _GarqLite
 # from .persistence import _GdxxLite

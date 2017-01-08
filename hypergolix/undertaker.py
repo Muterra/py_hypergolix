@@ -48,7 +48,7 @@ from golix import Secret
 from golix import ParseError
 from golix import SecurityError
 
-from golix.utils import generate_ghidlist_parser
+from golix.crypto_utils import generate_ghidlist_parser
 
 from golix._getlow import GIDC
 from golix._getlow import GEOC
