@@ -47,7 +47,7 @@ setup(
     # Versions should comply with PEP440.  For a discussion on single-sourcing
     # the version across setup.py and the project code, see
     # https://packaging.python.org/en/latest/single_source_version.html
-    version='0.0.1',
+    version='0.1.0',
 
     description='A python Golix client.',
     long_description=long_description,
@@ -124,4 +124,8 @@ setup(
     # have to be included in MANIFEST.in as well.
     package_data={
     },
+    
+    entry_points = {
+        'console_scripts': ['hypergolix=hypergolix.cli:main']
+    }
 )
