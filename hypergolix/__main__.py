@@ -37,64 +37,9 @@ hypergolix: A python Golix client.
 
 
 # Submodules
-from . import accounting
-from . import app
-from . import bootstrapping
 from . import cli
-from . import comms
-from . import core
-from . import dispatch
-from . import embed
-from . import exceptions
-from . import hypothetical
-from . import inquisition
-from . import ipc
-from . import lawyer
-from . import librarian
-from . import logutils
-from . import objproxy
-from . import persistence
-from . import postal
-from . import privateer
-from . import remotes
-from . import rolodex
-from . import service
-from . import utils
-from . import undertaker
+        
 
-# Add in toplevel stuff
-from golix import Ghid
-
-from .objproxy import Obj
-from .objproxy import Proxy
-from .objproxy import PickleObj
-from .objproxy import PickleProxy
-from .objproxy import JsonObj
-from .objproxy import JsonProxy
-
-from .embed import HGXLink
-
-
-# ###############################################
-# Boilerplate
-# ###############################################
-
-
-# Logging shenanigans
-import logging
-# Py2.7+, but this is Py3.5.1+
-from logging import NullHandler
-logging.getLogger(__name__).addHandler(NullHandler())
-
-
-# Control * imports.
-__all__ = [
-    'HGXLink',
-    'Ghid',
-    'Obj',
-    'Proxy',
-    'PickleObj',
-    'PickleProxy',
-    'JsonObj',
-    'JsonProxy',
-]
+if __name__ == '__main__':
+    # Pass module main calls straight to cli.main
+    cli.main()

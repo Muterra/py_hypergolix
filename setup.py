@@ -105,7 +105,7 @@ setup(
         'websockets>=3.2',
         'cryptography>=1.6',
         'pycryptodome>=3.4.3',  # blocking on cryptography .whl openssl version
-        'daemoniker>=0.2.2',
+        'daemoniker>=0.2.3',
         'loopa>=0.0.2',
         'certifi'
     ],

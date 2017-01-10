@@ -614,7 +614,8 @@ def start(namespace=None):
         # continue with startup
         is_parent, hgx_rootdir, pid_file, account_entity, root_secret = \
             daemonizer(pid_file, hgx_rootdir, pid_file, account_entity,
-                       root_secret, chdir=str(hgx_rootdir))
+                       root_secret, chdir=str(hgx_rootdir),
+                       explicit_rescript='-m hypergolix.daemon')
          
         if is_parent:
             # Set up a logging server that we can print() to the terminal
@@ -642,40 +643,9 @@ def stop(namespace=None):
         pid_file = str(config.pid_file)
         
     daemoniker.send(pid_file, SIGTERM)
-
-
-# ###############################################
-# Command line stuff
-# ###############################################
-
-
-COMMANDS = collections.OrderedDict((
-    ('start', start),
-    ('stop', stop)
-))
-
-
-def _ingest_args(argv=None):
-    ''' Parse and handle any command-line args.
+    
+    
+if __name__ == "__main__":
+    ''' This is used exclusively for reentry of the Windows daemon.
     '''
-    parser = argparse.ArgumentParser(
-        prog = 'hypergolix.daemon',
-        description = 'Control the Hypergolix app daemon.'
-    )
-    parser.add_argument(
-        'cmd',
-        action = 'store',
-        type = str,
-        choices = COMMANDS,
-        help = 'What should we do to the daemon? Note that stop and ' +
-               'restart will only work if the daemon is already running.'
-    )
-
-    args = parser.parse_args(args=argv)
-    return args
-        
-
-if __name__ == '__main__':
-    namespace = _ingest_args()
-    # Invoke the command
-    COMMANDS[namespace.cmd.lower()](namespace)
+    start()

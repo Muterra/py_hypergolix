@@ -37,7 +37,6 @@ hypergolix: A python Golix client.
 import logging
 import loopa
 import concurrent.futures
-import argparse
 import socket
 import pathlib
 import threading
@@ -288,9 +287,7 @@ def start(namespace=None):
             verbosity,
             pid_path,
             chdir = chdir,
-            # Don't strip these, because otherwise we won't know to resume
-            # daemonization
-            strip_cmd_args = False
+            explicit_rescript = '-m hypergolix.service'
         )
         
         #####################
@@ -348,132 +345,9 @@ def stop(namespace=None):
     ''' Stops the Hypergolix daemon.
     '''
     daemoniker.send(namespace.pidfile, SIGTERM)
-
-
-# ###############################################
-# Command line stuff
-# ###############################################
-
-
-def _ingest_args(argv=None):
-    ''' Parse and handle any command-line args.
+    
+    
+if __name__ == "__main__":
+    ''' This is used exclusively for reentry of the Windows daemon.
     '''
-    root_parser = argparse.ArgumentParser(
-        description = 'Control the Hypergolix remote persistence service.',
-        prog = 'hypergolix.service'
-    )
-    subparsers = root_parser.add_subparsers()
-
-    # ###############################################
-    # Start command
-    # ###############################################
-    
-    start_parser = subparsers.add_parser(
-        'start',
-        help = 'Start a remote persister. Invoke "start -h" for usage.'
-    )
-    start_parser.set_defaults(func=start)
-    
-    start_parser.add_argument(
-        'pidfile',
-        action = 'store',
-        type = str,
-        help = 'The full path to the PID file we should use for the service.'
-    )
-    start_parser.add_argument(
-        '--cachedir', '-c',
-        action = 'store',
-        dest = 'cachedir',
-        default = None,
-        type = str,
-        help = 'Specify a directory to use as a persistent cache for files. ' +
-               'If none is specified, will default to an in-memory-only ' +
-               'cache, which is, quite obviously, rather volatile.'
-    )
-    start_parser.add_argument(
-        '--host', '-H',
-        action = 'store',
-        dest = 'host',
-        default = None,
-        type = str,
-        help = 'Specify the TCP host to use. Defaults to localhost only. ' +
-               'Passing the special (case-sensitive) string "AUTO" will ' +
-               'determine the current local IP address and bind to that. ' +
-               'Passing the special (case-sensitive) string "ANY" will bind ' +
-               'to any host at the specified port (not recommended).'
-    )
-    start_parser.add_argument(
-        '--port', '-p',
-        action = 'store',
-        dest = 'port',
-        default = 7770,
-        type = int,
-        help = 'Specify the TCP port to use. Defaults to 7770.'
-    )
-    start_parser.add_argument(
-        '--chdir',
-        action = 'store',
-        default = None,
-        type = str,
-        help = 'Once the daemon starts, chdir it into the specified full ' +
-               'directory path. By default, the daemon will remain in the ' +
-               'current directory, which may create DirectoryBusy errors.'
-    )
-    start_parser.add_argument(
-        '--logdir',
-        action = 'store',
-        default = None,
-        type = str,
-        help = 'Specify a directory to use for logs. Every service failure, ' +
-               'error, message, etc will go to dev/null without this.'
-    )
-    start_parser.add_argument(
-        '--debug',
-        action = 'store_true',
-        help = 'Enable debug mode. Sets verbosity to debug unless overridden.'
-    )
-    start_parser.add_argument(
-        '--traceur',
-        action = 'store_true',
-        help = 'Enable thorough analysis, including stack tracing. '
-               'Implies verbosity of debug.'
-    )
-    start_parser.add_argument(
-        '--verbosity', '-V',
-        action = 'store',
-        dest = 'verbosity',
-        type = str,
-        choices = ['debug', 'info', 'warning', 'error', 'shouty', 'extreme'],
-        default = None,
-        help = 'Sets the log verbosity. Only applicable if --logdir is set.'
-    )
-
-    # ###############################################
-    # Stop command
-    # ###############################################
-    
-    stop_parser = subparsers.add_parser(
-        'stop',
-        help = 'Stop a running remote persister. Invoke "stop -h" for usage.'
-    )
-    stop_parser.set_defaults(func=stop)
-    
-    stop_parser.add_argument(
-        'pidfile',
-        action = 'store',
-        type = str,
-        help = 'The full path to the PID file we should use for the service.'
-    )
-
-    # ###############################################
-    # Parse and return
-    # ###############################################
-    
-    args = root_parser.parse_args(args=argv)
-    return args.func, args
-        
-
-if __name__ == '__main__':
-    cmd, namespace = _ingest_args()
-    # Invoke the command
-    cmd(namespace)
+    start()

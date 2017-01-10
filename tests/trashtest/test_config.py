@@ -57,8 +57,8 @@ from hypergolix.config import _index_remote
 
 from hypergolix.config import Config
 
-from hypergolix.config import _ingest_args
-from hypergolix.config import _handle_args
+from hypergolix.cli import main as ingest_args
+from hypergolix.config import handle_args
 
 from hypergolix.exceptions import ConfigError
 
@@ -150,6 +150,19 @@ class _SuppressSTDERR:
         os.close(self._cache)
 
 
+class _SuppressSTDOUT:
+    def __enter__(self):
+        self._fd = sys.stdout.fileno()
+        self._cache = os.dup(self._fd)
+        self._devnull = os.open(os.devnull, os.O_RDWR)
+        os.dup2(self._devnull, self._fd)
+        
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        os.dup2(self._cache, self._fd)
+        os.close(self._devnull)
+        os.close(self._cache)
+
+
 # ###############################################
 # Testing
 # ###############################################
@@ -205,7 +218,8 @@ class EtcTest(unittest.TestCase):
     '''
     
     def test_mk_blank(self):
-        config = _make_blank_cfg()
+        with _SuppressSTDOUT():
+            config = _make_blank_cfg()
         self.assertIn('remotes', config)
         self.assertIn('user', config)
         self.assertIn('instrumentation', config)
@@ -303,7 +317,8 @@ class EtcTest(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 _get_hgx_config(root)
             
-            blank = _make_blank_cfg()
+            with _SuppressSTDOUT():
+                blank = _make_blank_cfg()
             _ensure_hgx_homedir(root)
             _set_hgx_config(root, blank)
             re_blank = _get_hgx_config(root)
@@ -311,7 +326,8 @@ class EtcTest(unittest.TestCase):
             self.assertEqual(blank, re_blank)
         
     def test_manipulate_remotes(self):
-        cfg = _make_blank_cfg()
+        with _SuppressSTDOUT():
+            cfg = _make_blank_cfg()
         rem1 = _RemoteDef('host1', 123, False)
         rem2 = _RemoteDef('host2', 123, False)
         rem2a = _RemoteDef('host2', 123, True)
@@ -352,22 +368,23 @@ class ConfigTest(unittest.TestCase):
         '''
         with tempfile.TemporaryDirectory() as root:
             root = pathlib.Path(root)
-            other_cfg = _make_blank_cfg()
+            with _SuppressSTDOUT():
+                other_cfg = _make_blank_cfg()
             
-            with Config(root) as config:
-                self.assertEqual(config._cfg, other_cfg)
-                config.debug_mode = True
-                other_cfg['instrumentation'].debug = True
-                self.assertEqual(config._cfg, other_cfg)
-                
-            with Config(root) as config:
-                self.assertEqual(config._cfg, other_cfg)
-                config.debug_mode = False
-                other_cfg['instrumentation'].debug = False
-                self.assertEqual(config._cfg, other_cfg)
-                
-            with Config(root) as config:
-                self.assertEqual(config._cfg, other_cfg)
+                with Config(root) as config:
+                    self.assertEqual(config._cfg, other_cfg)
+                    config.debug_mode = True
+                    other_cfg['instrumentation'].debug = True
+                    self.assertEqual(config._cfg, other_cfg)
+                    
+                with Config(root) as config:
+                    self.assertEqual(config._cfg, other_cfg)
+                    config.debug_mode = False
+                    other_cfg['instrumentation'].debug = False
+                    self.assertEqual(config._cfg, other_cfg)
+                    
+                with Config(root) as config:
+                    self.assertEqual(config._cfg, other_cfg)
     
     def test_stuffs(self):
         ''' Tests attribute manipulation.
@@ -376,47 +393,48 @@ class ConfigTest(unittest.TestCase):
             root = pathlib.Path(root)
             homedir = _ensure_hgx_homedir(root)
             
-            with Config(root) as config:
-                self.assertEqual(config.home_dir, homedir)
-                
-                self.assertEqual(config.remotes, tuple())
-                self.assertEqual(config.fingerprint, None)
-                self.assertEqual(config.user_id, None)
-                self.assertEqual(config.root_secret, None)
-                self.assertEqual(config.log_verbosity, 'warning')
-                self.assertEqual(config.debug_mode, False)
-                
-                config.set_remote('host', 123, True)
-                self.assertIn(('host', 123, True), config.remotes)
-                
-                config.remove_remote('host', 123)
-                self.assertNotIn(('host', 123, True), config.remotes)
-                
-                # Test fingerprints and user_id
-                fingerprint = make_random_ghid()
-                user_id = make_random_ghid()
-                
-                config.fingerprint = fingerprint
-                self.assertEqual(config.fingerprint, fingerprint)
-                
-                config.user_id = user_id
-                self.assertEqual(config.user_id, user_id)
-                
-                # Test modification updates appropriately
-                fingerprint = make_random_ghid()
-                user_id = make_random_ghid()
-                
-                config.fingerprint = fingerprint
-                self.assertEqual(config.fingerprint, fingerprint)
-                
-                config.user_id = user_id
-                self.assertEqual(config.user_id, user_id)
-                
-                # Now everything else
-                config.log_verbosity = 'info'
-                self.assertEqual(config.log_verbosity, 'info')
-                config.debug_mode = True
-                self.assertEqual(config.debug_mode, True)
+            with _SuppressSTDOUT():
+                with Config(root) as config:
+                    self.assertEqual(config.home_dir, homedir)
+                    
+                    self.assertEqual(config.remotes, tuple())
+                    self.assertEqual(config.fingerprint, None)
+                    self.assertEqual(config.user_id, None)
+                    self.assertEqual(config.root_secret, None)
+                    self.assertEqual(config.log_verbosity, 'warning')
+                    self.assertEqual(config.debug_mode, False)
+                    
+                    config.set_remote('host', 123, True)
+                    self.assertIn(('host', 123, True), config.remotes)
+                    
+                    config.remove_remote('host', 123)
+                    self.assertNotIn(('host', 123, True), config.remotes)
+                    
+                    # Test fingerprints and user_id
+                    fingerprint = make_random_ghid()
+                    user_id = make_random_ghid()
+                    
+                    config.fingerprint = fingerprint
+                    self.assertEqual(config.fingerprint, fingerprint)
+                    
+                    config.user_id = user_id
+                    self.assertEqual(config.user_id, user_id)
+                    
+                    # Test modification updates appropriately
+                    fingerprint = make_random_ghid()
+                    user_id = make_random_ghid()
+                    
+                    config.fingerprint = fingerprint
+                    self.assertEqual(config.fingerprint, fingerprint)
+                    
+                    config.user_id = user_id
+                    self.assertEqual(config.user_id, user_id)
+                    
+                    # Now everything else
+                    config.log_verbosity = 'info'
+                    self.assertEqual(config.log_verbosity, 'info')
+                    config.debug_mode = True
+                    self.assertEqual(config.debug_mode, True)
                 
                 
 class CommandingTest(unittest.TestCase):
@@ -426,51 +444,52 @@ class CommandingTest(unittest.TestCase):
     def test_full(self):
         ''' Test a full command chain for everything.
         '''
-        blank = _make_blank_cfg()
-        debug = _make_blank_cfg()
+        with _SuppressSTDOUT():
+            blank = _make_blank_cfg()
+            debug = _make_blank_cfg()
+            loud = _make_blank_cfg()
+            host1 = _make_blank_cfg()
+            host1hgx = _make_blank_cfg()
+            host1host2f = _make_blank_cfg()
+            host1host2 = _make_blank_cfg()
         debug['instrumentation'].debug = True
-        loud = _make_blank_cfg()
         loud['instrumentation'].verbosity = 'info'
-        host1 = _make_blank_cfg()
         host1['remotes'].append(('host1', 123, True))
-        host1hgx = _make_blank_cfg()
         host1hgx['remotes'].append(('host1', 123, True))
         host1hgx['remotes'].append(('hgx.hypergolix.com', 443, True))
-        host1host2f = _make_blank_cfg()
         host1host2f['remotes'].append(('host1', 123, True))
         host1host2f['remotes'].append(('host2', 123, False))
-        host1host2 = _make_blank_cfg()
         host1host2['remotes'].append(('host1', 123, True))
         host1host2['remotes'].append(('host2', 123, True))
         
         # Definitely want to control the order of execution for this.
         valid_commands = [
-            ('--debug', debug),
-            ('--no-debug', blank),
-            ('--verbosity loud', loud),
-            ('--verbosity normal', blank),
-            ('-ah host1 123 t', host1),
-            ('--addhost host1 123 t', host1),
-            ('-a hgx', host1hgx),
-            ('--add hgx', host1hgx),
-            ('-r hgx', host1),
-            ('--remove hgx', host1),
+            ('config --debug', debug),
+            ('config --no-debug', blank),
+            ('config --verbosity loud', loud),
+            ('config --verbosity normal', blank),
+            ('config -ah host1 123 t', host1),
+            ('config --addhost host1 123 t', host1),
+            ('config -a hgx', host1hgx),
+            ('config --add hgx', host1hgx),
+            ('config -r hgx', host1),
+            ('config --remove hgx', host1),
             # Note switch of TLS flag
-            ('-ah host2 123 f', host1host2f),
+            ('config -ah host2 123 f', host1host2f),
             # Note return of TLS flag
-            ('--addhost host2 123 t', host1host2),
-            ('-rh host2 123', host1),
-            ('--removehost host2 123', host1),
-            ('-o local', blank),
-            ('--only local', blank),
-            ('-ah host1 123 t -ah host2 123 t', host1host2),
+            ('config --addhost host2 123 t', host1host2),
+            ('config -rh host2 123', host1),
+            ('config --removehost host2 123', host1),
+            ('config -o local', blank),
+            ('config --only local', blank),
+            ('config -ah host1 123 t -ah host2 123 t', host1host2),
         ]
         
         failing_commands = [
-            '-zz top',
-            '--verbosity XXXTREEEEEEEME',
-            '--debug --no-debug',
-            '-o local -a hgx',
+            'config -zz top',
+            'config --verbosity XXXTREEEEEEEME',
+            'config --debug --no-debug',
+            'config -o local -a hgx',
         ]
         
         with tempfile.TemporaryDirectory() as root:
@@ -479,8 +498,11 @@ class CommandingTest(unittest.TestCase):
             for cmd_str, cmd_result in valid_commands:
                 with self.subTest(cmd_str):
                     argv = cmd_str.split()
-                    args = _ingest_args(argv)
-                    _handle_args(args, root)
+                    argv.append('--root')
+                    argv.append(str(root))
+                    
+                    with _SuppressSTDOUT():
+                        ingest_args(argv)
                     
                     with Config(root) as config:
                         self.assertEqual(config._cfg, cmd_result)
@@ -489,10 +511,13 @@ class CommandingTest(unittest.TestCase):
         for cmd_str in failing_commands:
             with self.subTest(cmd_str):
                 argv = cmd_str.split()
+                argv.append('--root')
+                argv.append(str(root))
                 # Note that argparse will always push usage to stderr in a
                 # suuuuuuper annoying way if we don't suppress it.
-                with self.assertRaises(SystemExit), _SuppressSTDERR():
-                    args = _ingest_args(argv)
+                with self.assertRaises(SystemExit), \
+                    _SuppressSTDERR(), _SuppressSTDOUT():
+                        ingest_args(argv)
 
 
 if __name__ == "__main__":

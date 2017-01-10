@@ -438,6 +438,15 @@ class Config:
         remotes.
         '''
         rdef = _RemoteDef(host, port, tls)
+        
+        if rdef == NAMED_REMOTES['hgx']:
+            # TODO: move this somewhere else? This is a bit of an awkward place
+            # to put a warning.
+            print('Thanks for adding hgx.hypergolix.com as a remote server!\n')
+            print('We limit unregistered accounts to read-only access.')
+            print('For full access, please register:')
+            print('    hypergolix config --register\n')
+        
         _set_remote(self._cfg, rdef)
         
     def remove_remote(self, host, port):
@@ -632,6 +641,14 @@ class Config:
 def _make_blank_cfg():
     ''' Creates a new, blank cfg dict.
     '''
+    # TODO: move this somewhere that doesn't require config testing to suppress
+    # stdout!
+    print('Welcome to Hypergolix! Creating a new, local-only configuration.')
+    print('For configuration help, run this command:')
+    print('    hypergolix config -h')
+    print('To use Hypergolix over the internet, run this command:')
+    print('    hypergolix config --add hgx')
+    
     cfg = {
         'remotes': [],
         'user': _UserDef(None, None, None),
@@ -1040,11 +1057,15 @@ def _handle_register(config, register):
             )
     
     
-def _handle_args(args, root=None):
+def handle_args(args):
     ''' Performs all needed actions on the passed command args.
     '''
-    if root is None:
+    _typecast_remotes(args)
+    
+    if args.cfg_root is None:
         root = get_hgx_rootdir()
+    else:
+        root = args.cfg_root
     
     with Config(root) as config:
         _handle_remotes(
@@ -1059,178 +1080,4 @@ def _handle_args(args, root=None):
         _handle_whoami(config, args.whoami)
         _handle_register(config, args.register)
         
-        
-def _ingest_args(argv=None):
-    ''' Makes an arg parser and then ingests commands, returning the
-    arguments contained in the commands.
-    '''
-    parser = argparse.ArgumentParser(
-        prog = 'hypergolix.config',
-        description = 'Configure the Hypergolix service. You must restart ' +
-                      'Hypergolix before changes are applied.',
-    )
-    
-    ####################################################################
-    # Remotes config
-    ####################################################################
-    
-    remote_group = parser.add_argument_group(
-        title = 'Remotes configuration',
-        description = 'Specify which remote persistence servers Hypergolix ' +
-                      'should use.'
-    )
-    
-    # Exclusive autoconfig (also, clear all hosts)
-    remote_group.add_argument(
-        '--only', '-o',
-        action = 'store',
-        type = str,
-        help = 'Automatically configure Hypergolix to use only a single, ' +
-               'named remote (or no remote). Does not affect the remainder ' +
-               'of the configuration.',
-        choices = ['local', *NAMED_REMOTES],
-        dest = 'only_remotes',
-        default = None,
-    )
-    
-    # Auto-add
-    remote_group.add_argument(
-        '--add', '-a',
-        action = 'append',
-        type = str,
-        help = 'Add a named remote to the Hypergolix configuration. Cannot ' +
-               'be combined with --only.',
-        choices = NAMED_REMOTES,
-        dest = 'add_remotes'
-    )
-    
-    # Auto-remove
-    remote_group.add_argument(
-        '--remove', '-r',
-        action = 'append',
-        type = str,
-        help = 'Remove a named remote from the Hypergolix configuration. ' +
-               'Cannot be combined with --only.',
-        choices = NAMED_REMOTES,
-        dest = 'remove_remotes'
-    )
-    
-    # Manually add a host
-    remote_group.add_argument(
-        '--addhost', '-ah',
-        action = 'append',
-        type = str,
-        help = 'Add a remote host, of form "hostname port use_TLS". Example ' +
-               'usage: "hypergolix.config --adhost 192.168.0.1 7770 False". ' +
-               'Cannot be combined with --only.',
-        nargs = 3,
-        metavar = ('HOST', 'PORT', 'TLS'),
-        dest = 'add_remotes'
-    )
-    
-    # Manually remove a host
-    remote_group.add_argument(
-        '--removehost', '-rh',
-        action = 'append',
-        type = str,
-        help = 'Remove a remote host, of form "hostname port". Example ' +
-               'usage: "hypergolix.config --removehost 192.168.0.1 7770". ' +
-               'Cannot be combined with --only.',
-        nargs = 2,
-        metavar = ('HOST', 'PORT'),
-        dest = 'remove_remotes'
-    )
-    
-    # Set defaults for those two as well
-    parser.set_defaults(remove_remotes=[], add_remotes=[])
-    
-    ####################################################################
-    # Runtime config
-    ####################################################################
-    
-    runtime_group = parser.add_argument_group(
-        title = 'Runtime configuration',
-        description = 'Specify Hypergolix runtime options.'
-    )
-    
-    # Set debug mode.
-    # Make the debug parser a mutually exclusive group with flags.
-    debug_parser = runtime_group.add_mutually_exclusive_group(required=False)
-    debug_parser.add_argument(
-        '--debug',
-        action = 'store_true',
-        dest = 'debug',
-        help = 'Enables debug mode.'
-    )
-    debug_parser.add_argument(
-        '--no-debug',
-        action = 'store_false',
-        dest = 'debug',
-        help = 'Clears debug mode.'
-    )
-    parser.set_defaults(debug=None)
-    
-    # Set verbosity
-    runtime_group.add_argument(
-        '--verbosity', '-v',
-        action = 'store',
-        default = 'normal',
-        type = str,
-        choices = ['extreme', 'shouty', 'louder', 'loud', 'normal', 'quiet'],
-        help = 'Specify the logging level.'
-    )
-    
-    # Set verbosity
-    runtime_group.add_argument(
-        '--ipc-port', '-ipc',
-        action = 'store',
-        default = None,
-        type = int,
-        help = 'Configure which port to use for Hypergolix IPC.',
-        metavar = 'PORT'
-    )
-    
-    ####################################################################
-    # Etc
-    ####################################################################
-    
-    etc_group = parser.add_argument_group(
-        title = 'Miscellaneous commands'
-    )
-    
-    # Set verbosity
-    etc_group.add_argument(
-        '--whoami',
-        action = 'store_true',
-        help = 'Print the fingerprint and user ID for the current ' +
-               'Hypergolix configuration.'
-    )
-    
-    # Set verbosity
-    etc_group.add_argument(
-        '--register',
-        action = 'store_true',
-        help = 'Register the current Hypergolix user, allowing them access ' +
-               'to the hgx.hypergolix.com remote persister. Requires a web ' +
-               'browser.'
-    )
-    
-    # This will dispatch to sys.argv correctly if args=argv is None
-    args = parser.parse_args(args=argv)
-        
-    # Now we need to do some manual type checking and manipulation
-    try:
-        _typecast_remotes(args)
-        
-    # If any of the handling fails, error out the parser.
-    except Exception as exc:
-        parser.error(str(exc))
-        
-    return args
-
-
-if __name__ == '__main__':
-    # We now return to your regularly scheduled programming
-    args = _ingest_args()
-    _handle_args(args)
     print('Configuration successful. Restart Hypergolix to apply any changes.')
