@@ -72,7 +72,7 @@ from hgx.exceptions import IPCError
 
 # Imports within the scope of tests
 
-from hgx.ipc import IPCServerProtocol
+from hypergolix.ipc import IPCServerProtocol
 from hgx.ipc import IPCClientProtocol
 
 
