@@ -40,12 +40,12 @@ import sys
 # This is very gross, but we need to conditionally rename the source directory
 # to hgx so that we don't conflict with hypergolix itself (also, so that the
 # hgx package is available under a different namespace)
-if sys.argv[1] == 'install':
-    thisdir = Path(os.path.dirname(__file__))
-    packagedir_hypergolix = thisdir / 'hypergolix'
-    packagedir_hgx = thisdir / 'hgx'
+# if sys.argv[1] == 'install':
+#     thisdir = Path(os.path.dirname(__file__))
+#     packagedir_hypergolix = thisdir / 'hypergolix'
+#     packagedir_hgx = thisdir / 'hgx'
     
-    packagedir_hypergolix.rename(packagedir_hgx)
+#     packagedir_hypergolix.rename(packagedir_hgx)
 
 long_description = \
     '''Hypergolix is "programmable Dropbox". Run it as a daemonized background
@@ -57,7 +57,7 @@ setup(
     # Versions should comply with PEP440.  For a discussion on single-sourcing
     # the version across setup.py and the project code, see
     # https://packaging.python.org/en/latest/single_source_version.html
-    version='0.0.1',
+    version='0.1.0',
 
     description='Lightweight integration library for Hypergolix.',
     long_description=long_description,
