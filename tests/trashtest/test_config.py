@@ -71,7 +71,7 @@ from hypergolix.exceptions import ConfigError
 from _fixtures.ghidutils import make_random_ghid
 
 
-vec_remotedef = '''
+vec_remotedef_depr = '''
     {
         "__RemoteDef__": true,
         "host": "foo",
@@ -81,7 +81,14 @@ vec_remotedef = '''
 '''
 
 
-vec_userdef = '''
+vec_remotedef = '''
+    - host: foo
+      port: 1234
+      tls: false
+'''
+
+
+vec_userdef_depr = '''
     {
         "__UserDef__": true,
         "fingerprint": "foo",
@@ -91,7 +98,15 @@ vec_userdef = '''
 '''
 
 
-vec_instrumentationdef = '''
+vec_userdef = '''
+    user:
+      fingerprint: foo
+      user_id: bar
+      root_secret: null
+'''
+
+
+vec_instrumentationdef_depr = '''
     {
         "__InstrumentationDef__": true,
         "verbosity": "info",
@@ -101,7 +116,15 @@ vec_instrumentationdef = '''
 '''
 
 
-vec_cfg = '''
+vec_instrumentationdef = '''
+    instrumentation:
+      verbosity: info
+      debug: false
+      traceur: false
+'''
+
+
+vec_cfg_depr = '''
     {
         "remotes": [
             {
@@ -124,6 +147,24 @@ vec_cfg = '''
             "traceur": false
         }
     }
+'''
+
+
+vec_cfg = '''
+    remotes:
+      - host: foo
+        port: 1234
+        tls: false
+
+    user:
+      fingerprint: foo
+      user_id: bar
+      root_secret: null
+      
+    instrumentation:
+      verbosity: info
+      debug: false
+      traceur: false
 '''
 
 
@@ -439,6 +480,8 @@ class ConfigTest(unittest.TestCase):
                 
 class CommandingTest(unittest.TestCase):
     ''' Test passing commands and manipulation thereof.
+    
+    All of this is deprecated!
     '''
     
     def test_full(self):
