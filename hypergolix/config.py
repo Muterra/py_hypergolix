@@ -37,6 +37,7 @@ import json
 import collections
 import copy
 import webbrowser
+import yaml
 
 from golix import Ghid
 from golix import Secret
@@ -332,6 +333,28 @@ class _CfgEncoder(json.JSONEncoder):
             odict[type_hint] = True
         
         return odict
+        
+        
+def _yaml_caster(loader, data):
+    ''' Preserve order of OrderedDicts, and re-cast them as normal maps.
+    See also:
+    +   http://stackoverflow.com/questions/13297744/pyyaml-control-
+        ordering-of-items-called-by-yaml-load
+    +   http://stackoverflow.com/questions/16782112/can-pyyaml-dump-
+        dict-items-in-non-alphabetical-order
+    +   http://stackoverflow.com/questions/8651095/controlling-yaml-
+        serialization-order-in-python
+    +   http://stackoverflow.com/questions/31605131/dumping-a-
+        dictionary-to-a-yaml-file-while-preserving-order
+        
+    Note that nothin special is needed in the reverse direction, because
+    the AutoField config system is assigning everything to an
+    OrderedDict regardless of how it gets loaded.
+    '''
+    loader.represent_mapping('tag:yaml.org,2002:map', data.items())
+    
+    
+yaml.add_representer(collections.OrderedDict, _yaml_caster)
 
 
 # ###############################################
@@ -343,6 +366,183 @@ _readonly_remote = collections.namedtuple(
     typename = 'Remote',
     field_names = ('host', 'port', 'tls'),
 )
+        
+        
+class AutoField:
+    ''' Helper class descriptor for AutoMappers.
+    '''
+    
+    def __init__(self, subfield=None, *args, listed=False, decode=None,
+                 encode=None, name=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.subfield = subfield
+        self.listed = listed
+        self._encode = encode
+        self._decode = decode
+        self.name = name
+        
+    def encode(self, value):
+        ''' Wrap encode_single to support iteration.
+        '''
+        if self.listed:
+            result = []
+            for item in value:
+                result.append(self.encode_single(item))
+                
+        else:
+            result = self.encode_single(value)
+            
+        return result
+        
+    def encode_single(self, value):
+        if self.subfield is not None:
+            # We need to get the actual descriptor's encode method, not the
+            # value's.
+            return type(self.subfield).encode(value)
+        elif self._encode is None:
+            return value
+        elif callable(self._encode):
+            return self._encode(value)
+        else:
+            return getattr(value, self._encode)()
+        
+    def decode(self, value):
+        ''' Wrap decode_single to support iteration.
+        '''
+        if self.listed:
+            result = []
+            for item in value:
+                result.append(self.decode_single(item))
+                
+        else:
+            result = self.decode_single(value)
+            
+        return result
+        
+    def decode_single(self, value):
+        if self.subfield is not None:
+            # We need to get the actual descriptor's decode method, not the
+            # value's.
+            return type(self.subfield).decode(value)
+        elif self._decode is None:
+            return value
+        elif callable(self._decode):
+            return self._decode(value)
+        else:
+            raise TypeError('Decoding must use a callable.')
+            
+    @property
+    def name(self):
+        ''' Reading is trivial.
+        '''
+        try:
+            return self._name
+        except AttributeError:
+            return None
+    
+    @name.setter
+    def name(self, value):
+        ''' Writing checks to see if we have a value; if we do, it
+        silently ignores the change.
+        '''
+        if not hasattr(self, '_name'):
+            self._name = value
+        elif self._name is None:
+            self._name = value
+            
+    def __get__(self, instance, owner):
+        if instance is None:
+            return self
+        else:
+            return instance._fields[self._name]
+            
+    def __set__(self, instance, value):
+        ''' Set the value at the instance's _fields OrderedDict.
+        '''
+        if self.subfield is not None:
+            raise AttributeError('Cannot set AutoMapper attribute with ' +
+                                 'subfield directly.')
+        else:
+            instance._fields[self._name] = value
+        
+    def __delete__(self, instance):
+        ''' Set the value at the instance's _fields OrderedDict to None.
+        '''
+        instance._fields[self._name] = None
+            
+            
+class _AutoMapperMixin:
+    ''' Inject a control OrderedDict for the fields.
+    '''
+    
+    def __init__(self, *args, **kwargs):
+        nones = [None] * len(self.fields)
+        self._fields = collections.OrderedDict(zip(self.fields, nones))
+
+
+class _AutoMapper(type):
+    ''' Metaclass used for automatically mapping a structured something
+    into objects with properties and names and stuff.
+    '''
+
+    # Remember the order of class variable definitions!
+    @classmethod
+    def __prepare__(mcls, clsname, bases, **kwargs):
+        return collections.OrderedDict()
+
+    def __new__(mcls, clsname, bases, namespace, **kwargs):
+        fields = []
+        for name, value in namespace.items():
+            if name == 'fields':
+                raise ValueError('AutoMapper classes cannot define "fields" ' +
+                                 'as a class variable.')
+            elif name == '_fields':
+                raise ValueError('AutoMapper classes cannot define ' +
+                                 '"_fields" as a class variable.')
+            elif isinstance(value, AutoField):
+                fields.append(name)
+                # This will be ignored if the AutoField explicitly specifies
+                # the name to use.
+                value.name = '__' + name
+        
+        bases = (_AutoMapperMixin, *bases)
+        cls = super().__new__(mcls, clsname, bases, dict(namespace), **kwargs)
+        cls.fields = fields
+        return cls
+        
+        
+class _RemoteDef2(metaclass=_AutoMapper):
+    ''' How _RemoteDef should be.
+    '''
+    host = AutoField()
+    port = AutoField()
+    tls = AutoField()
+
+
+class _UserDef2(metaclass=_AutoMapper):
+    # Note that all of these recastings should handle None correctly
+    fingerprint = AutoField(decode=Ghid.from_str, encode='as_str')
+    user_id = AutoField(decode=Ghid.from_str, encode='as_str')
+    root_secret = AutoField(decode=Secret.from_str, encode='as_str')
+
+
+class _InstrumentationDef2(metaclass=_AutoMapper):
+    verbosity = AutoField()
+    debug = AutoField()
+    traceur = AutoField()
+
+
+class _ProcessDef2(metaclass=_AutoMapper):
+    ipc_port = AutoField()
+    
+    
+class _Config2(metaclass=_AutoMapper):
+    ''' How Config should be.
+    '''
+    remotes = AutoField(_RemoteDef2, listed=True)
+    user = AutoField(_UserDef2)
+    instrumentation = AutoField(_InstrumentationDef2)
+    process = AutoField(_ProcessDef2)
 
 
 class Config:
@@ -636,7 +836,25 @@ class Config:
             self._cfg['process'] = _ProcessDef(
                 ipc_port = port
             )
-            
+    
+    def encode(self):
+        ''' Converts the config into an encoded file ready for output.
+        '''
+        
+        return yaml.dump(raw_cfg, default_flow_style=False)
+        
+    @classmethod
+    def decode(cls, data):
+        ''' Load an existing config.
+        '''
+        raw_cfg = yaml.safe_load(data)
+        
+    @classmethod
+    def decode_json(cls, data):
+        ''' Load an existing (deprecated) JSON config.
+        '''
+        _CfgDecoder().decode(data)
+        
             
 def _make_blank_cfg():
     ''' Creates a new, blank cfg dict.
