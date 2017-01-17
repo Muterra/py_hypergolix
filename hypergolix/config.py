@@ -476,8 +476,61 @@ class _AutoMapperMixin:
     '''
     
     def __init__(self, *args, **kwargs):
-        nones = [None] * len(self.fields)
-        self._fields = collections.OrderedDict(zip(self.fields, nones))
+        empties = self._make_empty_fields()
+        self._fields = collections.OrderedDict(zip(self.fields, empties))
+        
+    @classmethod
+    def _make_empty_fields(cls):
+        ''' Goes through all fields, making a list of values to zip()
+        with them to make the new self._fields dict.
+        '''
+        empties = []
+        # For every fieldname...
+        for field in cls.fields:
+            
+            # Get the actual descriptor...
+            descriptor = getattr(cls, field)
+            subfield = descriptor.subfield
+            
+            # FILE POINTER TODO HELP: figure out how to manage lists here.
+            # This is the appropriate place to add in a list thing. Subclass
+            # list to bind an append?
+            
+            # If it has a subfield, create and assign an instance thereof to
+            # the list.
+            if subfield is not None:
+                empties.append(subfield())
+            
+            # Otherwise, just assign it None.
+            else:
+                empties.append(None)
+                
+        # Now return the generated list.
+        return empties
+        
+    def entranscode(self):
+        ''' Convert the object typed self._fields into a natively
+        serializable ordereddict.
+        '''
+        transcoded = collections.OrderedDict()
+        
+        cls = type(self)
+        for field in self.fields:
+            descriptor = getattr(cls, field)
+            value = self._fields[field]
+            transcoded[field] = descriptor.encode(value)
+            
+        return transcoded
+        
+    def detranscode(self, data):
+        ''' Apply the natively deserialized ordereddict into
+        self._fields.
+        '''
+        cls = type(self)
+        
+        for field in self.fields:
+            descriptor = getattr(cls, field)
+            self._fields[field] = descriptor.decode(data[field])
 
 
 class _AutoMapper(type):
