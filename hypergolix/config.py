@@ -38,6 +38,7 @@ import collections
 import copy
 import webbrowser
 import yaml
+import inspect
 
 from golix import Ghid
 from golix import Secret
@@ -373,13 +374,50 @@ class AutoField:
     '''
     
     def __init__(self, subfield=None, *args, listed=False, decode=None,
-                 encode=None, name=None, **kwargs):
+                 encode=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.subfield = subfield
-        self.listed = listed
         self._encode = encode
         self._decode = decode
-        self.name = name
+        
+        if listed:
+            if subfield:
+                class ListedSubfield(list):
+                    ''' Well, this doesn't support slicing, but whatevs.
+                    Or extension, for that matter.
+                    '''
+                    def __setitem__(instance, index, value, subfield=subfield):
+                        if isinstance(value, subfield):
+                            super(ListedSubfield, instance).__setitem__(index,
+                                                                        value)
+                        else:
+                            raise TypeError(value)
+                            
+                    def append(instance, value, subfield=subfield):
+                        if isinstance(value, subfield):
+                            super(ListedSubfield, instance).append(value)
+                        else:
+                            raise TypeError(value)
+                            
+                    def extend(instance, value, subfield=subfield):
+                        ''' Suppress extension, because it's messy.
+                        '''
+                        raise NotImplementedError()
+                        
+                    def insert(instance, index, value, subfield=subfield):
+                        if isinstance(value, subfield):
+                            super(ListedSubfield, instance).insert(index,
+                                                                   value)
+                        else:
+                            raise TypeError(value)
+                            
+                self.listed = ListedSubfield
+                
+            else:
+                self.listed = list
+        
+        else:
+            self.listed = False
         
     def encode(self, value):
         ''' Wrap encode_single to support iteration.
@@ -395,10 +433,10 @@ class AutoField:
         return result
         
     def encode_single(self, value):
-        if self.subfield is not None:
-            # We need to get the actual descriptor's encode method, not the
-            # value's.
-            return type(self.subfield).encode(value)
+        if value is None:
+            return value
+        elif self.subfield is not None:
+            return value.entranscode()
         elif self._encode is None:
             return value
         elif callable(self._encode):
@@ -420,10 +458,12 @@ class AutoField:
         return result
         
     def decode_single(self, value):
-        if self.subfield is not None:
-            # We need to get the actual descriptor's decode method, not the
-            # value's.
-            return type(self.subfield).decode(value)
+        if value is None:
+            return value
+        elif self.subfield is not None:
+            instance = self.subfield()
+            instance.detranscode(value)
+            return instance
         elif self._decode is None:
             return value
         elif callable(self._decode):
@@ -454,7 +494,7 @@ class AutoField:
         if instance is None:
             return self
         else:
-            return instance._fields[self._name]
+            return instance._fields[self.name]
             
     def __set__(self, instance, value):
         ''' Set the value at the instance's _fields OrderedDict.
@@ -462,13 +502,26 @@ class AutoField:
         if self.subfield is not None:
             raise AttributeError('Cannot set AutoMapper attribute with ' +
                                  'subfield directly.')
+        
+        elif self.listed:
+            raise AttributeError('Cannot set listed AutoMapper attribute ' +
+                                 'directly.')
+        
         else:
-            instance._fields[self._name] = value
+            instance._fields[self.name] = value
         
     def __delete__(self, instance):
         ''' Set the value at the instance's _fields OrderedDict to None.
         '''
-        instance._fields[self._name] = None
+        if self.listed:
+            # TODO: change this to a list subtype
+            instance._fields[self.name] = self.listed()
+        
+        elif self.subfield:
+            instance._fields[self.name] = self.subfield()
+        
+        else:
+            instance._fields[self.name] = None
             
             
 class _AutoMapperMixin:
@@ -476,37 +529,27 @@ class _AutoMapperMixin:
     '''
     
     def __init__(self, *args, **kwargs):
-        empties = self._make_empty_fields()
-        self._fields = collections.OrderedDict(zip(self.fields, empties))
+        # This is an awkward but effective way of initializing everything.
+        # Create self._fields, the ordereddict equivalent of self.__dict__
+        self._fields = collections.OrderedDict()
+        # For each field, delete it, resulting in the descriptor performing an
+        # initialization to its null state
+        for field in self.fields:
+            delattr(self, field)
+            
+        # Now, we need to assign whatever was included in *args and **kwargs.
+        # First bind the signature.
+        bound_args = self._signature.bind_partial(*args, **kwargs)
+        # Now pop *args and **kwargs from it, defaulting to empty collections
+        args = bound_args.arguments.pop('args', tuple())
+        kwargs = bound_args.arguments.pop('kwargs', {})
+        # Now actually assign the remaining everything.
+        for name, value in bound_args.arguments.items():
+            setattr(self, name, value)
         
-    @classmethod
-    def _make_empty_fields(cls):
-        ''' Goes through all fields, making a list of values to zip()
-        with them to make the new self._fields dict.
-        '''
-        empties = []
-        # For every fieldname...
-        for field in cls.fields:
-            
-            # Get the actual descriptor...
-            descriptor = getattr(cls, field)
-            subfield = descriptor.subfield
-            
-            # FILE POINTER TODO HELP: figure out how to manage lists here.
-            # This is the appropriate place to add in a list thing. Subclass
-            # list to bind an append?
-            
-            # If it has a subfield, create and assign an instance thereof to
-            # the list.
-            if subfield is not None:
-                empties.append(subfield())
-            
-            # Otherwise, just assign it None.
-            else:
-                empties.append(None)
-                
-        # Now return the generated list.
-        return empties
+        # Yeah, don't forget this, but we need to wait until remapping *args
+        # and **kwargs in the binding process above.
+        super().__init__(*args, **kwargs)
         
     def entranscode(self):
         ''' Convert the object typed self._fields into a natively
@@ -518,6 +561,7 @@ class _AutoMapperMixin:
         for field in self.fields:
             descriptor = getattr(cls, field)
             value = self._fields[field]
+            # Note that the descriptor handles nested fields and Nones
             transcoded[field] = descriptor.encode(value)
             
         return transcoded
@@ -530,7 +574,30 @@ class _AutoMapperMixin:
         
         for field in self.fields:
             descriptor = getattr(cls, field)
+            # Note that the descriptor handles nested fields
             self._fields[field] = descriptor.decode(data[field])
+            
+    def __eq__(self, other):
+        ''' Compare type of self and all fields.
+        '''
+        mycls = type(self)
+        othercls = type(other)
+        
+        comparator = True
+        if issubclass(mycls, othercls) or issubclass(othercls, mycls):
+            try:
+                comparator &= (self._fields == other._fields)
+            
+            except AttributeError as exc:
+                raise TypeError(other) from exc
+            
+        else:
+            comparator &= False
+            
+        return comparator
+        
+    # Restore normal hashing
+    __hash__ = object.__hash__
 
 
 class _AutoMapper(type):
@@ -545,22 +612,46 @@ class _AutoMapper(type):
 
     def __new__(mcls, clsname, bases, namespace, **kwargs):
         fields = []
+        parameters = []
         for name, value in namespace.items():
-            if name == 'fields':
-                raise ValueError('AutoMapper classes cannot define "fields" ' +
-                                 'as a class variable.')
-            elif name == '_fields':
-                raise ValueError('AutoMapper classes cannot define ' +
-                                 '"_fields" as a class variable.')
+            if name in {'fields', '_fields', '_signature', 'args', 'kwargs'}:
+                raise ValueError('Invalid class variable name for ' +
+                                 'AutoMapper: ' + name)
             elif isinstance(value, AutoField):
                 fields.append(name)
                 # This will be ignored if the AutoField explicitly specifies
                 # the name to use.
-                value.name = '__' + name
+                value.name = name
+                # We want to be able to pass instance creation into the
+                # automapper fields, so let's make a parameter for it
+                parameters.append(
+                    inspect.Parameter(
+                        name = name,
+                        kind = inspect.Parameter.POSITIONAL_OR_KEYWORD
+                    )
+                )
         
+        # We also want to support inheritance; so do this to add *args and
+        # **kwargs to the signature
+        parameters.append(
+            inspect.Parameter(
+                name = 'args',
+                kind = inspect.Parameter.VAR_POSITIONAL
+            )
+        )
+        parameters.append(
+            inspect.Parameter(
+                name = 'kwargs',
+                kind = inspect.Parameter.VAR_KEYWORD
+            )
+        )
+        
+        # Carry on then...
         bases = (_AutoMapperMixin, *bases)
         cls = super().__new__(mcls, clsname, bases, dict(namespace), **kwargs)
         cls.fields = fields
+        # This signature is for aforementioned binding
+        cls._signature = inspect.Signature(parameters)
         return cls
         
         
