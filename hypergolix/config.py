@@ -39,6 +39,7 @@ import copy
 import webbrowser
 import yaml
 import inspect
+import os
 
 from golix import Ghid
 from golix import Secret
@@ -46,6 +47,8 @@ from golix import Secret
 # Intra-package dependencies
 from .utils import _BijectDict
 from .exceptions import ConfigError
+from .exceptions import ConfigIncomplete
+from .exceptions import ConfigMissing
 
 
 # ###############################################
@@ -352,7 +355,7 @@ def _yaml_caster(loader, data):
     the AutoField config system is assigning everything to an
     OrderedDict regardless of how it gets loaded.
     '''
-    loader.represent_mapping('tag:yaml.org,2002:map', data.items())
+    return loader.represent_mapping('tag:yaml.org,2002:map', data.items())
     
     
 yaml.add_representer(collections.OrderedDict, _yaml_caster)
@@ -371,6 +374,8 @@ _readonly_remote = collections.namedtuple(
         
 class AutoField:
     ''' Helper class descriptor for AutoMappers.
+    
+    Huh... actually, is this usable as a decorator?
     '''
     
     def __init__(self, subfield=None, *args, listed=False, decode=None,
@@ -523,7 +528,7 @@ class AutoField:
         else:
             instance._fields[self.name] = None
             
-            
+
 class _AutoMapperMixin:
     ''' Inject a control OrderedDict for the fields.
     '''
@@ -574,8 +579,17 @@ class _AutoMapperMixin:
         
         for field in self.fields:
             descriptor = getattr(cls, field)
-            # Note that the descriptor handles nested fields
-            self._fields[field] = descriptor.decode(data[field])
+            
+            try:
+                # Note that the descriptor handles nested fields
+                self._fields[field] = descriptor.decode(data[field])
+            
+            # Make sure we can optionally support configs with incomplete data
+            except KeyError as exc:
+                logger.warning('Healed config w/ missing field: ' + field)
+                
+            except Exception as exc:
+                raise ConfigError('Failed to decode field: ' + field) from exc
             
     def __eq__(self, other):
         ''' Compare type of self and all fields.
@@ -655,7 +669,7 @@ class _AutoMapper(type):
         return cls
         
         
-class _RemoteDef2(metaclass=_AutoMapper):
+class Remote(metaclass=_AutoMapper):
     ''' How _RemoteDef should be.
     '''
     host = AutoField()
@@ -663,33 +677,27 @@ class _RemoteDef2(metaclass=_AutoMapper):
     tls = AutoField()
 
 
-class _UserDef2(metaclass=_AutoMapper):
+class User(metaclass=_AutoMapper):
     # Note that all of these recastings should handle None correctly
     fingerprint = AutoField(decode=Ghid.from_str, encode='as_str')
     user_id = AutoField(decode=Ghid.from_str, encode='as_str')
     root_secret = AutoField(decode=Secret.from_str, encode='as_str')
 
 
-class _InstrumentationDef2(metaclass=_AutoMapper):
+class Instrumentation(metaclass=_AutoMapper):
     verbosity = AutoField()
     debug = AutoField()
     traceur = AutoField()
 
 
-class _ProcessDef2(metaclass=_AutoMapper):
+class Process(metaclass=_AutoMapper):
+    ghidcache = AutoField(decode=pathlib.Path, encode=str)
+    logdir = AutoField(decode=pathlib.Path, encode=str)
+    pid_file = AutoField(decode=pathlib.Path, encode=str)
     ipc_port = AutoField()
     
     
-class _Config2(metaclass=_AutoMapper):
-    ''' How Config should be.
-    '''
-    remotes = AutoField(_RemoteDef2, listed=True)
-    user = AutoField(_UserDef2)
-    instrumentation = AutoField(_InstrumentationDef2)
-    process = AutoField(_ProcessDef2)
-
-
-class Config:
+class Config2(metaclass=_AutoMapper):
     ''' Context handler for semi-atomic config updates.
     
     .hypergolix /
@@ -705,26 +713,54 @@ class Config:
     +---(hgx.pid)
     +---(hgx-cfg.json)
     '''
+    process = AutoField(Process)
+    instrumentation = AutoField(Instrumentation)
+    user = AutoField(User)
+    remotes = AutoField(Remote, listed=True)
     
-    def __init__(self, root):
-        self._root = pathlib.Path(root).absolute()
+    TARGET_FNAME = 'hypergolix.yml'
+    OLD_FNAMES = {'hgx-cfg.json'}
+    
+    def __init__(self, path, *args, **kwargs):
+        ''' The usual init thing!
+        '''
+        super().__init__(*args, **kwargs)
+        
+        self.path = path.absolute()
+        
         self._cfg_cache = None
-        self._cfg = None
+        self.force_rewrite = False
+        self.coerce_name = False
+        
+        # Set defaults here so that the paths can be relative to the config
+        root = self.path.parent
+        self.defaults = {
+            'process': {
+                'ghidcache': root / 'ghidcache',
+                'logdir': root / 'logdir',
+                'pid_file': root / 'hypergolix.pid',
+                'ipc_port': 7772
+            },
+            'instrumentation': {
+                'verbosity': 'info',
+                'debug': False,
+                'traceur': False
+            }
+        }
     
     def __enter__(self):
         ''' Gets a configuration for hypergolix (if one exists), and
         creates a new one (with no remote persistence servers) if none
         is available.
         '''
-        try:
-            # Cache the existing configuration
-            self._cfg_cache = _get_hgx_config(self._root)
-            # Create a copy for modifications (a second name for the mutable
-            # self._cfg_cache object will always compare equal)
-            self._cfg = copy.deepcopy(self._cfg_cache)
-            
-        except ConfigError:
-            self._cfg = _make_blank_cfg()
+        # Cache the existing configuration so we can check for changes
+        self._cfg_cache = copy.deepcopy(self)
+        # Coerce any defaults, which will force a new config to do a rewrite
+        # upon __exit__, since we now differ from _cfg_cache
+        self.coerce_defaults()
+        # Make sure we have all the needed directories for the config
+        _ensure_dir_exists(self.process.ghidcache)
+        _ensure_dir_exists(self.process.logdir)
             
         # And now allow access to self.
         return self
@@ -735,8 +771,175 @@ class Config:
         '''
         # Only modify if there were no errors; never do a partial update.
         if exc_type is None:
-            if self._cfg_cache != self._cfg:
-                _set_hgx_config(self._root, self._cfg)
+            # Perform an update if forced, or if the config has changed
+            if self.force_rewrite or self._cfg_cache != self:
+                self.dump(self.path)
+        
+        # Reset the config cache (it's just wasting memory now)
+        self._cfg_cache = None
+        
+    def coerce_defaults(self):
+        ''' Finds any null fields and converts them to a default value.
+        '''
+        for subfield, defaults in self.defaults.items():
+            # Get the actual subfield instead of just its name
+            subfield = getattr(self, subfield)
+            # Now for that subfield, apply defaults
+            for attr, default in defaults.items():
+                if getattr(subfield, attr) is None:
+                    setattr(subfield, default)
+        
+    @classmethod
+    def find(cls):
+        ''' Automatically locates any existing config file. Raises
+        ConfigMissing if unable to locate.
+        
+        Search order:
+        1.  Environment variable "HYPERGOLIX_HOME"
+        2.  Current directory
+        3.  ~/.hypergolix
+        4.  /etc/hypergolix (Unix) or %LOCALAPPDATA%/Hypergolix (Windows)
+        '''
+        # Get the environment config setting, if it exists. If not, use a
+        # long random path which we "know" will not exist.
+        envpath = os.getenv(
+            'HYPERGOLIX_HOME',
+            default = '/qdubuddfsyvfafhlqcqetfkokykqeulsguoasnzjkc'
+        )
+        appdatapath = os.getenv(
+            'LOCALAPPDATA',
+            default = '/qdubuddfsyvfafhlqcqetfkokykqeulsguoasnzjkc'
+        )
+        
+        search_order = []
+        search_order.append(pathlib.Path(envpath))
+        search_order.append(pathlib.Path('.').absolute())
+        search_order.append(pathlib.Path.home() / '.hypergolix')
+        # It really doesn't matter if we do this on Windows too, since it'll
+        # just not exist.
+        search_order.append(pathlib.Path('/etc/hypergolix'))
+        search_order.append(pathlib.Path(appdatapath) / 'Hypergolix')
+        
+        # Collapse the nested loop into a single for loop with a list comp
+        fnames = {cls.TARGET_FNAME, *cls.OLD_FNAMES}
+        fpaths = (dirpath / fname for dirpath in search_order
+                  for fname in fnames)
+        # Check all of those paths
+        for fpath in fpaths:
+            if fpath.exists():
+                break
+        # Not found; raise.
+        else:
+            raise ConfigMissing()
+        
+        self = cls.load(fpath)
+        # If it's a deprecated filename, coerce it to the new one.
+        if fpath.name in cls.OLD_FNAMES:
+            self.coerce_name = True
+        
+        return self
+        
+    @classmethod
+    def wherever(cls):
+        ''' Create a new config in the preferred location, wherever that
+        is (hint: the answer is defined in the function!).
+        
+        Current location-of-choice is ~/.hypergolix.
+        '''
+        return cls(pathlib.Path.home() / '.hypergolix' / cls.TARGET_FNAME)
+                
+    @classmethod
+    def load(cls, path):
+        ''' Load a config from a pathlib.Path.
+        '''
+        cfg_txt = path.read_text()
+        self = cls(path)
+        self.decode(cfg_txt)
+        
+        return self
+        
+    def dump(self, path):
+        ''' Dump a config to a pathlib.Path.
+        '''
+        path.write_text(self.encode())
+    
+    def encode(self):
+        ''' Converts the config into an encoded file ready for output.
+        '''
+        raw_cfg = self.entranscode()
+        return yaml.dump(raw_cfg, default_flow_style=False)
+        
+    def decode(self, data):
+        ''' Load an existing config.
+        
+        NOTE: json is valid yaml. This will correctly load old configs
+        without any extra effort!
+        '''
+        raw_cfg = yaml.safe_load(data)
+        self.detranscode(raw_cfg)
+            
+    def set_remote(self, host, port, tls=True):
+        ''' Handles creation of _RemoteDef instances and insertion into
+        our config. Will also update TLS configuration of existing
+        remotes.
+        '''
+        rdef = Remote(host, port, tls)
+        
+        if rdef == NAMED_REMOTES['hgx']:
+            # TODO: move this somewhere else? This is a bit of an awkward place
+            # to put a warning.
+            print('Thanks for adding hgx.hypergolix.com as a remote server!\n')
+            print('We limit unregistered accounts to read-only access.')
+            print('For full access, please register:')
+            print('    hypergolix config --register\n')
+        
+        # Note that we may be overwriting an existing remote with a different
+        # TLS value.
+        index = self.index_remote(rdef)
+        
+        # This is a new remote.
+        if index is None:
+            self.remotes.append(rdef)
+            
+        # This is an existing remote. Update in-place
+        else:
+            self.remotes[index].tls = tls
+        
+    def remove_remote(self, host, port):
+        ''' Removes an existing remote. Silently does nothing if it does
+        not exist in the config.
+        '''
+        # TLS does not matter when removing stuff.
+        rdef = Remote(host, port, False)
+        index = self.index_remote(rdef)
+        
+        if index is None:
+            return None
+        else:
+            return self.remotes.pop(index)
+        
+    def index_remote(self, remote):
+        ''' Find the index of an existing remote, if it exists. Ignores
+        the remote's TLS configuration.
+        '''
+        remote2 = copy.deepcopy(remote)
+        remote2.tls = not remote.tls
+        
+        try:
+            index = self.remotes.index(remote)
+        except ValueError:
+            try:
+                index = self.remotes.index(remote2)
+            except ValueError:
+                return None
+        
+        # If we get here, one of the above was successful.
+        return index
+
+
+class Config:
+    ''' DEPRECATED and being removed!
+    '''
                 
     @property
     def home_dir(self):
@@ -775,31 +978,6 @@ class Config:
         
         except Exception as exc:
             raise ConfigError('Invalid configuration.') from exc
-            
-    def set_remote(self, host, port, tls=True):
-        ''' Handles creation of _RemoteDef instances and insertion into
-        our config. Will also update TLS configuration of existing
-        remotes.
-        '''
-        rdef = _RemoteDef(host, port, tls)
-        
-        if rdef == NAMED_REMOTES['hgx']:
-            # TODO: move this somewhere else? This is a bit of an awkward place
-            # to put a warning.
-            print('Thanks for adding hgx.hypergolix.com as a remote server!\n')
-            print('We limit unregistered accounts to read-only access.')
-            print('For full access, please register:')
-            print('    hypergolix config --register\n')
-        
-        _set_remote(self._cfg, rdef)
-        
-    def remove_remote(self, host, port):
-        ''' Removes an existing remote. Silently does nothing if it does
-        not exist in the config.
-        '''
-        # TLS does not matter when removing stuff.
-        rdef = _RemoteDef(host, port, False)
-        _pop_remote(self._cfg, rdef)
         
     @property
     def fingerprint(self):
@@ -980,24 +1158,6 @@ class Config:
             self._cfg['process'] = _ProcessDef(
                 ipc_port = port
             )
-    
-    def encode(self):
-        ''' Converts the config into an encoded file ready for output.
-        '''
-        
-        return yaml.dump(raw_cfg, default_flow_style=False)
-        
-    @classmethod
-    def decode(cls, data):
-        ''' Load an existing config.
-        '''
-        raw_cfg = yaml.safe_load(data)
-        
-    @classmethod
-    def decode_json(cls, data):
-        ''' Load an existing (deprecated) JSON config.
-        '''
-        _CfgDecoder().decode(data)
         
             
 def _make_blank_cfg():
@@ -1034,7 +1194,7 @@ def get_hgx_rootdir():
     return user_home
     
     
-def _ensure_dir(path):
+def _ensure_dir_exists(path):
     ''' Ensures the existence of a directory. Path must be to the dir,
     and not to a file therewithin.
     '''
@@ -1044,46 +1204,6 @@ def _ensure_dir(path):
         
     elif not path.is_dir():
         raise FileExistsError('Path exists already and is not a directory.')
-        
-        
-def _ensure_hgx_populated(hgx_home):
-    ''' Generates the folder structure expected for an hgx homedir.
-    
-    The expectation:
-    
-    .hypergolix /
-    
-    +---logs
-        +---(log file 1...)
-        +---(log file 2...)
-        
-    +---ghidcache
-        +---(ghid file 1...)
-        +---(ghid file 2...)
-        
-    +---(hgx.pid)
-    +---(hgx-cfg.json)
-    '''
-    subdirs = [
-        hgx_home / 'logs',
-        hgx_home / 'ghidcache'
-    ]
-    
-    for subdir in subdirs:
-        _ensure_dir(subdir)
-
-
-def _ensure_hgx_homedir(root):
-    ''' Gets the location of the hgx home dir and then makes sure it
-    exists, including expected subdirs.
-    '''
-    hgx_home = root / '.hypergolix'
-    # Create the home directory if it does not exist.
-    _ensure_dir(hgx_home)
-    # Create the remaining folder structure if it does not exist.
-    _ensure_hgx_populated(hgx_home)
-    
-    return hgx_home
         
         
 def _get_hgx_config(root):

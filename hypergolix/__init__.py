@@ -42,6 +42,7 @@ from . import app
 from . import bootstrapping
 from . import cli
 from . import comms
+from . import config
 from . import core
 from . import dispatch
 from . import embed
