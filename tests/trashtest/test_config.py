@@ -38,6 +38,8 @@ import pathlib
 import os
 import sys
 
+from hypergolix import Ghid
+
 from hypergolix.config import Config
 
 from hypergolix.config import Remote
@@ -152,29 +154,32 @@ vec_cfg_depr = '''
 '''
 
 
-vec_cfg = '''
-remotes:
-  - host: foo
-    port: 1234
-    tls: false
-user:
-  fingerprint: AX8w7tJGI2mTURKYc4x89eCC2WVXnrFZg-wu9Ec3lItTa5QywkEm6yeXO7p_lvsL8p5nx4UOCFTSC8iE9RbLRX4=
-  user_id: AbyzNTc81z5RhFRsA1JJ_Yok5_a8QFCZah6fyaqq6-hH5ylbjIaWU6qXjnOURsq8A4tTB6d9JxLQwxOn8iOZkyQ=
-  root_secret: null
-instrumentation:
-  verbosity: info
-  debug: false
-  traceur: false
-process:
+vec_cfg = '''process:
   ghidcache: null
   logdir: null
   pid_file: null
   ipc_port: 7772
+instrumentation:
+  verbosity: info
+  debug: false
+  traceur: false
+user:
+  fingerprint: AX8w7tJGI2mTURKYc4x89eCC2WVXnrFZg-wu9Ec3lItTa5QywkEm6yeXO7p_lvsL8p5nx4UOCFTSC8iE9RbLRX4=
+  user_id: AbyzNTc81z5RhFRsA1JJ_Yok5_a8QFCZah6fyaqq6-hH5ylbjIaWU6qXjnOURsq8A4tTB6d9JxLQwxOn8iOZkyQ=
+  root_secret: null
+remotes:
+- host: foo
+  port: 1234
+  tls: false
 '''
 
 
 obj_remotedef = Remote('foo', 1234, False)
-obj_userdef = User('foo', 'bar', None)
+obj_userdef = User(
+    Ghid.from_str('AX8w7tJGI2mTURKYc4x89eCC2WVXnrFZg-wu9Ec3lItTa5QywkEm6yeXO' +
+                  '7p_lvsL8p5nx4UOCFTSC8iE9RbLRX4='),
+    Ghid.from_str('AbyzNTc81z5RhFRsA1JJ_Yok5_a8QFCZah6fyaqq6-hH5ylbjIaWU6qXj' +
+                  'nOURsq8A4tTB6d9JxLQwxOn8iOZkyQ='), None)
 obj_instrumentationdef = Instrumentation('info', False, False)
 obj_process = Process(None, None, None, 7772)
 obj_cfg = Config(
@@ -476,16 +481,18 @@ class CommandingTest(unittest.TestCase):
             for cmd_str, cmd_result in valid_commands:
                 with self.subTest(cmd_str):
                     # Make sure we have a fresh config first
-                    (root / 'hypergolix.yml').write_text('')
+                    cfg_path = root / 'hypergolix.yml'
+                    if cfg_path.exists():
+                        cfg_path.unlink()
                     
                     argv = cmd_str.split()
                     argv.append('--root')
-                    argv.append(str(root / 'hypergolix.yml'))
+                    argv.append(str(cfg_path))
                     
                     with _SuppressSTDOUT():
                         ingest_args(argv)
                     
-                    config = Config.load(root / 'hypergolix.yml')
+                    config = Config.load(cfg_path)
                     # We need to do this because arg ingesting does this too
                     cmd_result.coerce_defaults()
                     self.assertEqual(config, cmd_result)
