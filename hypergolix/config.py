@@ -774,6 +774,21 @@ class Config(metaclass=_AutoMapper):
             # Perform an update if forced, or if the config has changed
             if self.force_rewrite or self._cfg_cache != self:
                 self.dump(self.path)
+                self.force_rewrite = False
+                
+            # Update our path if we're coercing the name.
+            if self.coerce_name:
+                # Construct the new path using the target filename
+                old_path = self.path
+                new_path = old_path.parent / self.TARGET_FNAME
+                
+                # Rename the old path, updating its location on disk, and then
+                # update self.path accordingly
+                old_path.rename(new_path)
+                self.path = new_path
+                
+                # Reset name coercion if successful
+                self.coerce_name = False
         
         # Reset the config cache (it's just wasting memory now)
         self._cfg_cache = None
