@@ -33,7 +33,6 @@ hypergolix: A python Golix client.
 # Global dependencies
 import argparse
 import pathlib
-import json
 import collections
 import copy
 import webbrowser
@@ -68,275 +67,6 @@ __all__ = [
 # ###############################################
 # Helper classes and encoder/decoder
 # ###############################################
-        
-        
-class _NamedListMeta(type):
-    ''' Metaclass for named lists.
-    '''
-    
-    def __new__(metacls, name, bases, clsdict, **kwargs):
-        ''' Automatically add any slots declarations (except _fields_ to
-        _fields, in order.
-        '''
-        # Enforce usage of __slots__
-        if '__slots__' not in clsdict:
-            raise TypeError('_NamedLists must use slots.')
-            
-        # Enforce non-usage of '_fields' attr. Note that this will only apply
-        # to this particular subclass, but it won't matter because all of them
-        # use us as a metaclass.
-        elif '_fields' in clsdict['__slots__']:
-            raise TypeError(
-                '_NamedLists cannot define a "_fields" attribute.'
-            )
-            
-        # Enforce not defining fields in the class definition as well
-        elif '_fields' in clsdict:
-            raise TypeError(
-                '_NamedLists cannot define a _fields class attribute.'
-            )
-            
-        # Now add '_fields' to the class dict separately and create the class
-        clsdict['_fields'] = []
-        cls = super().__new__(metacls, name, bases, clsdict, **kwargs)
-        
-        # Now modify cls._fields according to the MRO, adding all applicable
-        # slots.
-        
-        # Now we need to rewrite slots, collating everything into fields.
-        # Prepend '_fields' to __slots__ and convert it to a tuple
-        clsdict['__slots__'] = ('_fields', *clsdict['__slots__'])
-        
-        # And now add all of the __slots__ to _fields, in order of their MRO
-        fields = []
-        # Create a version of the MRO that ignores object, which doesn't define
-        # __slots__
-        stub_mro = cls.__mro__[:len(cls.__mro__) - 1]
-        for c in stub_mro:
-            # Add any fields that are not already defined there
-            fields.extend([slot for slot in c.__slots__ if slot not in fields])
-        # And assign that to cls._fields
-        cls._fields = tuple(fields)
-        
-        # Don't forget to return the finalized class!
-        return cls
-            
-    def __len__(cls):
-        ''' Use the number of _fields for the class length.
-        '''
-        return len(cls._fields)
-
-
-# Okay, normally I'd do these as collections.namedtuples, but those are being
-# interpreted by json as tuples, so no dice.
-class _NamedList(metaclass=_NamedListMeta):
-    ''' Some magic to simulate a named tuple in a way that doesn't
-    subclass tuple, and is therefore correctly interpreted by json. As
-    an implementation side effect, this is also mutable, hence being a
-    _NamedList and not _NamedTuple2.
-    
-    This is always a fixed-length entity. Additionally, though they may
-    be modified, attributes may not be added, nor deleted.
-    '''
-    __slots__ = []
-    __hash__ = None
-    
-    def __init__(self, *args, **kwargs):
-        ''' Pass all *args or **kwargs to _fields.
-        '''
-        for ii, arg in enumerate(args):
-            self[ii] = arg
-            
-        for key, value in kwargs.items():
-            # Check to see if the attr was defined by args
-            if hasattr(self, key):
-                raise TypeError(
-                    'Got multiple values for keyword "' + key + '"'
-                )
-                
-            else:
-                setattr(self, key, value)
-                
-        for field in self._fields:
-            if not hasattr(self, field):
-                raise TypeError('Must define all attributes to a _NamedList.')
-                
-    def __setitem__(self, index, value):
-        ''' Convert key-based (index) access to attr access.
-        '''
-        attrname = self._fields[index]
-        setattr(self, attrname, value)
-        
-    def __getitem__(self, index):
-        ''' Convert key-based (index) access to attr access.
-        '''
-        attrname = self._fields[index]
-        return getattr(self, attrname)
-        
-    def __repr__(self):
-        ''' Also add a nice repr for all of the fields.
-        '''
-        clsname = type(self).__name__
-        
-        fieldstrs = []
-        for field in self._fields:
-            fieldstrs.append(field)
-            fieldstrs.append('=')
-            fieldstrs.append(repr(getattr(self, field)))
-            fieldstrs.append(', ')
-        # Strip the final ', '
-        fieldstrs = fieldstrs[:len(fieldstrs) - 1]
-            
-        return ''.join((clsname, '(', *fieldstrs, ')'))
-        
-    def __iter__(self):
-        ''' Needed to, yknow, iterate and stuff.
-        
-        Note that iterating will only work if all attrs are defined.
-        '''
-        for field in self._fields:
-            yield getattr(self, field)
-            
-    def __reversed__(self):
-        ''' Performs the same checks as __iter__.
-        '''
-        for field in reversed(self._fields):
-            yield getattr(self, field)
-        
-    def __contains__(self, value):
-        # Iterate over all possible fields.
-        for field in self._fields:
-            # If the field is defined, and the values match, it's here.
-            if value == field:
-                return True
-        # Gone through everything without returning? Not contained.
-        else:
-            return False
-            
-    def __len__(self):
-        ''' Statically defined as the length of the _fields classattr.
-        '''
-        return len(self._fields)
-        
-    def __eq__(self, other):
-        ''' The usual equality test.
-        '''
-        # Ensure same lengths
-        if len(other) != len(self):
-            return False
-            
-        # Compare every value and short-circuit on failure
-        for mine, theirs in zip(self, other):
-            if mine != theirs:
-                return False
-        
-        # Nothing mismatched, both are same length, must be equal
-        else:
-            return True
-
-
-class _RemoteDef(_NamedList):
-    __slots__ = [
-        'host',
-        'port',
-        'tls'
-    ]
-
-
-class _UserDef(_NamedList):
-    __slots__ = [
-        'fingerprint',
-        'user_id',
-        'root_secret'
-    ]
-
-
-class _InstrumentationDef(_NamedList):
-    __slots__ = [
-        'verbosity',
-        'debug',
-        'traceur'
-    ]
-
-
-class _ProcessDef(_NamedList):
-    __slots__ = [
-        'ipc_port'
-    ]
-
-
-# Using a bijective mapping allows us to do bidirectional lookup
-# This might be overkill, but if you already have one in your .utils module...
-_TYPEHINTS = _BijectDict({
-    '__RemoteDef__': _RemoteDef,
-    '__UserDef__': _UserDef,
-    '__InstrumentationDef__': _InstrumentationDef,
-    '__ProcessDef__': _ProcessDef
-})
-
-
-class _CfgDecoder(json.JSONDecoder):
-    ''' Extends the default json decoder to create the relevant objects
-    from the cfg file.
-    '''
-    
-    def __init__(self):
-        ''' Hard-code the super() invocation.
-        '''
-        super().__init__(object_hook=self._ohook)
-        
-    def _ohook(self, odict):
-        ''' Called for every dict (json object) encountered.
-        '''
-        for key in odict:
-            if key in _TYPEHINTS:
-                # Get the class to use
-                cls = _TYPEHINTS[key]
-                # Pop out the key
-                odict.pop(key)
-                # Create an instance of the class, expanding the rest of the
-                # dict to be kwargs
-                return cls(**odict)
-                
-        else:
-            return odict
-    
-    
-class _CfgEncoder(json.JSONEncoder):
-    ''' Extends the default json encoder to allow parsing the cfg
-    objects into json.
-    '''
-    
-    def __init__(self):
-        ''' Hard-code in the super() invocation.
-        '''
-        # Make the cfg file as human-readable as possible
-        super().__init__(indent=4)
-        
-    def default(self, obj):
-        ''' Allow for encoding of our helper objects. Note that this is
-        class-strict, IE subclasses must be explicitly supported.
-        '''
-        try:
-            type_hint = _TYPEHINTS[type(obj)]
-            
-        # Unknown type. Pass TypeError raising to super().
-        except KeyError:
-            odict = super().default(obj)
-            
-        else:
-            # Convert all attributes into dictionary keys
-            odict = {key: getattr(obj, key) for key in obj._fields}
-            # Add a type hint, but make sure to error if the field is already
-            # defined (fail loud, fail fast)
-            if type_hint in odict:
-                raise ValueError(
-                    'The type hint key cannot match any attribute names for ' +
-                    'the object instance.'
-                )
-            odict[type_hint] = True
-        
-        return odict
         
         
 def _yaml_caster(loader, data):
@@ -504,13 +234,15 @@ class AutoField:
     def __set__(self, instance, value):
         ''' Set the value at the instance's _fields OrderedDict.
         '''
-        if self.subfield is not None:
-            raise AttributeError('Cannot set AutoMapper attribute with ' +
-                                 'subfield directly.')
-        
-        elif self.listed:
+        if self.listed:
             raise AttributeError('Cannot set listed AutoMapper attribute ' +
                                  'directly.')
+        
+        elif self.subfield is not None and not isinstance(value,
+                                                          self.subfield):
+            raise AttributeError('Cannot set AutoMapper attribute with ' +
+                                 'subfield directly, except as an instance ' +
+                                 'of the subfield.')
         
         else:
             instance._fields[self.name] = value
@@ -580,16 +312,18 @@ class _AutoMapperMixin:
         for field in self.fields:
             descriptor = getattr(cls, field)
             
-            try:
-                # Note that the descriptor handles nested fields
-                self._fields[field] = descriptor.decode(data[field])
-            
             # Make sure we can optionally support configs with incomplete data
-            except KeyError as exc:
+            if data is None or field not in data:
                 logger.warning('Healed config w/ missing field: ' + field)
                 
-            except Exception as exc:
-                raise ConfigError('Failed to decode field: ' + field) from exc
+            else:
+                try:
+                    # Note that the descriptor handles nested fields
+                    self._fields[field] = descriptor.decode(data[field])
+                    
+                except Exception as exc:
+                    raise ConfigError('Failed to decode field: ' +
+                                      field) from exc
             
     def __eq__(self, other):
         ''' Compare type of self and all fields.
@@ -737,7 +471,7 @@ class Config(metaclass=_AutoMapper):
         self.defaults = {
             'process': {
                 'ghidcache': root / 'ghidcache',
-                'logdir': root / 'logdir',
+                'logdir': root / 'logs',
                 'pid_file': root / 'hypergolix.pid',
                 'ipc_port': 7772
             },
@@ -802,7 +536,7 @@ class Config(metaclass=_AutoMapper):
             # Now for that subfield, apply defaults
             for attr, default in defaults.items():
                 if getattr(subfield, attr) is None:
-                    setattr(subfield, default)
+                    setattr(subfield, attr, default)
         
     @classmethod
     def find(cls):
@@ -877,6 +611,12 @@ class Config(metaclass=_AutoMapper):
         ''' Dump a config to a pathlib.Path.
         '''
         path.write_text(self.encode())
+        
+    def reload(self):
+        ''' Reload an existing config.
+        '''
+        cfg_txt = self.path.read_text()
+        self.decode(cfg_txt)
     
     def encode(self):
         ''' Converts the config into an encoded file ready for output.
@@ -1222,9 +962,14 @@ def handle_args(args):
             print('No existing configuration found; creating a new one.')
             config = Config.wherever()
     
-    # If we passed a config root as an argument, load it directly
+    # If we passed a config root as an argument, load it directly. Used only
+    # during tests.
     else:
-        config = Config.load(pathlib.Path(args.cfg_root))
+        cfg_path = pathlib.Path(args.cfg_root)
+        if cfg_path.exists():
+            config = Config.load(cfg_path)
+        else:
+            config = Config(cfg_path)
     
     with config:
         _handle_remotes(

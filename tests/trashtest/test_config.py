@@ -38,24 +38,14 @@ import pathlib
 import os
 import sys
 
-from hypergolix.config import _RemoteDef
-from hypergolix.config import _UserDef
-from hypergolix.config import _InstrumentationDef
-from hypergolix.config import _CfgDecoder
-from hypergolix.config import _CfgEncoder
-
-from hypergolix.config import _make_blank_cfg
-from hypergolix.config import get_hgx_rootdir
-from hypergolix.config import _ensure_dir
-from hypergolix.config import _ensure_hgx_homedir
-from hypergolix.config import _ensure_hgx_populated
-from hypergolix.config import _get_hgx_config
-from hypergolix.config import _set_hgx_config
-from hypergolix.config import _set_remote
-from hypergolix.config import _pop_remote
-from hypergolix.config import _index_remote
-
 from hypergolix.config import Config
+
+from hypergolix.config import Remote
+from hypergolix.config import User
+from hypergolix.config import Instrumentation
+from hypergolix.config import Process
+
+from hypergolix.config import _ensure_dir_exists
 
 from hypergolix.cli import main as ingest_args
 from hypergolix.config import handle_args
@@ -105,6 +95,14 @@ vec_userdef = '''
       root_secret: null
 '''
 
+vec_process = '''
+    process:
+      ghidcache: null
+      logdir: null
+      pid_file: null
+      ipc_port: 7772
+'''
+
 
 vec_instrumentationdef_depr = '''
     {
@@ -125,57 +123,68 @@ vec_instrumentationdef = '''
 
 
 vec_cfg_depr = '''
-    {
-        "remotes": [
-            {
-                "__RemoteDef__": true,
-                "host": "foo",
-                "port": 1234,
-                "tls": false
-            }
-        ],
-        "user": {
-            "__UserDef__": true,
-            "fingerprint": "foo",
-            "user_id": "bar",
-            "root_secret": null
-        },
-        "instrumentation": {
-            "__InstrumentationDef__": true,
-            "verbosity": "info",
-            "debug": false,
-            "traceur": false
+{
+    "remotes": [
+        {
+            "__RemoteDef__": true,
+            "host": "foo",
+            "port": 1234,
+            "tls": false
         }
+    ],
+    "user": {
+        "__UserDef__": true,
+        "fingerprint": "AX8w7tJGI2mTURKYc4x89eCC2WVXnrFZg-wu9Ec3lItTa5QywkEm6yeXO7p_lvsL8p5nx4UOCFTSC8iE9RbLRX4=",
+        "user_id": "AbyzNTc81z5RhFRsA1JJ_Yok5_a8QFCZah6fyaqq6-hH5ylbjIaWU6qXjnOURsq8A4tTB6d9JxLQwxOn8iOZkyQ=",
+        "root_secret": null
+    },
+    "instrumentation": {
+        "__InstrumentationDef__": true,
+        "verbosity": "info",
+        "debug": false,
+        "traceur": false
+    },
+    "process": {
+        "ipc_port": 7772,
+        "__ProcessDef__": true
     }
+}
 '''
 
 
 vec_cfg = '''
-    remotes:
-      - host: foo
-        port: 1234
-        tls: false
-
-    user:
-      fingerprint: foo
-      user_id: bar
-      root_secret: null
-      
-    instrumentation:
-      verbosity: info
-      debug: false
-      traceur: false
+remotes:
+  - host: foo
+    port: 1234
+    tls: false
+user:
+  fingerprint: AX8w7tJGI2mTURKYc4x89eCC2WVXnrFZg-wu9Ec3lItTa5QywkEm6yeXO7p_lvsL8p5nx4UOCFTSC8iE9RbLRX4=
+  user_id: AbyzNTc81z5RhFRsA1JJ_Yok5_a8QFCZah6fyaqq6-hH5ylbjIaWU6qXjnOURsq8A4tTB6d9JxLQwxOn8iOZkyQ=
+  root_secret: null
+instrumentation:
+  verbosity: info
+  debug: false
+  traceur: false
+process:
+  ghidcache: null
+  logdir: null
+  pid_file: null
+  ipc_port: 7772
 '''
 
 
-obj_remotedef = _RemoteDef('foo', 1234, False)
-obj_userdef = _UserDef('foo', 'bar', None)
-obj_instrumentationdef = _InstrumentationDef('info', False, False)
-obj_cfg = {
-    'remotes': [obj_remotedef],
-    'user': obj_userdef,
-    'instrumentation': obj_instrumentationdef
-}
+obj_remotedef = Remote('foo', 1234, False)
+obj_userdef = User('foo', 'bar', None)
+obj_instrumentationdef = Instrumentation('info', False, False)
+obj_process = Process(None, None, None, 7772)
+obj_cfg = Config(
+    # This won't get used anyways
+    path = pathlib.Path(),
+    user = obj_userdef,
+    instrumentation = obj_instrumentationdef,
+    process = obj_process
+)
+obj_cfg.remotes.append(obj_remotedef)
 
 
 class _SuppressSTDERR:
@@ -210,64 +219,95 @@ class _SuppressSTDOUT:
         
 
 class CfgSerialTest(unittest.TestCase):
-    
-    def setUp(self):
-        self.encoder = _CfgEncoder()
-        self.decoder = _CfgDecoder()
+    ''' Test round-trip config serialization.
+    '''
     
     def test_encode(self):
-        objs = (
-            obj_remotedef,
-            obj_userdef,
-            obj_instrumentationdef,
-            obj_cfg
-        )
-        serials = (
-            vec_remotedef,
-            vec_userdef,
-            vec_instrumentationdef,
-            vec_cfg
-        )
+        ''' Test encoding both as round-trip and against a test vector.
+        '''
+        preencoded = vec_cfg
+        encoded = obj_cfg.encode()
         
-        for obj, serial in zip(objs, serials):
-            with self.subTest(obj):
-                encoded = self.encoder.encode(obj)
-                # Use default json to bypass any issues in our custom decoding
-                self.assertEqual(json.loads(encoded), json.loads(serial))
+        freshconfig_1 = Config(pathlib.Path())
+        freshconfig_2 = Config(pathlib.Path())
+        
+        freshconfig_1.decode(preencoded)
+        freshconfig_2.decode(encoded)
+        
+        self.assertEqual(freshconfig_1, freshconfig_2)
+        self.assertEqual(freshconfig_2, obj_cfg)
         
     def test_decode(self):
-        objs = (
-            obj_remotedef,
-            obj_userdef,
-            obj_instrumentationdef,
-            obj_cfg
-        )
-        serials = (
-            vec_remotedef,
-            vec_userdef,
-            vec_instrumentationdef,
-            vec_cfg
-        )
+        ''' Test decoding both as round-trip and against a test vector.
+        '''
+        predecoded = obj_cfg
+        decoded = Config(pathlib.Path())
+        decoded.decode(vec_cfg)
         
-        for obj, serial in zip(objs, serials):
-            with self.subTest(obj):
-                self.assertEqual(self.decoder.decode(serial), obj)
+        freshdump_1 = predecoded.encode()
+        freshdump_2 = decoded.encode()
+        
+        self.assertEqual(freshdump_1, freshdump_2)
+        self.assertEqual(freshdump_2, vec_cfg)
+                
+    def test_upgrade(self):
+        ''' Test loading old configs is equivalent to loading new ones.
+        '''
+        new = Config(pathlib.Path())
+        old = Config(pathlib.Path())
+        
+        new.decode(vec_cfg)
+        old.decode(vec_cfg_depr)
+        
+        self.assertEqual(new, old)
                 
                 
-class EtcTest(unittest.TestCase):
+class ConfigTest(unittest.TestCase):
     ''' Test most of the ancillary internal functions.
     '''
     
     def test_mk_blank(self):
-        with _SuppressSTDOUT():
-            config = _make_blank_cfg()
-        self.assertIn('remotes', config)
-        self.assertIn('user', config)
-        self.assertIn('instrumentation', config)
+        config = Config(pathlib.Path())
+        self.assertTrue(hasattr(config, 'remotes'))
+        self.assertTrue(hasattr(config, 'user'))
+        self.assertTrue(hasattr(config, 'instrumentation'))
+        self.assertTrue(hasattr(config, 'process'))
         
-    def test_get_root(self):
-        root = get_hgx_rootdir()
-        self.assertTrue(root.exists())
+    def test_find_cfg_from_env(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.environ['HYPERGOLIX_HOME'] = root
+            
+            try:
+                fake_config = pathlib.Path(root) / 'hypergolix.yml'
+                # Create a fake file to pick up its existence
+                fake_config.touch()
+                config = Config.find()
+                self.assertEqual(config.path, fake_config)
+            finally:
+                del os.environ['HYPERGOLIX_HOME']
+    
+    @unittest.skip('Appdata superceded by local hgx on dev machines.')
+    def test_find_cfg_from_appdata(self):
+        with tempfile.TemporaryDirectory() as root:
+            try:
+                oldappdata = os.environ['LOCALAPPDATA']
+            except KeyError:
+                oldappdata = None
+                
+            os.environ['LOCALAPPDATA'] = root
+            
+            try:
+                fake_config = pathlib.Path(root) / 'hypergolix.yml'
+                # Create a fake file to pick up its existence
+                fake_config.touch()
+                config = Config.find()
+                self.assertEqual(config.path, fake_config)
+            
+            finally:
+                if oldappdata is None:
+                    del os.environ['LOCALAPPDATA']
+                else:
+                    os.environ['LOCALAPPDATA'] = oldappdata
         
     def test_ensure_dir(self):
         with tempfile.TemporaryDirectory() as root:
@@ -280,7 +320,7 @@ class EtcTest(unittest.TestCase):
             nest2 = root / 't3' / 'n2'
             
             self.assertFalse(test1.exists())
-            _ensure_dir(test1)
+            _ensure_dir_exists(test1)
             self.assertTrue(test1.exists())
             
             test2.mkdir()
@@ -288,120 +328,63 @@ class EtcTest(unittest.TestCase):
                 f.write('hello world')
             self.assertTrue(test2.exists())
             self.assertTrue(innocent.exists())
-            _ensure_dir(test2)
+            _ensure_dir_exists(test2)
             self.assertTrue(test2.exists())
             self.assertTrue(innocent.exists())
             
             self.assertFalse(nest1.exists())
             self.assertFalse(nest2.exists())
-            _ensure_dir(nest1)
+            _ensure_dir_exists(nest1)
             self.assertTrue(nest1.exists())
             self.assertFalse(nest2.exists())
-            _ensure_dir(nest2)
+            _ensure_dir_exists(nest2)
             self.assertTrue(nest1.exists())
             self.assertTrue(nest2.exists())
         
-    def test_ensure_homedir(self):
+    def test_ensure_process_dirs(self):
         with tempfile.TemporaryDirectory() as root:
             root = pathlib.Path(root)
-            
-            home = root / '.hypergolix'
-            logdir = home / 'logs'
-            cachedir = home / 'ghidcache'
-            testfile = cachedir / 'test.txt'
-            self.assertFalse(home.exists())
-            _ensure_hgx_homedir(root)
-            self.assertTrue(home.exists())
-            self.assertTrue(logdir.exists())
-            self.assertTrue(cachedir.exists())
-            
-            with testfile.open('w') as f:
-                f.write('Hello world')
-            self.assertTrue(testfile.exists())
-                
-            _ensure_hgx_homedir(root)
-            self.assertTrue(testfile.exists())
-        
-    def test_populate_home(self):
-        with tempfile.TemporaryDirectory() as root:
-            root = pathlib.Path(root)
-            
             logdir = root / 'logs'
             cachedir = root / 'ghidcache'
-            testfile1 = logdir / 'test.txt'
-            testfile2 = cachedir / 'test.txt'
-            self.assertFalse(logdir.exists())
-            self.assertFalse(cachedir.exists())
             
-            _ensure_hgx_populated(root)
+            config = Config(root / 'hypergolix.yml')
+            
+            with config:
+                pass
+                
             self.assertTrue(logdir.exists())
             self.assertTrue(cachedir.exists())
-            
-            with testfile1.open('w') as f:
-                f.write('Hello world')
-            self.assertTrue(testfile1.exists())
-            
-            with testfile2.open('w') as f:
-                f.write('Hello world')
-            self.assertTrue(testfile2.exists())
-            
-            _ensure_hgx_populated(root)
-            self.assertTrue(logdir.exists())
-            self.assertTrue(cachedir.exists())
-            self.assertTrue(testfile1.exists())
-            self.assertTrue(testfile2.exists())
-        
-    def test_cfg_getset(self):
-        with tempfile.TemporaryDirectory() as root:
-            root = pathlib.Path(root)
-            
-            with self.assertRaises(ConfigError):
-                _get_hgx_config(root)
-            
-            with _SuppressSTDOUT():
-                blank = _make_blank_cfg()
-            _ensure_hgx_homedir(root)
-            _set_hgx_config(root, blank)
-            re_blank = _get_hgx_config(root)
-            
-            self.assertEqual(blank, re_blank)
         
     def test_manipulate_remotes(self):
-        with _SuppressSTDOUT():
-            cfg = _make_blank_cfg()
-        rem1 = _RemoteDef('host1', 123, False)
-        rem2 = _RemoteDef('host2', 123, False)
-        rem2a = _RemoteDef('host2', 123, True)
-        rem3 = _RemoteDef('host3', 123, True)
+        config = Config(pathlib.Path())
+        rem1 = Remote('host1', 123, False)
+        rem2 = Remote('host2', 123, False)
+        rem2a = Remote('host2', 123, True)
+        rem3 = Remote('host3', 123, True)
             
-        self.assertIsNone(_index_remote(cfg, rem1))
-        self.assertIsNone(_index_remote(cfg, rem2))
-        self.assertIsNone(_index_remote(cfg, rem2a))
-        self.assertIsNone(_index_remote(cfg, rem3))
+        self.assertIsNone(config.index_remote(rem1))
+        self.assertIsNone(config.index_remote(rem2))
+        self.assertIsNone(config.index_remote(rem2a))
+        self.assertIsNone(config.index_remote(rem3))
         
-        _set_remote(cfg, rem1)
-        self.assertEqual(_index_remote(cfg, rem1), 0)
-        _set_remote(cfg, rem2)
-        self.assertEqual(_index_remote(cfg, rem1), 0)
-        self.assertEqual(_index_remote(cfg, rem2), 1)
-        self.assertEqual(_index_remote(cfg, rem2a), 1)
-        _set_remote(cfg, rem3)
-        self.assertEqual(_index_remote(cfg, rem1), 0)
-        self.assertEqual(_index_remote(cfg, rem2), 1)
-        self.assertEqual(_index_remote(cfg, rem3), 2)
-        _set_remote(cfg, rem2a)
-        self.assertEqual(_index_remote(cfg, rem1), 0)
-        self.assertEqual(_index_remote(cfg, rem2), 1)
-        self.assertEqual(_index_remote(cfg, rem3), 2)
-        _pop_remote(cfg, rem2)
-        self.assertEqual(_index_remote(cfg, rem1), 0)
-        self.assertIsNone(_index_remote(cfg, rem2))
-        self.assertEqual(_index_remote(cfg, rem3), 1)
-        
-        
-class ConfigTest(unittest.TestCase):
-    ''' Test the actual configuration context manager.
-    '''
+        config.set_remote(rem1.host, rem1.port, rem1.tls)
+        self.assertEqual(config.index_remote(rem1), 0)
+        config.set_remote(rem2.host, rem2.port, rem2.tls)
+        self.assertEqual(config.index_remote(rem1), 0)
+        self.assertEqual(config.index_remote(rem2), 1)
+        self.assertEqual(config.index_remote(rem2a), 1)
+        config.set_remote(rem3.host, rem3.port, rem3.tls)
+        self.assertEqual(config.index_remote(rem1), 0)
+        self.assertEqual(config.index_remote(rem2), 1)
+        self.assertEqual(config.index_remote(rem3), 2)
+        config.set_remote(rem2a.host, rem2a.port, rem2a.tls)
+        self.assertEqual(config.index_remote(rem1), 0)
+        self.assertEqual(config.index_remote(rem2), 1)
+        self.assertEqual(config.index_remote(rem3), 2)
+        config.remove_remote(rem2.host, rem2.port)
+        self.assertEqual(config.index_remote(rem1), 0)
+        self.assertIsNone(config.index_remote(rem2))
+        self.assertEqual(config.index_remote(rem3), 1)
     
     def test_context(self):
         ''' Ensure the context manager results in an update when changes
@@ -409,73 +392,25 @@ class ConfigTest(unittest.TestCase):
         '''
         with tempfile.TemporaryDirectory() as root:
             root = pathlib.Path(root)
-            with _SuppressSTDOUT():
-                other_cfg = _make_blank_cfg()
+            path = pathlib.Path(root / 'hypergolix.yml')
             
-                with Config(root) as config:
-                    self.assertEqual(config._cfg, other_cfg)
-                    config.debug_mode = True
-                    other_cfg['instrumentation'].debug = True
-                    self.assertEqual(config._cfg, other_cfg)
-                    
-                with Config(root) as config:
-                    self.assertEqual(config._cfg, other_cfg)
-                    config.debug_mode = False
-                    other_cfg['instrumentation'].debug = False
-                    self.assertEqual(config._cfg, other_cfg)
-                    
-                with Config(root) as config:
-                    self.assertEqual(config._cfg, other_cfg)
-    
-    def test_stuffs(self):
-        ''' Tests attribute manipulation.
-        '''
-        with tempfile.TemporaryDirectory() as root:
-            root = pathlib.Path(root)
-            homedir = _ensure_hgx_homedir(root)
-            
-            with _SuppressSTDOUT():
-                with Config(root) as config:
-                    self.assertEqual(config.home_dir, homedir)
-                    
-                    self.assertEqual(config.remotes, tuple())
-                    self.assertEqual(config.fingerprint, None)
-                    self.assertEqual(config.user_id, None)
-                    self.assertEqual(config.root_secret, None)
-                    self.assertEqual(config.log_verbosity, 'warning')
-                    self.assertEqual(config.debug_mode, False)
-                    
-                    config.set_remote('host', 123, True)
-                    self.assertIn(('host', 123, True), config.remotes)
-                    
-                    config.remove_remote('host', 123)
-                    self.assertNotIn(('host', 123, True), config.remotes)
-                    
-                    # Test fingerprints and user_id
-                    fingerprint = make_random_ghid()
-                    user_id = make_random_ghid()
-                    
-                    config.fingerprint = fingerprint
-                    self.assertEqual(config.fingerprint, fingerprint)
-                    
-                    config.user_id = user_id
-                    self.assertEqual(config.user_id, user_id)
-                    
-                    # Test modification updates appropriately
-                    fingerprint = make_random_ghid()
-                    user_id = make_random_ghid()
-                    
-                    config.fingerprint = fingerprint
-                    self.assertEqual(config.fingerprint, fingerprint)
-                    
-                    config.user_id = user_id
-                    self.assertEqual(config.user_id, user_id)
-                    
-                    # Now everything else
-                    config.log_verbosity = 'info'
-                    self.assertEqual(config.log_verbosity, 'info')
-                    config.debug_mode = True
-                    self.assertEqual(config.debug_mode, True)
+            config = Config(path)
+            other_cfg = Config(path)
+            self.assertEqual(config, other_cfg)
+        
+            with Config(path) as config:
+                config.instrumentation.debug = True
+                self.assertNotEqual(config, other_cfg)
+                
+            other_cfg.reload()
+            self.assertEqual(config, other_cfg)
+                
+            with config:
+                config.instrumentation.debug = False
+                self.assertNotEqual(config, other_cfg)
+                
+            other_cfg.reload()
+            self.assertEqual(config, other_cfg)
                 
                 
 class CommandingTest(unittest.TestCase):
@@ -487,70 +422,75 @@ class CommandingTest(unittest.TestCase):
     def test_full(self):
         ''' Test a full command chain for everything.
         '''
-        with _SuppressSTDOUT():
-            blank = _make_blank_cfg()
-            debug = _make_blank_cfg()
-            loud = _make_blank_cfg()
-            host1 = _make_blank_cfg()
-            host1hgx = _make_blank_cfg()
-            host1host2f = _make_blank_cfg()
-            host1host2 = _make_blank_cfg()
-        debug['instrumentation'].debug = True
-        loud['instrumentation'].verbosity = 'info'
-        host1['remotes'].append(('host1', 123, True))
-        host1hgx['remotes'].append(('host1', 123, True))
-        host1hgx['remotes'].append(('hgx.hypergolix.com', 443, True))
-        host1host2f['remotes'].append(('host1', 123, True))
-        host1host2f['remotes'].append(('host2', 123, False))
-        host1host2['remotes'].append(('host1', 123, True))
-        host1host2['remotes'].append(('host2', 123, True))
-        
-        # Definitely want to control the order of execution for this.
-        valid_commands = [
-            ('config --debug', debug),
-            ('config --no-debug', blank),
-            ('config --verbosity loud', loud),
-            ('config --verbosity normal', blank),
-            ('config -ah host1 123 t', host1),
-            ('config --addhost host1 123 t', host1),
-            ('config -a hgx', host1hgx),
-            ('config --add hgx', host1hgx),
-            ('config -r hgx', host1),
-            ('config --remove hgx', host1),
-            # Note switch of TLS flag
-            ('config -ah host2 123 f', host1host2f),
-            # Note return of TLS flag
-            ('config --addhost host2 123 t', host1host2),
-            ('config -rh host2 123', host1),
-            ('config --removehost host2 123', host1),
-            ('config -o local', blank),
-            ('config --only local', blank),
-            ('config -ah host1 123 t -ah host2 123 t', host1host2),
-        ]
-        
-        failing_commands = [
-            'config -zz top',
-            'config --verbosity XXXTREEEEEEEME',
-            'config --debug --no-debug',
-            'config -o local -a hgx',
-        ]
-        
         with tempfile.TemporaryDirectory() as root:
             root = pathlib.Path(root)
             
+            blank = Config(root / 'hypergolix.yml')
+            debug = Config(root / 'hypergolix.yml')
+            loud = Config(root / 'hypergolix.yml')
+            host1 = Config(root / 'hypergolix.yml')
+            host1hgx = Config(root / 'hypergolix.yml')
+            host1host2f = Config(root / 'hypergolix.yml')
+            host1host2 = Config(root / 'hypergolix.yml')
+            
+            debug.instrumentation.debug = True
+            loud.instrumentation.verbosity = 'info'
+            host1.remotes.append(Remote('host1', 123, True))
+            host1hgx.remotes.append(Remote('host1', 123, True))
+            host1hgx.remotes.append(Remote('hgx.hypergolix.com', 443, True))
+            host1host2f.remotes.append(Remote('host1', 123, True))
+            host1host2f.remotes.append(Remote('host2', 123, False))
+            host1host2.remotes.append(Remote('host1', 123, True))
+            host1host2.remotes.append(Remote('host2', 123, True))
+            
+            # Definitely want to control the order of execution for this.
+            valid_commands = [
+                ('config --debug', debug),
+                ('config --no-debug', blank),
+                ('config --verbosity loud', loud),
+                ('config --verbosity normal', blank),
+                ('config -ah host1 123 t', host1),
+                ('config --addhost host1 123 t', host1),
+                ('config -a hgx', host1hgx),
+                ('config --add hgx', host1hgx),
+                ('config -r hgx', host1),
+                ('config --remove hgx', host1),
+                # Note switch of TLS flag
+                ('config -ah host2 123 f', host1host2f),
+                # Note return of TLS flag
+                ('config --addhost host2 123 t', host1host2),
+                ('config -rh host2 123', host1),
+                ('config --removehost host2 123', host1),
+                ('config -o local', blank),
+                ('config --only local', blank),
+                ('config -ah host1 123 t -ah host2 123 t', host1host2),
+            ]
+            
+            failing_commands = [
+                'config -zz top',
+                'config --verbosity XXXTREEEEEEEME',
+                'config --debug --no-debug',
+                'config -o local -a hgx',
+            ]
+            
             for cmd_str, cmd_result in valid_commands:
                 with self.subTest(cmd_str):
+                    # Make sure we have a fresh config first
+                    (root / 'hypergolix.yml').write_text('')
+                    
                     argv = cmd_str.split()
                     argv.append('--root')
-                    argv.append(str(root))
+                    argv.append(str(root / 'hypergolix.yml'))
                     
                     with _SuppressSTDOUT():
                         ingest_args(argv)
                     
-                    with Config(root) as config:
-                        self.assertEqual(config._cfg, cmd_result)
+                    config = Config.load(root / 'hypergolix.yml')
+                    # We need to do this because arg ingesting does this too
+                    cmd_result.coerce_defaults()
+                    self.assertEqual(config, cmd_result)
                 
-        # Don't need the temp dir for this.
+        # Don't need the temp dir for this; un-context to escape permissions
         for cmd_str in failing_commands:
             with self.subTest(cmd_str):
                 argv = cmd_str.split()

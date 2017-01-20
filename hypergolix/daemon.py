@@ -58,7 +58,6 @@ from golix import Ghid
 # daemonization)
 
 from hypergolix.config import Config
-from hypergolix.config import get_hgx_rootdir
 
 from hypergolix.comms import WSConnection
 from hypergolix.comms import WSBeatingConn
