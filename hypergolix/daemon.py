@@ -68,6 +68,8 @@ from hypergolix.accounting import Account
 from hypergolix import logutils
 
 from hypergolix.exceptions import ConfigError
+from hypergolix.exceptions import ConfigIncomplete
+from hypergolix.exceptions import ConfigMissing
 
 
 # ###############################################
@@ -422,10 +424,10 @@ class _DaemonCore(HypergolixCore):
     references to historical minutiae.
     '''
     
-    def __init__(self, *args, hgx_rootdir, save_cfg, boot_logger, **kwargs):
+    def __init__(self, *args, cfg_path, save_cfg, boot_logger, **kwargs):
         super().__init__(*args, **kwargs)
         
-        self._hgx_rootdir = hgx_rootdir
+        self._cfg_path = cfg_path
         self._save_cfg = bool(save_cfg)
         self._boot_logger = boot_logger
         
@@ -447,9 +449,9 @@ class _DaemonCore(HypergolixCore):
                 logger.critical('User ID:\n' + user_id.as_str())
                 logger.critical('Fingerprint:\n' + fingerprint.as_str())
                 
-                with Config(self._hgx_rootdir) as config:
-                    config.fingerprint = fingerprint
-                    config.user_id = user_id
+                with Config.load(self._cfg_path) as config:
+                    config.user.fingerprint = fingerprint
+                    config.user.user_id = user_id
                     
         finally:
             logger.critical('Hypergolix boot complete.')
@@ -459,18 +461,26 @@ class _DaemonCore(HypergolixCore):
 def do_setup():
     ''' Does initial setup of the daemon BEFORE daemonizing.
     '''
-    hgx_rootdir = get_hgx_rootdir()
+    try:
+        config = Config.find()
     
-    with Config(hgx_rootdir) as config:
-        user_id = config.user_id
-        fingerprint = config.fingerprint
-        root_secret = config.root_secret
+    except ConfigMissing:
+        print('Welcome to Hypergolix!')
+        print('No existing configuration found; creating a new one.')
+        config = Config.wherever()
+    
+    # We do need to wrap this, so that we actually store a new config (and
+    # so that we actually coerce the defaults)
+    with config:
+        user_id = config.user.user_id
+        fingerprint = config.user.fingerprint
+        root_secret = config.user.root_secret
         # Convert the path to a str
-        pid_file = str(config.pid_file)
+        pid_file = str(config.process.pid_file)
     
     if bool(user_id) ^ bool(fingerprint):
-        raise ConfigError('Invalid config. Config must declare both ' +
-                          'user_id and fingerprint, or neither.')
+        raise ConfigIncomplete('Invalid config. Config must declare both ' +
+                               'user_id and fingerprint, or neither.')
     
     # We have no root secret, so we need to get a password and then inflate
     # it.
@@ -514,10 +524,10 @@ def do_setup():
             print('Private keys generated.')
             account_entity = account_entity._serialize()
         
-    return hgx_rootdir, pid_file, account_entity, root_secret
+    return config.path, pid_file, account_entity, root_secret
 
 
-def run_daemon(hgx_rootdir, pid_file, parent_port, account_entity,
+def run_daemon(cfg_path, pid_file, parent_port, account_entity,
                root_secret):
     ''' Start the actual Hypergolix daemon.
     '''
@@ -526,16 +536,16 @@ def run_daemon(hgx_rootdir, pid_file, parent_port, account_entity,
     startup_logger = parent_signaller.start()
     
     try:
-        with Config(hgx_rootdir) as config:
+        with Config.load(cfg_path) as config:
             # Convert paths to strs
-            cache_dir = str(config.cache_dir)
-            log_dir = str(config.log_dir)
-            debug = config.debug_mode
-            verbosity = config.log_verbosity
-            ipc_port = config.ipc_port
+            cache_dir = str(config.process.ghidcache)
+            log_dir = str(config.process.logdir)
+            debug = config.instrumentation.debug
+            verbosity = config.instrumentation.verbosity
+            ipc_port = config.process.ipc_port
             remotes = config.remotes
             # Look to see if we have an existing user_id to determine behavior
-            save_cfg = not bool(config.user_id)
+            save_cfg = not bool(config.user.user_id)
         
         hgxcore = _DaemonCore(
             cache_dir = cache_dir,
@@ -543,7 +553,7 @@ def run_daemon(hgx_rootdir, pid_file, parent_port, account_entity,
             reusable_loop = False,
             threaded = False,
             debug = debug,
-            hgx_rootdir = hgx_rootdir,
+            cfg_path = cfg_path,
             save_cfg = save_cfg,
             boot_logger = parent_signaller
         )
@@ -601,20 +611,20 @@ def start(namespace=None):
         
         if is_setup:
             print('Starting Hypergolix...')
-            hgx_rootdir, pid_file, account_entity, root_secret = do_setup()
+            cfg_path, pid_file, account_entity, root_secret = do_setup()
             
         else:
             # Need these so that the second time around doesn't NameError
-            hgx_rootdir = None
+            cfg_path = None
             pid_file = None
             account_entity = None
             root_secret = None
             
         # Daemonize. Don't strip cmd-line arguments, or we won't know to
         # continue with startup
-        is_parent, hgx_rootdir, pid_file, account_entity, root_secret = \
-            daemonizer(pid_file, hgx_rootdir, pid_file, account_entity,
-                       root_secret, chdir=str(hgx_rootdir),
+        is_parent, cfg_path, pid_file, account_entity, root_secret = \
+            daemonizer(pid_file, cfg_path, pid_file, account_entity,
+                       root_secret, chdir=str(cfg_path.parent),
                        explicit_rescript='-m hypergolix.daemon')
          
         if is_parent:
@@ -631,16 +641,14 @@ def start(namespace=None):
             account_entity = FirstParty._from_serialized(account_entity)
             
     # Daemonized child only from here on out. So, run the actual daemon!
-    run_daemon(hgx_rootdir, pid_file, parent_port, account_entity, root_secret)
+    run_daemon(cfg_path, pid_file, parent_port, account_entity, root_secret)
     
     
 def stop(namespace=None):
     ''' Stops the Hypergolix daemon.
     '''
-    hgx_rootdir = get_hgx_rootdir()
-    
-    with Config(hgx_rootdir) as config:
-        pid_file = str(config.pid_file)
+    with Config.find() as config:
+        pid_file = str(config.process.pid_file)
         
     daemoniker.send(pid_file, SIGTERM)
     

@@ -697,7 +697,7 @@ class Process(metaclass=_AutoMapper):
     ipc_port = AutoField()
     
     
-class Config2(metaclass=_AutoMapper):
+class Config(metaclass=_AutoMapper):
     ''' Context handler for semi-atomic config updates.
     
     .hypergolix /
@@ -937,263 +937,6 @@ class Config2(metaclass=_AutoMapper):
         return index
 
 
-class Config:
-    ''' DEPRECATED and being removed!
-    '''
-                
-    @property
-    def home_dir(self):
-        ''' The Hypergolix home directory.
-        '''
-        return self._root / '.hypergolix'
-        
-    @property
-    def cache_dir(self):
-        ''' Where is the cache dir?
-        '''
-        return self.home_dir / 'ghidcache'
-        
-    @property
-    def log_dir(self):
-        ''' Where is the log dir?
-        '''
-        return self.home_dir / 'logs'
-        
-    @property
-    def pid_file(self):
-        ''' The pid file to use.
-        '''
-        return self.home_dir / 'hypergolix.pid'
-            
-    @property
-    def remotes(self):
-        ''' Returns a read-only copy of all current remotes.
-        '''
-        try:
-            # Convert all of the defs to namedtuples while we're at it
-            # Check out this sexy tuple comprehension
-            return tuple(
-                _readonly_remote(*remote) for remote in self._cfg['remotes']
-            )
-        
-        except Exception as exc:
-            raise ConfigError('Invalid configuration.') from exc
-        
-    @property
-    def fingerprint(self):
-        ''' The fingerprint! Use this for a sharing target.
-        '''
-        try:
-            fingerprint = self._cfg['user'].fingerprint
-            
-            # May be undefined, in which case return None
-            if fingerprint is None:
-                return fingerprint
-                
-            # Convert to a ghid if defined.
-            else:
-                return Ghid.from_str(fingerprint)
-        
-        except Exception as exc:
-            raise ConfigError('Invalid configuration.') from exc
-        
-    @fingerprint.setter
-    def fingerprint(self, fingerprint):
-        ''' Set our fingerprint. Really only intended to be called by
-        hypergolix itself, and not for manual manipulation of the actual
-        config file.
-        '''
-        # Convert the ghid to a plaintext equivalent
-        try:
-            fingerprint = fingerprint.as_str()
-        except Exception as exc:
-            raise ConfigError('Invalid configuration.') from exc
-        
-        try:
-            self._cfg['user'].fingerprint = fingerprint
-        
-        except KeyError:
-            self._cfg['user'] = _UserDef(
-                fingerprint = fingerprint,
-                user_id = None,
-                root_secret = None
-            )
-        
-    @property
-    def user_id(self):
-        ''' Gets the user_id from the config. Returns a ghid.
-        '''
-        try:
-            user_id = self._cfg['user'].user_id
-            
-            # May be undefined, in which case return None
-            if user_id is None:
-                return user_id
-                
-            # Convert to a ghid if defined.
-            else:
-                return Ghid.from_str(user_id)
-        
-        except Exception as exc:
-            raise ConfigError('Invalid configuration.') from exc
-            
-    @user_id.setter
-    def user_id(self, user_id):
-        ''' Sets the user_id in the config, overwriting any existing
-        user_id.
-        '''
-        # Convert the ghid to a plaintext equivalent
-        try:
-            user_id = user_id.as_str()
-        except Exception as exc:
-            raise ConfigError('Invalid configuration.') from exc
-        
-        try:
-            self._cfg['user'].user_id = user_id
-        
-        except KeyError:
-            self._cfg['user'] = _UserDef(
-                fingerprint = None,
-                user_id = user_id,
-                root_secret = None
-            )
-            
-    @property
-    def root_secret(self):
-        ''' Read-only property that allows people to set a root secret
-        for automatic login on startup. Intended for use via sudo on
-        fully-autonomous things (ex: a raspberry pi). Can only be set
-        through manual manipulation of the config file. Really should
-        not be used until hypergolix daemonization supports privilege
-        dropping.
-        '''
-        try:
-            cfg_str = self._cfg['user'].root_secret
-            
-            if cfg_str is None:
-                return None
-            else:
-                return Secret.from_str(cfg_str)
-        
-        except Exception as exc:
-            raise ConfigError('Invalid configuration.') from exc
-            
-    @property
-    def log_verbosity(self):
-        ''' Tells the log verbosity.
-        '''
-        try:
-            return self._cfg['instrumentation'].verbosity
-        
-        except Exception as exc:
-            raise ConfigError('Invalid configuration.') from exc
-    
-    @log_verbosity.setter
-    def log_verbosity(self, verbosity):
-        ''' Updates log verbosity.
-        '''
-        try:
-            self._cfg['instrumentation'].verbosity = verbosity
-        
-        except KeyError:
-            self._cfg['instrumentation'] = _InstrumentationDef(
-                verbosity = verbosity,
-                debug = False,
-                traceur = False
-            )
-            
-        except Exception as exc:
-            raise ConfigError('Invalid configuration.') from exc
-            
-    @property
-    def debug_mode(self):
-        ''' Gets the debug mode.
-        '''
-        try:
-            return bool(self._cfg['instrumentation'].debug)
-            
-        except Exception as exc:
-            raise ConfigError('Invalid configuration.') from exc
-        
-    @debug_mode.setter
-    def debug_mode(self, enabled):
-        ''' Updates the debug mode.
-        '''
-        try:
-            enabled = bool(enabled)
-        except Exception as exc:
-            raise ConfigError('Invalid configuration.') from exc
-        
-        try:
-            self._cfg['instrumentation'].debug = enabled
-        except KeyError:
-            self._cfg['instrumentation'] = _InstrumentationDef(
-                verbosity = 'warning',
-                debug = enabled,
-                traceur = False
-            )
-            
-    @property
-    def ipc_port(self):
-        ''' Gets the IPC port.
-        '''
-        try:
-            return int(self._cfg['process'].ipc_port)
-            
-        except Exception as exc:
-            raise ConfigError('Invalid configuration.') from exc
-        
-    @ipc_port.setter
-    def ipc_port(self, port):
-        ''' Updates the debug mode.
-        '''
-        try:
-            port = int(port)
-        except Exception as exc:
-            raise ConfigError('Invalid configuration.') from exc
-        
-        try:
-            self._cfg['process'].ipc_port = port
-        except KeyError:
-            self._cfg['process'] = _ProcessDef(
-                ipc_port = port
-            )
-        
-            
-def _make_blank_cfg():
-    ''' Creates a new, blank cfg dict.
-    '''
-    # TODO: move this somewhere that doesn't require config testing to suppress
-    # stdout!
-    print('Welcome to Hypergolix! Creating a new, local-only configuration.')
-    print('For configuration help, run this command:')
-    print('    hypergolix config -h')
-    print('To use Hypergolix over the internet, run this command:')
-    print('    hypergolix config --add hgx')
-    
-    cfg = {
-        'remotes': [],
-        'user': _UserDef(None, None, None),
-        'instrumentation': _InstrumentationDef('warning', False, False),
-        'process': _ProcessDef(ipc_port=7772)
-    }
-    return cfg
-
-
-def get_hgx_rootdir():
-    ''' Simply returns the path to the hgx home dir. Does not ensure its
-    existence or perform any other checks.
-    
-    In the future, this will have an order of preference and search
-    path, but currently it is quite naively hard-coding a subdirectory
-    to the user home directory.
-    '''
-    # For now, simply make a subdir in the user folder.
-    user_home = pathlib.Path('~/')
-    user_home = user_home.expanduser()
-    return user_home
-    
-    
 def _ensure_dir_exists(path):
     ''' Ensures the existence of a directory. Path must be to the dir,
     and not to a file therewithin.
@@ -1204,101 +947,6 @@ def _ensure_dir_exists(path):
         
     elif not path.is_dir():
         raise FileExistsError('Path exists already and is not a directory.')
-        
-        
-def _get_hgx_config(root):
-    ''' Gets and returns the hypergolix configuration. Raises
-    ConfigError if none is defined.
-    '''
-    hgx_home = root / '.hypergolix'
-    hgx_cfg_path = hgx_home / 'hgx-cfg.json'
-    
-    if not hgx_cfg_path.exists():
-        raise ConfigError('Hypergolix configuration has not been run.')
-        
-    with open(hgx_cfg_path.as_posix(), 'r') as f:
-        cfg = f.read()
-        
-    return _CfgDecoder().decode(cfg)
-    
-    
-def _set_hgx_config(root, cfg):
-    ''' Idempotent function to update the config to the passed cfg.
-    If the config does not already exist, creates it.
-    '''
-    hgx_home = _ensure_hgx_homedir(root)
-    hgx_cfg_path = hgx_home / 'hgx-cfg.json'
-    cfg = _CfgEncoder().encode(cfg)
-    
-    # TODO: make an atomic update system for encoding?
-    # TODO: consider some kind of in-place updating system if cfg exists
-    with open(hgx_cfg_path.as_posix(), 'w') as f:
-        f.write(cfg)
-        
-        
-def _set_remote(cfg, remote_def):
-    ''' Adds a server to cfg. If no servers are defined, creates the
-    key for them. Also ensures no duplicates. If remote already exists,
-    will update in place if TLS definition changed; otherwise, silently
-    does nothing.
-    '''
-    if 'remotes' not in cfg:
-        cfg['remotes'] = [remote_def]
-    
-    else:
-        # Get the index of the remote, which will be None if nonexistent
-        index = _index_remote(cfg, remote_def)
-        
-        # Only add it if the server doesn't already exist in our cfg.
-        if index is None:
-            cfg['remotes'].append(remote_def)
-        
-        # Make sure the TLS definition didn't change though!
-        else:
-            old_rdef = cfg['remotes'][index]
-            
-            # TLS changed. Update in-place.
-            if old_rdef != remote_def:
-                cfg['remotes'][index] = remote_def
-        
-        
-def _pop_remote(cfg, remote_def):
-    ''' Removes a server from cfg. Silently does nothing if the
-    server does not exist in the cfg.
-    '''
-    if 'remotes' not in cfg:
-        raise ConfigError('Invalid configuration.')
-    
-    else:
-        # Only remove if the server exists in cfg.
-        index = _index_remote(cfg, remote_def)
-        if index is None:
-            return None
-        else:
-            return cfg['remotes'].pop(index)
-        
-        
-def _index_remote(cfg, remote_def):
-    ''' Finds the index of the remote_def in cfg. Returns None if the
-    server is not contained in the cfg.
-    
-    Note that the index is only looking for host and port. TLS usage
-    does not affect the remote index.
-    '''
-    # Short-circuit if servers are undefined
-    if 'remotes' not in cfg:
-        return None
-        
-    for index, server in enumerate(cfg['remotes']):
-        # Short circuit and return the index if we find an equivalent server.
-        # Don't worry about TLS for finding hosts -- you should never use the
-        # same server over both TLS and non-TLS connections.
-        if server.host == remote_def.host and server.port == remote_def.port:
-            return index
-            
-    # No equal server found. Return None.
-    else:
-        return None
 
 
 # ###############################################
@@ -1307,7 +955,7 @@ def _index_remote(cfg, remote_def):
 
 
 NAMED_REMOTES = {
-    'hgx': _readonly_remote('hgx.hypergolix.com', 443, True)
+    'hgx': Remote('hgx.hypergolix.com', 443, True)
 }
 
 
@@ -1315,8 +963,8 @@ def _named_remote(remote):
     ''' Converts a named remote to a host, port, TLS group.
     '''
     return NAMED_REMOTES[remote]
-    
-    
+
+
 def _exclusive_named_remote(remote):
     ''' Converts an exclusive named remote to a list of host, port, TLS
     groups, of length one.
@@ -1328,8 +976,8 @@ def _exclusive_named_remote(remote):
     # Otherwise, re-cast it as the pair.
     else:
         return [_named_remote(remote)]
-    
-    
+
+
 def _handle_verbosity(config, verbosity):
     lookup = {
         'extreme': 'extreme',
@@ -1337,11 +985,15 @@ def _handle_verbosity(config, verbosity):
         'louder': 'debug',
         'loud': 'info',
         'normal': 'warning',
-        'quiet': 'error'
+        'quiet': 'error',
+        'error': 'error',
+        'warning': 'warning',
+        'info': 'info',
+        'debug': 'debug'
     }
-    config.log_verbosity = lookup[verbosity]
-    
-    
+    config.instrumentation.verbosity = lookup[verbosity]
+
+
 def _handle_debug(config, debug_enabled):
     ''' Only modify debug if it was specified.
     '''
@@ -1349,12 +1001,12 @@ def _handle_debug(config, debug_enabled):
         return
         
     elif debug_enabled:
-        config.debug_mode = True
+        config.instrumentation.debug = True
         
     else:
-        config.debug_mode = False
-    
-    
+        config.instrumentation.debug = False
+
+
 def _handle_remotes(config, only_remotes, add_remotes, remove_remotes):
     ''' Manages remotes.
     '''
@@ -1385,8 +1037,8 @@ def _handle_remotes(config, only_remotes, add_remotes, remove_remotes):
                 remote.host,
                 remote.port
             )
-            
-            
+
+
 def _typecast_remotes(args):
     ''' Performs all type checking and casting for remotes.
     '''
@@ -1408,8 +1060,8 @@ def _typecast_remotes(args):
     # We've specified only local.
     else:
         args.only_remotes = []
-        
-        
+
+
 def _process_remotes(remotes):
     ''' Ensures correct definitions for all non-singular remotes, and
     type casts them appropriately.
@@ -1438,13 +1090,13 @@ def _process_remotes(remotes):
                 tls = True
             
             # Now make a readonly remote for the definition.
-            re_remotes.append(_readonly_remote(host, port, tls))
+            re_remotes.append(Remote(host, port, tls))
             
     # And finally, update the original remotes in place.
     remotes.clear()
     remotes.extend(re_remotes)
-    
-    
+
+
 def _str_to_bool(s, failure_msg='Failed to infer truthiness.'):
     ''' Attempts to convert a string to a bool.
     '''
@@ -1460,15 +1112,15 @@ def _str_to_bool(s, failure_msg='Failed to infer truthiness.'):
         return False
     else:
         raise ValueError(failure_msg)
-        
-        
+
+
 def _handle_ipc(config, ipc):
     ''' If IPC is defined, update it.
     '''
     if ipc is not None:
-        config.ipc_port = ipc
-    
-    
+        config.process.ipc_port = ipc
+
+
 def _format_blockstr(long_line):
     ''' Wraps a urlsafe ghid.
     '''
@@ -1482,15 +1134,15 @@ def _format_blockstr(long_line):
         )
     
     return '\n'.join(out)
-        
-        
+
+
 def _handle_whoami(config, whoami):
     ''' If whoami is True, prints out information about the current
     hypergolix user.
     '''
     if whoami:
-        fingerprint = config.fingerprint
-        user_id = config.user_id
+        fingerprint = config.user.fingerprint
+        user_id = config.user.user_id
 
         # Add newline just for format pretty
         print('')
@@ -1511,13 +1163,13 @@ def _handle_whoami(config, whoami):
                 'Someone else can use that to share\n' +
                 'Hypergolix objects with you.'
             )
-        
-    
+
+
 def _handle_register(config, register):
     ''' Launches registration in a browser window if set.
     '''
     if register:
-        fingerprint = config.fingerprint.as_str()
+        fingerprint = config.user.fingerprint.as_str()
         reg_address = 'https://www.hypergolix.com/register.html?' + fingerprint
         
         try:
@@ -1537,19 +1189,29 @@ def _handle_register(config, register):
                 'click "register":\n' +
                 _format_blockstr(reg_address)
             )
-    
-    
+
+
 def handle_args(args):
     ''' Performs all needed actions on the passed command args.
     '''
     _typecast_remotes(args)
     
+    # If no config root was passed as an argument, search for one, and if we
+    # can't find the config, create a new one
     if args.cfg_root is None:
-        root = get_hgx_rootdir()
-    else:
-        root = args.cfg_root
+        try:
+            config = Config.find()
+        
+        except ConfigMissing:
+            print('Welcome to Hypergolix!')
+            print('No existing configuration found; creating a new one.')
+            config = Config.wherever()
     
-    with Config(root) as config:
+    # If we passed a config root as an argument, load it directly
+    else:
+        config = Config.load(pathlib.Path(args.cfg_root))
+    
+    with config:
         _handle_remotes(
             config,
             args.only_remotes,
