@@ -44,7 +44,7 @@ from golix import Ghid
 from golix import Secret
 
 # Intra-package dependencies
-from .utils import _BijectDict
+from .utils import _ensure_dir_exists
 from .exceptions import ConfigError
 from .exceptions import ConfigIncomplete
 from .exceptions import ConfigMissing
@@ -324,6 +324,15 @@ class _AutoMapperMixin:
                 except Exception as exc:
                     raise ConfigError('Failed to decode field: ' +
                                       field) from exc
+                    
+    def __repr__(self):
+        ''' Wrap in nice handling of fields.
+        '''
+        rep = type(self).__name__ + '('
+        for field in self.fields:
+            rep += field + '=' + repr(getattr(self, field)) + ', '
+        rep = rep[:-2] + ')'
+        return rep
             
     def __eq__(self, other):
         ''' Compare type of self and all fields.
@@ -474,11 +483,6 @@ class Config(metaclass=_AutoMapper):
                 'logdir': root / 'logs',
                 'pid_file': root / 'hypergolix.pid',
                 'ipc_port': 7772
-            },
-            'instrumentation': {
-                'verbosity': 'info',
-                'debug': False,
-                'traceur': False
             }
         }
     
@@ -492,9 +496,6 @@ class Config(metaclass=_AutoMapper):
         # Coerce any defaults, which will force a new config to do a rewrite
         # upon __exit__, since we now differ from _cfg_cache
         self.coerce_defaults()
-        # Make sure we have all the needed directories for the config
-        _ensure_dir_exists(self.process.ghidcache)
-        _ensure_dir_exists(self.process.logdir)
             
         # And now allow access to self.
         return self
@@ -507,11 +508,13 @@ class Config(metaclass=_AutoMapper):
         if exc_type is None:
             # Perform an update if forced, or if the config has changed
             if self.force_rewrite or self._cfg_cache != self:
+                logger.debug('Dumping config to file.')
                 self.dump(self.path)
                 self.force_rewrite = False
                 
             # Update our path if we're coercing the name.
             if self.coerce_name:
+                logger.debug('Updating config filename.')
                 # Construct the new path using the target filename
                 old_path = self.path
                 new_path = old_path.parent / self.TARGET_FNAME
@@ -692,18 +695,6 @@ class Config(metaclass=_AutoMapper):
         return index
 
 
-def _ensure_dir_exists(path):
-    ''' Ensures the existence of a directory. Path must be to the dir,
-    and not to a file therewithin.
-    '''
-    path = pathlib.Path(path).absolute()
-    if not path.exists():
-        path.mkdir(parents=True)
-        
-    elif not path.is_dir():
-        raise FileExistsError('Path exists already and is not a directory.')
-
-
 # ###############################################
 # Argparse on command line invocation
 # ###############################################
@@ -734,19 +725,20 @@ def _exclusive_named_remote(remote):
 
 
 def _handle_verbosity(config, verbosity):
-    lookup = {
-        'extreme': 'extreme',
-        'shouty': 'shouty',
-        'louder': 'debug',
-        'loud': 'info',
-        'normal': 'warning',
-        'quiet': 'error',
-        'error': 'error',
-        'warning': 'warning',
-        'info': 'info',
-        'debug': 'debug'
-    }
-    config.instrumentation.verbosity = lookup[verbosity]
+    if verbosity is not None:
+        lookup = {
+            'extreme': 'extreme',
+            'shouty': 'shouty',
+            'louder': 'debug',
+            'loud': 'info',
+            'normal': 'warning',
+            'quiet': 'error',
+            'error': 'error',
+            'warning': 'warning',
+            'info': 'info',
+            'debug': 'debug'
+        }
+        config.instrumentation.verbosity = lookup[verbosity]
 
 
 def _handle_debug(config, debug_enabled):

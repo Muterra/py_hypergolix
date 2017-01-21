@@ -57,6 +57,9 @@ from golix import Ghid
 # Intra-package dependencies (that require explicit imports, courtesy of
 # daemonization)
 
+from hypergolix.utils import _default_to
+from hypergolix.utils import _ensure_dir_exists
+
 from hypergolix.config import Config
 
 from hypergolix.comms import WSConnection
@@ -536,11 +539,14 @@ def run_daemon(cfg_path, pid_file, parent_port, account_entity,
     
     try:
         with Config.load(cfg_path) as config:
-            # Convert paths to strs
+            # Convert paths to strs and make sure the dirs exist
             cache_dir = str(config.process.ghidcache)
             log_dir = str(config.process.logdir)
-            debug = config.instrumentation.debug
-            verbosity = config.instrumentation.verbosity
+            _ensure_dir_exists(config.process.ghidcache)
+            _ensure_dir_exists(config.process.logdir)
+            
+            debug = _default_to(config.instrumentation.debug, False)
+            verbosity = _default_to(config.instrumentation.verbosity, 'info')
             ipc_port = config.process.ipc_port
             remotes = config.remotes
             # Look to see if we have an existing user_id to determine behavior

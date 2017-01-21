@@ -346,20 +346,6 @@ class ConfigTest(unittest.TestCase):
             self.assertTrue(nest1.exists())
             self.assertTrue(nest2.exists())
         
-    def test_ensure_process_dirs(self):
-        with tempfile.TemporaryDirectory() as root:
-            root = pathlib.Path(root)
-            logdir = root / 'logs'
-            cachedir = root / 'ghidcache'
-            
-            config = Config(root / 'hypergolix.yml')
-            
-            with config:
-                pass
-                
-            self.assertTrue(logdir.exists())
-            self.assertTrue(cachedir.exists())
-        
     def test_manipulate_remotes(self):
         config = Config(pathlib.Path())
         rem1 = Remote('host1', 123, False)
@@ -421,7 +407,7 @@ class ConfigTest(unittest.TestCase):
 class CommandingTest(unittest.TestCase):
     ''' Test passing commands and manipulation thereof.
     
-    All of this is deprecated!
+    All of this should be deprecated!
     '''
     
     def test_full(self):
@@ -431,29 +417,60 @@ class CommandingTest(unittest.TestCase):
             root = pathlib.Path(root)
             
             blank = Config(root / 'hypergolix.yml')
-            debug = Config(root / 'hypergolix.yml')
-            loud = Config(root / 'hypergolix.yml')
-            host1 = Config(root / 'hypergolix.yml')
-            host1hgx = Config(root / 'hypergolix.yml')
-            host1host2f = Config(root / 'hypergolix.yml')
-            host1host2 = Config(root / 'hypergolix.yml')
+            blank.coerce_defaults()
             
+            debug = Config(root / 'hypergolix.yml')
+            debug.coerce_defaults()
             debug.instrumentation.debug = True
+            
+            nodebug = Config(root / 'hypergolix.yml')
+            nodebug.coerce_defaults()
+            nodebug.instrumentation.debug = False
+            
+            loud = Config(root / 'hypergolix.yml')
+            loud.coerce_defaults()
             loud.instrumentation.verbosity = 'info'
+            loud.instrumentation.debug = False
+            
+            normal = Config(root / 'hypergolix.yml')
+            normal.coerce_defaults()
+            normal.instrumentation.verbosity = 'warning'
+            normal.instrumentation.debug = False
+            
+            host1 = Config(root / 'hypergolix.yml')
+            host1.coerce_defaults()
             host1.remotes.append(Remote('host1', 123, True))
+            host1.instrumentation.verbosity = 'warning'
+            host1.instrumentation.debug = False
+            
+            host1hgx = Config(root / 'hypergolix.yml')
+            host1hgx.coerce_defaults()
             host1hgx.remotes.append(Remote('host1', 123, True))
             host1hgx.remotes.append(Remote('hgx.hypergolix.com', 443, True))
+            host1hgx.instrumentation.verbosity = 'warning'
+            host1hgx.instrumentation.debug = False
+            
+            host1host2f = Config(root / 'hypergolix.yml')
+            host1host2f.coerce_defaults()
             host1host2f.remotes.append(Remote('host1', 123, True))
             host1host2f.remotes.append(Remote('host2', 123, False))
+            host1host2f.instrumentation.verbosity = 'warning'
+            host1host2f.instrumentation.debug = False
+            
+            host1host2 = Config(root / 'hypergolix.yml')
+            host1host2.coerce_defaults()
             host1host2.remotes.append(Remote('host1', 123, True))
             host1host2.remotes.append(Remote('host2', 123, True))
+            host1host2.instrumentation.verbosity = 'warning'
+            host1host2.instrumentation.debug = False
             
             # Definitely want to control the order of execution for this.
             valid_commands = [
+                ('config', blank),
                 ('config --debug', debug),
-                ('config --no-debug', blank),
+                ('config --no-debug', nodebug),
                 ('config --verbosity loud', loud),
-                ('config --verbosity normal', blank),
+                ('config --verbosity normal', normal),
                 ('config -ah host1 123 t', host1),
                 ('config --addhost host1 123 t', host1),
                 ('config -a hgx', host1hgx),
@@ -466,8 +483,8 @@ class CommandingTest(unittest.TestCase):
                 ('config --addhost host2 123 t', host1host2),
                 ('config -rh host2 123', host1),
                 ('config --removehost host2 123', host1),
-                ('config -o local', blank),
-                ('config --only local', blank),
+                ('config -o local', normal),
+                ('config --only local', normal),
                 ('config -ah host1 123 t -ah host2 123 t', host1host2),
             ]
             
@@ -480,10 +497,10 @@ class CommandingTest(unittest.TestCase):
             
             for cmd_str, cmd_result in valid_commands:
                 with self.subTest(cmd_str):
-                    # Make sure we have a fresh config first
                     cfg_path = root / 'hypergolix.yml'
-                    if cfg_path.exists():
-                        cfg_path.unlink()
+                    # NOTE THAT THESE TESTS ARE CUMULATIVE! We definitely DON'T
+                    # want to start with a fresh config each time around, or
+                    # the tests will fail!
                     
                     argv = cmd_str.split()
                     argv.append('--root')
@@ -493,8 +510,9 @@ class CommandingTest(unittest.TestCase):
                         ingest_args(argv)
                     
                     config = Config.load(cfg_path)
-                    # We need to do this because arg ingesting does this too
-                    cmd_result.coerce_defaults()
+                    # THE PROBLEM HERE IS NOT JUST COERCE DEFAULTS! config.py,
+                    # in its handle_args section, is passing in default values
+                    # that are interfering with everything else.
                     self.assertEqual(config, cmd_result)
                 
         # Don't need the temp dir for this; un-context to escape permissions
