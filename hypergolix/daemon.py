@@ -538,19 +538,27 @@ def run_daemon(cfg_path, pid_file, parent_port, account_entity,
     startup_logger = parent_signaller.start()
     
     try:
-        with Config.load(cfg_path) as config:
-            # Convert paths to strs and make sure the dirs exist
-            cache_dir = str(config.process.ghidcache)
-            log_dir = str(config.process.logdir)
-            _ensure_dir_exists(config.process.ghidcache)
-            _ensure_dir_exists(config.process.logdir)
-            
-            debug = _default_to(config.instrumentation.debug, False)
-            verbosity = _default_to(config.instrumentation.verbosity, 'info')
-            ipc_port = config.process.ipc_port
-            remotes = config.remotes
-            # Look to see if we have an existing user_id to determine behavior
-            save_cfg = not bool(config.user.user_id)
+        config = Config.load(cfg_path)
+        # Convert paths to strs and make sure the dirs exist
+        cache_dir = str(config.process.ghidcache)
+        log_dir = str(config.process.logdir)
+        _ensure_dir_exists(config.process.ghidcache)
+        _ensure_dir_exists(config.process.logdir)
+        
+        debug = _default_to(config.instrumentation.debug, False)
+        verbosity = _default_to(config.instrumentation.verbosity, 'info')
+        
+        logutils.autoconfig(
+            tofile = True,
+            logdirname = log_dir,
+            loglevel = verbosity,
+            logname = 'hgxapp'
+        )
+        
+        ipc_port = config.process.ipc_port
+        remotes = config.remotes
+        # Look to see if we have an existing user_id to determine behavior
+        save_cfg = not bool(config.user.user_id)
         
         hgxcore = _DaemonCore(
             cache_dir = cache_dir,
@@ -578,13 +586,6 @@ def run_daemon(cfg_path, pid_file, parent_port, account_entity,
         )
         hgxcore.account = account
         
-        logutils.autoconfig(
-            tofile = True,
-            logdirname = log_dir,
-            loglevel = verbosity,
-            logname = 'hgxapp'
-        )
-        
         # We need a signal handler for that.
         def signal_handler(signum):
             logger.info('Caught signal. Exiting.')
@@ -603,6 +604,11 @@ def run_daemon(cfg_path, pid_file, parent_port, account_entity,
         startup_logger.info('Booting Hypergolix...')
         hgxcore.start()
         
+    except Exception:
+        startup_logger.error('Failed to start Hypergolix:\n' +
+                             ''.join(traceback.format_exc()))
+        raise
+        
     finally:
         # This is idempotent, so no worries if we already called it
         parent_signaller.stop()
@@ -617,6 +623,7 @@ def start(namespace=None):
         if is_setup:
             print('Starting Hypergolix...')
             cfg_path, pid_file, account_entity, root_secret = do_setup()
+            chdir = str(cfg_path.parent)
             
         else:
             # Need these so that the second time around doesn't NameError
@@ -624,12 +631,13 @@ def start(namespace=None):
             pid_file = None
             account_entity = None
             root_secret = None
+            chdir = None
             
         # Daemonize. Don't strip cmd-line arguments, or we won't know to
         # continue with startup
         is_parent, cfg_path, pid_file, account_entity, root_secret = \
             daemonizer(pid_file, cfg_path, pid_file, account_entity,
-                       root_secret, chdir=str(cfg_path.parent),
+                       root_secret, chdir=chdir,
                        explicit_rescript='-m hypergolix.daemon')
          
         if is_parent:
