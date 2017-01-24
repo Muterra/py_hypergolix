@@ -339,9 +339,10 @@ config_parser.set_defaults(debug=None)
 runtime_group.add_argument(
     '--verbosity', '-v',
     action = 'store',
-    default = 'normal',
+    default = None,
     type = str,
-    choices = ['extreme', 'shouty', 'louder', 'loud', 'normal', 'quiet'],
+    choices = ['extreme', 'shouty', 'debug', 'louder', 'info', 'loud',
+               'warning', 'normal', 'error', 'quiet'],
     help = 'Specify the logging level.'
 )
 

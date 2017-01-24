@@ -79,6 +79,8 @@ __all__ = [
     'RatchetError',
     # These are configuration errors
     'ConfigError',
+    'ConfigIncomplete',
+    'ConfigMissing',
     # These are HGXLink errors
     'HGXLinkError',
 ]
@@ -361,6 +363,20 @@ class UnknownSecret(PrivateerError, KeyError):
 class ConfigError(HypergolixException, RuntimeError):
     ''' This exception (or a subclass thereof) is raised for all failed
     operations with configuration.
+    '''
+    pass
+
+
+class ConfigIncomplete(ConfigError):
+    ''' This exception is raised when attempting to load an incomplete
+    configuration.
+    '''
+    pass
+
+
+class ConfigMissing(ConfigError, FileNotFoundError):
+    ''' This exception is raised when attempting to load an incomplete
+    configuration.
     '''
     pass
 

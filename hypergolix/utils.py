@@ -39,6 +39,7 @@ import asyncio
 import signal
 import sys
 import time
+import pathlib
 # Used for random token creation
 import random
 
@@ -1760,6 +1761,18 @@ def _default_to(check, default, comparator=None):
             return default
         else:
             return check
+
+
+def _ensure_dir_exists(path):
+    ''' Ensures the existence of a directory. Path must be to the dir,
+    and not to a file therewithin.
+    '''
+    path = pathlib.Path(path).absolute()
+    if not path.exists():
+        path.mkdir(parents=True)
+        
+    elif not path.is_dir():
+        raise FileExistsError('Path exists already and is not a directory.')
 
 
 def ensure_equal_len(iterable, msg=''):
