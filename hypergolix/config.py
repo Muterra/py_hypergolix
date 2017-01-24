@@ -31,7 +31,6 @@ hypergolix: A python Golix client.
 '''
 
 # Global dependencies
-import argparse
 import pathlib
 import collections
 import copy
@@ -44,7 +43,6 @@ from golix import Ghid
 from golix import Secret
 
 # Intra-package dependencies
-from .utils import _ensure_dir_exists
 from .exceptions import ConfigError
 from .exceptions import ConfigIncomplete
 from .exceptions import ConfigMissing

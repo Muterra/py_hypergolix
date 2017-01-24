@@ -47,7 +47,7 @@ from hypergolix.config import User
 from hypergolix.config import Instrumentation
 from hypergolix.config import Process
 
-from hypergolix.config import _ensure_dir_exists
+from hypergolix.utils import _ensure_dir_exists
 
 from hypergolix.cli import main as ingest_args
 from hypergolix.config import handle_args
