@@ -38,6 +38,7 @@ import webbrowser
 import yaml
 import inspect
 import os
+import warnings
 
 from golix import Ghid
 from golix import Secret
@@ -438,6 +439,16 @@ class Process(metaclass=_AutoMapper):
     ipc_port = AutoField()
     
     
+class Server(metaclass=_AutoMapper):
+    ghidcache = AutoField(decode=pathlib.Path, encode=str)
+    logdir = AutoField(decode=pathlib.Path, encode=str)
+    pid_file = AutoField(decode=pathlib.Path, encode=str)
+    host = AutoField()
+    port = AutoField()
+    verbosity = AutoField()
+    debug = AutoField()
+    
+    
 class Config(metaclass=_AutoMapper):
     ''' Context handler for semi-atomic config updates.
     
@@ -458,6 +469,7 @@ class Config(metaclass=_AutoMapper):
     instrumentation = AutoField(Instrumentation)
     user = AutoField(User)
     remotes = AutoField(Remote, listed=True)
+    server = AutoField(Server)
     
     TARGET_FNAME = 'hypergolix.yml'
     OLD_FNAMES = {'hgx-cfg.json'}
@@ -481,6 +493,12 @@ class Config(metaclass=_AutoMapper):
                 'logdir': root / 'logs',
                 'pid_file': root / 'hypergolix.pid',
                 'ipc_port': 7772
+            },
+            'server': {
+                'ghidcache': root / 'ghidcache',
+                'logdir': root / 'logs',
+                'pid_file': root / 'hgx-server.pid',
+                'port': 7770
             }
         }
     
@@ -724,6 +742,9 @@ def _exclusive_named_remote(remote):
 
 def _handle_verbosity(config, verbosity):
     if verbosity is not None:
+        warnings.warn('Modifying Hypergolix configuration through CLI is ' +
+                      'deprecated. Please edit the hypergolix.yml config ' +
+                      'file instead.', DeprecationWarning, stacklevel=10)
         lookup = {
             'extreme': 'extreme',
             'shouty': 'shouty',
@@ -745,16 +766,26 @@ def _handle_debug(config, debug_enabled):
     if debug_enabled is None:
         return
         
-    elif debug_enabled:
-        config.instrumentation.debug = True
-        
     else:
-        config.instrumentation.debug = False
+        warnings.warn('Modifying Hypergolix configuration through CLI is ' +
+                      'deprecated. Please edit the hypergolix.yml config ' +
+                      'file instead.', DeprecationWarning, stacklevel=10)
+        
+        if debug_enabled:
+            config.instrumentation.debug = True
+        
+        else:
+            config.instrumentation.debug = False
 
 
 def _handle_remotes(config, only_remotes, add_remotes, remove_remotes):
     ''' Manages remotes.
     '''
+    if ((only_remotes is not None) | bool(add_remotes) | bool(remove_remotes)):
+        warnings.warn('Modifying Hypergolix configuration through CLI is ' +
+                      'deprecated. Please edit the hypergolix.yml config ' +
+                      'file instead.', DeprecationWarning, stacklevel=10)
+    
     # Handling an exclusive remote declaration
     if only_remotes is not None:
         # Remove all existing remotes
@@ -863,6 +894,9 @@ def _handle_ipc(config, ipc):
     ''' If IPC is defined, update it.
     '''
     if ipc is not None:
+        warnings.warn('Modifying Hypergolix configuration through CLI is ' +
+                      'deprecated. Please edit the hypergolix.yml config ' +
+                      'file instead.', DeprecationWarning, stacklevel=10)
         config.process.ipc_port = ipc
 
 
@@ -962,6 +996,9 @@ def handle_args(args):
             config = Config(cfg_path)
     
     with config:
+        # Make sure we actually show the warnings; deprecation is normally
+        # ignored.
+        warnings.simplefilter('module')
         _handle_remotes(
             config,
             args.only_remotes,

@@ -38,7 +38,6 @@ import logging
 import loopa
 import concurrent.futures
 import socket
-import pathlib
 import threading
 import http.server
 from http import HTTPStatus
@@ -61,11 +60,14 @@ from hypergolix.persistence import Bookie
 
 from hypergolix.lawyer import LawyerCore
 from hypergolix.undertaker import UndertakerCore
-from hypergolix.librarian import LibrarianCore
 from hypergolix.librarian import DiskLibrarian
 from hypergolix.postal import PostOffice
 from hypergolix.remotes import Salmonator
 from hypergolix.remotes import RemotePersistenceProtocol
+
+from hypergolix.config import Config
+from hypergolix.utils import _ensure_dir_exists
+from hypergolix.utils import _default_to
 
 
 # ###############################################
@@ -239,54 +241,37 @@ class RemotePersistenceServer(loopa.TaskCommander):
 def start(namespace=None):
     ''' Starts a Hypergolix daemon.
     '''
-    # Command args coming in.
+    # Command arg support is deprecated.
     if namespace is not None:
-        host = namespace.host
-        port = namespace.port
-        debug = namespace.debug
-        traceur = namespace.traceur
-        chdir = namespace.chdir
-        # Convert log dir to absolute if defined
-        if namespace.logdir is not None:
-            log_dir = str(pathlib.Path(namespace.logdir).absolute())
-        else:
-            log_dir = namespace.logdir
-        # Convert cache dir to absolute if defined
-        if namespace.cachedir is not None:
-            cache_dir = str(pathlib.Path(namespace.cachedir).absolute())
-        else:
-            cache_dir = namespace.cachedir
-        verbosity = namespace.verbosity
-        # Convert pid path to absolute (must be defined)
-        pid_path = str(pathlib.Path(namespace.pidfile).absolute())
-        
-    # Daemonizing, we still need these to be defined to avoid NameErrors
-    else:
-        host = None
-        port = None
-        debug = None
-        traceur = None
-        chdir = None
-        log_dir = None
-        cache_dir = None
-        verbosity = None
-        pid_path = None
+        # Gigantic error trap
+        if ((namespace.host is not None) | (namespace.port is not None) |
+            (namespace.debug is not None) | (namespace.traceur is not None) |
+            (namespace.pidfile is not None) | (namespace.logdir is not None) |
+            (namespace.cachedir is not None) | (namespace.chdir is not None) |
+            (namespace.verbosity is not None)):
+                raise RuntimeError('Server configuration through CLI is no ' +
+                                   'longer supported. Edit hypergolix.yml ' +
+                                   'configuration file instead.')
     
     with Daemonizer() as (is_setup, daemonizer):
-        # Daemonize. Don't strip cmd-line arguments, or we won't know to
-        # continue with startup
-        (is_parent, host, port, debug, traceur, log_dir, cache_dir, verbosity,
-         pid_path) = daemonizer(
-            pid_path,
-            host,
-            port,
-            debug,
-            traceur,
-            log_dir,
-            cache_dir,
-            verbosity,
-            pid_path,
-            chdir = chdir,
+        # Get our config path in setup, so that we error out before attempting
+        # to daemonize (if anything is wrong).
+        if is_setup:
+            config = Config.find()
+            config_path = config.path
+            chdir = config_path.parent
+            pid_file = config.server.pid_file
+            
+        else:
+            config_path = None
+            pid_file = None
+            chdir = None
+        
+        # Daemonize.
+        is_parent, config_path = daemonizer(
+            str(pid_file),
+            config_path,
+            chdir = str(chdir),
             explicit_rescript = '-m hypergolix.service'
         )
         
@@ -294,22 +279,26 @@ def start(namespace=None):
         # PARENT EXITS HERE #
         #####################
         
-    verbosity = _cast_verbosity(verbosity, debug, traceur)
-        
-    if log_dir is not None:
-        logutils.autoconfig(
-            tofile = True,
-            logdirname = log_dir,
-            logname = 'hgxremote',
-            loglevel = verbosity
-        )
+    config = Config.load(config_path)
+    _ensure_dir_exists(config.server.ghidcache)
+    _ensure_dir_exists(config.server.logdir)
+    
+    debug = _default_to(config.server.debug, False)
+    verbosity = _default_to(config.server.verbosity, 'info')
+    
+    logutils.autoconfig(
+        tofile = True,
+        logdirname = config.server.logdir,
+        logname = 'hgxserver',
+        loglevel = verbosity
+    )
         
     logger.debug('Parsing config...')
-    host = _cast_host(host)
+    host = _cast_host(config.server.host)
     rps = RemotePersistenceServer(
-        cache_dir,
+        config.server.ghidcache,
         host,
-        port,
+        config.server.port,
         reusable_loop = False,
         threaded = False,
         debug = debug
@@ -330,7 +319,7 @@ def start(namespace=None):
     # Normally I'd do this within daemonization, but in this case, we need to
     # wait to have access to the handler.
     sighandler = SignalHandler1(
-        pid_path,
+        str(config.server.pid_file),
         sigint = signal_handler,
         sigterm = signal_handler,
         sigabrt = signal_handler
@@ -344,7 +333,13 @@ def start(namespace=None):
 def stop(namespace=None):
     ''' Stops the Hypergolix daemon.
     '''
-    daemoniker.send(namespace.pidfile, SIGTERM)
+    if namespace.pidfile is not None:
+        raise RuntimeError('Server pidfile specification through CLI is no ' +
+                           'longer supported. Edit hypergolix.yml ' +
+                           'configuration file instead.')
+        
+    config = Config.find()
+    daemoniker.send(str(config.server.pid_file), SIGTERM)
     
     
 if __name__ == "__main__":

@@ -171,6 +171,14 @@ remotes:
 - host: foo
   port: 1234
   tls: false
+server:
+  ghidcache: null
+  logdir: null
+  pid_file: null
+  host: null
+  port: null
+  verbosity: null
+  debug: null
 '''
 
 
@@ -192,7 +200,7 @@ obj_cfg = Config(
 obj_cfg.remotes.append(obj_remotedef)
 
 
-class _SuppressSTDERR:
+class _NoSTDERR:
     def __enter__(self):
         self._fd = sys.stderr.fileno()
         self._cache = os.dup(self._fd)
@@ -205,7 +213,7 @@ class _SuppressSTDERR:
         os.close(self._cache)
 
 
-class _SuppressSTDOUT:
+class _NoSTDOUT:
     def __enter__(self):
         self._fd = sys.stdout.fileno()
         self._cache = os.dup(self._fd)
@@ -467,6 +475,10 @@ class CommandingTest(unittest.TestCase):
             # Definitely want to control the order of execution for this.
             valid_commands = [
                 ('config', blank),
+                ('config --whoami', blank)
+            ]
+            
+            deprecated_commands = [
                 ('config --debug', debug),
                 ('config --no-debug', nodebug),
                 ('config --verbosity loud', loud),
@@ -506,7 +518,27 @@ class CommandingTest(unittest.TestCase):
                     argv.append('--root')
                     argv.append(str(cfg_path))
                     
-                    with _SuppressSTDOUT():
+                    with _NoSTDOUT():
+                        ingest_args(argv)
+                    
+                    config = Config.load(cfg_path)
+                    # THE PROBLEM HERE IS NOT JUST COERCE DEFAULTS! config.py,
+                    # in its handle_args section, is passing in default values
+                    # that are interfering with everything else.
+                    self.assertEqual(config, cmd_result)
+            
+            for cmd_str, cmd_result in deprecated_commands:
+                with self.subTest(cmd_str):
+                    cfg_path = root / 'hypergolix.yml'
+                    # NOTE THAT THESE TESTS ARE CUMULATIVE! We definitely DON'T
+                    # want to start with a fresh config each time around, or
+                    # the tests will fail!
+                    
+                    argv = cmd_str.split()
+                    argv.append('--root')
+                    argv.append(str(cfg_path))
+                    
+                    with _NoSTDOUT(), self.assertWarns(DeprecationWarning):
                         ingest_args(argv)
                     
                     config = Config.load(cfg_path)
@@ -523,8 +555,7 @@ class CommandingTest(unittest.TestCase):
                 argv.append(str(root))
                 # Note that argparse will always push usage to stderr in a
                 # suuuuuuper annoying way if we don't suppress it.
-                with self.assertRaises(SystemExit), \
-                    _SuppressSTDERR(), _SuppressSTDOUT():
+                with self.assertRaises(SystemExit), _NoSTDERR(), _NoSTDOUT():
                         ingest_args(argv)
 
 
