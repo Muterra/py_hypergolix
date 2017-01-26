@@ -171,6 +171,14 @@ remotes:
 - host: foo
   port: 1234
   tls: false
+server:
+  ghidcache: null
+  logdir: null
+  pid_file: null
+  host: null
+  port: null
+  verbosity: null
+  debug: null
 '''
 
 

@@ -115,12 +115,14 @@ server_start_parser.add_argument(
     'pidfile',
     action = 'store',
     type = str,
+    default = None,
+    nargs = '?',
     help = 'The full path to the PID file we should use for the service.'
 )
 server_start_parser.add_argument(
     '--cachedir', '-c',
     action = 'store',
-    required = True,
+    required = False,
     dest = 'cachedir',
     default = None,
     type = str,
@@ -144,7 +146,7 @@ server_start_parser.add_argument(
     '--port', '-p',
     action = 'store',
     dest = 'port',
-    default = 7770,
+    default = None,
     type = int,
     help = 'Specify the TCP port to use. Defaults to 7770.'
 )
@@ -167,11 +169,13 @@ server_start_parser.add_argument(
 )
 server_start_parser.add_argument(
     '--debug',
+    default = None,
     action = 'store_true',
     help = 'Enable debug mode. Sets verbosity to debug unless overridden.'
 )
 server_start_parser.add_argument(
     '--traceur',
+    default = None,
     action = 'store_true',
     help = 'Enable thorough analysis, including stack tracing. '
            'Implies verbosity of debug.'
@@ -215,6 +219,8 @@ server_stop_parser.add_argument(
     'pidfile',
     action = 'store',
     type = str,
+    default = None,
+    nargs = '?',
     help = 'The full path to the PID file we should use for the service.'
 )
 

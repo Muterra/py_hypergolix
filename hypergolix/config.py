@@ -439,6 +439,16 @@ class Process(metaclass=_AutoMapper):
     ipc_port = AutoField()
     
     
+class Server(metaclass=_AutoMapper):
+    ghidcache = AutoField(decode=pathlib.Path, encode=str)
+    logdir = AutoField(decode=pathlib.Path, encode=str)
+    pid_file = AutoField(decode=pathlib.Path, encode=str)
+    host = AutoField()
+    port = AutoField()
+    verbosity = AutoField()
+    debug = AutoField()
+    
+    
 class Config(metaclass=_AutoMapper):
     ''' Context handler for semi-atomic config updates.
     
@@ -459,6 +469,7 @@ class Config(metaclass=_AutoMapper):
     instrumentation = AutoField(Instrumentation)
     user = AutoField(User)
     remotes = AutoField(Remote, listed=True)
+    server = AutoField(Server)
     
     TARGET_FNAME = 'hypergolix.yml'
     OLD_FNAMES = {'hgx-cfg.json'}
@@ -482,6 +493,12 @@ class Config(metaclass=_AutoMapper):
                 'logdir': root / 'logs',
                 'pid_file': root / 'hypergolix.pid',
                 'ipc_port': 7772
+            },
+            'server': {
+                'ghidcache': root / 'ghidcache',
+                'logdir': root / 'logs',
+                'pid_file': root / 'hgx-server.pid',
+                'port': 7770
             }
         }
     
