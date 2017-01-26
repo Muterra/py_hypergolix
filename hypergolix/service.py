@@ -241,7 +241,7 @@ class RemotePersistenceServer(loopa.TaskCommander):
 def start(namespace=None):
     ''' Starts a Hypergolix daemon.
     '''
-    # Command args coming in.
+    # Command arg support is deprecated.
     if namespace is not None:
         # Gigantic error trap
         if ((namespace.host is not None) | (namespace.port is not None) |
