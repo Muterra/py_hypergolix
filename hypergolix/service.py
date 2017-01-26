@@ -38,7 +38,6 @@ import logging
 import loopa
 import concurrent.futures
 import socket
-import pathlib
 import threading
 import http.server
 from http import HTTPStatus
@@ -61,7 +60,6 @@ from hypergolix.persistence import Bookie
 
 from hypergolix.lawyer import LawyerCore
 from hypergolix.undertaker import UndertakerCore
-from hypergolix.librarian import LibrarianCore
 from hypergolix.librarian import DiskLibrarian
 from hypergolix.postal import PostOffice
 from hypergolix.remotes import Salmonator
