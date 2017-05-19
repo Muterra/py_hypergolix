@@ -147,9 +147,9 @@ def _cast_host(host):
     '''
     if host is None:
         host = '127.0.0.1'
-    elif host == 'AUTO':
+    elif str.lower(host) == 'auto':
         host = _get_local_ip()
-    elif host == 'ANY':
+    elif str.lower(host) == 'any':
         host = ''
     
     # Otherwise, host stays the same

@@ -327,6 +327,8 @@ class _WSLoc(namedtuple('_WSLoc', ('host', 'port', 'tls'))):
     unambiguous, canonical way to refer to WS targets, with a string
     representation suitable for use in websockets.connect (etc).
     '''
+    # Needed or we'll accidentally create a __dict__
+    __slots__ = []
     
     def __str__(self):
         ''' Converts the representation into something that can be used
@@ -989,6 +991,8 @@ class _BoundReq(namedtuple('_BoundReq', ('obj', 'requestor', 'request_handler',
     self[3] == self.response_handler
     self[4] == self.code
     '''
+    # Needed or we'll accidentally create a __dict__
+    __slots__ = []
     
     def __call__(self, connection, *args, **kwargs):
         ''' Get the object's wrapped_requestor, passing it the unwrapped
